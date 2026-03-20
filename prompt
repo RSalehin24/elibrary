@@ -1,0 +1,202 @@
+I want you to transform this existing Python ebook scraping and generation project into a production-ready web application.
+
+Read the current repository first and base the work on what already exists.
+
+Current repository behavior
+- `code/main.py` batch-processes static `BOOK_URLS` from `code/config.py`.
+- `code/scraper.py` scrapes a source URL and currently returns structured data like:
+  `book_title`, `author`, `series`, `book_type`, `cover`, `main_content`, `book_info`, `dedication`, `toc`, `content_items`, and `output_folder`.
+- `code/html_book.py` generates `book.html`.
+- `code/epub_book.py` generates the `.epub`.
+- Generated files are currently written under `outputs/<book_name>/`.
+
+High-level goal
+Keep the existing scraping and book-generation capability, but evolve the project into a full website with:
+- URL ingestion from one or many book URLs
+- metadata extraction and normalization
+- persistent storage of books and related metadata
+- search and filtering
+- secure authentication and authorization
+- per-book permissions
+- secure EPUB viewing and downloading
+- production-ready architecture, admin workflows, and documentation
+
+How I want you to work
+1. First inspect the existing repo and summarize:
+   - what the current flow is
+   - what code can be reused
+   - what needs refactoring
+   - what new architecture is needed
+2. Prefer a Python-first architecture that fits this repo. Since this app needs auth, admin, permissions, email, background processing, and database models, prefer Django + PostgreSQL unless you have a clearly better reason.
+3. Refactor the current scraper/generator into reusable services, workers, or jobs instead of throwing it away.
+4. Use production-ready patterns, secure defaults, and clean project structure.
+5. Do not only give advice. Implement the system in this repo.
+6. If the full scope is too large for one pass, complete the platform foundation and Phase 1 end-to-end, then leave a concrete Phase 2 plan.
+7. Add tests for critical flows, especially auth, authorization, permissions, and book-processing logic.
+8. Document important assumptions in the README instead of leaving them implicit.
+
+Core product requirements
+
+1. URL ingestion and processing
+- Allow one or multiple URLs to be submitted from the UI and/or API.
+- Support bulk import via:
+  - pasted multiline URLs
+  - CSV upload
+- Extract and normalize:
+  - book name
+  - writer/author(s)
+  - type/category/genre
+  - series if available
+  - source URL
+  - cover image
+  - any other useful metadata already available from the scraper
+- Preserve the current ability to build both HTML and EPUB outputs.
+- Move long-running scraping/generation into background jobs with clear statuses such as:
+  - queued
+  - processing
+  - succeeded
+  - failed
+- Provide a job dashboard that shows queue state, progress, retries, and failure details.
+- Save error details and allow retrying failed jobs.
+- Detect duplicate URLs or duplicate books and handle them gracefully.
+- Implement duplicate detection using both:
+  - exact source URL matching
+  - normalized metadata matching where reasonable
+
+2. Data model and persistence
+- Save each successfully created book with all necessary metadata and file references.
+- Use a proper relational schema, including entities such as:
+  - books
+  - authors
+  - categories/types
+  - source URLs
+  - generated assets
+  - users
+  - roles/permissions
+  - per-book access rules
+  - processing jobs/logs
+  - audit logs
+  - reading progress / reading sessions
+  - bookmarks / saved positions if needed for the reader experience
+- Support many-to-many relationships where appropriate, especially for multiple authors and multiple categories.
+- Store enough metadata to support filtering, permissions, auditing, and future growth.
+
+3. Search, filtering, and discovery
+- Add filters for:
+  - book name/title
+  - author
+  - type/category
+  - series
+  - creation date
+  - processing status
+- Add sorting and search that feel fast and usable.
+- Provide a strong admin/library management experience, not just a raw table.
+- Use slug-based public URLs for books when appropriate.
+- Show richer library cards or listing rows with cover thumbnails and useful metadata.
+
+4. Public vs protected access
+- Only the public book download page should be accessible without login.
+- All other pages must require authentication and proper authorization.
+- The public page should still look polished and include useful metadata.
+- Public book pages should have clean URLs, clear cover art, and useful metadata presentation.
+- The internal/admin pages should support secure management workflows.
+
+5. Authentication, authorization, and user management
+- Use email + password authentication.
+- Support password reset by email.
+- Support two-factor authentication using a secure production-ready approach such as TOTP.
+- Seed or initialize `rsalehin24@gmail.com` as the super admin account, but do not hardcode unsafe credentials in source code.
+- Allow admins to create users.
+- When creating a user, allow:
+  - full access
+  - view-only access
+  - download-only access
+  - access limited to specific books
+  - optional enforced 2FA for that user
+- Build authorization in a clean way, preferably with role-based access plus per-book permissions.
+- Prevent unauthorized users from viewing, downloading, or managing books they do not have access to.
+
+6. EPUB viewing integration
+- A book should be available in two ways:
+  - download
+  - view in reader
+- The "view" option must integrate with `/Users/rsalehin24/Documents/epub-reader`.
+- Make the necessary changes so books can only be opened in that EPUB reader from an allowed site URL/origin and with server-side validation.
+- Do not rely only on client-side checks.
+- Use a secure mechanism such as signed short-lived tokens or a backend-validated session so direct unauthorized opening is blocked.
+- Track and persist reader state where possible, including:
+  - reading progress
+  - last opened location
+  - bookmarks
+- If the EPUB reader codebase is available, implement the required changes there too. If it is not available in the current workspace, document the exact integration contract and required modifications clearly.
+
+7. UX and admin experience
+- Build a clean, responsive UI for desktop and mobile.
+- Include a dashboard for:
+  - submitting one or many URLs
+  - viewing processing status
+  - retrying failed jobs
+  - viewing job queue state and failure logs
+  - managing books
+  - managing users and permissions
+- Include book management actions such as:
+  - reprocess/regenerate a book
+  - soft delete
+  - restore
+- Show clear success/error messages and progress states.
+- Make the library browsing and filtering experience feel polished.
+
+8. Operations and maintainability
+- Add backup/export tools for important data, such as:
+  - book metadata
+  - generated asset references
+  - users and permissions
+- Make it possible to reprocess books without manually cleaning the filesystem first.
+- Prefer designs that can scale from local-only hosting now to a more production-oriented deployment later.
+
+Technical expectations
+- Use environment variables for secrets and environment-specific configuration.
+- Use a storage abstraction so generated assets are not tightly coupled to one folder layout.
+- The storage design should work locally now but have a clear path to S3 or another object storage provider later.
+- Keep the existing scraping logic where possible, but reorganize it into maintainable modules.
+- Add validation, logging, and error handling throughout.
+- Add rate-limiting, throttling, or retry protections where needed for scraping and public endpoints.
+- Sanitize file names, inputs, and permissions-sensitive operations.
+- Add audit logging for important actions such as:
+  - user creation
+  - permission changes
+  - book access changes
+  - downloads
+  - reader views
+  - reprocessing or deletion/restoration actions
+- Add tests for security-sensitive flows and critical business logic.
+- Provide migrations, setup instructions, and seed/init instructions.
+
+Suggested implementation direction
+- Backend: Django
+- Database: PostgreSQL
+- Background jobs: Celery or Django-Q or another solid queue system if justified
+- Cache/task broker: Redis if needed
+- Auth: Django auth extended with email login and TOTP 2FA
+- Storage: local storage abstraction now, with an easy path to object storage later
+- UI: server-rendered Django templates or a separate frontend only if you can justify the added complexity
+
+Deliverables I expect
+1. A short architecture summary based on the current repo
+2. The implemented web application in this repository
+3. Database schema/migrations
+4. Authentication, 2FA, password reset, and permission system
+5. Book ingestion, processing, storage, filtering, and public download page
+6. Secure EPUB reader integration plan or implementation
+7. Tests for the most important flows
+8. Clear README/setup instructions
+
+Nice-to-have improvements if time permits
+- Book processing history and retry history
+- Future-ready API endpoints for mobile or external integrations
+
+Important constraints
+- Reuse and refactor the current project instead of replacing it blindly.
+- Keep the existing scraping and EPUB/HTML generation capability working.
+- Use secure defaults everywhere.
+- If you make assumptions, state them clearly.
