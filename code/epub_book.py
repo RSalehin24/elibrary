@@ -1,6 +1,21 @@
 import os
 from epub_properties.epub_builder import EpubBuilder
 
+
+def display_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("display_name", "name", "title"):
+            if value.get(key):
+                return str(value[key])
+        return ", ".join(display_value(item) for item in value.values() if item)
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(display_value(item) for item in value if item)
+    return str(value)
+
 def create_epub(book_data):
     """
     Generate EPUB book from scraped data with hierarchical TOC.
@@ -20,9 +35,9 @@ def create_epub(book_data):
     """
     builder = EpubBuilder(
         book_title=book_data["book_title"],
-        author=book_data["author"],
-        series=book_data["series"],
-        book_type=book_data["book_type"],
+        author=display_value(book_data["author"]),
+        series=display_value(book_data["series"]),
+        book_type=display_value(book_data["book_type"]),
         output_folder=book_data["output_folder"]
     )
     

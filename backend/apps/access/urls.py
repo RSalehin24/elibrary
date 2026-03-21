@@ -1,0 +1,36 @@
+from django.urls import path
+
+from apps.access.views import (
+    AccessReferenceDataView,
+    BookAssetDownloadView,
+    BookmarkDeleteView,
+    BookmarkListCreateView,
+    PermissionGrantDetailView,
+    PermissionGrantListCreateView,
+    ReaderEpubDownloadView,
+    ReaderHtmlPreviewView,
+    ReaderBookmarkTokenDeleteView,
+    ReaderBookmarkTokenListCreateView,
+    ReaderLaunchView,
+    ReaderManifestView,
+    ReaderSessionTokenView,
+    ReadingSessionView,
+)
+
+
+urlpatterns = [
+    path("grants/", PermissionGrantListCreateView.as_view(), name="access-grant-list"),
+    path("grants/<uuid:pk>/", PermissionGrantDetailView.as_view(), name="access-grant-detail"),
+    path("references/", AccessReferenceDataView.as_view(), name="access-reference-data"),
+    path("books/<path:slug>/download/<slug:asset_type>/", BookAssetDownloadView.as_view(), name="access-book-asset-download"),
+    path("books/<path:slug>/reader-launch/", ReaderLaunchView.as_view(), name="access-reader-launch"),
+    path("reader/<str:token>/manifest/", ReaderManifestView.as_view(), name="access-reader-manifest"),
+    path("reader/<str:token>/epub/", ReaderEpubDownloadView.as_view(), name="access-reader-epub"),
+    path("reader/<str:token>/html/", ReaderHtmlPreviewView.as_view(), name="access-reader-html"),
+    path("reader/<str:token>/session/", ReaderSessionTokenView.as_view(), name="access-reader-session"),
+    path("reader/<str:token>/bookmarks/", ReaderBookmarkTokenListCreateView.as_view(), name="access-reader-bookmark-list"),
+    path("reader/<str:token>/bookmarks/<uuid:pk>/", ReaderBookmarkTokenDeleteView.as_view(), name="access-reader-bookmark-delete"),
+    path("books/<path:slug>/reading-session/", ReadingSessionView.as_view(), name="access-reading-session"),
+    path("books/<path:slug>/bookmarks/", BookmarkListCreateView.as_view(), name="access-bookmark-list"),
+    path("bookmarks/<uuid:pk>/", BookmarkDeleteView.as_view(), name="access-bookmark-delete"),
+]

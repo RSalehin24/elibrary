@@ -1,3 +1,4 @@
+import argparse
 import time
 from scraper import scrape_book_data
 from html_book import create_html_book
@@ -6,6 +7,41 @@ from config import BOOK_URLS
 
 # Delay between books (in seconds) to avoid rate limiting
 DELAY_BETWEEN_BOOKS = 3
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Batch scrape ebanglalibrary books and generate HTML/EPUB outputs.")
+    parser.add_argument(
+        "--url",
+        action="append",
+        dest="urls",
+        default=[],
+        help="Direct ebanglalibrary book URL. Repeat for multiple books.",
+    )
+    parser.add_argument(
+        "--name",
+        action="append",
+        dest="names",
+        default=[],
+        help="Optional display name for each --url entry. Repeat in the same order as --url.",
+    )
+    parser.add_argument(
+        "--delay",
+        type=int,
+        default=DELAY_BETWEEN_BOOKS,
+        help="Delay between books in seconds.",
+    )
+    return parser.parse_args()
+
+
+def configured_books(args):
+    if args.urls:
+        books = []
+        for index, url in enumerate(args.urls):
+            name = args.names[index] if index < len(args.names) else url
+            books.append((name, url))
+        return books
+    return BOOK_URLS
 
 def process_book(name, url, index, total):
     """Process a single book URL and return success status."""
@@ -20,7 +56,7 @@ def process_book(name, url, index, total):
             print(f"❌ Failed to scrape: {name}")
             return False, name
         
-        book_title = data.get('title', 'Unknown')
+        book_title = data.get("book_title", "Unknown")
         print(f"📖 Scraped Title: {book_title}")
         
         create_html_book(data)
@@ -33,21 +69,24 @@ def process_book(name, url, index, total):
         return False, name
 
 def main():
-    if not BOOK_URLS:
-        print("No book URLs configured in config.py")
+    args = parse_args()
+    book_urls = configured_books(args)
+
+    if not book_urls:
+        print("No book URLs configured. Use BOOK_URLS_JSON/BOOK_URL env vars or pass --url.")
         exit(1)
     
-    total = len(BOOK_URLS)
+    total = len(book_urls)
     print(f"\n📚 Starting batch processing of {total} book(s)...")
     print("\nBooks to process:")
-    for i, (name, _) in enumerate(BOOK_URLS, 1):
+    for i, (name, _) in enumerate(book_urls, 1):
         print(f"  {i}. {name}")
     
     successful = 0
     failed = 0
     failed_books = []
     
-    for index, (name, url) in enumerate(BOOK_URLS, 1):
+    for index, (name, url) in enumerate(book_urls, 1):
         success, book_name = process_book(name, url, index, total)
         if success:
             successful += 1
@@ -57,8 +96,8 @@ def main():
         
         # Add delay between books to avoid rate limiting (except for last book)
         if index < total:
-            print(f"\n⏳ Waiting {DELAY_BETWEEN_BOOKS}s before next book...")
-            time.sleep(DELAY_BETWEEN_BOOKS)
+            print(f"\n⏳ Waiting {args.delay}s before next book...")
+            time.sleep(args.delay)
     
     # Print summary
     print(f"\n{'='*60}")
@@ -76,4 +115,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

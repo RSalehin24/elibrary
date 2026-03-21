@@ -1,4 +1,5 @@
-# python version: 3.14.2
+# Legacy scraper/exporter dependencies.
+# Supported target runtime for the full platform: Python 3.12
 beautifulsoup4==4.14.3
 ebooklib==0.20
 Jinja2==3.1.6

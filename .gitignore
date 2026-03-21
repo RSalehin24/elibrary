@@ -1,6 +1,42 @@
-.venv/
 .DS_Store
-code/config.py
-*__pycache__
+.env
+.env.local
+.env.*.local
+.idea/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.vscode/
+__pycache__/
+*.egg-info/
+*.log
+*.pid
+*.py[cod]
+*.sqlite3
+*.swp
+*.swo
+*.tsbuildinfo
+
+# Python / Django
+backend/.coverage
+backend/htmlcov/
+backend/staticfiles/
+storage/
+
+# Node / React
+frontend/dist/
+frontend/node_modules/
+frontend/.vite/
+
+# Docker
+.docker/
+docker-data/
+
+# Legacy/generated assets
 outputs/
 ebook-scrapper/
+LOCAL_PASSWORDS.md
+
+# OS noise
+.Spotlight-V100
+.Trashes

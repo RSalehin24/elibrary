@@ -1,5 +1,6 @@
 import requests
 from requests.adapters import HTTPAdapter
+from urllib.parse import urlparse, urlunparse
 from urllib3.util.retry import Retry
 import time
 import json
@@ -16,6 +17,22 @@ HEADERS = {
         "Chrome/144.0.0.0 Safari/537.36"
     )
 }
+
+ALLOWED_SOURCE_HOSTS = {"ebanglalibrary.com", "www.ebanglalibrary.com"}
+
+
+def normalize_source_url(url):
+    """Normalize externally supplied ebanglalibrary book URLs."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Book URL must start with http:// or https://")
+    if parsed.netloc.lower() not in ALLOWED_SOURCE_HOSTS:
+        raise ValueError("Only ebanglalibrary.com book URLs are allowed")
+    if not parsed.path.startswith("/books/"):
+        raise ValueError("Only direct ebanglalibrary book URLs are supported")
+
+    normalized_path = parsed.path.rstrip("/") + "/"
+    return urlunparse(("https", "www.ebanglalibrary.com", normalized_path, "", "", ""))
 
 def create_session_with_retries(retries=3, backoff_factor=1):
     """Create a requests session with automatic retry logic."""
@@ -139,7 +156,7 @@ def extract_core_title(text):
     Extract the core title by removing common prefixes/suffixes like author info.
     Common patterns:
     - "Title – Author"
-    - "Title। লেখক— Author"
+    - "Title। লেখক- Author"
     - "Title - লেখক : Author"
     """
     if not text:
@@ -815,6 +832,7 @@ def build_toc_structure(lessons_data):
     return toc
 
 def scrape_book_data(book_url):
+    book_url = normalize_source_url(book_url)
     soup = get_soup(book_url)
     if not soup:
         print("Failed to fetch the book page.")

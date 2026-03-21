@@ -1,0 +1,13 @@
+# Supported target runtime for the new platform: Python 3.12
+Django==5.2.12
+djangorestframework==3.17.0
+django-cors-headers==4.9.0
+django-filter==24.3
+django-otp==1.7.0
+celery==5.6.2
+redis==5.3.1
+psycopg[binary]==3.3.3
+beautifulsoup4==4.14.3
+ebooklib==0.20
+Jinja2==3.1.6
+requests==2.32.5
