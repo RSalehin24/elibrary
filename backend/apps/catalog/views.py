@@ -3,7 +3,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import generics
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.catalog.models import Book, MetadataReview, MetadataVersion
@@ -36,7 +36,7 @@ def apply_created_at_filters(queryset, request):
 
 
 class BookListView(generics.ListAPIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     serializer_class = BookListSerializer
 
     def get_queryset(self):
@@ -104,7 +104,7 @@ class BookListView(generics.ListAPIView):
 
 
 class BookDetailView(generics.RetrieveAPIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     serializer_class = BookDetailSerializer
     lookup_field = "slug"
 

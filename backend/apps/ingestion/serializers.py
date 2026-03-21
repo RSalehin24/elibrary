@@ -14,37 +14,49 @@ from apps.catalog.serializers import BookListSerializer
 
 
 class SubmissionBatchCreateSerializer(serializers.Serializer):
-    input_type = serializers.ChoiceField(choices=SubmissionInputType.choices)
-    content = serializers.CharField()
+    input_type = serializers.ChoiceField(choices=SubmissionInputType.choices, required=False)
+    content = serializers.CharField(required=False, allow_blank=True)
+    entries = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=False)
     auto_process = serializers.BooleanField(default=True)
 
     def validate(self, attrs):
-        content = attrs["content"].strip()
-        if not content:
-            raise serializers.ValidationError({"content": "At least one submission value is required."})
-
         parsed_entries = []
-        if attrs["input_type"] in {SubmissionInputType.URL, SubmissionInputType.TITLE}:
-            for line in content.splitlines():
-                value = line.strip()
+        entries = attrs.get("entries") or []
+        if entries:
+            for raw_value in entries:
+                value = raw_value.strip()
                 if value:
-                    parsed_entries.append({"kind": attrs["input_type"], "value": value})
+                    inferred_kind = "url" if value.startswith("http") else "title"
+                    parsed_entries.append({"kind": inferred_kind, "value": value})
         else:
-            reader = csv.DictReader(StringIO(content))
-            for row in reader:
-                raw_value = row.get("url") or row.get("title") or row.get("query")
-                if not raw_value:
-                    for value in row.values():
-                        if value:
-                            raw_value = value
-                            break
-                if not raw_value:
-                    continue
-                inferred_kind = "url" if raw_value.strip().startswith("http") else "title"
-                parsed_entries.append({"kind": inferred_kind, "value": raw_value.strip()})
+            input_type = attrs.get("input_type")
+            content = attrs.get("content", "").strip()
+            if not input_type:
+                raise serializers.ValidationError({"input_type": "This field is required when entries are not supplied."})
+            if not content:
+                raise serializers.ValidationError({"content": "At least one submission value is required."})
+
+            if input_type in {SubmissionInputType.URL, SubmissionInputType.TITLE}:
+                for line in content.splitlines():
+                    value = line.strip()
+                    if value:
+                        parsed_entries.append({"kind": input_type, "value": value})
+            else:
+                reader = csv.DictReader(StringIO(content))
+                for row in reader:
+                    raw_value = row.get("url") or row.get("title") or row.get("query")
+                    if not raw_value:
+                        for value in row.values():
+                            if value:
+                                raw_value = value
+                                break
+                    if not raw_value:
+                        continue
+                    inferred_kind = "url" if raw_value.strip().startswith("http") else "title"
+                    parsed_entries.append({"kind": inferred_kind, "value": raw_value.strip()})
 
         if not parsed_entries:
-            raise serializers.ValidationError({"content": "No usable submission entries were found."})
+            raise serializers.ValidationError({"entries": "No usable submission entries were found."})
 
         attrs["parsed_entries"] = parsed_entries
         return attrs

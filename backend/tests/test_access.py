@@ -81,13 +81,17 @@ def test_reader_state_requires_reader_access(tmp_path, client):
 
 
 @pytest.mark.django_db
-def test_access_manage_scope_allows_non_staff_grant_management(client):
+def test_only_superadmin_can_manage_grants(client):
+    superadmin = User.objects.create_superuser(email="superadmin@example.com", password="strong-password-123")
     manager = User.objects.create_user(email="grant-manager@example.com", password="strong-password-123")
     target = User.objects.create_user(email="target@example.com", password="strong-password-123")
     book = Book.objects.create(title="Grant Scope Book", state="ready", review_state="approved")
-    PermissionGrant.objects.create(user=manager, scope=PermissionScope.ACCESS_MANAGE)
     client.force_login(manager)
 
+    denied = client.get("/api/access/references/")
+    assert denied.status_code == 403
+
+    client.force_login(superadmin)
     references = client.get("/api/access/references/")
     assert references.status_code == 200
 
@@ -104,6 +108,17 @@ def test_access_manage_scope_allows_non_staff_grant_management(client):
 
     deleted = client.delete(f"/api/access/grants/{created.json()['id']}/")
     assert deleted.status_code == 204
+
+
+@pytest.mark.django_db
+def test_catalog_endpoints_require_authentication(client):
+    book = Book.objects.create(title="Private Catalog Book", state="ready", review_state="approved")
+
+    list_response = client.get("/api/catalog/books/")
+    detail_response = client.get(f"/api/catalog/books/{book.slug}/")
+
+    assert list_response.status_code == 403
+    assert detail_response.status_code == 403
 
 
 @pytest.mark.django_db

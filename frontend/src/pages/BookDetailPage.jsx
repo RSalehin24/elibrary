@@ -3,15 +3,16 @@ import { useParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
+import { useToast } from "../hooks/useToast";
 import { hasCapability } from "../utils/capabilities";
 
 export default function BookDetailPage() {
   const { user } = useSession();
+  const toast = useToast();
   const { slug } = useParams();
   const [book, setBook] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [actionMessage, setActionMessage] = useState("");
   const [editor, setEditor] = useState({
     title: "",
     summary: "",
@@ -25,7 +26,6 @@ export default function BookDetailPage() {
   const [reviewForm, setReviewForm] = useState({ state: "pending", notes: "" });
   const [readerState, setReaderState] = useState({ last_location: "", progress_percent: 0 });
   const [readerAccess, setReaderAccess] = useState(false);
-  const [readerStateMessage, setReaderStateMessage] = useState("");
   const [bookmarks, setBookmarks] = useState([]);
   const [bookmarkForm, setBookmarkForm] = useState({ location: "", label: "", note: "" });
   const canEditMetadata = hasCapability(user, "metadata:edit");
@@ -121,7 +121,7 @@ export default function BookDetailPage() {
         setMetadataVersions(metadataPayload);
         setMetadataReviews(reviewPayload);
       } catch (nextError) {
-        setActionMessage(nextError.message);
+        toast.error(nextError.message);
       }
     }
 
@@ -135,9 +135,9 @@ export default function BookDetailPage() {
         body: {}
       });
       window.open(payload.launch_url, "_blank", "noopener,noreferrer");
-      setActionMessage("Reader launch approved. A new tab has been opened.");
+      toast.success("Reader opened.");
     } catch (nextError) {
-      setActionMessage(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -171,9 +171,9 @@ export default function BookDetailPage() {
       ]);
       setMetadataVersions(versionsPayload);
       setMetadataReviews(reviewsPayload);
-      setActionMessage("Metadata updated and versioned successfully.");
+      toast.success("Metadata updated.");
     } catch (nextError) {
-      setActionMessage(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -191,10 +191,10 @@ export default function BookDetailPage() {
         last_location: payload.last_location || "",
         progress_percent: payload.progress_percent || 0
       });
-      setReaderStateMessage("Reading progress saved.");
+      toast.success("Reading progress saved.");
       setReaderAccess(true);
     } catch (nextError) {
-      setReaderStateMessage(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -208,9 +208,9 @@ export default function BookDetailPage() {
       setBookmarks((current) => [payload, ...current]);
       setBookmarkForm({ location: "", label: "", note: "" });
       setReaderAccess(true);
-      setReaderStateMessage("Bookmark saved.");
+      toast.success("Bookmark saved.");
     } catch (nextError) {
-      setReaderStateMessage(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -218,9 +218,9 @@ export default function BookDetailPage() {
     try {
       await apiFetch(`/access/bookmarks/${id}/`, { method: "DELETE" });
       setBookmarks((current) => current.filter((bookmark) => bookmark.id !== id));
-      setReaderStateMessage("Bookmark removed.");
+      toast.success("Bookmark removed.");
     } catch (nextError) {
-      setReaderStateMessage(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -234,9 +234,9 @@ export default function BookDetailPage() {
       setMetadataReviews((current) => [payload, ...current]);
       setReviewForm({ state: "pending", notes: "" });
       setBook((current) => ({ ...current, review_state: payload.state }));
-      setActionMessage("Metadata review state recorded.");
+      toast.success("Review saved.");
     } catch (nextError) {
-      setActionMessage(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -250,9 +250,9 @@ export default function BookDetailPage() {
         current.map((review) => (review.id === reviewId ? payload : review))
       );
       setBook((current) => ({ ...current, review_state: payload.state }));
-      setActionMessage("Metadata review updated.");
+      toast.success("Review updated.");
     } catch (nextError) {
-      setActionMessage(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -282,7 +282,6 @@ export default function BookDetailPage() {
             Download {asset.asset_type.toUpperCase()}
           </a>
         ))}
-        {actionMessage ? <p className="form-feedback">{actionMessage}</p> : null}
       </section>
       <section className="detail-main">
         <p className="eyebrow">Book record</p>
@@ -395,7 +394,6 @@ export default function BookDetailPage() {
           ) : (
             <p>Reading progress and bookmarks become available after preview or durable read access is granted.</p>
           )}
-          {readerStateMessage ? <p className="form-feedback">{readerStateMessage}</p> : null}
         </section>
         {canEditMetadata ? (
           <section className="detail-card">

@@ -1,116 +1,97 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { authApi } from "../api/client";
+import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
+import { useToast } from "../hooks/useToast";
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useSession();
-  const [loginForm, setLoginForm] = useState({ email: "", password: "", otp_token: "" });
-  const [registerForm, setRegisterForm] = useState({ email: "", full_name: "", password: "" });
-  const [message, setMessage] = useState("");
+  const toast = useToast();
+  const [phase, setPhase] = useState("credentials");
+  const [form, setForm] = useState({ email: "", password: "", otp_token: "" });
 
   async function handleLogin(event) {
     event.preventDefault();
     try {
-      await login(loginForm);
+      await login(form);
+      toast.success("Signed in.");
       navigate("/");
     } catch (error) {
-      setMessage(error.message);
+      const code = error?.payload?.code;
+      if (code === "otp_required") {
+        setPhase("otp");
+        toast.info("Enter your authenticator code to continue.");
+        return;
+      }
+
+      if (code === "otp_invalid") {
+        setPhase("otp");
+      }
+
+      toast.error(error.message);
     }
   }
 
-  async function handleRegister(event) {
-    event.preventDefault();
-    try {
-      await authApi.register(registerForm);
-      setMessage("Account created. You can sign in now.");
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-
-  async function handlePasswordReset() {
-    try {
-      await authApi.passwordReset({ email: loginForm.email });
-      setMessage("If that account exists, a reset link has been sent.");
-    } catch (error) {
-      setMessage(error.message);
-    }
+  function resetPhase() {
+    setPhase("credentials");
+    setForm((current) => ({ ...current, otp_token: "" }));
   }
 
   return (
-    <div className="two-column-layout">
-      <section className="detail-card">
-        <p className="eyebrow">Sign in</p>
-        <h1>Continue with a secured session.</h1>
+    <div className="login-shell">
+      <section className={`detail-card login-card login-card-${phase}`}>
+        <div className="login-header">
+          <h1>{phase === "otp" ? "Verification" : "Sign in"}</h1>
+        </div>
         <form className="stack-form" onSubmit={handleLogin}>
           <label>
             <span>Email</span>
             <input
               type="email"
-              value={loginForm.email}
-              onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
+              value={form.email}
+              onChange={(event) => setForm({ ...form, email: event.target.value })}
+              autoComplete="username"
+              readOnly={phase === "otp"}
             />
           </label>
           <label>
             <span>Password</span>
             <input
               type="password"
-              value={loginForm.password}
-              onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
+              value={form.password}
+              onChange={(event) => setForm({ ...form, password: event.target.value })}
+              autoComplete="current-password"
+              readOnly={phase === "otp"}
             />
           </label>
-          <label>
-            <span>TOTP code</span>
-            <input
-              type="text"
-              value={loginForm.otp_token}
-              onChange={(event) => setLoginForm({ ...loginForm, otp_token: event.target.value })}
-              placeholder="Required only if 2FA is enabled"
-            />
-          </label>
-          <button type="submit" className="primary-button">
-            Sign in
-          </button>
-          <button type="button" className="ghost-button" onClick={handlePasswordReset}>
-            Email reset link
-          </button>
+          {phase === "otp" ? (
+            <label className="login-otp-field">
+              <span>TOTP code</span>
+              <input
+                type="text"
+                value={form.otp_token}
+                onChange={(event) => setForm({ ...form, otp_token: event.target.value })}
+                autoFocus
+                inputMode="numeric"
+                placeholder="123456"
+              />
+            </label>
+          ) : null}
+          <div className="inline-pills login-actions">
+            <button type="submit" className="primary-button">
+              {phase === "otp" ? "Verify" : "Continue"}
+            </button>
+            {phase === "otp" ? (
+              <button type="button" className="ghost-button" onClick={resetPhase}>
+                Change account
+              </button>
+            ) : (
+              <Link to="/reset-password" className="ghost-button">
+                Reset password
+              </Link>
+            )}
+          </div>
         </form>
-      </section>
-      <section className="detail-card">
-        <p className="eyebrow">Registration</p>
-        <h2>Create a submitter account</h2>
-        <form className="stack-form" onSubmit={handleRegister}>
-          <label>
-            <span>Full name</span>
-            <input
-              type="text"
-              value={registerForm.full_name}
-              onChange={(event) => setRegisterForm({ ...registerForm, full_name: event.target.value })}
-            />
-          </label>
-          <label>
-            <span>Email</span>
-            <input
-              type="email"
-              value={registerForm.email}
-              onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })}
-            />
-          </label>
-          <label>
-            <span>Password</span>
-            <input
-              type="password"
-              value={registerForm.password}
-              onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })}
-            />
-          </label>
-          <button type="submit" className="ghost-button">
-            Register
-          </button>
-        </form>
-        {message ? <p className="form-feedback">{message}</p> : null}
       </section>
     </div>
   );

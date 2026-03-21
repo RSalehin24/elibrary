@@ -67,3 +67,9 @@ class CanManageProcessing(ScopePermission):
 class CanEditMetadata(ScopePermission):
     required_scopes = (PermissionScope.METADATA_EDIT,)
     allow_book_scoped = True
+
+
+class IsSuperAdmin(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(getattr(user, "is_authenticated", False) and user.is_superuser)

@@ -6,7 +6,7 @@ This repository started as a Python scraper that pulls Bengali ebooks from `http
 
 - `code/`: legacy scraper and export pipeline, kept intact and still runnable.
 - `backend/`: Django backend for auth, submissions, catalog persistence, protected asset access, and background processing orchestration.
-- `frontend/`: React/Vite application for the library, submission, queue, and access-management experience.
+- `frontend/`: React/Vite application with a single public create page and a protected internal library/management workspace.
 - `docker-compose.yml`: local development stack with PostgreSQL, Redis, Django, Celery worker, and React.
 
 ## Real Repo Baseline
@@ -27,12 +27,13 @@ The previous `code/requirements.txt` referenced Python `3.14.2`, but the platfor
 - Email-first custom user model with session auth.
 - TOTP setup/confirm/status endpoints.
 - Password-reset request and reset-confirm APIs.
+- Super-admin-only managed user creation endpoints.
 - Catalog models for books, contributors, series, categories, sources, metadata reviews, metadata versions, and generated assets.
 - Ingestion models for submissions, title-resolution attempts, match candidates, processing jobs/logs, duplicate reviews, and source catalog entries.
 - Access-control models for grants, preview sessions, reading sessions, and bookmarks.
 - Protected asset download endpoints and a backend-issued reader launch flow for `https://ereader.rsalehin24.me/`.
 - Celery task wiring plus a Django management command that wraps the legacy batch process.
-- Capability-scoped authorization for metadata editing, processing review, and access management.
+- Capability-scoped authorization for metadata editing, processing review, and access management, with grant administration reserved for the super admin.
 - Submission-time database reuse so existing books are returned instead of being recreated from duplicate title/URL requests.
 - Canonical normalized contributor/series/category/book naming so repeated names collapse to a single relational record.
 - Public-facing auth/submission throttle hooks and server-side reader-state protection.
@@ -42,14 +43,15 @@ The previous `code/requirements.txt` referenced Python `3.14.2`, but the platfor
 
 ### Frontend
 
-- React/Vite scaffold with:
+- Single public landing page with one or more `URL or Book Name` inputs and lightweight creation results.
+- Protected signed-in workspace for:
   - library home
   - book detail
-  - submission/import
   - queue/results
   - auth
   - access overview
 - In-app TOTP setup/confirmation.
+- Super-admin-only user creation, user activation/deactivation, and grant/revoke authorization controls.
 - Basic reviewer actions for duplicate confirmation and submission reprocessing.
 - Reader progress and bookmark controls for authorized users.
 - Staff/capability-aware metadata editing and version history views.
@@ -180,9 +182,8 @@ npm run build
 
 ## What Is Still Incomplete
 
-- Production mail delivery hardening and deeper account-management UX.
-- Richer merge/review tooling for duplicates and metadata corrections beyond the current basic staff flows.
-- Fuller grant/user management UX beyond the current screens.
+- Production mail delivery hardening.
+- Richer merge/review tooling for duplicates and metadata corrections beyond the current basic flows.
 - Deeper reader-side polish beyond the current manifest launch and progress-sync contract.
 - End-to-end Docker validation against live Postgres/Redis/Celery rather than eager-mode local testing.
 

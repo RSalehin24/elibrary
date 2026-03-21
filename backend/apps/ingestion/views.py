@@ -1,10 +1,10 @@
 from django.db.models import Q
+from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.access.models import PermissionScope
 from apps.common.permissions import CanManageProcessing, user_has_scope
@@ -62,7 +62,10 @@ def visible_submissions_queryset(user):
 
 
 class SubmissionListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get_throttles(self):
         if self.request.method == "POST":
@@ -100,7 +103,7 @@ class SubmissionListCreateView(APIView):
         serializer = SubmissionBatchCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         submissions = create_submission_records(
-            submitter=request.user,
+            submitter=request.user if request.user.is_authenticated else None,
             parsed_entries=serializer.validated_data["parsed_entries"],
             auto_process=serializer.validated_data["auto_process"],
         )

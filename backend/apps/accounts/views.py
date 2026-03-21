@@ -1,13 +1,17 @@
-from django.contrib.auth import login, logout
+from django.contrib.auth import get_user_model, login, logout
 from django.db import transaction
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.serializers import (
     LoginSerializer,
+    ManagedUserCreateSerializer,
+    ManagedUserSerializer,
+    ManagedUserUpdateSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
@@ -17,6 +21,7 @@ from apps.accounts.serializers import (
     TOTPStatusSerializer,
     UserSerializer,
 )
+from apps.common.permissions import IsSuperAdmin
 from apps.common.throttles import LoginRateThrottle, PasswordResetRateThrottle, RegisterRateThrottle
 
 
@@ -31,7 +36,7 @@ class SessionView(APIView):
 
 
 class RegisterView(generics.CreateAPIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
     serializer_class = RegisterSerializer
     throttle_classes = [RegisterRateThrottle]
 
@@ -42,7 +47,18 @@ class LoginView(APIView):
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as exc:
+            if isinstance(exc.detail, dict) and "code" in exc.detail and "detail" in exc.detail:
+                code = exc.detail["code"]
+                detail = exc.detail["detail"]
+                if isinstance(code, (list, tuple)):
+                    code = code[0]
+                if isinstance(detail, (list, tuple)):
+                    detail = detail[0]
+                return Response({"detail": str(detail), "code": str(code)}, status=status.HTTP_400_BAD_REQUEST)
+            raise
         login(request, serializer.validated_data["user"])
         return Response(UserSerializer(request.user).data)
 
@@ -119,5 +135,41 @@ class TOTPConfirmView(APIView):
         device.confirmed = True
         device.save(update_fields=["confirmed"])
         return Response({"detail": "TOTP is now enabled."})
+
+
+class ManagedUserListCreateView(generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get_queryset(self):
+        user_model = get_user_model()
+        return user_model.objects.order_by("email").prefetch_related("permission_grants")
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return ManagedUserCreateSerializer
+        return ManagedUserSerializer
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        payload = [
+            {
+                **ManagedUserSerializer(user).data,
+                "grant_count": user.permission_grants.count(),
+            }
+            for user in queryset
+        ]
+        return Response(payload)
+
+
+class ManagedUserDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get_queryset(self):
+        return get_user_model().objects.order_by("email")
+
+    def get_serializer_class(self):
+        if self.request.method in {"PUT", "PATCH"}:
+            return ManagedUserUpdateSerializer
+        return ManagedUserSerializer
 
 # Create your views here.

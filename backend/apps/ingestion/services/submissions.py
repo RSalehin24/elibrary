@@ -220,6 +220,7 @@ def create_submission_records(submitter, parsed_entries, auto_process=True):
             status=SubmissionStatus.PENDING_RESOLUTION
             if entry["kind"] == "title"
             else SubmissionStatus.QUEUED,
+            raw_payload={"submitted_publicly": submitter is None},
         )
 
         AuditLog.objects.create(
@@ -283,6 +284,7 @@ def create_submission_records(submitter, parsed_entries, auto_process=True):
 
         if auto_process and submission.resolved_url and submission.status == SubmissionStatus.QUEUED:
             queue_submission(submission, actor=submitter)
+            submission.refresh_from_db()
 
         submissions.append(submission)
 

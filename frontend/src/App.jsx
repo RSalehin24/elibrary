@@ -3,10 +3,10 @@ import AppShell from "./layouts/AppShell";
 import AccessPage from "./pages/AccessPage";
 import BookDetailPage from "./pages/BookDetailPage";
 import HomePage from "./pages/HomePage";
+import LibraryPage from "./pages/LibraryPage";
 import LoginPage from "./pages/LoginPage";
 import PasswordResetPage from "./pages/PasswordResetPage";
 import QueuePage from "./pages/QueuePage";
-import SubmissionPage from "./pages/SubmissionPage";
 import { useSession } from "./hooks/useSession";
 
 function ProtectedRoute({ children }) {
@@ -31,12 +31,11 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/reset-password" element={<PasswordResetPage />} />
-        <Route path="/books/:slug" element={<BookDetailPage />} />
         <Route
-          path="/submit"
+          path="/library"
           element={
             <ProtectedRoute>
-              <SubmissionPage />
+              <LibraryPage />
             </ProtectedRoute>
           }
         />
@@ -45,6 +44,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <QueuePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/books/:slug"
+          element={
+            <ProtectedRoute>
+              <BookDetailPage />
             </ProtectedRoute>
           }
         />

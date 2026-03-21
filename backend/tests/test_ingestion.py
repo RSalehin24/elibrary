@@ -53,6 +53,38 @@ def test_title_submission_surfaces_exact_match_without_guessing(client, settings
 
 
 @pytest.mark.django_db
+def test_public_submission_accepts_mixed_entries_and_reuses_existing_books(client):
+    existing_book = Book.objects.create(title="সংরক্ষিত বই", state="ready", review_state="approved")
+    BookSource.objects.create(
+        book=existing_book,
+        source_url="https://www.ebanglalibrary.com/books/existing-book/",
+        normalized_source_url="https://www.ebanglalibrary.com/books/existing-book/",
+        source_title="সংরক্ষিত বই",
+    )
+
+    response = client.post(
+        "/api/ingestion/submissions/",
+        data=json.dumps(
+            {
+                "entries": [
+                    "https://www.ebanglalibrary.com/books/existing-book/",
+                    "সংরক্ষিত বই",
+                ],
+                "auto_process": True,
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert len(payload) == 2
+    assert all(entry["served_from_database"] is True for entry in payload)
+    assert all(entry["linked_book_slug"] == existing_book.slug for entry in payload)
+    assert PreviewAccessSession.objects.count() == 0
+
+
+@pytest.mark.django_db
 def test_confirm_candidate_requires_manual_choice_for_ambiguous_title(client, monkeypatch):
     user = User.objects.create_user(email="reviewer@example.com", password="strong-password-123")
     client.force_login(user)

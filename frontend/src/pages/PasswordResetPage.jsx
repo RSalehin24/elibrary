@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
+import { useToast } from "../hooks/useToast";
 
 export default function PasswordResetPage() {
   const [params] = useSearchParams();
+  const toast = useToast();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [message, setMessage] = useState("");
 
   const resetPayload = useMemo(
     () => ({
@@ -19,7 +21,7 @@ export default function PasswordResetPage() {
   async function handleSubmit(event) {
     event.preventDefault();
     if (password !== confirmPassword) {
-      setMessage("The password fields must match.");
+      toast.error("The password fields must match.");
       return;
     }
 
@@ -31,17 +33,17 @@ export default function PasswordResetPage() {
           new_password: password
         }
       });
-      setMessage("Your password has been reset. You can sign in now.");
+      toast.success("Password reset complete.");
     } catch (error) {
-      setMessage(error.message);
+      toast.error(error.message);
     }
   }
 
   return (
-    <div className="two-column-layout">
-      <section className="detail-card">
+    <div className="login-shell">
+      <section className="detail-card login-card">
         <p className="eyebrow">Password reset</p>
-        <h1>Choose a new password.</h1>
+        <h1>New password</h1>
         <form className="stack-form" onSubmit={handleSubmit}>
           <label>
             <span>New password</span>
@@ -55,19 +57,15 @@ export default function PasswordResetPage() {
               onChange={(event) => setConfirmPassword(event.target.value)}
             />
           </label>
-          <button type="submit" className="primary-button">
-            Reset password
-          </button>
+          <div className="inline-pills">
+            <button type="submit" className="primary-button">
+              Reset password
+            </button>
+            <Link to="/login" className="ghost-button">
+              Back
+            </Link>
+          </div>
         </form>
-        {message ? <p className="form-feedback">{message}</p> : null}
-      </section>
-      <section className="detail-card">
-        <p className="eyebrow">Secure access</p>
-        <h2>What this does</h2>
-        <p>
-          This flow only changes your account password. Reader authorization, durable read permissions, and protected
-          downloads remain controlled by backend grants.
-        </p>
       </section>
     </div>
   );

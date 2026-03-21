@@ -1,43 +1,44 @@
 import { NavLink } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 
-const navigation = [
-  { to: "/", label: "Library" },
-  { to: "/submit", label: "Submit" },
-  { to: "/queue", label: "Queue" },
-  { to: "/access", label: "Access" }
-];
-
 export default function AppShell({ children }) {
   const { authenticated, user, logout } = useSession();
+  const navigation = authenticated
+    ? [
+        { to: "/", label: "Create" },
+        { to: "/library", label: "Library" },
+        { to: "/queue", label: "Queue" },
+        ...(user?.is_superuser ? [{ to: "/access", label: "Access" }] : [])
+      ]
+    : [];
 
   return (
     <div className="shell">
       <div className="shell-ornament shell-ornament-left" aria-hidden="true" />
       <div className="shell-ornament shell-ornament-right" aria-hidden="true" />
-      <header className="topbar">
+      <header className={authenticated ? "topbar" : "topbar topbar-public"}>
         <div className="brand-block">
-          <span className="brand-kicker">Controlled Digital Library</span>
           <NavLink to="/" className="brand-mark">
             Bangla Library
           </NavLink>
         </div>
-        <nav className="topnav" aria-label="Primary">
-          {navigation.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => (isActive ? "nav-link is-active" : "nav-link")}
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
+        {authenticated ? (
+          <nav className="topnav" aria-label="Primary">
+            {navigation.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) => (isActive ? "nav-link is-active" : "nav-link")}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+        ) : null}
         <div className="session-box">
           {authenticated ? (
             <>
               <div className="session-meta">
-                <span className="session-label">Signed in</span>
                 <strong>{user?.full_name || user?.email}</strong>
               </div>
               <button type="button" className="ghost-button" onClick={logout}>

@@ -4,6 +4,7 @@ import { apiFetch } from "../api/client";
 import StatusPill from "../components/StatusPill";
 import EmptyState from "../components/EmptyState";
 import { useSession } from "../hooks/useSession";
+import { useToast } from "../hooks/useToast";
 import { hasCapability } from "../utils/capabilities";
 import { toQueryString } from "../utils/query";
 
@@ -23,6 +24,7 @@ const defaultJobFilters = {
 
 export default function QueuePage() {
   const { user } = useSession();
+  const toast = useToast();
   const canManageProcessing = hasCapability(user, "processing:manage");
   const [jobs, setJobs] = useState([]);
   const [submissions, setSubmissions] = useState([]);
@@ -51,6 +53,7 @@ export default function QueuePage() {
       setError("");
     } catch (nextError) {
       setError(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -62,7 +65,7 @@ export default function QueuePage() {
       });
       await load();
     } catch (nextError) {
-      setError(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -78,7 +81,7 @@ export default function QueuePage() {
       });
       await load();
     } catch (nextError) {
-      setError(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -90,13 +93,13 @@ export default function QueuePage() {
       });
       await load();
     } catch (nextError) {
-      setError(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
   async function saveCurrentFilter() {
     if (!savedFilterName.trim()) {
-      setError("Name this queue filter before saving it.");
+      toast.error("Name this filter before saving it.");
       return;
     }
 
@@ -113,9 +116,10 @@ export default function QueuePage() {
         }
       });
       setSavedFilterName("");
+      toast.success("Queue filter saved.");
       await load();
     } catch (nextError) {
-      setError(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -130,9 +134,10 @@ export default function QueuePage() {
   async function deleteSavedFilter(id) {
     try {
       await apiFetch(`/saved-filters/${id}/`, { method: "DELETE" });
+      toast.success("Queue filter removed.");
       await load();
     } catch (nextError) {
-      setError(nextError.message);
+      toast.error(nextError.message);
     }
   }
 
@@ -140,8 +145,8 @@ export default function QueuePage() {
     <div className="two-column-layout">
       <section className="detail-card">
         <p className="eyebrow">Processing</p>
-        <h1>Queue visibility</h1>
-        {error ? <p className="form-feedback">{error}</p> : null}
+        <h1>Queue</h1>
+        {error ? <p className="muted-copy">{error}</p> : null}
         <form
           className="stack-form"
           onSubmit={(event) => {
@@ -210,7 +215,7 @@ export default function QueuePage() {
       </section>
       <section className="detail-card">
         <p className="eyebrow">Review</p>
-        <h2>Submission outcomes</h2>
+        <h2>Requests</h2>
         <form
           className="stack-form"
           onSubmit={(event) => {

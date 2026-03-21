@@ -58,17 +58,19 @@ Remaining:
 ## Phase 4: Library and Management UI
 
 Completed:
-- Added React pages for library home, login/registration, submission, queue/results, book detail, and access overview.
+- Reworked the React app around a single public create page plus a protected signed-in workspace.
+- Replaced public registration with super-admin-only user creation and activation/deactivation controls.
+- Added React pages for the protected library home, login, queue/results, book detail, and access overview.
 - Added capability-aware UI gating instead of relying only on `is_staff`.
 - Added in-app TOTP setup/confirmation, reader progress/bookmark controls, metadata version visibility, duplicate review actions, and grant management basics.
 - Added richer catalog and queue filtering plus saved filters.
 - Added metadata review create/update flows in the book-detail experience.
-- Added multi-book completion actions after submission intake.
+- Added multi-book creation from repeated `URL or Book Name` inputs on the public landing page.
 
 Remaining:
 - Staff-grade metadata review UI with richer merge/edit tooling.
 - Even richer search facets and reviewer tooling.
-- Grant editing and user management screens beyond the current create/revoke flow.
+- More advanced user/grant audit tooling beyond the current create/revoke flow.
 
 ## Blockers / Assumptions
 

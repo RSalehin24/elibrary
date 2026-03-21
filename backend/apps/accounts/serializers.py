@@ -47,6 +47,46 @@ class RegisterSerializer(serializers.ModelSerializer):
         return User.objects.create_user(password=password, **validated_data)
 
 
+class ManagedUserSerializer(UserSerializer):
+    grant_count = serializers.SerializerMethodField()
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ["is_active", "grant_count"]
+
+    def get_grant_count(self, obj):
+        return obj.permission_grants.count()
+
+
+class ManagedUserCreateSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=12)
+    is_active = serializers.BooleanField(default=True)
+
+    class Meta:
+        model = User
+        fields = ["email", "full_name", "password", "is_active"]
+
+    def create(self, validated_data):
+        password = validated_data.pop("password")
+        return User.objects.create_user(password=password, **validated_data)
+
+
+class ManagedUserUpdateSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=12, required=False, allow_blank=False)
+
+    class Meta:
+        model = User
+        fields = ["full_name", "is_active", "password"]
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop("password", "")
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        if password:
+            instance.set_password(password)
+        instance.save()
+        return instance
+
+
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -58,6 +98,14 @@ class LoginSerializer(serializers.Serializer):
         "otp_invalid": _("The supplied TOTP code is invalid."),
     }
 
+    def raise_login_error(self, code):
+        raise serializers.ValidationError(
+            {
+                "detail": self.error_messages[code],
+                "code": code,
+            }
+        )
+
     def validate(self, attrs):
         request = self.context["request"]
         email = attrs["email"]
@@ -66,17 +114,17 @@ class LoginSerializer(serializers.Serializer):
 
         user = authenticate(request=request, email=email, password=password)
         if user is None:
-            self.fail("invalid_credentials")
+            self.raise_login_error("invalid_credentials")
 
         if user.has_totp_enabled:
             if not otp_token:
-                self.fail("otp_required")
+                self.raise_login_error("otp_required")
 
             from django_otp.plugins.otp_totp.models import TOTPDevice
 
             device = TOTPDevice.objects.filter(user=user, confirmed=True).first()
             if device is None or not device.verify_token(otp_token):
-                self.fail("otp_invalid")
+                self.raise_login_error("otp_invalid")
 
         attrs["user"] = user
         return attrs

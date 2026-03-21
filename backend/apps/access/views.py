@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from apps.access.models import Bookmark, PermissionGrant, PermissionScope, PreviewAccessSession, ReadingSession
 from apps.access.serializers import BookmarkSerializer, PermissionGrantSerializer, ReadingSessionSerializer
 from apps.catalog.models import Book, GeneratedAsset, GeneratedAssetType
-from apps.common.permissions import CanManageAccess, user_has_scope
+from apps.common.permissions import IsSuperAdmin, user_has_scope
 
 
 def get_active_preview_session(user, book):
@@ -58,7 +58,7 @@ def open_asset_stream(asset):
 
 
 class PermissionGrantListCreateView(generics.ListCreateAPIView):
-    permission_classes = [CanManageAccess]
+    permission_classes = [IsSuperAdmin]
     serializer_class = PermissionGrantSerializer
     queryset = PermissionGrant.objects.select_related("user", "book").all()
 
@@ -67,13 +67,13 @@ class PermissionGrantListCreateView(generics.ListCreateAPIView):
 
 
 class PermissionGrantDetailView(generics.DestroyAPIView):
-    permission_classes = [CanManageAccess]
+    permission_classes = [IsSuperAdmin]
     serializer_class = PermissionGrantSerializer
     queryset = PermissionGrant.objects.select_related("user", "book").all()
 
 
 class AccessReferenceDataView(APIView):
-    permission_classes = [CanManageAccess]
+    permission_classes = [IsSuperAdmin]
 
     def get(self, request):
         users = [
