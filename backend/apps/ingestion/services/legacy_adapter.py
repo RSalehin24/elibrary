@@ -1,52 +1,19 @@
-import importlib
-import importlib.util
-import sys
-from contextlib import contextmanager
 from functools import lru_cache
-from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+from apps.ingestion.legacy import config as legacy_config
+from apps.ingestion.legacy import epub_book, html_book, scraper
 
-LEGACY_CODE_DIR = Path(__file__).resolve().parents[4] / "code"
 ALLOWED_HOSTS = {"ebanglalibrary.com", "www.ebanglalibrary.com"}
-
-
-@contextmanager
-def legacy_code_path():
-    path_str = str(LEGACY_CODE_DIR)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
-        inserted = True
-    else:
-        inserted = False
-
-    try:
-        yield
-    finally:
-        if inserted and path_str in sys.path:
-            sys.path.remove(path_str)
 
 
 @lru_cache(maxsize=1)
 def legacy_modules():
-    with legacy_code_path():
-        scraper = importlib.import_module("scraper")
-        html_book = importlib.import_module("html_book")
-        epub_book = importlib.import_module("epub_book")
     return scraper, html_book, epub_book
 
 
 def load_legacy_config_entries():
-    config_path = LEGACY_CODE_DIR / "config.py"
-    if not config_path.exists():
-        return []
-
-    spec = importlib.util.spec_from_file_location("legacy_code_config", config_path)
-    module = importlib.util.module_from_spec(spec)
-    if spec.loader is None:
-        return []
-    spec.loader.exec_module(module)
-    return getattr(module, "BOOK_URLS", [])
+    return legacy_config.load_book_urls()
 
 
 def normalize_source_url(url):

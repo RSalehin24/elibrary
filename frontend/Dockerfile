@@ -1,10 +1,10 @@
 FROM node:22-alpine
 
-WORKDIR /app/frontend
+WORKDIR /app
 
-COPY frontend/package.json /app/frontend/package.json
+COPY package.json package-lock.json* /app/
 RUN npm install
 
-COPY frontend /app/frontend
+COPY . /app
 
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

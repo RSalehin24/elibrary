@@ -8,6 +8,7 @@ import re
 import os
 import shutil
 import unicodedata
+from pathlib import Path
 from bs4 import BeautifulSoup
 
 HEADERS = {
@@ -704,23 +705,21 @@ def sanitize_folder_name(name):
     return name
 
 def create_output_folder(book_title):
-    parent_dir = os.path.dirname(os.path.abspath(__file__))
-
-    base_folder = os.path.join(os.path.dirname(parent_dir), "outputs")
-    if not os.path.exists(base_folder):
-        os.makedirs(base_folder)
+    base_folder = Path(__file__).resolve().parents[3] / "outputs"
+    if not base_folder.exists():
+        base_folder.mkdir(parents=True, exist_ok=True)
         print(f"Created base folder: {base_folder}")
 
     folder_name = sanitize_folder_name(book_title)
-    full_path = os.path.join(base_folder, folder_name)
+    full_path = base_folder / folder_name
 
-    if not os.path.exists(full_path):
-        os.makedirs(full_path)
+    if not full_path.exists():
+        full_path.mkdir(parents=True, exist_ok=True)
         print(f"Created folder: {full_path}")
     else:
         print(f"Folder already exists: {full_path}")
 
-    return full_path
+    return str(full_path)
 
 def extract_title_and_author(soup):
     title_tag = soup.find("title")

@@ -1,5 +1,6 @@
 import os
-from epub_properties.epub_builder import EpubBuilder
+
+from .epub_properties.epub_builder import EpubBuilder
 
 
 def display_value(value):

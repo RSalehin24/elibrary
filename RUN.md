@@ -1,51 +1,73 @@
-# Docker Postgres + Local App
+# Local Run Guide
 
-Start Docker services:
+This repo now contains two separate deployable apps:
+
+- [`backend/`](./backend)
+- [`frontend/`](./frontend)
+
+For detailed per-app run and deploy instructions, use:
+
+- [`backend/README.md`](./backend/README.md)
+- [`frontend/README.md`](./frontend/README.md)
+
+## Run With Docker
+
+From the repo root:
 
 ```bash
-docker-compose up -d postgres redis worker
+cp .env.example .env
+docker-compose up --build
 ```
 
-Backend:
+This starts the full local stack:
+
+- `frontend` at `http://localhost:5173`
+- `backend` at `http://localhost:8000`
+- `postgres` at `localhost:5432`
+- `redis` at `localhost:6379`
+
+If you want Docker to keep running in the background:
 
 ```bash
-set -a
-source .env
-export DATABASE_URL=postgresql://postgres:postgres@localhost:5433/bangla_library
-export CELERY_BROKER_URL=redis://localhost:6379/0
-export CELERY_RESULT_BACKEND=redis://localhost:6379/0
-set +a
-./ebook-scrapper/bin/python backend/manage.py migrate
-./ebook-scrapper/bin/python backend/manage.py seed_superadmin
-./ebook-scrapper/bin/python backend/manage.py runserver
+docker-compose up --build -d
 ```
 
-Frontend:
+## View Logs
+
+If you run `docker-compose up --build` without `-d`, Docker will stream logs in the terminal automatically.
+
+If you run in detached mode, use:
 
 ```bash
-cd frontend
-set -a
-source ../.env
-export VITE_DEV_PROXY_TARGET=http://localhost:8000
-set +a
-npm install
-npm run dev
+docker-compose logs -f
 ```
 
-Backend: `http://localhost:8000`
-
-Frontend: `http://localhost:5173`
-
-If submissions show Redis connection errors, confirm `redis` and `worker` are both running. The backend can now fall back to inline processing, but the normal queue path still expects Docker Redis plus the Celery worker.
-
-# Re-seed Super Admin
+Useful log commands:
 
 ```bash
-set -a
-source .env
-export DATABASE_URL=postgresql://postgres:postgres@localhost:5433/bangla_library
-export CELERY_BROKER_URL=redis://localhost:6379/0
-export CELERY_RESULT_BACKEND=redis://localhost:6379/0
-set +a
-./ebook-scrapper/bin/python backend/manage.py seed_superadmin
+docker-compose logs -f backend frontend
+docker-compose logs -f backend
+docker-compose logs -f frontend
+docker-compose logs -f worker
+docker-compose logs --tail=100 backend
+```
+
+## Helpful Docker Commands
+
+See running services:
+
+```bash
+docker-compose ps
+```
+
+Stop everything:
+
+```bash
+docker-compose down
+```
+
+Stop everything and remove volumes too:
+
+```bash
+docker-compose down -v
 ```

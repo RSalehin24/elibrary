@@ -6,12 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements /app/requirements
-RUN pip install --upgrade pip && pip install -r /app/requirements/backend.txt
+COPY requirements.txt /app/requirements.txt
+RUN pip install --upgrade pip && pip install -r /app/requirements.txt
 
-COPY backend /app/backend
-COPY code /app/code
-
-WORKDIR /app/backend
+COPY . /app
 
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

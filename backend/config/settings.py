@@ -3,7 +3,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-REPO_ROOT = BASE_DIR.parent
 
 
 def env(key, default=None):
@@ -178,7 +177,7 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 MEDIA_URL = "/media/"
-MEDIA_ROOT = REPO_ROOT / "storage" / "media"
+MEDIA_ROOT = Path(env("MEDIA_ROOT", str(BASE_DIR / "storage" / "media")))
 
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", "Lax")

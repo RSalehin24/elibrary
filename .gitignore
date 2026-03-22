@@ -21,19 +21,20 @@ __pycache__/
 backend/.coverage
 backend/htmlcov/
 backend/staticfiles/
-storage/
+backend/storage/
+backend/outputs/
 
 # Node / React
 frontend/dist/
 frontend/node_modules/
 frontend/.vite/
+frontend/.env
 
 # Docker
 .docker/
 docker-data/
 
 # Legacy/generated assets
-outputs/
 ebook-scrapper/
 LOCAL_PASSWORDS.md
 

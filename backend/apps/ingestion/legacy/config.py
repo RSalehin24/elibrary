@@ -13,7 +13,7 @@ def _normalize_entry(entry):
     raise ValueError("Each BOOK_URLS entry must be a (name, url) pair or an object with `name` and `url`.")
 
 
-def _load_book_urls():
+def load_book_urls():
     raw_json = os.environ.get("BOOK_URLS_JSON", "").strip()
     if raw_json:
         payload = json.loads(raw_json)
@@ -27,4 +27,4 @@ def _load_book_urls():
     return []
 
 
-BOOK_URLS = _load_book_urls()
+BOOK_URLS = load_book_urls()

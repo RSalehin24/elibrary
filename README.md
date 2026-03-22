@@ -1,200 +1,55 @@
 # Bangla Library Platform
 
-This repository started as a Python scraper that pulls Bengali ebooks from `https://www.ebanglalibrary.com/` and generates standalone HTML/EPUB exports under `outputs/`. It now includes an evolutionary refactor path toward a production-ready digital library platform while preserving the legacy scraper/export flow.
+This repository is now organized as two independently deployable apps:
 
-## Current Architecture
+- `backend/`: Django API, auth, catalog, ingestion, reader access, Celery worker support, and the integrated legacy scraper/export pipeline under `backend/apps/ingestion/legacy/`.
+- `frontend/`: React/Vite client that talks to the backend over `VITE_API_BASE_URL`.
 
-- `code/`: legacy scraper and export pipeline, kept intact and still runnable.
-- `backend/`: Django backend for auth, submissions, catalog persistence, protected asset access, and background processing orchestration.
-- `frontend/`: React/Vite application with a single public create page and a protected internal library/management workspace.
-- `docker-compose.yml`: local development stack with PostgreSQL, Redis, Django, Celery worker, and React.
+The apps can still be developed together locally from this repo, but they are now structured so each one can be deployed from its own folder in a separate environment.
 
-## Real Repo Baseline
+## Folder Layout
 
-- `code/main.py` was the original batch entrypoint.
-- `code/scraper.py` already contained the reusable ingestion logic: retries, normalization, fuzzy title comparison, header cleanup, dedication extraction, TOC construction, and lesson/topic scraping.
-- `code/html_book.py` and `code/epub_book.py` already generated exports and still do.
-- The repo originally had no backend, no frontend, no database models, no tests, and only a minimal `.gitignore`.
+- `backend/`
+  - `apps/`, `config/`, `manage.py`
+  - `apps/ingestion/legacy/` for the scraper, HTML builder, and EPUB builder
+  - `requirements.txt` and `requirements-dev.txt`
+  - `.env.example`
+  - `storage/` and `outputs/` for backend-owned local assets
+- `frontend/`
+  - `src/`, `package.json`, `vite.config.js`
+  - `.env.example`
+- `docker-compose.yml`
+  - optional local full-stack integration only
 
-## Python Version
+## Separate Deployment
 
-The previous `code/requirements.txt` referenced Python `3.14.2`, but the platform is now documented and containerized around **Python 3.12** as the supported target for Django, Celery, and PostgreSQL compatibility. The checked-in `ebook-scrapper/` virtualenv remains disposable local noise and is not the deployment model.
+Deploy the backend from the [`backend/`](./backend) folder.
 
-## What Exists Now
+Deploy the frontend from the [`frontend/`](./frontend) folder.
 
-### Backend
+Each folder now has its own environment example and deployment notes:
 
-- Email-first custom user model with session auth.
-- TOTP setup/confirm/status endpoints.
-- Password-reset request and reset-confirm APIs.
-- Super-admin-only managed user creation endpoints.
-- Catalog models for books, contributors, series, categories, sources, metadata reviews, metadata versions, and generated assets.
-- Ingestion models for submissions, title-resolution attempts, match candidates, processing jobs/logs, duplicate reviews, and source catalog entries.
-- Access-control models for grants, preview sessions, reading sessions, and bookmarks.
-- Protected asset download endpoints and a backend-issued reader launch flow for `https://ereader.rsalehin24.me/`.
-- Celery task wiring plus a Django management command that wraps the legacy batch process.
-- Capability-scoped authorization for metadata editing, processing review, and access management, with grant administration reserved for the super admin.
-- Submission-time database reuse so existing books are returned instead of being recreated from duplicate title/URL requests.
-- Canonical normalized contributor/series/category/book naming so repeated names collapse to a single relational record.
-- Public-facing auth/submission throttle hooks and server-side reader-state protection.
-- Token-backed reader session and bookmark endpoints for the external EPUB reader launch contract.
-- Saved-filter persistence for catalog and queue management views.
-- Metadata review APIs that update per-book review state and versioning history.
+- [`backend/README.md`](./backend/README.md)
+- [`frontend/README.md`](./frontend/README.md)
 
-### Frontend
+## Local Full Stack
 
-- Single public landing page with one or more `URL or Book Name` inputs and lightweight creation results.
-- Protected signed-in workspace for:
-  - library home
-  - book detail
-  - queue/results
-  - auth
-  - access overview
-- In-app TOTP setup/confirmation.
-- Super-admin-only user creation, user activation/deactivation, and grant/revoke authorization controls.
-- Basic reviewer actions for duplicate confirmation and submission reprocessing.
-- Reader progress and bookmark controls for authorized users.
-- Staff/capability-aware metadata editing and version history views.
-- Saved filter controls for library and queue workflows.
-- Metadata review controls in the book-detail workflow.
-- Bulk post-submission actions for opening created records and launching readers.
-
-### Legacy Pipeline Preservation
-
-- `code/main.py` now supports env vars and CLI flags for batch input.
-- `code/config.py` is tracked and bootstrap-safe.
-- `title` vs `book_title` mismatch is fixed.
-- HTML/EPUB generators now tolerate relational-style/list metadata by adapting values back to display strings.
-
-## Key Environment Variables
-
-Use `.env.example` as the baseline.
-
-- `DATABASE_URL`
-- `CELERY_BROKER_URL`
-- `CELERY_RESULT_BACKEND`
-- `DJANGO_SECRET_KEY`
-- `DJANGO_ALLOWED_HOSTS`
-- `DJANGO_CORS_ALLOWED_ORIGINS`
-- `DJANGO_CSRF_TRUSTED_ORIGINS`
-- `SUPER_ADMIN_EMAIL`
-- `SUPER_ADMIN_PASSWORD`
-- `EPUB_READER_BASE_URL`
-- `BOOK_URLS_JSON` / `BOOK_URL`
-
-## Local Development
-
-### Backend without Docker
-
-The repository currently validates backend work using the existing checked-in virtualenv:
-
-```bash
-./ebook-scrapper/bin/python backend/manage.py migrate
-./ebook-scrapper/bin/python backend/manage.py seed_superadmin --password 'change-me'
-./ebook-scrapper/bin/python backend/manage.py runserver
-```
-
-In local non-Docker development, Celery defaults to eager execution unless you explicitly set `CELERY_TASK_ALWAYS_EAGER=0`.
-
-### Frontend without Docker
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### Full Stack with Docker Compose
+If you still want the whole stack together locally:
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker-compose up --build
 ```
-
-If queue processing is enabled with `CELERY_TASK_ALWAYS_EAGER=0`, make sure the `redis` and `worker` services are running. The backend now falls back to inline processing if Celery dispatch fails, but the intended local queue setup is still Docker Compose with Redis plus the Celery worker.
 
 Services:
 
-- Django API: `http://localhost:8000`
-- React app: `http://localhost:5173`
+- Backend: `http://localhost:8000`
+- Frontend: `http://localhost:5173`
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 
-## Legacy CLI / Batch Path
+## Notes
 
-Direct script path:
-
-```bash
-BOOK_URLS_JSON='[["Sample","https://www.ebanglalibrary.com/books/sample/"]]' python code/main.py
-python code/main.py --url https://www.ebanglalibrary.com/books/sample/
-```
-
-Django-managed wrapper:
-
-```bash
-./ebook-scrapper/bin/python backend/manage.py process_legacy_batch --sync --url https://www.ebanglalibrary.com/books/sample/
-```
-
-## Migrations and Workers
-
-```bash
-./ebook-scrapper/bin/python backend/manage.py makemigrations
-./ebook-scrapper/bin/python backend/manage.py migrate
-celery -A config worker --workdir backend --loglevel=info
-```
-
-## Reader Integration Contract
-
-The backend issues reader launches via:
-
-- `POST /api/access/books/<slug>/reader-launch/`
-
-That returns a `launch_url` pointing at `https://ereader.rsalehin24.me/?manifest=<signed manifest url>`.
-
-The reader can then request:
-
-- `GET /api/access/reader/<token>/manifest/`
-- `GET /api/access/reader/<token>/epub/`
-- `GET /api/access/reader/<token>/html/`
-- `GET/POST /api/access/reader/<token>/session/`
-- `GET/POST /api/access/reader/<token>/bookmarks/`
-
-This keeps file authorization in Django instead of trusting the frontend alone.
-
-The static reader at `/Users/rsalehin24/Documents/epub-reader` now supports:
-
-- `/?manifest=<absolute manifest url>`
-
-When launched that way, it auto-loads the protected EPUB and syncs reading progress back through the backend session URL.
-
-## Tests
-
-Run backend tests with:
-
-```bash
-./ebook-scrapper/bin/python -m pytest
-```
-
-Run the verified frontend production build with:
-
-```bash
-cd frontend
-npm run build
-```
-
-## ebanglalibrary URL Findings
-
-The current URL normalization and metadata lookup notes are documented in:
-
-- `docs/ebanglalibrary-url-metadata.md`
-
-## What Is Still Incomplete
-
-- Production mail delivery hardening.
-- Richer merge/review tooling for duplicates and metadata corrections beyond the current basic flows.
-- Deeper reader-side polish beyond the current manifest launch and progress-sync contract.
-- End-to-end Docker validation against live Postgres/Redis/Celery rather than eager-mode local testing.
-
-## Resume Notes
-
-See `PROGRESS.md` for the phased checkpoint summary and immediate next steps.
+- The old root-level `code/` dependency is now integrated into `backend/apps/ingestion/legacy/`, so the backend is self-contained.
+- Backend media and new generated outputs now default under `backend/storage/` and `backend/outputs/`.
+- The root `.env.example` remains useful for local integrated development with `docker-compose.yml`.
