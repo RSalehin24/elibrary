@@ -1,12 +1,73 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Fragment, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
+import BookCoverArt from "../components/BookCoverArt";
+import ConfirmationDialog from "../components/ConfirmationDialog";
+import BookDetailSkeleton from "../components/BookDetailSkeleton";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import {
+  formatBookDateTime,
+  getContributorGroups,
+  getPrimaryContributorGroup,
+  getSourceLabel,
+  getStatusMeta
+} from "../utils/bookPresentation";
 import { hasCapability } from "../utils/capabilities";
+import { toQueryString } from "../utils/query";
+
+const assetLabels = {
+  html: "Preview HTML",
+  epub: "Download EPUB",
+  cover: "Download cover"
+};
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
+      <path
+        d="M9 3.75h6a1 1 0 0 1 1 1V6h3a.75.75 0 0 1 0 1.5h-1.1l-.79 10.28A2.5 2.5 0 0 1 14.62 20H9.38a2.5 2.5 0 0 1-2.49-2.22L6.1 7.5H5a.75.75 0 0 1 0-1.5h3V4.75a1 1 0 0 1 1-1Zm5.5 2.25v-.75h-5V6h5Zm-6.9 1.5.78 10.17a1 1 0 0 0 1 .83h5.24a1 1 0 0 0 1-.83l.78-10.17Zm2.4 2.25c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Zm4 0c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function renderTocSummary(toc) {
+  return (
+    <div className="toc-record-list">
+      {toc.map((entry, index) => (
+        <article key={`${entry.title || "section"}-${index}`} className="toc-record-card">
+          <strong>{entry.title || `Section ${index + 1}`}</strong>
+          {entry.children?.length ? (
+            <p>{entry.children.map((child) => child.title).filter(Boolean).join(" • ")}</p>
+          ) : (
+            <p>{entry.type === "topic" ? "Topic" : "Section"}</p>
+          )}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function renderFilterLinks(values, queryKey, emptyLabel = "") {
+  if (!values?.length) {
+    return emptyLabel || null;
+  }
+
+  return values.map((value, index) => (
+    <Fragment key={`${queryKey}-${value}`}>
+      <Link to={`/library${toQueryString({ [queryKey]: value })}`} className="meta-link">
+        {value}
+      </Link>
+      {index < values.length - 1 ? <span className="meta-divider">, </span> : null}
+    </Fragment>
+  ));
+}
 
 export default function BookDetailPage() {
+  const navigate = useNavigate();
   const { user } = useSession();
   const toast = useToast();
   const { slug } = useParams();
@@ -24,27 +85,99 @@ export default function BookDetailPage() {
   const [metadataVersions, setMetadataVersions] = useState([]);
   const [metadataReviews, setMetadataReviews] = useState([]);
   const [reviewForm, setReviewForm] = useState({ state: "pending", notes: "" });
-  const [readerState, setReaderState] = useState({ last_location: "", progress_percent: 0 });
+  const [readerState, setReaderState] = useState({
+    last_location: "",
+    progress_percent: 0,
+    last_opened_at: ""
+  });
   const [readerAccess, setReaderAccess] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
-  const [bookmarkForm, setBookmarkForm] = useState({ location: "", label: "", note: "" });
+  const [deleting, setDeleting] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const canEditMetadata = hasCapability(user, "metadata:edit");
 
+  function applyReaderState(sessionPayload) {
+    if (sessionPayload) {
+      setReaderAccess(true);
+      setReaderState({
+        last_location: sessionPayload.last_location || "",
+        progress_percent: sessionPayload.progress_percent || 0,
+        last_opened_at: sessionPayload.last_opened_at || ""
+      });
+      return;
+    }
+
+    setReaderAccess(false);
+    setReaderState({ last_location: "", progress_percent: 0, last_opened_at: "" });
+  }
+
+  async function fetchBook(targetSlug = slug) {
+    const payload = await apiFetch(`/catalog/books/${targetSlug}/`);
+    setBook(payload);
+    setError("");
+    if (payload.slug && payload.slug !== targetSlug) {
+      navigate(`/books/${payload.slug}`, { replace: true });
+    }
+    return payload;
+  }
+
+  async function refreshMetadataCollections(targetSlug = slug) {
+    if (!canEditMetadata) {
+      setMetadataVersions([]);
+      setMetadataReviews([]);
+      return;
+    }
+
+    const [versionsPayload, reviewsPayload] = await Promise.all([
+      apiFetch(`/catalog/books/${targetSlug}/metadata-versions/`),
+      apiFetch(`/catalog/books/${targetSlug}/metadata-reviews/`)
+    ]);
+    setMetadataVersions(versionsPayload);
+    setMetadataReviews(reviewsPayload);
+  }
+
+  async function fetchReaderCollections(targetSlug = slug) {
+    const [sessionPayload, bookmarkPayload] = await Promise.all([
+      apiFetch(`/access/books/${targetSlug}/reading-session/`).catch((nextError) => {
+        if ([401, 403].includes(nextError.status)) {
+          return null;
+        }
+        throw nextError;
+      }),
+      apiFetch(`/access/books/${targetSlug}/bookmarks/`).catch((nextError) => {
+        if ([401, 403].includes(nextError.status)) {
+          return [];
+        }
+        throw nextError;
+      })
+    ]);
+
+    return { sessionPayload, bookmarkPayload };
+  }
+
   useEffect(() => {
+    let active = true;
+
     async function loadBook() {
       try {
         setLoading(true);
-        const payload = await apiFetch(`/catalog/books/${slug}/`);
-        setBook(payload);
-        setError("");
+        await fetchBook(slug);
       } catch (nextError) {
-        setError(nextError.message);
+        if (active) {
+          setError(nextError.message);
+        }
       } finally {
-        setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
     loadBook();
+
+    return () => {
+      active = false;
+    };
   }, [slug]);
 
   useEffect(() => {
@@ -66,66 +199,56 @@ export default function BookDetailPage() {
       setMetadataVersions([]);
       setMetadataReviews([]);
       setBookmarks([]);
-      setReaderAccess(false);
-      setReaderState({ last_location: "", progress_percent: 0 });
+      applyReaderState(null);
       return;
     }
 
+    let active = true;
+
     async function loadSupplementalData() {
       try {
-        const requests = [
-          apiFetch(`/access/books/${slug}/reading-session/`).catch((nextError) => {
-            if ([401, 403].includes(nextError.status)) {
-              return null;
-            }
-            throw nextError;
-          }),
-          apiFetch(`/access/books/${slug}/bookmarks/`).catch((nextError) => {
-            if ([401, 403].includes(nextError.status)) {
-              return [];
-            }
-            throw nextError;
-          })
-        ];
+        const requests = [fetchReaderCollections(slug)];
 
         if (canEditMetadata) {
           requests.push(
-            apiFetch(`/catalog/books/${slug}/metadata-versions/`).catch((nextError) => {
-              if ([401, 403].includes(nextError.status)) {
-                return [];
-              }
-              throw nextError;
-            })
-          );
-          requests.push(
-            apiFetch(`/catalog/books/${slug}/metadata-reviews/`).catch((nextError) => {
-              if ([401, 403].includes(nextError.status)) {
-                return [];
-              }
-              throw nextError;
-            })
+            Promise.all([
+              apiFetch(`/catalog/books/${slug}/metadata-versions/`).catch((nextError) => {
+                if ([401, 403].includes(nextError.status)) {
+                  return [];
+                }
+                throw nextError;
+              }),
+              apiFetch(`/catalog/books/${slug}/metadata-reviews/`).catch((nextError) => {
+                if ([401, 403].includes(nextError.status)) {
+                  return [];
+                }
+                throw nextError;
+              })
+            ])
           );
         }
 
-        const [sessionPayload, bookmarkPayload, metadataPayload = [], reviewPayload = []] = await Promise.all(requests);
-        if (sessionPayload) {
-          setReaderAccess(true);
-          setReaderState({
-            last_location: sessionPayload.last_location || "",
-            progress_percent: sessionPayload.progress_percent || 0
-          });
-        } else {
-          setReaderAccess(false);
+        const [{ sessionPayload, bookmarkPayload }, metadataPayload = [[], []]] = await Promise.all(requests);
+        if (!active) {
+          return;
         }
+
+        applyReaderState(sessionPayload);
         setBookmarks(bookmarkPayload);
-        setMetadataVersions(metadataPayload);
-        setMetadataReviews(reviewPayload);
+        setMetadataVersions(metadataPayload[0] || []);
+        setMetadataReviews(metadataPayload[1] || []);
       } catch (nextError) {
-        toast.error(nextError.message);
+        if (active) {
+          toast.error(nextError.message);
+        }
       }
     }
 
     loadSupplementalData();
+
+    return () => {
+      active = false;
+    };
   }, [book?.id, slug, user?.id, canEditMetadata]);
 
   async function launchReader() {
@@ -135,6 +258,9 @@ export default function BookDetailPage() {
         body: {}
       });
       window.open(payload.launch_url, "_blank", "noopener,noreferrer");
+      const { sessionPayload, bookmarkPayload } = await fetchReaderCollections(slug);
+      applyReaderState(sessionPayload);
+      setBookmarks(bookmarkPayload);
       toast.success("Reader opened.");
     } catch (nextError) {
       toast.error(nextError.message);
@@ -165,50 +291,11 @@ export default function BookDetailPage() {
         }
       });
       setBook(payload);
-      const [versionsPayload, reviewsPayload] = await Promise.all([
-        apiFetch(`/catalog/books/${slug}/metadata-versions/`),
-        apiFetch(`/catalog/books/${slug}/metadata-reviews/`)
-      ]);
-      setMetadataVersions(versionsPayload);
-      setMetadataReviews(reviewsPayload);
+      if (payload.slug && payload.slug !== slug) {
+        navigate(`/books/${payload.slug}`, { replace: true });
+      }
+      await refreshMetadataCollections(payload.slug || slug);
       toast.success("Metadata updated.");
-    } catch (nextError) {
-      toast.error(nextError.message);
-    }
-  }
-
-  async function saveReadingSession(event) {
-    event.preventDefault();
-    try {
-      const payload = await apiFetch(`/access/books/${slug}/reading-session/`, {
-        method: "POST",
-        body: {
-          last_location: readerState.last_location,
-          progress_percent: Number(readerState.progress_percent) || 0
-        }
-      });
-      setReaderState({
-        last_location: payload.last_location || "",
-        progress_percent: payload.progress_percent || 0
-      });
-      toast.success("Reading progress saved.");
-      setReaderAccess(true);
-    } catch (nextError) {
-      toast.error(nextError.message);
-    }
-  }
-
-  async function createBookmark(event) {
-    event.preventDefault();
-    try {
-      const payload = await apiFetch(`/access/books/${slug}/bookmarks/`, {
-        method: "POST",
-        body: bookmarkForm
-      });
-      setBookmarks((current) => [payload, ...current]);
-      setBookmarkForm({ location: "", label: "", note: "" });
-      setReaderAccess(true);
-      toast.success("Bookmark saved.");
     } catch (nextError) {
       toast.error(nextError.message);
     }
@@ -233,7 +320,7 @@ export default function BookDetailPage() {
       });
       setMetadataReviews((current) => [payload, ...current]);
       setReviewForm({ state: "pending", notes: "" });
-      setBook((current) => ({ ...current, review_state: payload.state }));
+      await fetchBook(slug);
       toast.success("Review saved.");
     } catch (nextError) {
       toast.error(nextError.message);
@@ -249,243 +336,432 @@ export default function BookDetailPage() {
       setMetadataReviews((current) =>
         current.map((review) => (review.id === reviewId ? payload : review))
       );
-      setBook((current) => ({ ...current, review_state: payload.state }));
+      await fetchBook(slug);
       toast.success("Review updated.");
     } catch (nextError) {
       toast.error(nextError.message);
     }
   }
 
+  function requestDeleteBook() {
+    if (!book || deleting) {
+      return;
+    }
+    setDeleteDialogOpen(true);
+  }
+
+  async function confirmDeleteBook() {
+    if (!book || deleting) {
+      return;
+    }
+
+    try {
+      setDeleting(true);
+      await apiFetch(`/catalog/books/${slug}/`, { method: "DELETE" });
+      toast.success("Book deleted.");
+      navigate("/library", { replace: true });
+    } catch (nextError) {
+      toast.error(nextError.message);
+      setDeleting(false);
+    }
+  }
+
+  function handleDeleteControlKeyDown(event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      requestDeleteBook();
+    }
+  }
+
   if (loading) {
-    return <div className="page-state">Loading book record...</div>;
+    return <BookDetailSkeleton />;
   }
 
   if (error) {
     return <div className="page-state page-state-error">{error}</div>;
   }
 
+  const sourceRecords = book.source_records?.length
+    ? book.source_records
+    : (book.source_urls || []).map((url) => ({
+        url,
+        display_url: decodeURIComponent(url),
+        display_path: decodeURIComponent(url).replace(/^https?:\/\/[^/]+\//, ""),
+        source_title: "",
+        site: "",
+        is_primary: false
+      }));
+  const contributorGroups = getContributorGroups(book);
+  const primaryContributorGroup = getPrimaryContributorGroup(book);
+  const supportingContributorGroups = contributorGroups.filter((group) => group.role !== primaryContributorGroup?.role);
+  const frontMatter = book.front_matter || [];
+  const hasFrontMatter = Boolean(frontMatter.length || book.book_info_html?.trim());
+  const hasDedication = Boolean(book.dedication_html?.trim());
+  const hasToc = Boolean(book.toc?.length);
+  const progressPercent = Math.max(0, Math.min(100, Math.round(Number(readerState.progress_percent) || 0)));
+
   return (
-    <div className="detail-layout">
-      <section className="detail-sidebar">
-        <div className="book-cover-placeholder book-cover-large" aria-hidden="true">
-          <span>{book.title.slice(0, 1)}</span>
-        </div>
-        <div className="detail-statuses">
-          <StatusPill value={book.state} />
-          <StatusPill value={book.review_state} />
-        </div>
-        <button type="button" className="primary-button" onClick={launchReader}>
-          Launch Reader
-        </button>
-        {(book.assets || []).map((asset) => (
-          <a key={asset.id} className="ghost-button asset-link" href={asset.download_url} target="_blank" rel="noreferrer">
-            Download {asset.asset_type.toUpperCase()}
-          </a>
-        ))}
-      </section>
-      <section className="detail-main">
-        <p className="eyebrow">Book record</p>
-        <h1>{book.title}</h1>
-        <p className="detail-lead">
-          {(book.contributors || [])
-            .map((contributor) => `${contributor.name} · ${contributor.role.replace(/_/g, " ")}`)
-            .join(" / ")}
-        </p>
-        <div className="detail-facts">
-          <div>
-            <span className="fact-label">Series</span>
-            <strong>{(book.series || []).join(", ") || "None"}</strong>
-          </div>
-          <div>
-            <span className="fact-label">Categories</span>
-            <strong>{(book.categories || []).join(", ") || "Unclassified"}</strong>
-          </div>
-          <div>
-            <span className="fact-label">Source URLs</span>
-            <strong>{(book.source_urls || []).join(", ")}</strong>
-          </div>
-          <div>
-            <span className="fact-label">Metadata reviewed</span>
-            <strong>{book.metadata_last_reviewed_at || "Not reviewed yet"}</strong>
-          </div>
-        </div>
-        <section className="detail-card">
-          <h2>Front matter</h2>
-          <div dangerouslySetInnerHTML={{ __html: book.book_info_html || "<p>No front matter extracted yet.</p>" }} />
-        </section>
-        <section className="detail-card">
-          <h2>Dedication</h2>
-          <div dangerouslySetInnerHTML={{ __html: book.dedication_html || "<p>No dedication captured.</p>" }} />
-        </section>
-        <section className="detail-card">
-          <h2>TOC shape</h2>
-          <pre className="json-block">{JSON.stringify(book.toc || [], null, 2)}</pre>
-        </section>
-        {book.raw_provenance && Object.keys(book.raw_provenance).length ? (
-          <section className="detail-card">
-            <h2>Raw provenance</h2>
-            <pre className="json-block">{JSON.stringify(book.raw_provenance, null, 2)}</pre>
-          </section>
+    <div className="book-detail-page page-stack">
+      <section className="detail-card book-hero">
+        {canEditMetadata ? (
+          <span
+            className={`book-delete-control${deleting ? " is-disabled" : ""}`}
+            role="button"
+            tabIndex={deleting ? -1 : 0}
+            onClick={requestDeleteBook}
+            onKeyDown={handleDeleteControlKeyDown}
+            aria-label={deleting ? "Deleting book" : "Delete book"}
+            title={deleting ? "Deleting book" : "Delete book"}
+            aria-disabled={deleting ? "true" : "false"}
+          >
+            <TrashIcon />
+          </span>
         ) : null}
+
+        <div className="book-hero-cover">
+          <BookCoverArt book={book} className="book-cover-large book-hero-placeholder" ariaHidden />
+        </div>
+
+        <div className="book-hero-copy">
+          <p className="eyebrow">Book</p>
+          <h1>{book.title}</h1>
+          {primaryContributorGroup ? (
+            primaryContributorGroup.role === "author" ? (
+              <p className="detail-lead">
+                {renderFilterLinks(primaryContributorGroup.names, "author", "Contributor unavailable")}
+              </p>
+            ) : (
+              <p className="detail-meta-row detail-lead-row">
+                <span className="fact-label">{primaryContributorGroup.label}</span>
+                <span className="detail-meta-values">
+                  {renderFilterLinks(primaryContributorGroup.names, "contributor", "Contributor unavailable")}
+                </span>
+              </p>
+            )
+          ) : (
+            <p className="detail-lead">Contributor unavailable</p>
+          )}
+
+          <div className="detail-statuses">
+            <StatusPill value={book.state} />
+            <StatusPill value={book.review_state} />
+          </div>
+
+          {supportingContributorGroups.length || book.series?.length || book.categories?.length ? (
+            <div className="book-meta-stack">
+              {supportingContributorGroups.map((group) => (
+                <p key={group.role} className="detail-meta-row">
+                  <span className="fact-label">{group.label}</span>
+                  <span className="detail-meta-values">
+                    {renderFilterLinks(group.names, group.role === "author" ? "author" : "contributor")}
+                  </span>
+                </p>
+              ))}
+              {book.series?.length ? (
+                <p className="detail-meta-row">
+                  <span className="fact-label">Series</span>
+                  <span className="detail-meta-values">{renderFilterLinks(book.series, "series")}</span>
+                </p>
+              ) : null}
+              {book.categories?.length ? (
+                <p className="detail-meta-row">
+                  <span className="fact-label">Categories</span>
+                  <span className="detail-meta-values">{renderFilterLinks(book.categories, "category")}</span>
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="book-hero-actions">
+            <button type="button" className="primary-button" onClick={launchReader}>
+              Open reader
+            </button>
+            {(book.assets || []).map((asset) => (
+              <a key={asset.id} className="ghost-button asset-link" href={asset.download_url} target="_blank" rel="noreferrer">
+                {assetLabels[asset.asset_type] || `Download ${asset.asset_type.toUpperCase()}`}
+              </a>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {sourceRecords.length ? (
         <section className="detail-card">
-          <h2>Reader state</h2>
+          <div className="panel-header">
+            <div className="section-title-block">
+              <p className="eyebrow">Source</p>
+              <h2>Source Records</h2>
+            </div>
+          </div>
+          <div className="source-record-list">
+            {sourceRecords.map((source, index) => (
+              <article key={`${source.url}-${index}`} className="source-record-card">
+                <div className="source-record-copy">
+                  <span className="fact-label">{source.is_primary ? "Primary" : "Linked"}</span>
+                  <strong>{getSourceLabel(source) || "Source page"}</strong>
+                  <a className="source-link" href={source.url} target="_blank" rel="noreferrer">
+                    {source.display_url || source.url}
+                  </a>
+                </div>
+                <a className="ghost-button" href={source.url} target="_blank" rel="noreferrer">
+                  Open
+                </a>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {hasFrontMatter ? (
+        <section className="detail-card">
+          <div className="section-title-block">
+            <p className="eyebrow">Extracted</p>
+            <h2>Book Details</h2>
+          </div>
+          {frontMatter.length ? (
+            <div className="metadata-list">
+              {frontMatter.map((entry) => (
+                <div key={`${entry.key}-${entry.value}`} className="metadata-row">
+                  <span className="fact-label">{entry.label}</span>
+                  <strong className="metadata-value">{entry.value}</strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rich-content-block" dangerouslySetInnerHTML={{ __html: book.book_info_html }} />
+          )}
+        </section>
+      ) : null}
+
+      {hasDedication ? (
+        <section className="detail-card">
+          <div className="section-title-block">
+            <p className="eyebrow">Extracted</p>
+            <h2>Dedication</h2>
+          </div>
+          <div className="rich-content-block" dangerouslySetInnerHTML={{ __html: book.dedication_html }} />
+        </section>
+      ) : null}
+
+      {hasToc ? (
+        <section className="detail-card">
+          <div className="section-title-block">
+            <p className="eyebrow">Structure</p>
+            <h2>Table of Contents</h2>
+          </div>
+          {renderTocSummary(book.toc || [])}
+        </section>
+      ) : null}
+
+      <section className="book-detail-grid">
+        <section className="detail-card">
+          <div className="section-title-block">
+            <p className="eyebrow">Reader</p>
+            <h2>Reading</h2>
+          </div>
           {readerAccess ? (
-            <>
-              <form className="stack-form" onSubmit={saveReadingSession}>
-                <label>
-                  <span>Last location</span>
-                  <input
-                    value={readerState.last_location}
-                    onChange={(event) => setReaderState({ ...readerState, last_location: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>Progress percent</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={readerState.progress_percent}
-                    onChange={(event) => setReaderState({ ...readerState, progress_percent: event.target.value })}
-                  />
-                </label>
-                <button type="submit" className="primary-button">
-                  Save reading progress
-                </button>
-              </form>
-              <form className="stack-form" onSubmit={createBookmark}>
-                <label>
-                  <span>Bookmark location</span>
-                  <input
-                    value={bookmarkForm.location}
-                    onChange={(event) => setBookmarkForm({ ...bookmarkForm, location: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>Label</span>
-                  <input
-                    value={bookmarkForm.label}
-                    onChange={(event) => setBookmarkForm({ ...bookmarkForm, label: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>Note</span>
-                  <input
-                    value={bookmarkForm.note}
-                    onChange={(event) => setBookmarkForm({ ...bookmarkForm, note: event.target.value })}
-                  />
-                </label>
-                <button type="submit" className="ghost-button">
-                  Add bookmark
-                </button>
-              </form>
+            <div className="reader-stats-grid">
+              <article className="book-detail-chip">
+                <span className="fact-label">Progress</span>
+                <strong>{progressPercent}%</strong>
+              </article>
+              <article className="book-detail-chip">
+                <span className="fact-label">Last location</span>
+                <strong className="metadata-value">{readerState.last_location || "Not synced"}</strong>
+              </article>
+              <article className="book-detail-chip">
+                <span className="fact-label">Last opened</span>
+                <strong>{readerState.last_opened_at ? formatBookDateTime(readerState.last_opened_at) : "Not synced"}</strong>
+              </article>
+            </div>
+          ) : (
+            <p className="muted-copy">Syncs after reading.</p>
+          )}
+        </section>
+
+        <section className="detail-card">
+          <div className="section-title-block">
+            <p className="eyebrow">Reader</p>
+            <h2>Bookmarks</h2>
+          </div>
+          {readerAccess ? (
+            bookmarks.length ? (
               <div className="queue-list">
                 {bookmarks.map((bookmark) => (
                   <article key={bookmark.id} className="queue-card">
                     <strong>{bookmark.label || bookmark.location}</strong>
-                    <p>{bookmark.note || "No note added."}</p>
-                    <button type="button" className="ghost-button" onClick={() => deleteBookmark(bookmark.id)}>
-                      Remove bookmark
-                    </button>
+                    {bookmark.label && bookmark.location ? (
+                      <p className="metadata-value">{bookmark.location}</p>
+                    ) : null}
+                    {bookmark.note ? <p>{bookmark.note}</p> : null}
+                    <div className="inline-pills">
+                      <button type="button" className="ghost-button" onClick={() => deleteBookmark(bookmark.id)}>
+                        Remove
+                      </button>
+                    </div>
                   </article>
                 ))}
               </div>
-            </>
+            ) : (
+              <p className="muted-copy">No bookmarks yet.</p>
+            )
           ) : (
-            <p>Reading progress and bookmarks become available after preview or durable read access is granted.</p>
+            <p className="muted-copy">Syncs after reading.</p>
           )}
         </section>
-        {canEditMetadata ? (
-          <section className="detail-card">
-            <h2>Staff metadata editor</h2>
-            <form className="stack-form" onSubmit={saveMetadata}>
-              <label>
-                <span>Title</span>
-                <input value={editor.title} onChange={(event) => setEditor({ ...editor, title: event.target.value })} />
-              </label>
-              <label>
-                <span>Summary</span>
-                <textarea
-                  rows="4"
-                  value={editor.summary}
-                  onChange={(event) => setEditor({ ...editor, summary: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Contributors</span>
-                <textarea
-                  rows="5"
-                  value={editor.contributors}
-                  onChange={(event) => setEditor({ ...editor, contributors: event.target.value })}
-                  placeholder="Name|author"
-                />
-              </label>
-              <label>
-                <span>Series</span>
-                <input value={editor.series} onChange={(event) => setEditor({ ...editor, series: event.target.value })} />
-              </label>
-              <label>
-                <span>Categories</span>
-                <input
-                  value={editor.categories}
-                  onChange={(event) => setEditor({ ...editor, categories: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Review note</span>
-                <input value={editor.notes} onChange={(event) => setEditor({ ...editor, notes: event.target.value })} />
-              </label>
+      </section>
+
+      {canEditMetadata ? (
+        <section className="detail-card">
+          <div className="section-title-block">
+            <p className="eyebrow">Editorial</p>
+            <h2>Metadata Workspace</h2>
+          </div>
+
+          <div className="book-admin-grid">
+            <form className="stack-form metadata-form" onSubmit={saveMetadata}>
+              <div className="metadata-form-grid">
+                <label className="field-span-full">
+                  <span>Title</span>
+                  <input value={editor.title} onChange={(event) => setEditor({ ...editor, title: event.target.value })} />
+                </label>
+                <label className="field-span-full">
+                  <span>Summary</span>
+                  <textarea
+                    rows="4"
+                    value={editor.summary}
+                    onChange={(event) => setEditor({ ...editor, summary: event.target.value })}
+                  />
+                </label>
+                <label className="field-span-full">
+                  <span>Contributors</span>
+                  <textarea
+                    rows="5"
+                    value={editor.contributors}
+                    onChange={(event) => setEditor({ ...editor, contributors: event.target.value })}
+                    placeholder="Name|author"
+                  />
+                </label>
+                <label>
+                  <span>Series</span>
+                  <input value={editor.series} onChange={(event) => setEditor({ ...editor, series: event.target.value })} />
+                </label>
+                <label>
+                  <span>Categories</span>
+                  <input
+                    value={editor.categories}
+                    onChange={(event) => setEditor({ ...editor, categories: event.target.value })}
+                  />
+                </label>
+                <label className="field-span-full">
+                  <span>Edit note</span>
+                  <input value={editor.notes} onChange={(event) => setEditor({ ...editor, notes: event.target.value })} />
+                </label>
+              </div>
               <button type="submit" className="primary-button">
                 Save metadata
               </button>
             </form>
-            <div className="queue-list">
-              {metadataVersions.map((version) => (
-                <article key={version.id} className="queue-card">
-                  <strong>{version.source}</strong>
-                  <p>{version.notes || "No notes."}</p>
-                  <p>{new Date(version.created_at).toLocaleString()}</p>
-                </article>
-              ))}
-            </div>
-            <form className="stack-form" onSubmit={createMetadataReview}>
-              <label>
-                <span>Metadata review state</span>
-                <select value={reviewForm.state} onChange={(event) => setReviewForm({ ...reviewForm, state: event.target.value })}>
-                  <option value="pending">Pending</option>
-                  <option value="needs_review">Needs review</option>
-                  <option value="approved">Approved</option>
-                  <option value="rejected">Rejected</option>
-                </select>
-              </label>
-              <label>
-                <span>Review notes</span>
-                <input value={reviewForm.notes} onChange={(event) => setReviewForm({ ...reviewForm, notes: event.target.value })} />
-              </label>
-              <button type="submit" className="ghost-button">
-                Record metadata review
-              </button>
-            </form>
-            <div className="queue-list">
-              {metadataReviews.map((review) => (
-                <article key={review.id} className="queue-card">
-                  <strong>{review.state}</strong>
-                  <p>{review.notes || "No notes."}</p>
-                  <p>Requested by: {review.requested_by_email || "Unknown"}</p>
-                  <div className="inline-pills">
-                    <button type="button" className="primary-button" onClick={() => updateMetadataReview(review.id, "approved")}>
-                      Approve
-                    </button>
-                    <button type="button" className="ghost-button" onClick={() => updateMetadataReview(review.id, "rejected")}>
-                      Reject
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        ) : null}
-      </section>
+
+            <section className="stack-form editorial-panel">
+              <form className="stack-form" onSubmit={createMetadataReview}>
+                <div className="section-title-block">
+                  <h3>Review</h3>
+                </div>
+                <label>
+                  <span>Review state</span>
+                  <select value={reviewForm.state} onChange={(event) => setReviewForm({ ...reviewForm, state: event.target.value })}>
+                    <option value="pending">Awaiting review</option>
+                    <option value="needs_review">Needs review</option>
+                    <option value="approved">Reviewed</option>
+                    <option value="rejected">Needs correction</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Notes</span>
+                  <input value={reviewForm.notes} onChange={(event) => setReviewForm({ ...reviewForm, notes: event.target.value })} />
+                </label>
+                <button type="submit" className="ghost-button">
+                  Save review
+                </button>
+              </form>
+            </section>
+
+            <section className="stack-form editorial-panel">
+              <div className="section-title-block">
+                <h3>Metadata History</h3>
+              </div>
+              <div className="queue-list">
+                {metadataVersions.length ? (
+                  metadataVersions.map((version) => (
+                    <article key={version.id} className="queue-card">
+                      <strong>{version.source}</strong>
+                      <p>{version.notes || "No notes"}</p>
+                      <p>{formatBookDateTime(version.created_at)}</p>
+                    </article>
+                  ))
+                ) : (
+                  <p className="muted-copy">No history yet.</p>
+                )}
+              </div>
+            </section>
+
+            <section className="stack-form editorial-panel">
+              <div className="section-title-block">
+                <h3>Review Log</h3>
+              </div>
+              <div className="queue-list">
+                {metadataReviews.length ? (
+                  metadataReviews.map((review) => (
+                    <article key={review.id} className="queue-card">
+                      <strong>{getStatusMeta(review.state).label}</strong>
+                      <p>{review.notes || "No notes"}</p>
+                      <p>
+                        {review.requested_by_email || "Unknown"}
+                        {review.updated_at ? ` · ${formatBookDateTime(review.updated_at)}` : ""}
+                      </p>
+                      <div className="inline-pills">
+                        <button type="button" className="primary-button" onClick={() => updateMetadataReview(review.id, "approved")}>
+                          Approve
+                        </button>
+                        <button type="button" className="ghost-button" onClick={() => updateMetadataReview(review.id, "rejected")}>
+                          Reject
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <p className="muted-copy">No reviews yet.</p>
+                )}
+              </div>
+            </section>
+          </div>
+        </section>
+      ) : null}
+
+      {book.raw_provenance && Object.keys(book.raw_provenance).length ? (
+        <section className="detail-card">
+          <div className="section-title-block">
+            <p className="eyebrow">Staff</p>
+            <h2>Raw Provenance</h2>
+          </div>
+          <pre className="json-block">{JSON.stringify(book.raw_provenance, null, 2)}</pre>
+        </section>
+      ) : null}
+
+      <ConfirmationDialog
+        open={deleteDialogOpen}
+        title="Delete Book?"
+        body={book ? `Delete "${book.title}"? This will hide it from the catalog.` : ""}
+        confirmLabel="Delete Book"
+        loading={deleting}
+        onCancel={() => {
+          if (!deleting) {
+            setDeleteDialogOpen(false);
+          }
+        }}
+        onConfirm={confirmDeleteBook}
+      />
     </div>
   );
 }

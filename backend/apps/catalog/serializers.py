@@ -1,3 +1,5 @@
+from urllib.parse import unquote, urlparse
+
 from rest_framework import serializers
 from rest_framework.reverse import reverse
 
@@ -9,6 +11,8 @@ from apps.catalog.models import (
     MetadataVersion,
 )
 from apps.catalog.services import replace_book_relations
+from apps.catalog.services import normalize_book_contributors
+from apps.ingestion.services.normalization import combined_front_matter_html, extract_front_matter_entries, split_multi_value
 
 
 class GeneratedAssetSerializer(serializers.ModelSerializer):
@@ -36,10 +40,12 @@ class GeneratedAssetSerializer(serializers.ModelSerializer):
 
 class BookListSerializer(serializers.ModelSerializer):
     authors = serializers.SerializerMethodField()
+    contributors = serializers.SerializerMethodField()
     series = serializers.SerializerMethodField()
     categories = serializers.SerializerMethodField()
     cover_download_url = serializers.SerializerMethodField()
     latest_submission_at = serializers.SerializerMethodField()
+    primary_source = serializers.SerializerMethodField()
 
     class Meta:
         model = Book
@@ -50,19 +56,23 @@ class BookListSerializer(serializers.ModelSerializer):
             "state",
             "review_state",
             "authors",
+            "contributors",
             "series",
             "categories",
             "cover_download_url",
             "latest_submission_at",
+            "primary_source",
             "created_at",
         ]
 
     def get_authors(self, obj):
-        return [
-            rel.contributor.name
-            for rel in obj.book_contributors.all()
-            if rel.role == "author"
-        ]
+        contributors = self.get_contributors(obj)
+        return [entry["name"] for entry in contributors if entry["role"] == ContributorRole.AUTHOR]
+
+    def get_contributors(self, obj):
+        return normalize_book_contributors(
+            [{"name": rel.contributor.name, "role": rel.role} for rel in obj.book_contributors.all()]
+        )
 
     def get_series(self, obj):
         return [rel.series.name for rel in obj.book_series.all()]
@@ -84,31 +94,54 @@ class BookListSerializer(serializers.ModelSerializer):
     def get_latest_submission_at(self, obj):
         return getattr(obj, "latest_submission_at", None)
 
+    def serialize_source_record(self, source):
+        url = source.normalized_source_url or source.source_url
+        parsed = urlparse(url)
+        display_url = unquote(url)
+        display_path = unquote(parsed.path).strip("/") or parsed.netloc
+        return {
+            "url": url,
+            "display_url": display_url,
+            "display_path": display_path,
+            "source_title": source.source_title,
+            "source_type": source.source_type,
+            "site": parsed.netloc,
+            "is_primary": source.is_primary,
+        }
+
+    def get_primary_source(self, obj):
+        sources = list(obj.source_urls.all())
+        if not sources:
+            return None
+        primary = next((source for source in sources if source.is_primary), sources[0])
+        return self.serialize_source_record(primary)
+
 
 class BookDetailSerializer(BookListSerializer):
-    contributors = serializers.SerializerMethodField()
     assets = GeneratedAssetSerializer(source="generated_assets", many=True, read_only=True)
     source_urls = serializers.SerializerMethodField()
+    source_records = serializers.SerializerMethodField()
+    front_matter = serializers.SerializerMethodField()
     book_info_html = serializers.CharField()
     dedication_html = serializers.CharField()
-    main_content_html = serializers.CharField()
     toc = serializers.JSONField()
     raw_provenance = serializers.SerializerMethodField()
 
     class Meta(BookListSerializer.Meta):
         fields = BookListSerializer.Meta.fields + [
-            "contributors",
             "assets",
             "source_urls",
+            "source_records",
+            "front_matter",
             "book_info_html",
             "dedication_html",
-            "main_content_html",
             "toc",
             "metadata_last_reviewed_at",
             "raw_provenance",
         ]
 
-    def get_contributors(self, obj):
+    def build_contributors_payload(self, obj):
+        front_matter_html = combined_front_matter_html(obj.book_info_html, obj.main_content_html)
         payload = []
         for relation in obj.book_contributors.all():
             payload.append(
@@ -117,10 +150,30 @@ class BookDetailSerializer(BookListSerializer):
                     "role": relation.role,
                 }
             )
-        return payload
+
+        for entry in extract_front_matter_entries(front_matter_html):
+            if not entry["role"]:
+                continue
+            for name in split_multi_value(entry["value"]):
+                payload.append({"name": name, "role": entry["role"]})
+
+        return normalize_book_contributors(payload)
+
+    def get_authors(self, obj):
+        return [entry["name"] for entry in self.build_contributors_payload(obj) if entry["role"] == ContributorRole.AUTHOR]
+
+    def get_contributors(self, obj):
+        return self.build_contributors_payload(obj)
 
     def get_source_urls(self, obj):
         return [source.normalized_source_url for source in obj.source_urls.all()]
+
+    def get_source_records(self, obj):
+        return [self.serialize_source_record(source) for source in obj.source_urls.all()]
+
+    def get_front_matter(self, obj):
+        front_matter_html = combined_front_matter_html(obj.book_info_html, obj.main_content_html)
+        return [entry for entry in extract_front_matter_entries(front_matter_html) if not entry["role"]]
 
     def get_raw_provenance(self, obj):
         request = self.context.get("request")

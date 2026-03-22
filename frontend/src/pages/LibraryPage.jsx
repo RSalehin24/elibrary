@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import BookCard from "../components/BookCard";
+import BookCardSkeleton from "../components/BookCardSkeleton";
+import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -20,11 +23,88 @@ const defaultFilters = {
   sort: "-created_at"
 };
 
+const libraryFilterFields = [
+  { key: "author", label: "Author" },
+  { key: "contributor", label: "Contributor" },
+  { key: "series", label: "Series" },
+  { key: "category", label: "Category" },
+  {
+    key: "ownership",
+    label: "Ownership",
+    type: "select",
+    options: [
+      { value: "", label: "All books" },
+      { value: "mine", label: "My books" }
+    ]
+  },
+  {
+    key: "state",
+    label: "State",
+    type: "select",
+    options: [
+      { value: "", label: "Any" },
+      { value: "draft", label: "Draft" },
+      { value: "processing", label: "Processing" },
+      { value: "needs_review", label: "Needs review" },
+      { value: "ready", label: "Ready" },
+      { value: "published", label: "Published" },
+      { value: "archived", label: "Archived" }
+    ]
+  },
+  {
+    key: "review_state",
+    label: "Review",
+    type: "select",
+    options: [
+      { value: "", label: "Any" },
+      { value: "pending", label: "Pending" },
+      { value: "needs_review", label: "Needs review" },
+      { value: "approved", label: "Approved" },
+      { value: "rejected", label: "Rejected" }
+    ]
+  },
+  { key: "created_after", label: "Created after", type: "date" },
+  { key: "created_before", label: "Created before", type: "date" },
+  {
+    key: "sort",
+    label: "Sort",
+    type: "select",
+    options: [
+      { value: "-created_at", label: "Newest first" },
+      { value: "created_at", label: "Oldest first" },
+      { value: "-requested_at", label: "Newest request first" },
+      { value: "requested_at", label: "Oldest request first" },
+      { value: "title", label: "Title A-Z" },
+      { value: "-title", label: "Title Z-A" }
+    ]
+  }
+];
+
+function cleanFilters(nextFilters) {
+  return Object.fromEntries(
+    Object.entries(nextFilters).filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+  );
+}
+
+function filtersFromSearchParams(searchParams) {
+  const nextFilters = { ...defaultFilters };
+
+  Object.keys(defaultFilters).forEach((key) => {
+    const value = searchParams.get(key);
+    if (value !== null) {
+      nextFilters[key] = value;
+    }
+  });
+
+  return nextFilters;
+}
+
 export default function LibraryPage() {
   const { authenticated } = useSession();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
-  const [filters, setFilters] = useState(defaultFilters);
+  const [filters, setFilters] = useState(() => filtersFromSearchParams(searchParams));
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [savedFilters, setSavedFilters] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -58,22 +138,29 @@ export default function LibraryPage() {
   }
 
   useEffect(() => {
-    loadBooks(defaultFilters);
-  }, []);
+    const nextFilters = filtersFromSearchParams(searchParams);
+    setFilters(nextFilters);
+    loadBooks(nextFilters);
+  }, [searchParams.toString()]);
 
   useEffect(() => {
     loadSavedFilters();
   }, [authenticated]);
 
-  async function applyFilters(event) {
+  function applyFilters(event) {
     event.preventDefault();
-    await loadBooks(filters);
+    setSearchParams(cleanFilters(filters));
+  }
+
+  function resetFilters() {
+    setFilters(defaultFilters);
+    setSearchParams(cleanFilters(defaultFilters));
   }
 
   function applySavedFilter(savedFilter) {
     const nextFilters = { ...defaultFilters, ...(savedFilter.params || {}) };
     setFilters(nextFilters);
-    loadBooks(nextFilters);
+    setSearchParams(cleanFilters(nextFilters));
     toast.success(`Applied "${savedFilter.name}".`);
   }
 
@@ -87,150 +174,49 @@ export default function LibraryPage() {
     }
   }
 
+  const resultCount = error || loading ? "" : `${books.length}`;
+
   return (
-    <div className="page-stack">
-      <section className="detail-card toolbar-panel">
-        <div className="panel-header">
-          <h1>Library</h1>
-          <button type="button" className="ghost-button" onClick={() => setFiltersExpanded((current) => !current)}>
-            {filtersExpanded ? "Hide filters" : "Filters"}
-          </button>
-        </div>
-        <form className="stack-form" onSubmit={applyFilters}>
-          <div className="search-inline">
-            <input
-              type="search"
-              value={filters.q}
-              onChange={(event) => setFilters({ ...filters, q: event.target.value })}
-              placeholder="Search library"
-            />
-            <button type="submit" className="primary-button">
-              Search
-            </button>
-          </div>
-          {filtersExpanded ? (
-            <>
-              <div className="detail-facts">
-                <label>
-                  <span className="fact-label">Author</span>
-                  <input value={filters.author} onChange={(event) => setFilters({ ...filters, author: event.target.value })} />
-                </label>
-                <label>
-                  <span className="fact-label">Contributor</span>
-                  <input
-                    value={filters.contributor}
-                    onChange={(event) => setFilters({ ...filters, contributor: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span className="fact-label">Series</span>
-                  <input value={filters.series} onChange={(event) => setFilters({ ...filters, series: event.target.value })} />
-                </label>
-                <label>
-                  <span className="fact-label">Category</span>
-                  <input value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })} />
-                </label>
-                <label>
-                  <span className="fact-label">Ownership</span>
-                  <select
-                    value={filters.ownership}
-                    onChange={(event) => setFilters({ ...filters, ownership: event.target.value })}
-                  >
-                    <option value="">All books</option>
-                    <option value="mine">My created books</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="fact-label">State</span>
-                  <select value={filters.state} onChange={(event) => setFilters({ ...filters, state: event.target.value })}>
-                    <option value="">Any</option>
-                    <option value="draft">Draft</option>
-                    <option value="processing">Processing</option>
-                    <option value="needs_review">Needs review</option>
-                    <option value="ready">Ready</option>
-                    <option value="published">Published</option>
-                    <option value="archived">Archived</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="fact-label">Review</span>
-                  <select
-                    value={filters.review_state}
-                    onChange={(event) => setFilters({ ...filters, review_state: event.target.value })}
-                  >
-                    <option value="">Any</option>
-                    <option value="pending">Pending</option>
-                    <option value="needs_review">Needs review</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="fact-label">Created after</span>
-                  <input
-                    type="date"
-                    value={filters.created_after}
-                    onChange={(event) => setFilters({ ...filters, created_after: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span className="fact-label">Created before</span>
-                  <input
-                    type="date"
-                    value={filters.created_before}
-                    onChange={(event) => setFilters({ ...filters, created_before: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span className="fact-label">Sort</span>
-                  <select value={filters.sort} onChange={(event) => setFilters({ ...filters, sort: event.target.value })}>
-                    <option value="-requested_at">Newest request first</option>
-                    <option value="requested_at">Oldest request first</option>
-                    <option value="-created_at">Newest first</option>
-                    <option value="created_at">Oldest first</option>
-                    <option value="title">Title A-Z</option>
-                    <option value="-title">Title Z-A</option>
-                  </select>
-                </label>
-              </div>
-              <div className="inline-pills">
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => {
-                    setFilters(defaultFilters);
-                    loadBooks(defaultFilters);
-                  }}
-                >
-                  Reset
-                </button>
-              </div>
-            </>
-          ) : null}
-        </form>
-      </section>
+    <div className="catalog-page page-stack">
+      <CatalogToolbar
+        filters={filters}
+        setFilters={setFilters}
+        fields={libraryFilterFields}
+        defaultFilters={defaultFilters}
+        filtersExpanded={filtersExpanded}
+        setFiltersExpanded={setFiltersExpanded}
+        onSubmit={applyFilters}
+        onReset={resetFilters}
+        searchPlaceholder="Search books, authors, translators, series..."
+        resultCount={resultCount}
+      />
+
       {savedFilters.length ? (
-        <section className="detail-card compact-card">
-          <h2>Saved Filters</h2>
-          <div className="queue-list">
-            {savedFilters.map((filter) => (
-              <article key={filter.id} className="queue-card">
-                <strong>{filter.name}</strong>
-                <div className="inline-pills">
-                  <button type="button" className="primary-button" onClick={() => applySavedFilter(filter)}>
-                    Apply
-                  </button>
-                  <button type="button" className="ghost-button" onClick={() => deleteSavedFilter(filter.id)}>
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
+        <section className="catalog-saved-strip" aria-label="Saved filters">
+          {savedFilters.map((filter) => (
+            <div key={filter.id} className="saved-filter-chip">
+              <button type="button" className="saved-filter-apply" onClick={() => applySavedFilter(filter)}>
+                {filter.name}
+              </button>
+              <button
+                type="button"
+                className="saved-filter-delete"
+                onClick={() => deleteSavedFilter(filter.id)}
+                aria-label={`Delete ${filter.name}`}
+              >
+                ×
+              </button>
+            </div>
+          ))}
         </section>
       ) : null}
+
       {loading ? (
-        <div className="page-state">Loading catalog...</div>
+        <section className="book-grid">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <BookCardSkeleton key={index} />
+          ))}
+        </section>
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : books.length ? (
@@ -240,7 +226,7 @@ export default function LibraryPage() {
           ))}
         </section>
       ) : (
-        <EmptyState title="No books found" body="Try a different search." />
+        <EmptyState title="No books found" body="Adjust the search or filters." />
       )}
     </div>
   );

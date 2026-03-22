@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import BookCard from "../components/BookCard";
+import BookCardSkeleton from "../components/BookCardSkeleton";
+import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
 import { toQueryString } from "../utils/query";
 
@@ -16,9 +18,74 @@ const defaultFilters = {
   ownership: "mine"
 };
 
+const createdBookFilterFields = [
+  { key: "author", label: "Author" },
+  { key: "series", label: "Series" },
+  { key: "category", label: "Category" },
+  {
+    key: "state",
+    label: "State",
+    type: "select",
+    options: [
+      { value: "", label: "Any" },
+      { value: "draft", label: "Draft" },
+      { value: "processing", label: "Processing" },
+      { value: "needs_review", label: "Needs review" },
+      { value: "ready", label: "Ready" },
+      { value: "published", label: "Published" },
+      { value: "archived", label: "Archived" }
+    ]
+  },
+  {
+    key: "review_state",
+    label: "Review",
+    type: "select",
+    options: [
+      { value: "", label: "Any" },
+      { value: "pending", label: "Pending" },
+      { value: "needs_review", label: "Needs review" },
+      { value: "approved", label: "Approved" },
+      { value: "rejected", label: "Rejected" }
+    ]
+  },
+  {
+    key: "sort",
+    label: "Sort",
+    type: "select",
+    options: [
+      { value: "-requested_at", label: "Newest request first" },
+      { value: "requested_at", label: "Oldest request first" },
+      { value: "-created_at", label: "Newest book first" },
+      { value: "created_at", label: "Oldest book first" },
+      { value: "title", label: "Title A-Z" },
+      { value: "-title", label: "Title Z-A" }
+    ]
+  }
+];
+
+function cleanFilters(nextFilters) {
+  return Object.fromEntries(
+    Object.entries(nextFilters).filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+  );
+}
+
+function filtersFromSearchParams(searchParams) {
+  const nextFilters = { ...defaultFilters };
+
+  Object.keys(defaultFilters).forEach((key) => {
+    const value = searchParams.get(key);
+    if (value !== null) {
+      nextFilters[key] = value;
+    }
+  });
+
+  return nextFilters;
+}
+
 export default function CreatedBooksPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
-  const [filters, setFilters] = useState(defaultFilters);
+  const [filters, setFilters] = useState(() => filtersFromSearchParams(searchParams));
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -37,112 +104,49 @@ export default function CreatedBooksPage() {
   }
 
   useEffect(() => {
-    loadBooks(defaultFilters);
-  }, []);
+    const nextFilters = filtersFromSearchParams(searchParams);
+    setFilters(nextFilters);
+    loadBooks(nextFilters);
+  }, [searchParams.toString()]);
 
-  async function handleSearch(event) {
+  function applyFilters(event) {
     event.preventDefault();
-    await loadBooks(filters);
+    setSearchParams(cleanFilters(filters));
   }
 
-  return (
-    <div className="page-stack">
-      <section className="detail-card toolbar-panel">
-        <div className="panel-header">
-          <h1>My Created Books</h1>
-          <div className="inline-pills">
-            <button type="button" className="ghost-button" onClick={() => setFiltersExpanded((current) => !current)}>
-              {filtersExpanded ? "Hide filters" : "Filters"}
-            </button>
-            <Link to="/create" className="primary-button">
-              Create Books
-            </Link>
-          </div>
-        </div>
-        <form className="stack-form" onSubmit={handleSearch}>
-          <div className="search-inline">
-            <input
-              type="search"
-              value={filters.q}
-              onChange={(event) => setFilters({ ...filters, q: event.target.value })}
-              placeholder="Search created books"
-            />
-            <button type="submit" className="primary-button">
-              Search
-            </button>
-          </div>
+  function resetFilters() {
+    setFilters(defaultFilters);
+    setSearchParams(cleanFilters(defaultFilters));
+  }
 
-          {filtersExpanded ? (
-            <>
-              <div className="detail-facts">
-                <label>
-                  <span className="fact-label">Author</span>
-                  <input value={filters.author} onChange={(event) => setFilters({ ...filters, author: event.target.value })} />
-                </label>
-                <label>
-                  <span className="fact-label">Series</span>
-                  <input value={filters.series} onChange={(event) => setFilters({ ...filters, series: event.target.value })} />
-                </label>
-                <label>
-                  <span className="fact-label">Category</span>
-                  <input value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })} />
-                </label>
-                <label>
-                  <span className="fact-label">State</span>
-                  <select value={filters.state} onChange={(event) => setFilters({ ...filters, state: event.target.value })}>
-                    <option value="">Any</option>
-                    <option value="draft">Draft</option>
-                    <option value="processing">Processing</option>
-                    <option value="needs_review">Needs review</option>
-                    <option value="ready">Ready</option>
-                    <option value="published">Published</option>
-                    <option value="archived">Archived</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="fact-label">Review</span>
-                  <select
-                    value={filters.review_state}
-                    onChange={(event) => setFilters({ ...filters, review_state: event.target.value })}
-                  >
-                    <option value="">Any</option>
-                    <option value="pending">Pending</option>
-                    <option value="needs_review">Needs review</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="fact-label">Sort</span>
-                  <select value={filters.sort} onChange={(event) => setFilters({ ...filters, sort: event.target.value })}>
-                    <option value="-requested_at">Newest request first</option>
-                    <option value="requested_at">Oldest request first</option>
-                    <option value="-created_at">Newest book first</option>
-                    <option value="created_at">Oldest book first</option>
-                    <option value="title">Title A-Z</option>
-                    <option value="-title">Title Z-A</option>
-                  </select>
-                </label>
-              </div>
-              <div className="inline-pills">
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => {
-                    setFilters(defaultFilters);
-                    loadBooks(defaultFilters);
-                  }}
-                >
-                  Reset
-                </button>
-              </div>
-            </>
-          ) : null}
-        </form>
-      </section>
+  const resultCount = error || loading ? "" : `${books.length}`;
+
+  return (
+    <div className="catalog-page page-stack">
+      <header className="catalog-page-header catalog-page-header--with-toolbar">
+        <h1 className="created-books-page-title">My Books</h1>
+
+        <CatalogToolbar
+          filters={filters}
+          setFilters={setFilters}
+          fields={createdBookFilterFields}
+          defaultFilters={defaultFilters}
+          filtersExpanded={filtersExpanded}
+          setFiltersExpanded={setFiltersExpanded}
+          onSubmit={applyFilters}
+          onReset={resetFilters}
+          searchPlaceholder="Search your books..."
+          resultCount={resultCount}
+          inline
+        />
+      </header>
 
       {loading ? (
-        <div className="page-state">Loading books...</div>
+        <section className="book-grid">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <BookCardSkeleton key={index} />
+          ))}
+        </section>
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : books.length ? (
@@ -152,7 +156,7 @@ export default function CreatedBooksPage() {
           ))}
         </section>
       ) : (
-        <EmptyState title="No created books found" body="Try a different search or create a new book." />
+        <EmptyState title="No books found" body="Adjust the search or filters." />
       )}
     </div>
   );

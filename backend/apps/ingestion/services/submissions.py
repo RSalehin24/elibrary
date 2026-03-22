@@ -50,7 +50,7 @@ from apps.ingestion.services.legacy_adapter import (
     texts_are_similar,
     validate_source_url,
 )
-from apps.ingestion.services.normalization import normalize_scraped_book
+from apps.ingestion.services.normalization import normalize_scraped_book, promote_leading_front_matter
 from apps.ingestion.services.resolution import (
     TitleResolver,
     fetch_source_page_metadata,
@@ -511,6 +511,27 @@ def content_type_for_suffix(path):
     return "application/octet-stream"
 
 
+def resolve_generated_cover_path(output_folder, requested_cover):
+    if requested_cover:
+        requested_path = Path(str(requested_cover))
+        direct_path = requested_path if requested_path.is_absolute() else output_folder / requested_path
+        if direct_path.exists():
+            return direct_path
+
+        requested_stem = requested_path.stem
+        if requested_stem:
+            for candidate in sorted(output_folder.glob(f"{requested_stem}.*")):
+                if candidate.is_file():
+                    return candidate
+
+    for fallback_stem in ("book_cover", "book_image"):
+        for candidate in sorted(output_folder.glob(f"{fallback_stem}.*")):
+            if candidate.is_file():
+                return candidate
+
+    return None
+
+
 def candidate_asset_paths(scraped_data):
     output_folder = Path(scraped_data["output_folder"])
     epub_path = output_folder / f"{scraped_data['book_title']}.epub"
@@ -518,7 +539,7 @@ def candidate_asset_paths(scraped_data):
         epub_candidates = sorted(output_folder.glob("*.epub"))
         epub_path = epub_candidates[0] if epub_candidates else None
 
-    cover_path = output_folder / scraped_data["cover"] if scraped_data.get("cover") else None
+    cover_path = resolve_generated_cover_path(output_folder, scraped_data.get("cover", ""))
     return {
         GeneratedAssetType.HTML: output_folder / "book.html",
         GeneratedAssetType.EPUB: epub_path,
@@ -659,6 +680,12 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             return job
 
         scraped_data = scrape_book(submission.resolved_url)
+        promoted_book_info, cleaned_main_content = promote_leading_front_matter(
+            scraped_data.get("book_info", ""),
+            scraped_data.get("main_content", ""),
+        )
+        scraped_data["book_info"] = promoted_book_info
+        scraped_data["main_content"] = cleaned_main_content
         record_job_log(job, "info", "Scraped source content.", {"title": scraped_data.get("book_title", "")})
         generate_exports(scraped_data)
         record_job_log(job, "info", "Generated HTML and EPUB exports.")

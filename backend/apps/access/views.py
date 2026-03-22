@@ -1,8 +1,12 @@
+import base64
+import mimetypes
+import re
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
+from bs4 import BeautifulSoup
 from django.conf import settings
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import generics, status
@@ -23,6 +27,7 @@ from apps.access.models import (
 from apps.access.serializers import BookmarkSerializer, PermissionGrantSerializer, ReadingSessionSerializer
 from apps.catalog.models import Book, Contributor, ContributorRole, Category, GeneratedAsset, GeneratedAssetType
 from apps.common.permissions import IsSuperAdmin, user_has_scope
+from apps.ingestion.services.normalization import promote_leading_front_matter
 
 
 def get_active_preview_session(user, book):
@@ -54,15 +59,203 @@ def resolve_asset(book, asset_type):
 def open_asset_stream(asset):
     if asset.file:
         asset.file.open("rb")
-        filename = Path(asset.file.name).name
-        return asset.file, filename
+        return asset.file
 
     if asset.legacy_path:
         handle = open(asset.legacy_path, "rb")
-        filename = Path(asset.legacy_path).name
-        return handle, filename
+        return handle
 
     raise Http404("Asset file is not available.")
+
+
+def asset_source_name(asset):
+    if asset.file:
+        return Path(asset.file.name).name
+    if asset.legacy_path:
+        return Path(asset.legacy_path).name
+    return ""
+
+
+def safe_download_stem(value):
+    cleaned = re.sub(r'[<>:"/\\|?*]+', "-", str(value or "")).strip().strip(".")
+    return cleaned or "book"
+
+
+def asset_download_filename(book, asset):
+    source_name = asset_source_name(asset)
+    source_suffix = Path(source_name).suffix.lower()
+
+    if asset.asset_type == GeneratedAssetType.EPUB:
+        suffix = ".epub"
+    elif asset.asset_type == GeneratedAssetType.COVER:
+        suffix = source_suffix or mimetypes.guess_extension(asset.content_type or "") or ".jpg"
+    elif asset.asset_type == GeneratedAssetType.HTML:
+        suffix = ".html"
+    else:
+        suffix = source_suffix or mimetypes.guess_extension(asset.content_type or "") or ""
+
+    return f"{safe_download_stem(book.title)}{suffix}"
+
+
+def local_asset_path(asset):
+    if asset is None:
+        return None
+
+    if asset.file:
+        try:
+            return Path(asset.file.path)
+        except (AttributeError, NotImplementedError, ValueError):
+            pass
+
+    if asset.legacy_path:
+        return Path(asset.legacy_path)
+
+    return None
+
+
+def read_asset_bytes(asset):
+    path = local_asset_path(asset)
+    if path and path.exists():
+        return path.read_bytes(), path.name, path
+
+    if asset.file:
+        asset.file.open("rb")
+        try:
+            return asset.file.read(), Path(asset.file.name).name, None
+        finally:
+            asset.file.close()
+
+    raise Http404("Asset file is not available.")
+
+
+def build_data_uri(path):
+    mime_type = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+    encoded_image = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded_image}"
+
+
+def is_local_preview_src(src):
+    if not src:
+        return False
+    parsed = urlsplit(src)
+    if parsed.scheme or parsed.netloc:
+        return False
+    if src.startswith(("/", "#")):
+        return False
+    return parsed.path != ""
+
+
+def is_cover_reference(image_tag, requested_name):
+    classes = set(image_tag.get("class", []))
+    alt_text = (image_tag.get("alt") or "").lower()
+    stem = Path(requested_name).stem.lower()
+    return "cover-image" in classes or "cover" in alt_text or stem in {"book_cover", "book_image"}
+
+
+def resolve_preview_image_path(source_dir, requested_src, image_tag, cover_path=None):
+    if source_dir is None or not source_dir.exists():
+        source_dir = None
+
+    requested_name = Path(unquote(urlsplit(requested_src).path)).name
+    requested_stem = Path(requested_name).stem
+
+    if source_dir and requested_name:
+        direct_path = source_dir / requested_name
+        if direct_path.is_file():
+            return direct_path
+
+        if requested_stem:
+            for candidate in sorted(source_dir.iterdir()):
+                if candidate.is_file() and candidate.stem == requested_stem:
+                    return candidate
+
+    if is_cover_reference(image_tag, requested_name):
+        if cover_path and cover_path.exists():
+            return cover_path
+
+        if source_dir:
+            for fallback_stem in ("book_cover", "book_image"):
+                for candidate in sorted(source_dir.glob(f"{fallback_stem}.*")):
+                    if candidate.is_file():
+                        return candidate
+
+    return None
+
+
+def normalize_preview_html(book, asset):
+    html_bytes, _, source_path = read_asset_bytes(asset)
+    html_text = html_bytes.decode("utf-8", errors="replace")
+    soup = BeautifulSoup(html_text, "html.parser")
+    source_dir = source_path.parent if source_path else None
+    cover_asset = book.generated_assets.filter(asset_type=GeneratedAssetType.COVER).first()
+    cover_path = local_asset_path(cover_asset)
+    updated = normalize_preview_book_sections(soup)
+
+    for image_tag in soup.find_all("img"):
+        src = (image_tag.get("src") or "").strip()
+        if not is_local_preview_src(src):
+            continue
+        resolved_path = resolve_preview_image_path(source_dir, src, image_tag, cover_path=cover_path)
+        if resolved_path is None:
+            continue
+        image_tag["src"] = build_data_uri(resolved_path)
+        updated = True
+
+    return soup.decode() if updated else html_text
+
+
+def replace_tag_contents(tag, html_fragment):
+    tag.clear()
+    fragment = BeautifulSoup(html_fragment, "html.parser")
+    container = fragment.body if fragment.body else fragment
+    for child in list(container.contents):
+        tag.append(child)
+
+
+def build_book_info_section(html_fragment):
+    fragment = BeautifulSoup(
+        f"""
+        <div class="book-info-section">
+          <h2 class="book-info-title">বই তথ্য</h2>
+          <div class="book-info-content">{html_fragment}</div>
+        </div>
+        """,
+        "html.parser",
+    )
+    return fragment.find("div", class_="book-info-section")
+
+
+def normalize_preview_book_sections(soup):
+    main_content = soup.find("div", class_="main-content")
+    if main_content is None:
+        return False
+
+    book_info_content = soup.find("div", class_="book-info-content")
+    current_book_info_html = book_info_content.decode_contents() if book_info_content else ""
+    current_main_content_html = main_content.decode_contents()
+    promoted_book_info_html, cleaned_main_content_html = promote_leading_front_matter(
+        current_book_info_html,
+        current_main_content_html,
+    )
+
+    updated = False
+    if cleaned_main_content_html != current_main_content_html:
+        replace_tag_contents(main_content, cleaned_main_content_html)
+        updated = True
+
+    if promoted_book_info_html and promoted_book_info_html != current_book_info_html:
+        if book_info_content is None:
+            main_content.insert_before(build_book_info_section(promoted_book_info_html))
+        else:
+            replace_tag_contents(book_info_content, promoted_book_info_html)
+        updated = True
+
+    return updated
+
+
+def html_asset_response(book, asset):
+    html = normalize_preview_html(book, asset)
+    return HttpResponse(html, content_type=asset.content_type or "text/html")
 
 
 class PermissionGrantListCreateView(generics.ListCreateAPIView):
@@ -133,7 +326,10 @@ class BookAssetDownloadView(APIView):
             raise PermissionDenied("You do not have download access for this book.")
 
         asset = resolve_asset(book, asset_type)
-        file_handle, filename = open_asset_stream(asset)
+        if asset.asset_type == GeneratedAssetType.HTML:
+            return html_asset_response(book, asset)
+        file_handle = open_asset_stream(asset)
+        filename = asset_download_filename(book, asset)
         as_attachment = asset.asset_type != GeneratedAssetType.HTML
         return FileResponse(file_handle, as_attachment=as_attachment, filename=filename)
 
@@ -236,7 +432,8 @@ class ReaderEpubDownloadView(APIView):
         session = get_token_preview_session(token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.EPUB)
-        file_handle, filename = open_asset_stream(asset)
+        file_handle = open_asset_stream(asset)
+        filename = asset_download_filename(session.book, asset)
         return FileResponse(file_handle, as_attachment=False, filename=filename)
 
 
@@ -248,8 +445,7 @@ class ReaderHtmlPreviewView(APIView):
         session = get_token_preview_session(token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.HTML)
-        file_handle, filename = open_asset_stream(asset)
-        return FileResponse(file_handle, as_attachment=False, filename=filename)
+        return html_asset_response(session.book, asset)
 
 
 class ReaderSessionTokenView(APIView):

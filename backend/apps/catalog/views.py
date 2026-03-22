@@ -1,7 +1,9 @@
 from django.db.models import OuterRef, Q, Subquery
+from django.http import Http404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
-from rest_framework import generics
+from django.utils.text import slugify
+from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -16,6 +18,7 @@ from apps.catalog.serializers import (
     MetadataReviewSerializer,
 )
 from apps.access.models import PermissionScope
+from apps.common.models import LifecycleState
 from apps.common.permissions import CanEditMetadata, user_has_scope
 
 
@@ -47,6 +50,7 @@ class BookListView(generics.ListAPIView):
                 "book_series__series",
                 "book_categories__category",
                 "generated_assets",
+                "source_urls",
             )
             .filter(deleted_at__isnull=True)
             .distinct()
@@ -138,19 +142,48 @@ class BookListView(generics.ListAPIView):
         return queryset.order_by(sort_field, "-created_at")
 
 
-class BookDetailView(generics.RetrieveAPIView):
+class BookDetailView(generics.RetrieveDestroyAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = BookDetailSerializer
     lookup_field = "slug"
 
     def get_queryset(self):
-        return Book.objects.prefetch_related(
-            "book_contributors__contributor",
-            "book_series__series",
-            "book_categories__category",
-            "generated_assets",
-            "source_urls",
+        return (
+            Book.objects.prefetch_related(
+                "book_contributors__contributor",
+                "book_series__series",
+                "book_categories__category",
+                "generated_assets",
+                "source_urls",
+            )
+            .filter(deleted_at__isnull=True)
         )
+
+    def get_object(self):
+        queryset = self.get_queryset()
+        slug = self.kwargs["slug"]
+        book = queryset.filter(slug=slug).first()
+        if book:
+            self.check_object_permissions(self.request, book)
+            return book
+
+        for candidate in queryset.only("id", "title", "slug").iterator(chunk_size=200):
+            if slugify(candidate.title or "", allow_unicode=True) == slug:
+                book = queryset.get(pk=candidate.pk)
+                self.check_object_permissions(self.request, book)
+                return book
+
+        raise Http404
+
+    def destroy(self, request, *args, **kwargs):
+        book = self.get_object()
+        if not user_has_scope(request.user, [PermissionScope.METADATA_EDIT], book=book):
+            raise PermissionDenied("You do not have permission to delete this book.")
+
+        book.state = LifecycleState.SOFT_DELETED
+        book.deleted_at = timezone.now()
+        book.save(update_fields=["state", "deleted_at", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MetadataVersionListView(generics.ListAPIView):

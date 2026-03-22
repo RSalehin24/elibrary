@@ -1,5 +1,4 @@
 from django.db import models
-from django.utils.text import slugify
 
 from apps.common.models import (
     LifecycleState,
@@ -8,11 +7,11 @@ from apps.common.models import (
     TimeStampedModel,
     UUIDPrimaryKeyModel,
 )
-from apps.common.text import clean_display_text, normalize_catalog_text
+from apps.common.text import clean_display_text, normalize_catalog_text, unicode_slugify
 
 
 def build_unique_slug(model, value, instance=None):
-    base_slug = slugify(value or "", allow_unicode=True) or "item"
+    base_slug = unicode_slugify(value or "") or "item"
     slug = base_slug
     counter = 2
     queryset = model.objects.all()
@@ -60,10 +59,16 @@ class Contributor(UUIDPrimaryKeyModel, TimeStampedModel):
     class Meta:
         ordering = ["name"]
 
+    def _should_refresh_slug(self):
+        if not self.slug or not self.pk:
+            return True
+        previous = Contributor.objects.filter(pk=self.pk).values_list("name", flat=True).first()
+        return clean_display_text(previous) != self.name
+
     def save(self, *args, **kwargs):
         self.name = clean_display_text(self.name)
         self.normalized_name = normalize_catalog_text(self.name)
-        if not self.slug:
+        if self._should_refresh_slug():
             self.slug = build_unique_slug(Contributor, self.name, self)
         super().save(*args, **kwargs)
 
@@ -80,10 +85,16 @@ class Series(UUIDPrimaryKeyModel, TimeStampedModel):
         verbose_name_plural = "series"
         ordering = ["name"]
 
+    def _should_refresh_slug(self):
+        if not self.slug or not self.pk:
+            return True
+        previous = Series.objects.filter(pk=self.pk).values_list("name", flat=True).first()
+        return clean_display_text(previous) != self.name
+
     def save(self, *args, **kwargs):
         self.name = clean_display_text(self.name)
         self.normalized_name = normalize_catalog_text(self.name)
-        if not self.slug:
+        if self._should_refresh_slug():
             self.slug = build_unique_slug(Series, self.name, self)
         super().save(*args, **kwargs)
 
@@ -100,10 +111,16 @@ class Category(UUIDPrimaryKeyModel, TimeStampedModel):
         verbose_name_plural = "categories"
         ordering = ["name"]
 
+    def _should_refresh_slug(self):
+        if not self.slug or not self.pk:
+            return True
+        previous = Category.objects.filter(pk=self.pk).values_list("name", flat=True).first()
+        return clean_display_text(previous) != self.name
+
     def save(self, *args, **kwargs):
         self.name = clean_display_text(self.name)
         self.normalized_name = normalize_catalog_text(self.name)
-        if not self.slug:
+        if self._should_refresh_slug():
             self.slug = build_unique_slug(Category, self.name, self)
         super().save(*args, **kwargs)
 
@@ -140,10 +157,16 @@ class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
             )
         ]
 
+    def _should_refresh_slug(self):
+        if not self.slug or not self.pk:
+            return True
+        previous = Book.objects.filter(pk=self.pk).values_list("title", flat=True).first()
+        return clean_display_text(previous) != self.title
+
     def save(self, *args, **kwargs):
         self.title = clean_display_text(self.title)
         self.normalized_title = normalize_catalog_text(self.title)
-        if not self.slug:
+        if self._should_refresh_slug():
             self.slug = build_unique_slug(Book, self.title, self)
         super().save(*args, **kwargs)
 

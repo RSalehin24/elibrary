@@ -1,8 +1,9 @@
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
-from apps.access.models import PermissionGrant, PermissionScope
+from apps.access.models import PermissionGrant, PermissionScope, PreviewAccessSession
 from apps.accounts.models import User
 from apps.catalog.models import (
     Book,
@@ -16,6 +17,13 @@ from apps.catalog.models import (
     GeneratedAssetType,
 )
 from apps.common.permissions import user_has_scope
+
+
+def assert_content_disposition_filename(header_value, expected_filename):
+    assert (
+        f'filename="{expected_filename}"' in header_value
+        or f"filename*=utf-8''{quote(expected_filename)}" in header_value
+    )
 
 
 @pytest.mark.django_db
@@ -51,6 +59,7 @@ def test_download_and_reader_launch_are_protected(tmp_path, client):
     PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.DOWNLOAD_FILE)
     allowed = client.get(f"/api/access/books/{book.slug}/download/epub/")
     assert allowed.status_code == 200
+    assert_content_disposition_filename(allowed.headers["Content-Disposition"], "Access Book.epub")
 
     PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.PREVIEW_READ_ONCE)
     launch = client.post(f"/api/access/books/{book.slug}/reader-launch/")
@@ -63,6 +72,91 @@ def test_download_and_reader_launch_are_protected(tmp_path, client):
     assert manifest.json()["book"]["slug"] == book.slug
     assert manifest.json()["reading_session_url"]
     assert manifest.json()["bookmarks_url"]
+
+
+@pytest.mark.django_db
+def test_download_uses_current_book_title_for_cover_and_epub_filenames(tmp_path, client):
+    user = User.objects.create_user(email="filename-access@example.com", password="strong-password-123")
+    book = Book.objects.create(title="বর্তমান বই নাম", state="ready", review_state="approved")
+    epub_path = Path(tmp_path) / "মযলস.epub"
+    cover_path = Path(tmp_path) / "book_cover.jpg"
+    epub_path.write_bytes(b"epub")
+    cover_path.write_bytes(b"cover")
+
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.EPUB,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(epub_path),
+        content_type="application/epub+zip",
+        file_size=epub_path.stat().st_size,
+    )
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.COVER,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(cover_path),
+        content_type="image/jpeg",
+        file_size=cover_path.stat().st_size,
+    )
+
+    PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.DOWNLOAD_FILE)
+    PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.PREVIEW_READ_ONCE)
+    client.force_login(user)
+
+    epub_response = client.get(f"/api/access/books/{book.slug}/download/epub/")
+    cover_response = client.get(f"/api/access/books/{book.slug}/download/cover/")
+    assert epub_response.status_code == 200
+    assert cover_response.status_code == 200
+    assert_content_disposition_filename(epub_response.headers["Content-Disposition"], "বর্তমান বই নাম.epub")
+    assert_content_disposition_filename(cover_response.headers["Content-Disposition"], "বর্তমান বই নাম.jpg")
+
+    launch = client.post(f"/api/access/books/{book.slug}/reader-launch/")
+    manifest_path = launch.json()["manifest_url"].replace("http://testserver", "")
+    manifest = client.get(manifest_path)
+    reader_epub_path = manifest.json()["epub_download_url"].replace("http://testserver", "")
+    reader_epub_response = client.get(reader_epub_path)
+    assert reader_epub_response.status_code == 200
+    assert_content_disposition_filename(reader_epub_response.headers["Content-Disposition"], "বর্তমান বই নাম.epub")
+
+
+@pytest.mark.django_db
+def test_html_download_inlines_stale_relative_cover_references(tmp_path, client):
+    user = User.objects.create_user(email="html-download@example.com", password="strong-password-123")
+    book = Book.objects.create(title="HTML Download Book", state="ready", review_state="approved")
+    html_path = Path(tmp_path) / "book.html"
+    cover_path = Path(tmp_path) / "book_cover.jpg"
+    html_path.write_text(
+        "<!DOCTYPE html><html><body><img src='book_image.hpg' alt='Book Cover' class='cover-image'></body></html>",
+        encoding="utf-8",
+    )
+    cover_path.write_bytes(b"cover-bytes")
+
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.HTML,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(html_path),
+        content_type="text/html",
+        file_size=html_path.stat().st_size,
+    )
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.COVER,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(cover_path),
+        content_type="image/jpeg",
+        file_size=cover_path.stat().st_size,
+    )
+    PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.DOWNLOAD_FILE)
+    client.force_login(user)
+
+    response = client.get(f"/api/access/books/{book.slug}/download/html/")
+
+    assert response.status_code == 200
+    body = response.content.decode("utf-8")
+    assert "data:image/jpeg;base64," in body
+    assert "book_image.hpg" not in body
 
 
 @pytest.mark.django_db
@@ -89,6 +183,89 @@ def test_reader_state_requires_reader_access(tmp_path, client):
         data={"location": "chapter-1", "label": "Start", "note": "Important"},
     )
     assert bookmark.status_code == 201
+
+
+@pytest.mark.django_db
+def test_reader_html_preview_inlines_stale_relative_cover_references(tmp_path, client):
+    book = Book.objects.create(title="HTML Preview Book", state="ready", review_state="approved")
+    html_path = Path(tmp_path) / "book.html"
+    cover_path = Path(tmp_path) / "book_cover.jpg"
+    html_path.write_text(
+        "<!DOCTYPE html><html><body><img src='book_image.hpg' alt='Book Cover' class='cover-image'></body></html>",
+        encoding="utf-8",
+    )
+    cover_path.write_bytes(b"cover-bytes")
+
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.HTML,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(html_path),
+        content_type="text/html",
+        file_size=html_path.stat().st_size,
+    )
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.COVER,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(cover_path),
+        content_type="image/jpeg",
+        file_size=cover_path.stat().st_size,
+    )
+    session = PreviewAccessSession.objects.create(book=book)
+
+    response = client.get(f"/api/access/reader/{session.token}/html/")
+
+    assert response.status_code == 200
+    body = response.content.decode("utf-8")
+    assert "data:image/jpeg;base64," in body
+    assert "book_image.hpg" not in body
+
+
+@pytest.mark.django_db
+def test_reader_html_preview_promotes_leading_front_matter_from_main_content(tmp_path, client):
+    book = Book.objects.create(title="HTML Front Matter Book", state="ready", review_state="approved")
+    html_path = Path(tmp_path) / "book.html"
+    html_path.write_text(
+        """
+        <!DOCTYPE html>
+        <html>
+          <body>
+            <div class="container">
+              <div class="main-content">
+                <h2 class="wp-block-heading">ম্যালিস – কিয়েগো হিগাশিনো</h2>
+                <p><strong>ম্যালিস – কিয়েগো হিগাশিনো</strong><br/>অনুবাদ: সালমান হক, ইশরাক অর্ণব</p>
+                <p>প্রথম প্রকাশ: মার্চ ২০২৩</p>
+                <p><strong>ভূমিকা</strong></p>
+                <p>এটাই মূল কনটেন্ট।</p>
+              </div>
+            </div>
+          </body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
+
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.HTML,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(html_path),
+        content_type="text/html",
+        file_size=html_path.stat().st_size,
+    )
+    session = PreviewAccessSession.objects.create(book=book)
+
+    response = client.get(f"/api/access/reader/{session.token}/html/")
+
+    assert response.status_code == 200
+    body = response.content.decode("utf-8")
+    assert "book-info-section" in body
+    assert "অনুবাদ: সালমান হক, ইশরাক অর্ণব" in body
+    assert "প্রথম প্রকাশ: মার্চ ২০২৩" in body
+    main_content_fragment = body.split('<div class="main-content">', 1)[1]
+    assert "অনুবাদ: সালমান হক, ইশরাক অর্ণব" not in main_content_fragment
+    assert "প্রথম প্রকাশ: মার্চ ২০২৩" not in main_content_fragment
 
 
 @pytest.mark.django_db

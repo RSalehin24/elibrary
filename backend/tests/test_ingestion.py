@@ -19,8 +19,17 @@ from apps.ingestion.models import (
     TitleResolutionAttempt,
 )
 from apps.ingestion.services.legacy_adapter import normalize_text
+from apps.ingestion.services.normalization import (
+    extract_front_matter_entries,
+    normalize_scraped_book,
+    promote_leading_front_matter,
+)
 from apps.ingestion.services.resolution import TitleResolver
 from apps.ingestion.services.submissions import create_submission_records, process_submission_job, queue_submission
+
+
+def test_legacy_normalize_text_preserves_bengali_combining_marks():
+    assert normalize_text("ম্যালিস") == "ম্যালিস"
 
 
 @pytest.mark.django_db
@@ -246,6 +255,101 @@ def test_direct_url_submission_stores_source_page_metadata(monkeypatch):
     )
 
     assert submissions[0].raw_payload["source_page_metadata"]["title"] == "সোর্স বুক"
+
+
+def test_front_matter_extraction_handles_inline_labels_and_role_detection():
+    book_info_html = """
+    <p><strong>অনুবাদ</strong>: অনুবাদক এক, অনুবাদক দুই</p>
+    <p><strong>প্রথম প্রকাশ</strong>: জানুয়ারি ২০০১</p>
+    <p><strong>প্রকাশক</strong> : প্রকাশনী</p>
+    """
+
+    entries = extract_front_matter_entries(book_info_html)
+    normalized = normalize_scraped_book(
+        {
+            "book_title": "উদাহরণ",
+            "author": "লেখক এক",
+            "series": "",
+            "book_type": "",
+            "book_info": book_info_html,
+        }
+    )
+
+    assert [entry["key"] for entry in entries] == ["translator", "first_published", "publisher"]
+    assert any(
+        contributor["name"] == "অনুবাদক এক" and contributor["role"] == "translator"
+        for contributor in normalized["contributors"]
+    )
+    assert any(
+        contributor["name"] == "অনুবাদক দুই" and contributor["role"] == "translator"
+        for contributor in normalized["contributors"]
+    )
+    assert any(
+        contributor["name"] == "প্রকাশনী" and contributor["role"] == "publisher"
+        for contributor in normalized["contributors"]
+    )
+
+
+def test_front_matter_promotion_extracts_title_prefixed_translator_and_publication_from_main_content():
+    main_content_html = """
+    <div>
+      <h2 class="wp-block-heading">ম্যালিস – কিয়েগো হিগাশিনো</h2>
+      <p><strong>ম্যালিস – কিয়েগো হিগাশিনো</strong><br/>অনুবাদ: সালমান হক, ইশরাক অর্ণব</p>
+      <p>প্রথম প্রকাশ: মার্চ ২০২৩</p>
+      <p><strong>ভূমিকা</strong></p>
+      <p>এটাই মূল কনটেন্ট।</p>
+    </div>
+    """
+
+    book_info_html, cleaned_main_content = promote_leading_front_matter("", main_content_html)
+    entries = extract_front_matter_entries(book_info_html)
+    normalized = normalize_scraped_book(
+        {
+            "book_title": "ম্যালিস",
+            "author": "কেইগো হিগাশিনো",
+            "series": "",
+            "book_type": "",
+            "book_info": "",
+            "main_content": main_content_html,
+        }
+    )
+
+    assert any(entry["role"] == "translator" and "সালমান হক" in entry["value"] for entry in entries)
+    assert any(entry["key"] == "first_published" and entry["value"] == "মার্চ ২০২৩" for entry in entries)
+    assert "অনুবাদ: সালমান হক, ইশরাক অর্ণব" not in cleaned_main_content
+    assert "প্রথম প্রকাশ: মার্চ ২০২৩" not in cleaned_main_content
+    assert "এটাই মূল কনটেন্ট।" in cleaned_main_content
+    assert any(
+        contributor["name"] == "সালমান হক" and contributor["role"] == "translator"
+        for contributor in normalized["contributors"]
+    )
+    assert any(
+        contributor["name"] == "ইশরাক অর্ণব" and contributor["role"] == "translator"
+        for contributor in normalized["contributors"]
+    )
+
+
+def test_normalize_scraped_book_drops_author_role_when_same_person_is_translator_or_editor():
+    normalized = normalize_scraped_book(
+        {
+            "book_title": "উদাহরণ",
+            "author": "ইশরাক অর্ণব, কেইগো হিগাশিনো, সালমান হক",
+            "series": "",
+            "book_type": "",
+            "book_info": """
+            <p><strong>অনুবাদ</strong>: ইশরাক অর্ণব</p>
+            <p><strong>সম্পাদক</strong>: কেইগো হিগাশিনো</p>
+            """,
+        }
+    )
+
+    contributor_roles = {(entry["name"], entry["role"]) for entry in normalized["contributors"]}
+
+    assert ("সালমান হক", "author") in contributor_roles
+    assert ("ইশরাক অর্ণব", "translator") in contributor_roles
+    assert ("কেইগো হিগাশিনো", "editor") in contributor_roles
+    assert ("ইশরাক অর্ণব", "author") not in contributor_roles
+    assert ("কেইগো হিগাশিনো", "author") not in contributor_roles
 
 
 @pytest.mark.django_db
@@ -588,6 +692,58 @@ def test_process_submission_job_persists_metadata_and_assets(tmp_path, monkeypat
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.HTML).exists()
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.EPUB).exists()
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.COVER).exists()
+
+
+@pytest.mark.django_db
+def test_process_submission_job_resolves_cover_asset_when_scraped_extension_is_wrong(tmp_path, monkeypatch):
+    user = User.objects.create_user(email="processor-cover@example.com", password="strong-password-123")
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/test-cover-book/",
+        normalized_input="test cover book",
+        resolved_url="https://www.ebanglalibrary.com/books/test-cover-book/",
+        resolution_status="resolved",
+        resolution_confidence=1.0,
+        status="queued",
+    )
+    job = ProcessingJob.objects.create(submission=submission)
+
+    sample = {
+        "book_title": "কভার টেস্ট বুক",
+        "author": "লেখক এক",
+        "series": "",
+        "book_type": "",
+        "cover": "book_image.hpg",
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [{"title": "অধ্যায় ১", "content": "<p>বিষয়বস্তু</p>", "type": "lesson", "parent": None}],
+        "output_folder": str(tmp_path),
+    }
+
+    def fake_scrape_book(url):
+        return sample
+
+    def fake_generate_exports(book_data):
+        output_dir = Path(book_data["output_folder"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "book.html").write_text(
+            "<html><body><img src='book_image.hpg' alt='Book Cover'></body></html>",
+            encoding="utf-8",
+        )
+        (output_dir / "কভার টেস্ট বুক.epub").write_bytes(b"epub-bytes")
+        (output_dir / "book_cover.jpg").write_bytes(b"cover-bytes")
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.scrape_book", fake_scrape_book)
+    monkeypatch.setattr("apps.ingestion.services.submissions.generate_exports", fake_generate_exports)
+
+    process_submission_job(str(job.id))
+
+    cover_asset = GeneratedAsset.objects.get(asset_type=GeneratedAssetType.COVER)
+    assert cover_asset.status == GeneratedAssetStatus.READY
+    assert cover_asset.legacy_path.endswith("book_cover.jpg")
 
 
 @pytest.mark.django_db

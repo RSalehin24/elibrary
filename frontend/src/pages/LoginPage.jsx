@@ -1,23 +1,21 @@
 import { useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const location = useLocation();
   const { login } = useSession();
   const toast = useToast();
   const [phase, setPhase] = useState("credentials");
   const [form, setForm] = useState({ email: "", password: "", otp_token: "" });
-  const redirectTo = location.state?.from || "/create";
 
   async function handleLogin(event) {
     event.preventDefault();
     try {
       await login(form);
       toast.success("Signed in.");
-      navigate(redirectTo, { replace: true });
+      navigate("/create", { replace: true });
     } catch (error) {
       const code = error?.payload?.code;
       if (code === "otp_required") {

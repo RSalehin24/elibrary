@@ -318,7 +318,7 @@ export default function ProfilePage() {
                   </label>
                   <label>
                     <span className="fact-label">Email</span>
-                    <input value={profile?.email || ""} readOnly />
+                    <input value={profile?.email || ""} readOnly disabled />
                   </label>
                 </div>
               </div>

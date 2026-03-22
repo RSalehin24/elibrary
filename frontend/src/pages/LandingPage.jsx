@@ -8,7 +8,7 @@ export default function LandingPage() {
     <div className="page-stack">
       <section className="landing-panel landing-create-panel">
         <div className="landing-create-stack">
-          <p className="eyebrow">Bangla Library</p>
+          <p className="eyebrow">RSalehin24 Library</p>
           <h1>Manage ingestion, review metadata, and keep EPUB creation organized.</h1>
           <p className="landing-lead">
             {authenticated

@@ -16,6 +16,41 @@ def canonical_display_name(value):
     return clean_display_text(value)
 
 
+def normalize_book_contributors(contributors):
+    normalized_entries = []
+    seen = set()
+    non_author_names = set()
+
+    for contributor_info in contributors or []:
+        name = canonical_display_name(contributor_info.get("name", ""))
+        role = contributor_info.get("role", ContributorRole.AUTHOR) or ContributorRole.AUTHOR
+        normalized_name = normalize_catalog_text(name)
+        contributor_key = (normalized_name, role)
+        if not normalized_name or contributor_key in seen:
+            continue
+        seen.add(contributor_key)
+        normalized_entry = {
+            **contributor_info,
+            "name": name,
+            "role": role,
+        }
+        normalized_entries.append(normalized_entry)
+        if role in {ContributorRole.TRANSLATOR, ContributorRole.EDITOR}:
+            non_author_names.add(normalized_name)
+
+    if not non_author_names:
+        return normalized_entries
+
+    return [
+        entry
+        for entry in normalized_entries
+        if not (
+            entry["role"] == ContributorRole.AUTHOR
+            and normalize_catalog_text(entry["name"]) in non_author_names
+        )
+    ]
+
+
 def get_or_create_contributor(name):
     cleaned = canonical_display_name(name)
     normalized = normalize_catalog_text(cleaned)
@@ -84,21 +119,14 @@ def find_existing_book_by_source_url(normalized_source_url):
 def replace_book_relations(book, contributors=None, series_names=None, category_names=None):
     if contributors is not None:
         book.book_contributors.all().delete()
-        seen_contributors = set()
-        for index, contributor_info in enumerate(contributors):
-            normalized_name = normalize_catalog_text(contributor_info["name"])
-            role = contributor_info.get("role", ContributorRole.AUTHOR)
-            contributor_key = (normalized_name, role)
-            if not normalized_name or contributor_key in seen_contributors:
-                continue
-            seen_contributors.add(contributor_key)
+        for index, contributor_info in enumerate(normalize_book_contributors(contributors)):
             contributor = get_or_create_contributor(contributor_info["name"])
             if contributor is None:
                 continue
             BookContributor.objects.create(
                 book=book,
                 contributor=contributor,
-                role=role,
+                role=contributor_info["role"],
                 raw_value=contributor_info.get("raw_value", contributor_info["name"]),
                 sort_order=index,
             )

@@ -1,3 +1,5 @@
+import base64
+import mimetypes
 import os
 import re
 from html import escape
@@ -27,6 +29,48 @@ def make_unique_id(name, existing):
         i += 1
     existing.add(slug)
     return slug
+
+
+def resolve_cover_path(cover, output_folder):
+    if cover and str(cover).startswith(("http://", "https://", "data:")):
+        return str(cover)
+
+    if not output_folder or not os.path.isdir(output_folder):
+        return ""
+
+    if cover:
+        direct_path = cover if os.path.isabs(cover) else os.path.join(output_folder, cover)
+        if os.path.exists(direct_path):
+            return direct_path
+
+        requested_base = os.path.splitext(os.path.basename(str(cover)))[0]
+        if requested_base:
+            for filename in sorted(os.listdir(output_folder)):
+                if os.path.splitext(filename)[0] == requested_base:
+                    candidate_path = os.path.join(output_folder, filename)
+                    if os.path.isfile(candidate_path):
+                        return candidate_path
+
+    for filename in sorted(os.listdir(output_folder)):
+        if os.path.splitext(filename)[0] == "book_cover":
+            candidate_path = os.path.join(output_folder, filename)
+            if os.path.isfile(candidate_path):
+                return candidate_path
+
+    return ""
+
+
+def html_cover_source(cover, output_folder):
+    cover_path = resolve_cover_path(cover, output_folder)
+    if not cover_path:
+        return ""
+    if cover_path.startswith(("http://", "https://", "data:")):
+        return cover_path
+
+    mime_type = mimetypes.guess_type(cover_path)[0] or "image/jpeg"
+    with open(cover_path, "rb") as handle:
+        encoded_image = base64.b64encode(handle.read()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded_image}"
 
 def build_hierarchical_toc_html(toc, existing_ids):
     """
@@ -195,6 +239,48 @@ def generate_css():
         display: block;
         box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         border-radius: 5px;
+      }
+
+      .cover-placeholder-card {
+        max-width: 400px;
+        min-height: 520px;
+        margin: 20px auto;
+        padding: 28px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-radius: 16px;
+        background:
+          radial-gradient(circle at 18% 12%, rgba(238, 211, 121, 0.35), transparent 34%),
+          radial-gradient(circle at 100% 100%, rgba(15, 75, 56, 0.22), transparent 42%),
+          linear-gradient(145deg, #f9f2df 0%, #e6f1eb 100%);
+        box-shadow: 0 10px 24px rgba(0,0,0,0.14);
+        color: #0b3d2e;
+        text-align: left;
+      }
+
+      .cover-placeholder-kicker {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.72);
+        font-size: 0.72em;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .cover-placeholder-title {
+        font-size: 2.1em;
+        line-height: 1.2;
+        margin: 24px 0 12px;
+        color: #17392f;
+      }
+
+      .cover-placeholder-author {
+        font-size: 1.1em;
+        margin: 0;
+        color: rgba(11, 61, 46, 0.78);
       }
       
       /* Book Info Section */
@@ -489,8 +575,14 @@ def save_html(book_title, author, series, book_type, cover, main_content, book_i
     html += "\n      </div>"
 
     # Cover Image
-    if cover:
-        html += f"\n      <img src='{cover}' alt='Book Cover' class='cover-image'>"
+    cover_src = html_cover_source(cover, output_folder)
+    if cover_src:
+        html += f"\n      <img src='{cover_src}' alt='Book Cover' class='cover-image'>"
+    else:
+        html += "\n      <div class='cover-placeholder-card'>"
+        html += "\n        <span class='cover-placeholder-kicker'>Book</span>"
+        html += f"\n        <div><h2 class='cover-placeholder-title'>{escape(book_title)}</h2><p class='cover-placeholder-author'>{escape(author)}</p></div>"
+        html += "\n      </div>"
 
     # Book Info Section (extracted from main content, before dedication)
     if book_info:

@@ -4,7 +4,6 @@ import AccessPage from "./pages/AccessPage";
 import BookDetailPage from "./pages/BookDetailPage";
 import CreatedBooksPage from "./pages/CreatedBooksPage";
 import HomePage from "./pages/HomePage";
-import LandingPage from "./pages/LandingPage";
 import LibraryPage from "./pages/LibraryPage";
 import LoginPage from "./pages/LoginPage";
 import PasswordResetPage from "./pages/PasswordResetPage";
@@ -35,7 +34,14 @@ export default function App() {
   return (
     <AppShell>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <Navigate to="/create" replace />
+            </ProtectedRoute>
+          }
+        />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/reset-password" element={<PasswordResetPage />} />
         <Route

@@ -262,7 +262,7 @@ export default function HomePage() {
               <h2>This Session</h2>
               <p className="muted-copy">
                 {authenticated
-                  ? "These requests update live here. Ready books also appear in My Created Books."
+                  ? "These requests update live here. Ready books also appear in My Books."
                   : "These requests stay visible only until you leave or refresh this page."}
               </p>
             </div>

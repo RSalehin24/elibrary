@@ -1,4 +1,10 @@
+import { getStatusMeta } from "../utils/bookPresentation";
+
 export default function StatusPill({ value }) {
-  const normalized = (value || "unknown").replace(/_/g, " ");
-  return <span className={`status-pill status-${value}`}>{normalized}</span>;
+  const meta = getStatusMeta(value);
+  return (
+    <span className={`status-pill status-${value || "unknown"}`} title={meta.description || meta.label}>
+      {meta.label}
+    </span>
+  );
 }

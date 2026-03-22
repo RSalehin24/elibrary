@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, authApi } from "../api/client";
+import ConfirmationDialog from "../components/ConfirmationDialog";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
@@ -70,9 +71,13 @@ export default function AccessPage() {
   const [managedUsers, setManagedUsers] = useState([]);
   const [userForm, setUserForm] = useState(() => createInitialUserForm());
   const [editingUserId, setEditingUserId] = useState(null);
+  const [pendingDeleteUser, setPendingDeleteUser] = useState(null);
+  const [deletingUserId, setDeletingUserId] = useState(null);
   const [grantForm, setGrantForm] = useState(initialGrantForm);
   const [targetSearch, setTargetSearch] = useState("");
   const isSuperAdmin = Boolean(user?.is_superuser);
+  const isEditingUser = Boolean(editingUserId);
+  const userEditorRef = useRef(null);
 
   const accountScopes = references.account_scopes || [];
   const scopedScopes = references.scoped_scopes || [];
@@ -267,6 +272,9 @@ export default function AccessPage() {
       global_scopes: sortValues(entry.global_scopes || [])
     });
     setActiveTab("users");
+    window.requestAnimationFrame(() => {
+      userEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   async function submitUser(event) {
@@ -282,13 +290,15 @@ export default function AccessPage() {
     }
 
     const payload = {
-      email: userForm.email.trim(),
-      full_name: userForm.full_name.trim(),
       is_active: userForm.is_active,
       totp_required: userForm.totp_required,
       global_scopes: userForm.global_scopes
     };
-    if (userForm.password.trim()) {
+    if (!isEditingUser) {
+      payload.email = userForm.email.trim();
+      payload.full_name = userForm.full_name.trim();
+    }
+    if (!isEditingUser && userForm.password.trim()) {
       payload.password = userForm.password;
     }
 
@@ -313,20 +323,28 @@ export default function AccessPage() {
     }
   }
 
-  async function deleteUser(entry) {
-    if (!window.confirm(`Delete ${entry.email}?`)) {
+  function requestDeleteUser(entry) {
+    setPendingDeleteUser(entry);
+  }
+
+  async function confirmDeleteUser() {
+    if (!pendingDeleteUser || deletingUserId) {
       return;
     }
 
     try {
-      await authApi.deleteUser(entry.id);
-      if (editingUserId === entry.id) {
+      setDeletingUserId(pendingDeleteUser.id);
+      await authApi.deleteUser(pendingDeleteUser.id);
+      if (editingUserId === pendingDeleteUser.id) {
         resetUserForm();
       }
+      setPendingDeleteUser(null);
       toast.success("User deleted.");
       await loadAdminData();
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setDeletingUserId(null);
     }
   }
 
@@ -437,7 +455,7 @@ export default function AccessPage() {
             onClick={() => setActiveTab("users")}
             aria-pressed={activeTab === "users"}
           >
-            <span className="admin-tab-label">Create User</span>
+            <span className="admin-tab-label">Users</span>
           </button>
           <button
             type="button"
@@ -453,6 +471,7 @@ export default function AccessPage() {
       {activeTab === "users" ? (
         <>
           <section className="detail-card">
+            <div ref={userEditorRef} className="access-user-editor-anchor" />
             <div className="panel-header">
               <h2>{editingUserId ? "Edit User" : "Create User"}</h2>
               {editingUserId ? (
@@ -470,6 +489,8 @@ export default function AccessPage() {
                     value={userForm.full_name}
                     onChange={(event) => setUserForm({ ...userForm, full_name: event.target.value })}
                     placeholder="Full name"
+                    disabled={isEditingUser}
+                    readOnly={isEditingUser}
                   />
                 </label>
                 <label>
@@ -479,12 +500,14 @@ export default function AccessPage() {
                     value={userForm.email}
                     onChange={(event) => setUserForm({ ...userForm, email: event.target.value })}
                     placeholder="Email address"
+                    disabled={isEditingUser}
+                    readOnly={isEditingUser}
                   />
                 </label>
                 <label>
                   <div className="field-header">
                     <span className="fact-label">Password</span>
-                    {!editingUserId ? (
+                    {!isEditingUser ? (
                       <div className="field-header-actions">
                         <button
                           type="button"
@@ -509,9 +532,11 @@ export default function AccessPage() {
                   </div>
                   <input
                     type="password"
-                    value={userForm.password}
+                    value={isEditingUser ? "" : userForm.password}
                     onChange={(event) => setUserForm({ ...userForm, password: event.target.value })}
-                    placeholder={editingUserId ? "Leave blank to keep current password" : "Create password"}
+                    placeholder={isEditingUser ? "Password changes are disabled here" : "Create password"}
+                    disabled={isEditingUser}
+                    readOnly={isEditingUser}
                   />
                 </label>
               </div>
@@ -604,11 +629,11 @@ export default function AccessPage() {
                       <td>{formatAccountAccess(entry)}</td>
                       <td>
                         <div className="table-actions">
-                          <button type="button" className="ghost-button" onClick={() => startEditing(entry)}>
+                          <button type="button" className="primary-button" onClick={() => startEditing(entry)}>
                             Edit
                           </button>
                           {!entry.is_superuser ? (
-                            <button type="button" className="ghost-button" onClick={() => deleteUser(entry)}>
+                            <button type="button" className="ghost-button danger-button" onClick={() => requestDeleteUser(entry)}>
                               Delete
                             </button>
                           ) : (
@@ -758,6 +783,24 @@ export default function AccessPage() {
           </section>
         </>
       )}
+
+      <ConfirmationDialog
+        open={Boolean(pendingDeleteUser)}
+        title="Delete User?"
+        body={
+          pendingDeleteUser
+            ? `Delete ${pendingDeleteUser.email}? This will permanently remove the account.`
+            : ""
+        }
+        confirmLabel="Delete User"
+        loading={Boolean(deletingUserId)}
+        onCancel={() => {
+          if (!deletingUserId) {
+            setPendingDeleteUser(null);
+          }
+        }}
+        onConfirm={confirmDeleteUser}
+      />
     </div>
   );
 }
