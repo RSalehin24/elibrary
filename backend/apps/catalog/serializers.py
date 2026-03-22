@@ -1,3 +1,4 @@
+from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from rest_framework import serializers
@@ -122,6 +123,7 @@ class BookDetailSerializer(BookListSerializer):
     source_urls = serializers.SerializerMethodField()
     source_records = serializers.SerializerMethodField()
     front_matter = serializers.SerializerMethodField()
+    latest_processing_job = serializers.SerializerMethodField()
     book_info_html = serializers.CharField()
     dedication_html = serializers.CharField()
     toc = serializers.JSONField()
@@ -133,6 +135,7 @@ class BookDetailSerializer(BookListSerializer):
             "source_urls",
             "source_records",
             "front_matter",
+            "latest_processing_job",
             "book_info_html",
             "dedication_html",
             "toc",
@@ -175,6 +178,22 @@ class BookDetailSerializer(BookListSerializer):
         front_matter_html = combined_front_matter_html(obj.book_info_html, obj.main_content_html)
         return [entry for entry in extract_front_matter_entries(front_matter_html) if not entry["role"]]
 
+    def get_latest_processing_job(self, obj):
+        job = obj.processing_jobs.first()
+        if not job:
+            return None
+        return {
+            "id": str(job.id),
+            "job_type": job.job_type,
+            "status": job.status,
+            "queue_name": job.queue_name,
+            "retry_count": job.retry_count,
+            "last_error": job.last_error,
+            "created_at": job.created_at,
+            "started_at": job.started_at,
+            "finished_at": job.finished_at,
+        }
+
     def get_raw_provenance(self, obj):
         request = self.context.get("request")
         if request and request.user.is_authenticated and request.user.is_staff:
@@ -183,6 +202,15 @@ class BookDetailSerializer(BookListSerializer):
                 "raw_scrape_payload": obj.raw_scrape_payload,
             }
         return {}
+
+
+class EpubAssetReplaceSerializer(serializers.Serializer):
+    file = serializers.FileField()
+
+    def validate_file(self, value):
+        if Path(value.name).suffix.lower() != ".epub":
+            raise serializers.ValidationError("Please upload an EPUB file.")
+        return value
 
 
 class MetadataContributorInputSerializer(serializers.Serializer):

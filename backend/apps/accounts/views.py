@@ -1,4 +1,4 @@
-from django.contrib.auth import get_user_model, login, logout
+from django.contrib.auth import get_user_model, login, logout, update_session_auth_hash
 from django.db import transaction
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework import generics, status
@@ -179,6 +179,8 @@ class ProfileView(APIView):
         serializer = ProfileUpdateSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        if getattr(serializer, "password_changed", False):
+            update_session_auth_hash(request, request.user)
         return Response(ProfileSerializer(request.user, context={"request": request}).data)
 
 

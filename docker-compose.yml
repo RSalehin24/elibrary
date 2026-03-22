@@ -35,6 +35,18 @@ services:
       - ./backend:/app
     ports:
       - "8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/csrf/', timeout=5)"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     depends_on:
       - postgres
       - redis
@@ -56,6 +68,23 @@ services:
       - postgres
       - redis
 
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/bangla_library}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    command: celery -A config beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - postgres
+      - redis
+
   frontend:
     build:
       context: ./frontend
@@ -71,7 +100,8 @@ services:
     ports:
       - "5173:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:

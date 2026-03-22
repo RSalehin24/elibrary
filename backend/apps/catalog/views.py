@@ -1,4 +1,8 @@
+import hashlib
+
+from django.core.files.base import ContentFile
 from django.db.models import OuterRef, Q, Subquery
+from django.shortcuts import get_object_or_404
 from django.http import Http404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -7,11 +11,13 @@ from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.ingestion.models import BookSubmission
-from apps.catalog.models import Book, MetadataReview, MetadataVersion
+from apps.catalog.models import Book, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType, MetadataReview, MetadataVersion
 from apps.catalog.serializers import (
     BookDetailSerializer,
+    EpubAssetReplaceSerializer,
     BookListSerializer,
     BookMetadataUpdateSerializer,
     MetadataReviewDecisionSerializer,
@@ -20,6 +26,7 @@ from apps.catalog.serializers import (
 from apps.access.models import PermissionScope
 from apps.common.models import LifecycleState
 from apps.common.permissions import CanEditMetadata, user_has_scope
+from apps.ingestion.services.submissions import queue_reprocess_book
 
 
 def apply_created_at_filters(queryset, request):
@@ -155,6 +162,7 @@ class BookDetailView(generics.RetrieveDestroyAPIView):
                 "book_categories__category",
                 "generated_assets",
                 "source_urls",
+                "processing_jobs",
             )
             .filter(deleted_at__isnull=True)
         )
@@ -279,3 +287,72 @@ class MetadataReviewUpdateView(generics.UpdateAPIView):
             instance.book.metadata_last_reviewed_at = timezone.now()
         instance.book.save(update_fields=["review_state", "metadata_last_reviewed_at", "updated_at"])
         return Response(MetadataReviewSerializer(instance).data)
+
+
+class BookEpubReplaceView(APIView):
+    permission_classes = [CanEditMetadata]
+
+    def post(self, request, slug):
+        book = get_object_or_404(
+            Book.objects.prefetch_related("generated_assets", "source_urls", "processing_jobs").filter(deleted_at__isnull=True),
+            slug=slug,
+        )
+        self.check_object_permissions(request, book)
+
+        serializer = EpubAssetReplaceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        upload = serializer.validated_data["file"]
+
+        content = upload.read()
+        checksum = hashlib.sha256(content).hexdigest()
+        asset, _ = GeneratedAsset.objects.get_or_create(book=book, asset_type=GeneratedAssetType.EPUB)
+        if asset.file and asset.file.name:
+            asset.file.delete(save=False)
+
+        filename = f"{book.title}.epub"
+        asset.status = GeneratedAssetStatus.READY
+        asset.content_type = upload.content_type or "application/epub+zip"
+        asset.file_size = len(content)
+        asset.checksum = checksum
+        asset.source_job = None
+        asset.legacy_path = ""
+        asset.file.save(filename, ContentFile(content), save=False)
+        asset.storage_path = asset.file.name
+        asset.save()
+        book.refresh_from_db()
+
+        return Response(BookDetailSerializer(book, context={"request": request}).data)
+
+
+class BookRegenerateView(APIView):
+    permission_classes = [CanEditMetadata]
+
+    def post(self, request, slug):
+        book = get_object_or_404(
+            Book.objects.prefetch_related("generated_assets", "source_urls", "processing_jobs").filter(deleted_at__isnull=True),
+            slug=slug,
+        )
+        self.check_object_permissions(request, book)
+
+        try:
+            job, created = queue_reprocess_book(book, actor=request.user)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        book.refresh_from_db()
+        payload = {
+            "book": BookDetailSerializer(book, context={"request": request}).data,
+            "job": {
+                "id": str(job.id),
+                "job_type": job.job_type,
+                "status": job.status,
+                "queue_name": job.queue_name,
+                "retry_count": job.retry_count,
+                "last_error": job.last_error,
+                "created_at": job.created_at,
+                "started_at": job.started_at,
+                "finished_at": job.finished_at,
+            },
+            "created": created,
+        }
+        return Response(payload, status=status.HTTP_202_ACCEPTED)

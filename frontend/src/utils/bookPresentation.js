@@ -7,6 +7,10 @@ const STATUS_META = {
     label: "Processing",
     description: "The system is still generating or organizing this book."
   },
+  queued: {
+    label: "Queued",
+    description: "This task is waiting to start."
+  },
   ready: {
     label: "Ready",
     description: "This book is ready to open and download."
@@ -46,6 +50,26 @@ const STATUS_META = {
   failed: {
     label: "Failed",
     description: "Something went wrong and needs attention."
+  },
+  cancelled: {
+    label: "Cancelled",
+    description: "This task was stopped before it finished."
+  },
+  duplicate: {
+    label: "Duplicate",
+    description: "This request matches an existing book."
+  },
+  new: {
+    label: "New",
+    description: "This source has not been created locally yet."
+  },
+  unfinished: {
+    label: "Unfinished",
+    description: "This source still needs another processing pass."
+  },
+  deleted: {
+    label: "Deleted",
+    description: "This source points to a deleted local book."
   },
   succeeded: {
     label: "Completed",

@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import quote
 
 from django.conf import settings
@@ -5,6 +6,7 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
+import requests
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -17,29 +19,49 @@ from apps.common.permissions import CanManageProcessing, user_has_scope
 from apps.common.throttles import SubmissionRateThrottle
 from apps.ingestion.models import (
     BookSubmission,
+    CatalogAutomationSettings,
+    CatalogCurationRun,
     DuplicateReview,
     DuplicateReviewStatus,
     MatchCandidate,
     ProcessingJob,
     ResolutionStatus,
+    SourceCatalogEntry,
+    SubmissionOrigin,
     SubmissionStatus,
 )
 from apps.ingestion.serializers import (
+    CatalogAutomationSettingsSerializer,
+    CatalogAutomationSettingsUpdateSerializer,
+    CatalogCurationRunCreateSerializer,
+    CatalogCurationRunSerializer,
     DuplicateReviewDecisionSerializer,
     DuplicateReviewSerializer,
     ProcessingJobSerializer,
+    SourceCatalogEntrySnapshotSerializer,
     SubmissionBatchCreateSerializer,
     SubmissionSerializer,
 )
+from apps.ingestion.services.curation import (
+    cancel_catalog_curation_run,
+    create_catalog_curation_run,
+    get_catalog_automation_settings,
+    source_catalog_entry_snapshots,
+)
 from apps.ingestion.services.submissions import (
+    cancel_processing_job,
     create_submission_records,
     ensure_preview_session,
     find_existing_book_by_source_url,
     fulfill_submission_with_existing_book,
     queue_submission,
+    recover_stale_processing_jobs,
+    resume_processing_job,
     sync_deduplicated_submissions,
 )
-from apps.ingestion.services.resolution import TitleResolver
+from apps.ingestion.services.resolution import ARCHIVE_MAX_PAGES, TitleResolver
+
+logger = logging.getLogger(__name__)
 
 
 def submission_base_queryset():
@@ -71,6 +93,17 @@ def apply_created_at_filters(queryset, request):
         if parsed_before:
             queryset = queryset.filter(created_at__lte=parsed_before)
 
+    return queryset
+
+
+def apply_limit(queryset, request, *, default_limit=80, max_limit=200):
+    limit = request.query_params.get("limit", "").strip()
+    try:
+        limit_value = max(1, min(int(limit), max_limit)) if limit else default_limit
+    except (TypeError, ValueError):
+        limit_value = default_limit
+    if limit_value:
+        return queryset[:limit_value]
     return queryset
 
 
@@ -113,6 +146,9 @@ class SubmissionListCreateView(APIView):
 
     def get(self, request):
         queryset = visible_submissions_queryset(request.user)
+        origin = request.query_params.get("origin", "").strip()
+        if origin:
+            queryset = queryset.filter(origin=origin)
         status_filter = request.query_params.get("status")
         if status_filter:
             queryset = queryset.filter(status=status_filter)
@@ -135,6 +171,7 @@ class SubmissionListCreateView(APIView):
         if linked_book_slug:
             queryset = queryset.filter(linked_book__slug=linked_book_slug)
         queryset = apply_created_at_filters(queryset, request)
+        queryset = apply_limit(queryset, request)
         serializer = SubmissionSerializer(queryset, many=True, context={"request": request})
         return Response(serializer.data)
 
@@ -145,6 +182,7 @@ class SubmissionListCreateView(APIView):
             submitter=request.user if request.user.is_authenticated else None,
             parsed_entries=serializer.validated_data["parsed_entries"],
             auto_process=serializer.validated_data["auto_process"],
+            origin=SubmissionOrigin.USER,
         )
         return Response(
             SubmissionSerializer(submissions, many=True, context={"request": request}).data,
@@ -259,6 +297,9 @@ class ProcessingJobListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = ProcessingJob.objects.select_related("submission", "book").all()
+        origin = self.request.query_params.get("origin", "").strip()
+        if origin:
+            queryset = queryset.filter(submission__origin=origin)
         status_filter = self.request.query_params.get("status", "").strip()
         if status_filter:
             queryset = queryset.filter(status=status_filter)
@@ -270,8 +311,49 @@ class ProcessingJobListView(generics.ListAPIView):
             queryset = queryset.filter(submission__original_input__icontains=query)
         queryset = apply_created_at_filters(queryset, self.request)
         if self.request.user.is_staff or user_has_scope(self.request.user, [PermissionScope.PROCESSING_MANAGE]):
-            return queryset
-        return queryset.filter(submission__submitter=self.request.user)
+            return apply_limit(queryset, self.request)
+        queryset = queryset.filter(submission__submitter=self.request.user)
+        return apply_limit(queryset, self.request)
+
+
+class ProcessingJobStopView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        job = get_object_or_404(ProcessingJob.objects.select_related("submission"), pk=pk)
+        can_manage_processing = user_has_scope(request.user, [PermissionScope.PROCESSING_MANAGE])
+        if not request.user.is_staff and not can_manage_processing and job.submission.submitter_id != request.user.id:
+            raise PermissionDenied("You cannot stop this job.")
+        job = cancel_processing_job(job)
+        return Response(ProcessingJobSerializer(job).data)
+
+
+class ProcessingJobResumeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        job = get_object_or_404(ProcessingJob.objects.select_related("submission"), pk=pk)
+        can_manage_processing = user_has_scope(request.user, [PermissionScope.PROCESSING_MANAGE])
+        if not request.user.is_staff and not can_manage_processing and job.submission.submitter_id != request.user.id:
+            raise PermissionDenied("You cannot resume this job.")
+        try:
+            job = resume_processing_job(job)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(ProcessingJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
+
+class ProcessingJobRecoverView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def post(self, request):
+        origin = request.data.get("origin") or request.query_params.get("origin") or ""
+        try:
+            limit = int(request.data.get("limit") or request.query_params.get("limit") or 50)
+        except (TypeError, ValueError):
+            return Response({"detail": "limit must be a whole number."}, status=status.HTTP_400_BAD_REQUEST)
+        recovered = recover_stale_processing_jobs(origin=origin, limit=max(1, min(limit, 100)))
+        return Response({"recovered_jobs": recovered}, status=status.HTTP_202_ACCEPTED)
 
 
 class SubmissionRetryView(APIView):
@@ -293,13 +375,19 @@ class SubmissionRetryView(APIView):
 class DuplicateReviewListView(generics.ListAPIView):
     permission_classes = [CanManageProcessing]
     serializer_class = DuplicateReviewSerializer
-    queryset = DuplicateReview.objects.select_related("submission__linked_book", "existing_book").prefetch_related(
-        "submission__resolution_attempts__match_candidates",
-        "existing_book__book_contributors__contributor",
-        "existing_book__book_series__series",
-        "existing_book__book_categories__category",
-        "existing_book__generated_assets",
-    )
+
+    def get_queryset(self):
+        queryset = DuplicateReview.objects.select_related("submission__linked_book", "existing_book").prefetch_related(
+            "submission__resolution_attempts__match_candidates",
+            "existing_book__book_contributors__contributor",
+            "existing_book__book_series__series",
+            "existing_book__book_categories__category",
+            "existing_book__generated_assets",
+        )
+        origin = self.request.query_params.get("origin", "").strip()
+        if origin:
+            queryset = queryset.filter(submission__origin=origin)
+        return apply_limit(queryset, self.request, default_limit=40)
 
 
 class DuplicateReviewResolveView(APIView):
@@ -333,14 +421,118 @@ class DuplicateReviewResolveView(APIView):
         return Response(DuplicateReviewSerializer(review, context={"request": request}).data)
 
 
+class SourceCatalogEntryListView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def get(self, request):
+        queryset = SourceCatalogEntry.objects.order_by("title")
+        query = request.query_params.get("q", "").strip()
+        if query:
+            queryset = queryset.filter(Q(title__icontains=query) | Q(author_line__icontains=query))
+
+        queryset = apply_limit(queryset, request, default_limit=150)
+
+        snapshots, summary = source_catalog_entry_snapshots(queryset)
+        status_filter = request.query_params.get("status", "").strip()
+        if status_filter:
+            snapshots = [snapshot for snapshot in snapshots if snapshot["curation_status"] == status_filter]
+
+        return Response(
+            {
+                "summary": summary,
+                "entries": SourceCatalogEntrySnapshotSerializer(snapshots, many=True).data,
+            }
+        )
+
+
+class CatalogCurationRunListCreateView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def get(self, request):
+        queryset = CatalogCurationRun.objects.select_related("requested_by")
+        trigger = request.query_params.get("trigger", "").strip()
+        if trigger:
+            queryset = queryset.filter(trigger=trigger)
+        limit = request.query_params.get("limit", "").strip()
+        try:
+            limit_value = max(1, min(int(limit), 50)) if limit else 12
+        except (TypeError, ValueError):
+            limit_value = 12
+        runs = queryset[:limit_value]
+        return Response(CatalogCurationRunSerializer(runs, many=True).data)
+
+    def post(self, request):
+        serializer = CatalogCurationRunCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        run = create_catalog_curation_run(
+            mode=serializer.validated_data["mode"],
+            requested_by=request.user,
+            refresh_catalog=serializer.validated_data["refresh_catalog"],
+            refresh_max_pages=serializer.validated_data["refresh_max_pages"],
+        )
+        return Response(CatalogCurationRunSerializer(run).data, status=status.HTTP_202_ACCEPTED)
+
+
+class CatalogCurationRunStopView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def post(self, request, pk):
+        run = get_object_or_404(CatalogCurationRun, pk=pk)
+        run = cancel_catalog_curation_run(run)
+        return Response(CatalogCurationRunSerializer(run).data)
+
+
+class CatalogAutomationSettingsView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def get(self, request):
+        settings_obj = get_catalog_automation_settings()
+        latest_run = CatalogCurationRun.objects.filter(trigger="scheduled").select_related("requested_by").first()
+        return Response(
+            {
+                "settings": CatalogAutomationSettingsSerializer(settings_obj).data,
+                "latest_run": CatalogCurationRunSerializer(latest_run).data if latest_run else None,
+            }
+        )
+
+    def patch(self, request):
+        settings_obj = get_catalog_automation_settings()
+        serializer = CatalogAutomationSettingsUpdateSerializer(settings_obj, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        settings_obj = serializer.save(updated_by=request.user)
+        latest_run = CatalogCurationRun.objects.filter(trigger="scheduled").select_related("requested_by").first()
+        return Response(
+            {
+                "settings": CatalogAutomationSettingsSerializer(settings_obj).data,
+                "latest_run": CatalogCurationRunSerializer(latest_run).data if latest_run else None,
+            }
+        )
+
+
 class SourceCatalogRefreshView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
-        max_pages = int(request.data.get("max_pages") or request.query_params.get("max_pages") or 3)
-        max_pages = max(1, min(max_pages, 20))
+        try:
+            max_pages = int(request.data.get("max_pages") or request.query_params.get("max_pages") or 3)
+        except (TypeError, ValueError):
+            return Response({"detail": "max_pages must be a whole number."}, status=status.HTTP_400_BAD_REQUEST)
+        max_pages = max(1, min(max_pages, ARCHIVE_MAX_PAGES))
         resolver = TitleResolver()
-        refreshed = resolver.refresh_catalog(max_pages=max_pages)
+        try:
+            refreshed = resolver.refresh_catalog(max_pages=max_pages)
+        except requests.RequestException:
+            logger.warning("Source catalog refresh failed because the upstream catalog was unavailable.", exc_info=True)
+            return Response(
+                {"detail": "Could not refresh the source catalog right now. Please try again in a moment."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception:
+            logger.exception("Source catalog refresh failed unexpectedly.")
+            return Response(
+                {"detail": "Source catalog refresh failed before it could finish."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return Response(
             {
                 "refreshed_entries": len(refreshed),

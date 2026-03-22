@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import BookCoverArt from "../components/BookCoverArt";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import BookDetailSkeleton from "../components/BookDetailSkeleton";
+import LoadingSpinner from "../components/LoadingSpinner";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -28,6 +29,24 @@ function TrashIcon() {
     <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
       <path
         d="M9 3.75h6a1 1 0 0 1 1 1V6h3a.75.75 0 0 1 0 1.5h-1.1l-.79 10.28A2.5 2.5 0 0 1 14.62 20H9.38a2.5 2.5 0 0 1-2.49-2.22L6.1 7.5H5a.75.75 0 0 1 0-1.5h3V4.75a1 1 0 0 1 1-1Zm5.5 2.25v-.75h-5V6h5Zm-6.9 1.5.78 10.17a1 1 0 0 0 1 .83h5.24a1 1 0 0 0 1-.83l.78-10.17Zm2.4 2.25c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Zm4 0c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function RefreshIcon({ spinning = false }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      aria-hidden="true"
+      focusable="false"
+      className={spinning ? "icon-spin" : ""}
+    >
+      <path
+        d="M12 4.75a7.25 7.25 0 0 1 6.86 4.92l.32-.9a.75.75 0 1 1 1.41.49l-1.03 2.92a.75.75 0 0 1-.95.46l-2.92-1.03a.75.75 0 0 1 .5-1.42l1.18.41A5.75 5.75 0 1 0 17.1 16a.75.75 0 1 1 1.3.75A7.25 7.25 0 1 1 12 4.75Z"
         fill="currentColor"
       />
     </svg>
@@ -71,6 +90,7 @@ export default function BookDetailPage() {
   const { user } = useSession();
   const toast = useToast();
   const { slug } = useParams();
+  const epubInputRef = useRef(null);
   const [book, setBook] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -94,6 +114,13 @@ export default function BookDetailPage() {
   const [bookmarks, setBookmarks] = useState([]);
   const [deleting, setDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [launchingReader, setLaunchingReader] = useState(false);
+  const [savingMetadata, setSavingMetadata] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
+  const [reviewUpdating, setReviewUpdating] = useState({ id: "", state: "" });
+  const [deletingBookmarkId, setDeletingBookmarkId] = useState("");
+  const [replacingEpub, setReplacingEpub] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const canEditMetadata = hasCapability(user, "metadata:edit");
 
   function applyReaderState(sessionPayload) {
@@ -251,8 +278,28 @@ export default function BookDetailPage() {
     };
   }, [book?.id, slug, user?.id, canEditMetadata]);
 
+  useEffect(() => {
+    const nextJob = book?.latest_processing_job;
+    if (!nextJob || !["queued", "processing"].includes(nextJob.status)) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      fetchBook(slug).catch(() => {});
+    }, 4000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [book?.latest_processing_job?.id, book?.latest_processing_job?.status, slug]);
+
   async function launchReader() {
+    if (launchingReader) {
+      return;
+    }
+
     try {
+      setLaunchingReader(true);
       const payload = await apiFetch(`/access/books/${slug}/reader-launch/`, {
         method: "POST",
         body: {}
@@ -264,12 +311,19 @@ export default function BookDetailPage() {
       toast.success("Reader opened.");
     } catch (nextError) {
       toast.error(nextError.message);
+    } finally {
+      setLaunchingReader(false);
     }
   }
 
   async function saveMetadata(event) {
     event.preventDefault();
+    if (savingMetadata) {
+      return;
+    }
+
     try {
+      setSavingMetadata(true);
       const contributors = editor.contributors
         .split("\n")
         .map((line) => line.trim())
@@ -298,22 +352,36 @@ export default function BookDetailPage() {
       toast.success("Metadata updated.");
     } catch (nextError) {
       toast.error(nextError.message);
+    } finally {
+      setSavingMetadata(false);
     }
   }
 
   async function deleteBookmark(id) {
+    if (deletingBookmarkId) {
+      return;
+    }
+
     try {
+      setDeletingBookmarkId(id);
       await apiFetch(`/access/bookmarks/${id}/`, { method: "DELETE" });
       setBookmarks((current) => current.filter((bookmark) => bookmark.id !== id));
       toast.success("Bookmark removed.");
     } catch (nextError) {
       toast.error(nextError.message);
+    } finally {
+      setDeletingBookmarkId("");
     }
   }
 
   async function createMetadataReview(event) {
     event.preventDefault();
+    if (savingReview) {
+      return;
+    }
+
     try {
+      setSavingReview(true);
       const payload = await apiFetch(`/catalog/books/${slug}/metadata-reviews/`, {
         method: "POST",
         body: reviewForm
@@ -324,11 +392,18 @@ export default function BookDetailPage() {
       toast.success("Review saved.");
     } catch (nextError) {
       toast.error(nextError.message);
+    } finally {
+      setSavingReview(false);
     }
   }
 
   async function updateMetadataReview(reviewId, state) {
+    if (reviewUpdating.id) {
+      return;
+    }
+
     try {
+      setReviewUpdating({ id: reviewId, state });
       const payload = await apiFetch(`/catalog/metadata-reviews/${reviewId}/`, {
         method: "PATCH",
         body: { state }
@@ -340,18 +415,20 @@ export default function BookDetailPage() {
       toast.success("Review updated.");
     } catch (nextError) {
       toast.error(nextError.message);
+    } finally {
+      setReviewUpdating({ id: "", state: "" });
     }
   }
 
   function requestDeleteBook() {
-    if (!book || deleting) {
+    if (!book || deleting || hasActiveProcessing) {
       return;
     }
     setDeleteDialogOpen(true);
   }
 
   async function confirmDeleteBook() {
-    if (!book || deleting) {
+    if (!book || deleting || hasActiveProcessing) {
       return;
     }
 
@@ -366,10 +443,69 @@ export default function BookDetailPage() {
     }
   }
 
-  function handleDeleteControlKeyDown(event) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      requestDeleteBook();
+  function openEpubPicker() {
+    if (replacingEpub || regenerating || hasActiveProcessing) {
+      return;
+    }
+    epubInputRef.current?.click();
+  }
+
+  async function replaceEpub(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      setReplacingEpub(true);
+      const formData = new FormData();
+      formData.append("file", file);
+      const payload = await apiFetch(`/catalog/books/${slug}/assets/epub/`, {
+        method: "POST",
+        body: formData
+      });
+      setBook(payload);
+      if (payload.slug && payload.slug !== slug) {
+        navigate(`/books/${payload.slug}`, { replace: true });
+      }
+      toast.success("EPUB updated.");
+    } catch (nextError) {
+      toast.error(nextError.message);
+    } finally {
+      event.target.value = "";
+      setReplacingEpub(false);
+    }
+  }
+
+  async function regenerateBook() {
+    if (!book || regenerating || hasActiveProcessing) {
+      return;
+    }
+
+    try {
+      setRegenerating(true);
+      const payload = await apiFetch(`/catalog/books/${slug}/regenerate/`, {
+        method: "POST",
+        body: {}
+      });
+      if (payload.book) {
+        setBook(payload.book);
+        if (payload.book.slug && payload.book.slug !== slug) {
+          navigate(`/books/${payload.book.slug}`, { replace: true });
+        }
+      }
+
+      if (!payload.created) {
+        toast.success("Book regeneration is already in progress.");
+      } else if (payload.job?.status === "succeeded") {
+        toast.success("Book regenerated.");
+      } else {
+        toast.success("Book regeneration started.");
+      }
+    } catch (nextError) {
+      toast.error(nextError.message);
+    } finally {
+      setRegenerating(false);
     }
   }
 
@@ -399,23 +535,46 @@ export default function BookDetailPage() {
   const hasDedication = Boolean(book.dedication_html?.trim());
   const hasToc = Boolean(book.toc?.length);
   const progressPercent = Math.max(0, Math.min(100, Math.round(Number(readerState.progress_percent) || 0)));
+  const latestProcessingJob = book.latest_processing_job || null;
+  const hasActiveProcessing = Boolean(
+    latestProcessingJob && ["queued", "processing"].includes(latestProcessingJob.status)
+  );
+  const hasFailedProcessing = latestProcessingJob?.status === "failed";
+  const epubAsset = (book.assets || []).find((asset) => asset.asset_type === "epub");
+  const processingHeading =
+    latestProcessingJob?.job_type === "reprocess" ? "Regenerating book" : "Processing book";
+  const processingBody = hasFailedProcessing
+    ? latestProcessingJob?.last_error || "The latest processing job failed."
+    : hasActiveProcessing
+      ? "New book files are being prepared. This page refreshes automatically while the job is running."
+      : "";
 
   return (
     <div className="book-detail-page page-stack">
       <section className="detail-card book-hero">
         {canEditMetadata ? (
-          <span
-            className={`book-delete-control${deleting ? " is-disabled" : ""}`}
-            role="button"
-            tabIndex={deleting ? -1 : 0}
-            onClick={requestDeleteBook}
-            onKeyDown={handleDeleteControlKeyDown}
-            aria-label={deleting ? "Deleting book" : "Delete book"}
-            title={deleting ? "Deleting book" : "Delete book"}
-            aria-disabled={deleting ? "true" : "false"}
-          >
-            <TrashIcon />
-          </span>
+          <div className="book-hero-controls">
+            <button
+              type="button"
+              className="book-refresh-control"
+              onClick={regenerateBook}
+              aria-label={hasActiveProcessing ? "Book regeneration in progress" : "Regenerate book"}
+              title={hasActiveProcessing ? "Book regeneration in progress" : "Regenerate book"}
+              disabled={regenerating || hasActiveProcessing}
+            >
+              <RefreshIcon spinning={regenerating || hasActiveProcessing} />
+            </button>
+            <button
+              type="button"
+              className="book-delete-control"
+              onClick={requestDeleteBook}
+              aria-label={deleting ? "Deleting book" : "Delete book"}
+              title={deleting ? "Deleting book" : "Delete book"}
+              disabled={deleting || hasActiveProcessing}
+            >
+              {deleting ? <LoadingSpinner size={18} /> : <TrashIcon />}
+            </button>
+          </div>
         ) : null}
 
         <div className="book-hero-cover">
@@ -473,15 +632,55 @@ export default function BookDetailPage() {
           ) : null}
 
           <div className="book-hero-actions">
-            <button type="button" className="primary-button" onClick={launchReader}>
-              Open reader
+            <button type="button" className="primary-button" onClick={launchReader} disabled={launchingReader}>
+              <span className="button-label">
+                {launchingReader ? <LoadingSpinner size={16} /> : null}
+                {launchingReader ? "Opening..." : "Open reader"}
+              </span>
             </button>
             {(book.assets || []).map((asset) => (
               <a key={asset.id} className="ghost-button asset-link" href={asset.download_url} target="_blank" rel="noreferrer">
                 {assetLabels[asset.asset_type] || `Download ${asset.asset_type.toUpperCase()}`}
               </a>
             ))}
+            {canEditMetadata ? (
+              <>
+                <input
+                  ref={epubInputRef}
+                  type="file"
+                  accept=".epub,application/epub+zip"
+                  hidden
+                  onChange={replaceEpub}
+                />
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={openEpubPicker}
+                  disabled={replacingEpub || regenerating || hasActiveProcessing}
+                >
+                  <span className="button-label">
+                    {replacingEpub ? <LoadingSpinner size={16} /> : null}
+                    {replacingEpub ? "Uploading..." : epubAsset ? "Replace EPUB" : "Upload EPUB"}
+                  </span>
+                </button>
+              </>
+            ) : null}
           </div>
+
+          {latestProcessingJob && (hasActiveProcessing || hasFailedProcessing) ? (
+            <div
+              className={`book-status-note${hasActiveProcessing ? " book-status-note-processing" : ""}${
+                hasFailedProcessing ? " book-status-note-error" : ""
+              }`}
+            >
+              <div className="book-status-note-head">
+                <span className="fact-label">Processing</span>
+                {hasActiveProcessing ? <LoadingSpinner size={14} /> : null}
+              </div>
+              <strong>{processingHeading}</strong>
+              <p>{processingBody}</p>
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -596,7 +795,10 @@ export default function BookDetailPage() {
                     {bookmark.note ? <p>{bookmark.note}</p> : null}
                     <div className="inline-pills">
                       <button type="button" className="ghost-button" onClick={() => deleteBookmark(bookmark.id)}>
-                        Remove
+                        <span className="button-label">
+                          {deletingBookmarkId === bookmark.id ? <LoadingSpinner size={14} /> : null}
+                          {deletingBookmarkId === bookmark.id ? "Removing..." : "Remove"}
+                        </span>
                       </button>
                     </div>
                   </article>
@@ -658,8 +860,11 @@ export default function BookDetailPage() {
                   <input value={editor.notes} onChange={(event) => setEditor({ ...editor, notes: event.target.value })} />
                 </label>
               </div>
-              <button type="submit" className="primary-button">
-                Save metadata
+              <button type="submit" className="primary-button" disabled={savingMetadata}>
+                <span className="button-label">
+                  {savingMetadata ? <LoadingSpinner size={16} /> : null}
+                  {savingMetadata ? "Saving..." : "Save metadata"}
+                </span>
               </button>
             </form>
 
@@ -681,8 +886,11 @@ export default function BookDetailPage() {
                   <span>Notes</span>
                   <input value={reviewForm.notes} onChange={(event) => setReviewForm({ ...reviewForm, notes: event.target.value })} />
                 </label>
-                <button type="submit" className="ghost-button">
-                  Save review
+                <button type="submit" className="ghost-button" disabled={savingReview}>
+                  <span className="button-label">
+                    {savingReview ? <LoadingSpinner size={16} /> : null}
+                    {savingReview ? "Saving..." : "Save review"}
+                  </span>
                 </button>
               </form>
             </section>
@@ -721,11 +929,31 @@ export default function BookDetailPage() {
                         {review.updated_at ? ` · ${formatBookDateTime(review.updated_at)}` : ""}
                       </p>
                       <div className="inline-pills">
-                        <button type="button" className="primary-button" onClick={() => updateMetadataReview(review.id, "approved")}>
-                          Approve
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => updateMetadataReview(review.id, "approved")}
+                          disabled={Boolean(reviewUpdating.id)}
+                        >
+                          <span className="button-label">
+                            {reviewUpdating.id === review.id && reviewUpdating.state === "approved" ? (
+                              <LoadingSpinner size={14} />
+                            ) : null}
+                            {reviewUpdating.id === review.id && reviewUpdating.state === "approved" ? "Approving..." : "Approve"}
+                          </span>
                         </button>
-                        <button type="button" className="ghost-button" onClick={() => updateMetadataReview(review.id, "rejected")}>
-                          Reject
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => updateMetadataReview(review.id, "rejected")}
+                          disabled={Boolean(reviewUpdating.id)}
+                        >
+                          <span className="button-label">
+                            {reviewUpdating.id === review.id && reviewUpdating.state === "rejected" ? (
+                              <LoadingSpinner size={14} />
+                            ) : null}
+                            {reviewUpdating.id === review.id && reviewUpdating.state === "rejected" ? "Rejecting..." : "Reject"}
+                          </span>
                         </button>
                       </div>
                     </article>

@@ -2,9 +2,11 @@ import hashlib
 import logging
 from pathlib import Path
 
+from celery import current_app
 from django.conf import settings
 from django.core.files import File
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.access.models import PreviewAccessSession
@@ -38,6 +40,8 @@ from apps.ingestion.models import (
     ProcessingJob,
     ProcessingLog,
     ResolutionStatus,
+    SubmissionOrigin,
+    SubmissionInputType,
     SubmissionStatus,
     TitleResolutionAttempt,
 )
@@ -77,6 +81,9 @@ SUBMISSION_PAYLOAD_KEYS_TO_SHARE = (
     "scraped_preview",
 )
 
+ACTIVE_JOB_STATUSES = (JobStatus.QUEUED, JobStatus.PROCESSING)
+JOB_CANCEL_MESSAGE = "Stopped by user."
+
 
 def ensure_preview_session(user, book, submission=None, allow_guest=False):
     if not user and not allow_guest:
@@ -110,6 +117,86 @@ def record_job_log(job, level, message, details=None):
         message=message,
         details=details or {},
     )
+
+
+def revoke_processing_task(task_id):
+    if not task_id:
+        return
+    try:
+        current_app.control.revoke(task_id)
+    except Exception:
+        logger.warning("Failed to revoke processing task.", exc_info=True)
+
+
+def reprocess_target_book_for_job(job):
+    reprocess_book_id = job.payload.get("reprocess_book_id") or job.book_id or job.submission.linked_book_id
+    if not reprocess_book_id:
+        return None
+    return Book.objects.filter(pk=reprocess_book_id).first()
+
+
+def finalize_cancelled_job(job, message=JOB_CANCEL_MESSAGE):
+    submission = job.submission
+    submission.status = SubmissionStatus.CANCELLED
+    submission.error_message = message
+    submission.save(update_fields=["status", "error_message", "updated_at"])
+    sync_deduplicated_submissions(submission)
+
+    if job.job_type == JobType.REPROCESS:
+        reprocess_book = reprocess_target_book_for_job(job)
+        previous_book_state = job.payload.get("previous_book_state")
+        if reprocess_book is not None and previous_book_state:
+            reprocess_book.state = previous_book_state
+            reprocess_book.save(update_fields=["state", "updated_at"])
+
+    job.status = JobStatus.CANCELLED
+    job.cancel_requested = False
+    job.last_error = message
+    job.finished_at = timezone.now()
+    job.save(update_fields=["status", "cancel_requested", "last_error", "finished_at", "updated_at"])
+    record_job_log(job, "warning", message)
+    return job
+
+
+def cancel_processing_job(job, message=JOB_CANCEL_MESSAGE):
+    job = ProcessingJob.objects.select_related("submission").get(pk=job.pk)
+    if job.status in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED}:
+        return job
+
+    job.cancel_requested = True
+    job.save(update_fields=["cancel_requested", "updated_at"])
+    if job.status == JobStatus.QUEUED:
+        revoke_processing_task(job.task_id)
+        return finalize_cancelled_job(job, message=message)
+    record_job_log(job, "warning", "Stop requested.")
+    return job
+
+
+def resume_processing_job(job):
+    job = ProcessingJob.objects.select_related("submission").get(pk=job.pk)
+    if job.status != JobStatus.QUEUED:
+        raise ValueError("Only queued jobs can be resumed.")
+    if job.cancel_requested:
+        raise ValueError("This job has a pending stop request.")
+    dispatch_processing_job(job, force=True)
+    return job
+
+
+def recover_stale_processing_jobs(*, origin="", limit=50):
+    queryset = (
+        ProcessingJob.objects.select_related("submission")
+        .filter(status=JobStatus.QUEUED, cancel_requested=False)
+        .filter(Q(task_id="") | Q(task_id__isnull=True))
+        .order_by("created_at")
+    )
+    if origin:
+        queryset = queryset.filter(submission__origin=origin)
+
+    recovered = 0
+    for job in queryset[:limit]:
+        dispatch_processing_job(job, force=True)
+        recovered += 1
+    return recovered
 
 
 def capture_source_page_metadata(source_url):
@@ -310,7 +397,7 @@ def resolve_submission(submission, force_refresh=False):
 
 def queue_submission(submission, actor=None):
     submission = root_submission(submission)
-    existing_job = submission.processing_jobs.filter(status__in=[JobStatus.QUEUED, JobStatus.PROCESSING]).first()
+    existing_job = submission.processing_jobs.filter(status__in=ACTIVE_JOB_STATUSES).first()
     if existing_job:
         return existing_job
 
@@ -327,7 +414,18 @@ def queue_submission(submission, actor=None):
     submission.save(update_fields=["status", "updated_at"])
     sync_deduplicated_submissions(submission)
 
+    dispatch_processing_job(job)
+    return job
+
+
+def dispatch_processing_job(job, force=False):
     from apps.ingestion.tasks import process_submission_task
+
+    job.refresh_from_db(fields=["status", "task_id", "queue_name", "cancel_requested", "updated_at"])
+    if job.status == JobStatus.CANCELLED or job.cancel_requested:
+        return job
+    if not force and job.status == JobStatus.QUEUED and job.task_id:
+        return job
 
     try:
         async_result = process_submission_task.delay(str(job.id))
@@ -347,16 +445,58 @@ def queue_submission(submission, actor=None):
         )
         process_submission_job(str(job.id), retry_count=job.retry_count, task_id="")
         job.refresh_from_db()
-    return job
 
 
-def create_submission_records(submitter, parsed_entries, auto_process=True):
+def queue_reprocess_book(book, actor=None, origin=SubmissionOrigin.USER):
+    existing_job = book.processing_jobs.filter(status__in=ACTIVE_JOB_STATUSES).first()
+    if existing_job:
+        return existing_job, False
+
+    resolved_url = normalize_source_url(primary_source_url_for_book(book))
+    submission = BookSubmission.objects.create(
+        submitter=actor if getattr(actor, "is_authenticated", False) else None,
+        input_type=SubmissionInputType.URL,
+        origin=origin,
+        original_input=resolved_url,
+        normalized_input=normalize_text(resolved_url),
+        resolved_url=resolved_url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        resolution_confidence=1.0,
+        status=SubmissionStatus.QUEUED,
+        review_state=book.review_state,
+        linked_book=book,
+        raw_payload={
+            "submitted_publicly": False,
+            "reprocess_book_id": str(book.id),
+        },
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        book=book,
+        job_type=JobType.REPROCESS,
+        status=JobStatus.QUEUED,
+        payload={
+            "resolved_url": resolved_url,
+            "actor_id": getattr(actor, "id", None),
+            "reprocess_book_id": str(book.id),
+            "previous_book_state": book.state,
+        },
+    )
+    book.state = LifecycleState.PROCESSING
+    book.save(update_fields=["state", "updated_at"])
+
+    dispatch_processing_job(job)
+    return job, True
+
+
+def create_submission_records(submitter, parsed_entries, auto_process=True, origin=SubmissionOrigin.USER):
     submissions = []
 
     for entry in parsed_entries:
         submission = BookSubmission.objects.create(
             submitter=submitter,
             input_type=entry["kind"],
+            origin=origin,
             original_input=entry["value"],
             normalized_input=normalize_text(entry["value"]),
             status=SubmissionStatus.PENDING_RESOLUTION
@@ -547,7 +687,38 @@ def candidate_asset_paths(scraped_data):
     }
 
 
+def path_is_within(path, root):
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def cleanup_staged_asset_files(output_folder, synced_paths):
+    if not output_folder:
+        return
+
+    output_folder = Path(output_folder)
+    if not output_folder.exists() or not output_folder.is_dir():
+        return
+
+    media_root = Path(settings.MEDIA_ROOT)
+    if path_is_within(output_folder, media_root):
+        return
+
+    for path in synced_paths:
+        if path.exists() and path_is_within(path, output_folder):
+            path.unlink()
+
+    try:
+        output_folder.rmdir()
+    except OSError:
+        pass
+
+
 def sync_assets(book, job, scraped_data):
+    synced_paths = []
     for asset_type, path in candidate_asset_paths(scraped_data).items():
         asset, _ = GeneratedAsset.objects.get_or_create(book=book, asset_type=asset_type)
         if not path or not Path(path).exists():
@@ -562,10 +733,47 @@ def sync_assets(book, job, scraped_data):
         asset.content_type = content_type_for_suffix(path)
         asset.checksum = calculate_checksum(path)
         asset.source_job = job
+        if asset.file and asset.file.name:
+            asset.file.delete(save=False)
         with open(path, "rb") as handle:
             asset.file.save(path.name, File(handle), save=False)
         asset.storage_path = asset.file.name
+        asset.legacy_path = ""
         asset.save()
+        synced_paths.append(path)
+
+    cleanup_staged_asset_files(scraped_data.get("output_folder"), synced_paths)
+
+
+def complete_processed_submission(submission, book, normalized_url, source="scrape"):
+    submission.linked_book = book
+    submission.duplicate_of_book = None
+    submission.resolved_url = normalized_url
+    submission.resolution_status = ResolutionStatus.RESOLVED
+    submission.resolution_confidence = max(submission.resolution_confidence, 1.0)
+    submission.status = SubmissionStatus.READY
+    submission.review_state = book.review_state
+    submission.error_message = ""
+    submission.raw_payload = {
+        **submission.raw_payload,
+        "normalized_url": normalized_url,
+        "linked_book_slug": book.slug,
+        "processing_source": source,
+        "served_from_database": False,
+    }
+    submission.save()
+    sync_deduplicated_submissions(submission)
+
+    if submission.submitter_id:
+        ensure_preview_session(submission.submitter, book, submission=submission)
+
+    AuditLog.objects.create(
+        actor=submission.submitter,
+        verb="submission.processed",
+        target_type="BookSubmission",
+        target_id=str(submission.id),
+        payload={"book_id": str(book.id), "source": source},
+    )
 
 
 def sync_metadata_relations(book, normalized):
@@ -577,9 +785,9 @@ def sync_metadata_relations(book, normalized):
     )
 
 
-def persist_scraped_book(submission, job, scraped_data):
+def persist_scraped_book(submission, job, scraped_data, target_book=None):
     normalized = normalize_scraped_book(scraped_data)
-    existing_book = find_existing_book_by_title(scraped_data["book_title"])
+    existing_book = target_book or find_existing_book_by_title(scraped_data["book_title"])
     if existing_book:
         book = existing_book
         book.state = LifecycleState.READY
@@ -620,10 +828,20 @@ def persist_scraped_book(submission, job, scraped_data):
     return book
 
 
+def cancel_requested_for_job(job):
+    job.refresh_from_db(fields=["status", "cancel_requested", "updated_at"])
+    return job.status == JobStatus.CANCELLED or job.cancel_requested
+
+
 @transaction.atomic
 def process_submission_job(job_id, retry_count=0, task_id=""):
-    job = ProcessingJob.objects.select_related("submission", "submission__submitter").get(pk=job_id)
+    job = ProcessingJob.objects.select_related("submission", "submission__submitter", "book").get(pk=job_id)
     submission = job.submission
+    reprocess_book = None
+    if job.status == JobStatus.CANCELLED:
+        return job
+    if job.cancel_requested:
+        return finalize_cancelled_job(job)
     job.status = JobStatus.PROCESSING
     job.retry_count = retry_count
     job.task_id = task_id or job.task_id
@@ -636,6 +854,8 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
     record_job_log(job, "info", "Started processing submission.", {"submission_id": str(submission.id)})
 
     try:
+        if cancel_requested_for_job(job):
+            return finalize_cancelled_job(job)
         if not submission.resolved_url and submission.input_type == "title":
             resolve_submission(submission, force_refresh=True)
             if not submission.resolved_url:
@@ -647,6 +867,14 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                 return job
 
         normalized_url = normalize_source_url(submission.resolved_url)
+        if job.job_type == JobType.REPROCESS:
+            reprocess_book_id = job.payload.get("reprocess_book_id") or job.book_id or submission.linked_book_id
+            reprocess_book = Book.objects.filter(pk=reprocess_book_id, deleted_at__isnull=True).first()
+            if reprocess_book is None:
+                raise ValueError("The target book for regeneration is unavailable.")
+
+        if cancel_requested_for_job(job):
+            return finalize_cancelled_job(job)
         source_page_metadata = capture_source_page_metadata(normalized_url)
         if source_page_metadata:
             submission.raw_payload = {
@@ -654,7 +882,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                 "source_page_metadata": source_page_metadata["raw_data"],
             }
             submission.save(update_fields=["raw_payload", "updated_at"])
-        source_duplicate = find_existing_book_by_source_url(normalized_url)
+        source_duplicate = None if reprocess_book else find_existing_book_by_source_url(normalized_url)
         if source_duplicate:
             fulfill_submission_with_existing_book(
                 submission,
@@ -679,6 +907,8 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             job.save(update_fields=["book", "status", "finished_at", "updated_at"])
             return job
 
+        if cancel_requested_for_job(job):
+            return finalize_cancelled_job(job)
         scraped_data = scrape_book(submission.resolved_url)
         promoted_book_info, cleaned_main_content = promote_leading_front_matter(
             scraped_data.get("book_info", ""),
@@ -687,10 +917,12 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         scraped_data["book_info"] = promoted_book_info
         scraped_data["main_content"] = cleaned_main_content
         record_job_log(job, "info", "Scraped source content.", {"title": scraped_data.get("book_title", "")})
+        if cancel_requested_for_job(job):
+            return finalize_cancelled_job(job)
         generate_exports(scraped_data)
         record_job_log(job, "info", "Generated HTML and EPUB exports.")
 
-        exact_title_duplicate = find_exact_existing_book(scraped_data)
+        exact_title_duplicate = None if reprocess_book else find_exact_existing_book(scraped_data)
         if exact_title_duplicate:
             fulfill_submission_with_existing_book(
                 submission,
@@ -718,7 +950,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             job.save(update_fields=["book", "status", "finished_at", "updated_at"])
             return job
 
-        metadata_duplicate = detect_metadata_duplicate(scraped_data)
+        metadata_duplicate = None if reprocess_book else detect_metadata_duplicate(scraped_data)
         if metadata_duplicate:
             submission.duplicate_of_book = metadata_duplicate
             submission.status = SubmissionStatus.DUPLICATE
@@ -746,29 +978,23 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             job.save(update_fields=["book", "status", "finished_at", "updated_at"])
             return job
 
-        book = persist_scraped_book(submission, job, scraped_data)
-        submission.linked_book = book
-        submission.status = SubmissionStatus.READY
-        submission.review_state = ReviewState.PENDING
-        submission.raw_payload = {**submission.raw_payload, "normalized_url": normalized_url}
-        submission.save()
-        sync_deduplicated_submissions(submission)
+        book = persist_scraped_book(submission, job, scraped_data, target_book=reprocess_book)
+        complete_processed_submission(
+            submission,
+            book,
+            normalized_url,
+            source="reprocess" if reprocess_book else "scrape",
+        )
         job.book = book
         job.status = JobStatus.SUCCEEDED
         job.finished_at = timezone.now()
         job.save(update_fields=["book", "status", "finished_at", "updated_at"])
-
-        if submission.submitter_id:
-            ensure_preview_session(submission.submitter, book, submission=submission)
-
-        AuditLog.objects.create(
-            actor=submission.submitter,
-            verb="submission.processed",
-            target_type="BookSubmission",
-            target_id=str(submission.id),
-            payload={"book_id": str(book.id)},
+        record_job_log(
+            job,
+            "info",
+            "Submission finished successfully.",
+            {"book_id": str(book.id), "job_type": job.job_type},
         )
-        record_job_log(job, "info", "Submission finished successfully.", {"book_id": str(book.id)})
         return job
     except Exception as exc:
         logger.exception("Submission processing failed", extra={"submission_id": str(submission.id)})
@@ -776,6 +1002,11 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         submission.error_message = str(exc)
         submission.save(update_fields=["status", "error_message", "updated_at"])
         sync_deduplicated_submissions(submission)
+        if reprocess_book is not None:
+            previous_book_state = job.payload.get("previous_book_state")
+            if previous_book_state:
+                reprocess_book.state = previous_book_state
+                reprocess_book.save(update_fields=["state", "updated_at"])
         job.status = JobStatus.FAILED
         job.last_error = str(exc)
         job.finished_at = timezone.now()

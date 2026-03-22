@@ -6,10 +6,10 @@ It includes:
 
 - Django API and admin/auth flows
 - catalog, access, and ingestion apps
-- Celery worker support
+- Celery worker and beat scheduler support
 - legacy scraper/export pipeline in `apps/ingestion/legacy/`
 - backend-owned local media under `storage/`
-- backend-owned generated export output under `outputs/`
+- temporary ingestion staging under `outputs/`
 
 ## Environment
 
@@ -61,6 +61,15 @@ set -a
 source .env
 set +a
 celery -A config worker --loglevel=info
+```
+
+## Beat Scheduler
+
+```bash
+set -a
+source .env
+set +a
+celery -A config beat --loglevel=info
 ```
 
 ## Tests

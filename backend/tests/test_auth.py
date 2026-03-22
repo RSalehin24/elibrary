@@ -259,3 +259,60 @@ def test_authenticated_user_can_upload_profile_image(client):
     user.refresh_from_db()
     assert bool(user.profile_image.name) is True
     assert response.json()["profile_image_url"]
+
+
+@pytest.mark.django_db
+def test_authenticated_user_can_change_password_from_profile_and_remain_signed_in(client):
+    user = User.objects.create_user(
+        email="password-change@example.com",
+        password="strong-password-123",
+        full_name="Password User",
+    )
+    client.force_login(user)
+
+    response = client.patch(
+        "/api/auth/profile/",
+        data=json.dumps(
+            {
+                "current_password": "strong-password-123",
+                "new_password": "strong-password-456",
+                "confirm_new_password": "strong-password-456",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    user.refresh_from_db()
+    assert user.check_password("strong-password-456") is True
+
+    session_response = client.get("/api/auth/session/")
+    assert session_response.status_code == 200
+    assert session_response.json()["authenticated"] is True
+
+
+@pytest.mark.django_db
+def test_profile_password_change_requires_the_current_password(client):
+    user = User.objects.create_user(
+        email="password-guard@example.com",
+        password="strong-password-123",
+        full_name="Password Guard",
+    )
+    client.force_login(user)
+
+    response = client.patch(
+        "/api/auth/profile/",
+        data=json.dumps(
+            {
+                "current_password": "wrong-password-123",
+                "new_password": "strong-password-456",
+                "confirm_new_password": "strong-password-456",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert "current_password" in response.json()
+    user.refresh_from_db()
+    assert user.check_password("strong-password-123") is True

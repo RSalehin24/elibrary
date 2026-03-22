@@ -2,12 +2,15 @@ import json
 from pathlib import Path
 
 import pytest
+import requests
+from django.utils import timezone
 
 from apps.access.models import PreviewAccessSession
 from apps.accounts.models import User
 from apps.catalog.models import Book, BookSource, Category, Contributor, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType, Series
 from apps.ingestion.models import (
     BookSubmission,
+    CatalogCurationRun,
     DuplicateReview,
     DuplicateReviewStatus,
     JobStatus,
@@ -15,9 +18,11 @@ from apps.ingestion.models import (
     ProcessingJob,
     ResolutionStatus,
     SourceCatalogEntry,
+    SubmissionOrigin,
     SubmissionStatus,
     TitleResolutionAttempt,
 )
+from apps.ingestion.services.curation import get_catalog_automation_settings, run_due_catalog_automation, source_catalog_entry_snapshots
 from apps.ingestion.services.legacy_adapter import normalize_text
 from apps.ingestion.services.normalization import (
     extract_front_matter_entries,
@@ -25,7 +30,7 @@ from apps.ingestion.services.normalization import (
     promote_leading_front_matter,
 )
 from apps.ingestion.services.resolution import TitleResolver
-from apps.ingestion.services.submissions import create_submission_records, process_submission_job, queue_submission
+from apps.ingestion.services.submissions import create_submission_records, process_submission_job, queue_submission, sync_assets
 
 
 def test_legacy_normalize_text_preserves_bengali_combining_marks():
@@ -255,6 +260,344 @@ def test_direct_url_submission_stores_source_page_metadata(monkeypatch):
     )
 
     assert submissions[0].raw_payload["source_page_metadata"]["title"] == "সোর্স বুক"
+
+
+@pytest.mark.django_db
+def test_source_catalog_refresh_returns_bad_gateway_when_upstream_fails(client, monkeypatch):
+    admin = User.objects.create_superuser(email="catalog-refresh@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    def raise_upstream_error(self, max_pages=1, bucket=""):
+        raise requests.RequestException("upstream unavailable")
+
+    monkeypatch.setattr(TitleResolver, "refresh_catalog", raise_upstream_error)
+
+    response = client.post(
+        "/api/ingestion/catalog/refresh/",
+        data=json.dumps({"max_pages": 3}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Could not refresh the source catalog right now. Please try again in a moment."
+
+
+@pytest.mark.django_db
+def test_title_resolver_refresh_catalog_accepts_long_source_urls():
+    long_slug = "kaliguneen-" + ("rahasya-" * 24)
+    long_url = f"https://www.ebanglalibrary.com/books/{long_slug}/"
+    page_one = f"""
+    <div class="facetwp-template" data-name="books">
+      <div class="fwpl-result">
+        <div class="fwpl-item el-97dha">
+          <a href="{long_url}">কালীগুণীন ও বজ্র-সিন্দুক রহস্য - সৌমিক দে</a>
+        </div>
+      </div>
+    </div>
+    """
+    empty_page = '<div class="facetwp-template" data-name="books"></div>'
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+
+        def get(self, url, params=None, timeout=30):
+            page_number = (params or {}).get("_paged", 1)
+            return FakeResponse(page_one if page_number == 1 else empty_page)
+
+    resolver = TitleResolver(session=FakeSession())
+
+    refreshed = resolver.refresh_catalog(max_pages=2)
+
+    assert len(refreshed) == 1
+    entry = SourceCatalogEntry.objects.get(source_url=long_url)
+    assert entry.title == "কালীগুণীন ও বজ্র-সিন্দুক রহস্য"
+    assert entry.author_line == "সৌমিক দে"
+
+
+@pytest.mark.django_db
+def test_long_source_urls_can_be_stored_across_ingestion_and_catalog_models():
+    long_slug = "source-book-" + ("extended-path-" * 20)
+    long_url = f"https://www.ebanglalibrary.com/books/{long_slug}/"
+    book = Book.objects.create(title="Long URL Book", state="ready", review_state="pending")
+
+    source_entry = SourceCatalogEntry.objects.create(
+        source_url=long_url,
+        title="Long URL Book",
+        author_line="Writer",
+        normalized_title=normalize_text("Long URL Book"),
+        normalized_display=normalize_text("Long URL Book Writer"),
+    )
+    source = BookSource.objects.create(
+        book=book,
+        source_url=long_url,
+        normalized_source_url=long_url,
+        source_title="Long URL Book",
+    )
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input=long_url,
+        normalized_input=normalize_text(long_url),
+        resolved_url=long_url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    attempt = TitleResolutionAttempt.objects.create(
+        submission=submission,
+        query="Long URL Book",
+        normalized_query=normalize_text("Long URL Book"),
+        status=ResolutionStatus.RESOLVED,
+        resolved_url=long_url,
+    )
+    candidate = MatchCandidate.objects.create(
+        resolution_attempt=attempt,
+        rank=1,
+        candidate_title="Long URL Book",
+        candidate_author="Writer",
+        candidate_url=long_url,
+        confidence=0.98,
+    )
+
+    assert source_entry.source_url == long_url
+    assert source.normalized_source_url == long_url
+    assert submission.resolved_url == long_url
+    assert attempt.resolved_url == long_url
+    assert candidate.candidate_url == long_url
+
+
+@pytest.mark.django_db
+def test_source_catalog_entry_snapshots_mark_new_and_ready_books():
+    missing_entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/missing-book/",
+        title="Missing Book",
+        author_line="Writer One",
+        normalized_title=normalize_text("Missing Book"),
+        normalized_display=normalize_text("Missing Book Writer One"),
+    )
+    ready_entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/ready-book/",
+        title="Ready Book",
+        author_line="Writer Two",
+        normalized_title=normalize_text("Ready Book"),
+        normalized_display=normalize_text("Ready Book Writer Two"),
+    )
+    ready_book = Book.objects.create(title="Ready Book", state="ready", review_state="pending")
+    BookSource.objects.create(
+        book=ready_book,
+        source_url=ready_entry.source_url,
+        normalized_source_url=ready_entry.source_url,
+        source_title=ready_entry.title,
+    )
+    GeneratedAsset.objects.create(book=ready_book, asset_type=GeneratedAssetType.HTML, status=GeneratedAssetStatus.READY)
+    GeneratedAsset.objects.create(book=ready_book, asset_type=GeneratedAssetType.EPUB, status=GeneratedAssetStatus.READY)
+
+    snapshots, summary = source_catalog_entry_snapshots(SourceCatalogEntry.objects.order_by("title"))
+    by_url = {snapshot["source_url"]: snapshot for snapshot in snapshots}
+
+    assert by_url[missing_entry.source_url]["curation_status"] == "new"
+    assert by_url[ready_entry.source_url]["curation_status"] == "ready"
+    assert summary["new"] == 1
+    assert summary["ready"] == 1
+
+
+@pytest.mark.django_db
+def test_processing_manager_can_start_catalog_curation_run(client, monkeypatch):
+    admin = User.objects.create_superuser(email="curation-admin@example.com", password="strong-password-123")
+    queued_run = CatalogCurationRun.objects.create(
+        trigger="manual",
+        mode="pending",
+        status="queued",
+        refresh_catalog=True,
+        refresh_max_pages=80,
+        requested_by=admin,
+    )
+    client.force_login(admin)
+
+    monkeypatch.setattr("apps.ingestion.views.create_catalog_curation_run", lambda **kwargs: queued_run)
+
+    response = client.post(
+        "/api/ingestion/catalog/curation-runs/",
+        data=json.dumps({"mode": "pending", "refresh_catalog": True, "refresh_max_pages": 80}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 202
+    assert response.json()["id"] == str(queued_run.id)
+    assert response.json()["status"] == "queued"
+
+
+@pytest.mark.django_db
+def test_processing_manager_can_update_catalog_automation_settings(client):
+    admin = User.objects.create_superuser(email="automation-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    response = client.patch(
+        "/api/ingestion/catalog/automation/",
+        data=json.dumps(
+            {
+                "enabled": True,
+                "daily_run_time": "03:45",
+                "mode": "all",
+                "refresh_max_pages": 40,
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["settings"]
+    assert payload["enabled"] is True
+    assert payload["daily_run_time"].startswith("03:45")
+    assert payload["mode"] == "all"
+    assert payload["refresh_max_pages"] == 40
+
+
+@pytest.mark.django_db
+def test_processing_lists_filter_by_origin_and_recover_stale_jobs(client, monkeypatch):
+    admin = User.objects.create_superuser(email="origin-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    user_submission = BookSubmission.objects.create(
+        input_type="url",
+        origin=SubmissionOrigin.USER,
+        original_input="https://www.ebanglalibrary.com/books/user-book/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/user-book/"),
+        resolved_url="https://www.ebanglalibrary.com/books/user-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    curation_submission = BookSubmission.objects.create(
+        input_type="url",
+        origin=SubmissionOrigin.CURATION,
+        original_input="https://www.ebanglalibrary.com/books/source-book/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/source-book/"),
+        resolved_url="https://www.ebanglalibrary.com/books/source-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    user_job = ProcessingJob.objects.create(submission=user_submission, status=JobStatus.QUEUED)
+    ProcessingJob.objects.create(submission=curation_submission, status=JobStatus.QUEUED, task_id="already-dispatched")
+    dispatched_ids = []
+
+    def fake_dispatch(job, force=False):
+        dispatched_ids.append(str(job.id))
+        job.task_id = f"task-{job.id}"
+        job.queue_name = "celery"
+        job.save(update_fields=["task_id", "queue_name", "updated_at"])
+        return job
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.dispatch_processing_job", fake_dispatch)
+
+    job_response = client.get("/api/ingestion/jobs/?origin=user")
+    submission_response = client.get("/api/ingestion/submissions/?origin=curation")
+    recover_response = client.post(
+        "/api/ingestion/jobs/recover/",
+        data=json.dumps({"origin": "user"}),
+        content_type="application/json",
+    )
+
+    assert job_response.status_code == 200
+    assert [entry["id"] for entry in job_response.json()] == [str(user_job.id)]
+    assert submission_response.status_code == 200
+    assert [entry["id"] for entry in submission_response.json()] == [str(curation_submission.id)]
+    assert recover_response.status_code == 202
+    assert recover_response.json()["recovered_jobs"] == 1
+    assert dispatched_ids == [str(user_job.id)]
+
+
+@pytest.mark.django_db
+def test_processing_manager_can_stop_queued_job(client, monkeypatch):
+    admin = User.objects.create_superuser(email="stop-job-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        origin=SubmissionOrigin.USER,
+        original_input="https://www.ebanglalibrary.com/books/queued-book/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/queued-book/"),
+        resolved_url="https://www.ebanglalibrary.com/books/queued-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.QUEUED,
+        task_id="queued-task",
+        queue_name="celery",
+    )
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.revoke_processing_task", lambda task_id: None)
+
+    response = client.post(f"/api/ingestion/jobs/{job.id}/stop/", data=json.dumps({}), content_type="application/json")
+
+    assert response.status_code == 200
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert job.status == JobStatus.CANCELLED
+    assert submission.status == SubmissionStatus.CANCELLED
+
+
+@pytest.mark.django_db
+def test_processing_manager_can_stop_catalog_curation_run(client, monkeypatch):
+    admin = User.objects.create_superuser(email="stop-run-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+    run = CatalogCurationRun.objects.create(
+        trigger="manual",
+        mode="pending",
+        status=JobStatus.QUEUED,
+        refresh_catalog=True,
+        refresh_max_pages=80,
+        requested_by=admin,
+        task_id="queued-run-task",
+        queue_name="celery",
+    )
+
+    monkeypatch.setattr("apps.ingestion.services.curation.revoke_curation_task", lambda task_id: None)
+
+    response = client.post(
+        f"/api/ingestion/catalog/curation-runs/{run.id}/stop/",
+        data=json.dumps({}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    run.refresh_from_db()
+    assert run.status == JobStatus.CANCELLED
+
+
+@pytest.mark.django_db
+def test_due_catalog_automation_queues_one_scheduled_run_per_day(monkeypatch):
+    settings_obj = get_catalog_automation_settings()
+    settings_obj.enabled = True
+    settings_obj.daily_run_time = timezone.localtime(timezone.now()).replace(hour=1, minute=0, second=0, microsecond=0).time()
+    settings_obj.mode = "pending"
+    settings_obj.refresh_max_pages = 10
+    settings_obj.save()
+
+    def fake_create_catalog_curation_run(**kwargs):
+        return CatalogCurationRun.objects.create(
+            trigger=kwargs["trigger"],
+            mode=kwargs["mode"],
+            status="queued",
+            refresh_catalog=kwargs["refresh_catalog"],
+            refresh_max_pages=kwargs["refresh_max_pages"],
+        )
+
+    monkeypatch.setattr("apps.ingestion.services.curation.create_catalog_curation_run", fake_create_catalog_curation_run)
+
+    result = run_due_catalog_automation(now=timezone.now())
+    second_result = run_due_catalog_automation(now=timezone.now())
+
+    assert result["ran"] is True
+    assert CatalogCurationRun.objects.filter(trigger="scheduled").count() == 1
+    assert second_result["ran"] is False
+    assert second_result["reason"] == "already_ran"
 
 
 def test_front_matter_extraction_handles_inline_labels_and_role_detection():
@@ -743,7 +1086,143 @@ def test_process_submission_job_resolves_cover_asset_when_scraped_extension_is_w
 
     cover_asset = GeneratedAsset.objects.get(asset_type=GeneratedAssetType.COVER)
     assert cover_asset.status == GeneratedAssetStatus.READY
-    assert cover_asset.legacy_path.endswith("book_cover.jpg")
+    assert cover_asset.legacy_path == ""
+
+
+@pytest.mark.django_db
+def test_process_submission_job_keeps_only_media_copies_of_generated_assets(tmp_path, settings, monkeypatch):
+    settings.MEDIA_ROOT = tmp_path / "media"
+
+    user = User.objects.create_user(email="single-copy@example.com", password="strong-password-123")
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/single-copy-book/",
+        normalized_input="single copy book",
+        resolved_url="https://www.ebanglalibrary.com/books/single-copy-book/",
+        resolution_status="resolved",
+        resolution_confidence=1.0,
+        status="queued",
+    )
+    job = ProcessingJob.objects.create(submission=submission)
+    output_dir = tmp_path / "legacy-output"
+
+    sample = {
+        "book_title": "একক কপি বই",
+        "author": "লেখক এক",
+        "series": "",
+        "book_type": "",
+        "cover": "book_cover.jpg",
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [{"title": "অধ্যায় ১", "content": "<p>বিষয়বস্তু</p>", "type": "lesson", "parent": None}],
+        "output_folder": str(output_dir),
+    }
+
+    def fake_scrape_book(url):
+        return sample
+
+    def fake_generate_exports(book_data):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "book.html").write_text("<html><body>book</body></html>", encoding="utf-8")
+        (output_dir / "একক কপি বই.epub").write_bytes(b"epub-bytes")
+        (output_dir / "book_cover.jpg").write_bytes(b"cover-bytes")
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.scrape_book", fake_scrape_book)
+    monkeypatch.setattr("apps.ingestion.services.submissions.generate_exports", fake_generate_exports)
+
+    process_submission_job(str(job.id))
+
+    book = Book.objects.get()
+    media_dir = Path(settings.MEDIA_ROOT) / "generated" / book.slug
+    saved_names = sorted(path.name for path in media_dir.iterdir())
+    assert "book.html" in saved_names
+    assert "book_cover.jpg" in saved_names
+    assert len([name for name in saved_names if name.endswith(".epub")]) == 1
+    assert len(saved_names) == 3
+    assert not output_dir.exists()
+
+    for asset in book.generated_assets.order_by("asset_type"):
+        assert asset.legacy_path == ""
+        assert asset.file
+
+
+@pytest.mark.django_db
+def test_process_submission_job_replaces_existing_media_assets_instead_of_creating_duplicates(tmp_path, settings, monkeypatch):
+    settings.MEDIA_ROOT = tmp_path / "media"
+
+    user = User.objects.create_user(email="replace-assets@example.com", password="strong-password-123")
+    output_dir = tmp_path / "legacy-output"
+
+    submission_one = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/reprocess-book/",
+        normalized_input="reprocess book",
+        resolved_url="https://www.ebanglalibrary.com/books/reprocess-book/",
+        resolution_status="resolved",
+        resolution_confidence=1.0,
+        status="queued",
+    )
+    first_job = ProcessingJob.objects.create(submission=submission_one)
+
+    first_scraped = {
+        "book_title": "পুনরায় বই",
+        "author": "লেখক এক",
+        "series": "",
+        "book_type": "",
+        "cover": "book_cover.jpg",
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [{"title": "অধ্যায় ১", "content": "<p>বিষয়বস্তু</p>", "type": "lesson", "parent": None}],
+        "output_folder": str(output_dir),
+    }
+
+    def fake_scrape_book(url):
+        return first_scraped
+
+    def fake_generate_exports(book_data):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "book.html").write_text("<html><body>first</body></html>", encoding="utf-8")
+        (output_dir / "পুনরায় বই.epub").write_bytes(b"first")
+        (output_dir / "book_cover.jpg").write_bytes(b"first")
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.scrape_book", fake_scrape_book)
+    monkeypatch.setattr("apps.ingestion.services.submissions.generate_exports", fake_generate_exports)
+
+    process_submission_job(str(first_job.id))
+
+    book = Book.objects.get()
+    second_job = ProcessingJob.objects.create(submission=submission_one, job_type="ingestion")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "book.html").write_text("<html><body>second</body></html>", encoding="utf-8")
+    (output_dir / "পুনরায় বই.epub").write_bytes(b"second")
+    (output_dir / "book_cover.jpg").write_bytes(b"second")
+
+    sync_assets(
+        book,
+        second_job,
+        {
+            **first_scraped,
+            "output_folder": str(output_dir),
+        },
+    )
+
+    media_dir = Path(settings.MEDIA_ROOT) / "generated" / book.slug
+    saved_paths = sorted(media_dir.iterdir())
+    saved_names = [path.name for path in saved_paths]
+    assert "book.html" in saved_names
+    assert "book_cover.jpg" in saved_names
+    assert len([name for name in saved_names if name.endswith(".epub")]) == 1
+    assert len(saved_names) == 3
+    assert (media_dir / "book.html").read_text(encoding="utf-8") == "<html><body>second</body></html>"
+    cover_path = media_dir / "book_cover.jpg"
+    assert cover_path.read_bytes() == b"second"
+    assert not output_dir.exists()
 
 
 @pytest.mark.django_db

@@ -142,7 +142,7 @@ class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
     book_info_html = models.TextField(blank=True)
     dedication_html = models.TextField(blank=True)
     toc = models.JSONField(default=list, blank=True)
-    cover_source_url = models.URLField(blank=True)
+    cover_source_url = models.URLField(max_length=1000, blank=True)
     metadata_last_reviewed_at = models.DateTimeField(blank=True, null=True)
     contributors = models.ManyToManyField(Contributor, through="BookContributor", related_name="books")
     series_entries = models.ManyToManyField(Series, through="BookSeries", related_name="books")
@@ -218,8 +218,8 @@ class BookCategory(UUIDPrimaryKeyModel, TimeStampedModel):
 
 class BookSource(UUIDPrimaryKeyModel, TimeStampedModel):
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="source_urls")
-    source_url = models.URLField()
-    normalized_source_url = models.URLField(unique=True)
+    source_url = models.URLField(max_length=1000)
+    normalized_source_url = models.URLField(max_length=1000, unique=True)
     source_type = models.CharField(max_length=50, default="ebanglalibrary_book")
     source_title = models.CharField(max_length=255, blank=True)
     is_primary = models.BooleanField(default=True)

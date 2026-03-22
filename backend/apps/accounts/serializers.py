@@ -3,9 +3,11 @@ from io import BytesIO
 
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext_lazy as _
@@ -188,14 +190,62 @@ class ProfileSerializer(UserSerializer):
 class ProfileUpdateSerializer(serializers.ModelSerializer):
     profile_image = serializers.FileField(required=False, allow_null=True)
     remove_profile_image = serializers.BooleanField(required=False, default=False, write_only=True)
+    current_password = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=False)
+    new_password = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=False)
+    confirm_new_password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=False,
+        trim_whitespace=False,
+    )
 
     class Meta:
         model = User
-        fields = ["full_name", "profile_image", "remove_profile_image"]
+        fields = [
+            "full_name",
+            "profile_image",
+            "remove_profile_image",
+            "current_password",
+            "new_password",
+            "confirm_new_password",
+        ]
+
+    def validate(self, attrs):
+        current_password = attrs.get("current_password", "")
+        new_password = attrs.get("new_password", "")
+        confirm_new_password = attrs.get("confirm_new_password", "")
+        has_password_change = any([current_password, new_password, confirm_new_password])
+
+        if not has_password_change:
+            return attrs
+
+        if not current_password:
+            raise serializers.ValidationError({"current_password": "Enter your current password."})
+        if not self.instance.check_password(current_password):
+            raise serializers.ValidationError({"current_password": "Current password is incorrect."})
+        if not new_password:
+            raise serializers.ValidationError({"new_password": "Enter a new password."})
+        if not confirm_new_password:
+            raise serializers.ValidationError({"confirm_new_password": "Confirm your new password."})
+        if new_password != confirm_new_password:
+            raise serializers.ValidationError({"confirm_new_password": "The new password fields must match."})
+        if self.instance.check_password(new_password):
+            raise serializers.ValidationError({"new_password": "Choose a different password."})
+
+        try:
+            validate_password(new_password, self.instance)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": list(exc.messages)}) from exc
+
+        return attrs
 
     def update(self, instance, validated_data):
         remove_profile_image = validated_data.pop("remove_profile_image", False)
         profile_image = validated_data.pop("profile_image", None)
+        validated_data.pop("current_password", "")
+        new_password = validated_data.pop("new_password", "")
+        validated_data.pop("confirm_new_password", "")
+        self.password_changed = False
 
         if remove_profile_image and instance.profile_image:
             instance.profile_image.delete(save=False)
@@ -208,6 +258,10 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
 
         for field, value in validated_data.items():
             setattr(instance, field, value)
+
+        if new_password:
+            instance.set_password(new_password)
+            self.password_changed = True
 
         instance.save()
         return instance

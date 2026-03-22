@@ -46,6 +46,10 @@ export default function ProfilePage() {
   const [profileImageFile, setProfileImageFile] = useState(null);
   const [profileImagePreview, setProfileImagePreview] = useState("");
   const [removeProfileImage, setRemoveProfileImage] = useState(false);
+  const [passwordSectionOpen, setPasswordSectionOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -70,6 +74,10 @@ export default function ProfilePage() {
         setProfileImageFile(null);
         setProfileImagePreview(profilePayload.profile_image_url || "");
         setRemoveProfileImage(false);
+        setPasswordSectionOpen(false);
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmNewPassword("");
       }
       setTwoFactor(statusPayload);
     } catch (error) {
@@ -88,6 +96,10 @@ export default function ProfilePage() {
     setProfileImageFile(null);
     setProfileImagePreview(sourceProfile?.profile_image_url || "");
     setRemoveProfileImage(false);
+    setPasswordSectionOpen(false);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmNewPassword("");
     setSetupVisible(false);
     setToken("");
   }
@@ -104,6 +116,21 @@ export default function ProfilePage() {
 
   async function saveProfile(event) {
     event.preventDefault();
+    const hasPasswordChanges = Boolean(currentPassword || newPassword || confirmNewPassword);
+
+    if (hasPasswordChanges && !currentPassword) {
+      toast.error("Enter your current password to change it.");
+      return;
+    }
+    if (hasPasswordChanges && !newPassword) {
+      toast.error("Enter a new password.");
+      return;
+    }
+    if (hasPasswordChanges && newPassword !== confirmNewPassword) {
+      toast.error("The new password fields must match.");
+      return;
+    }
+
     try {
       setSavingProfile(true);
       const body = new FormData();
@@ -114,11 +141,14 @@ export default function ProfilePage() {
       if (removeProfileImage) {
         body.append("remove_profile_image", "true");
       }
+      if (hasPasswordChanges) {
+        body.append("current_password", currentPassword);
+        body.append("new_password", newPassword);
+        body.append("confirm_new_password", confirmNewPassword);
+      }
       const payload = await authApi.updateProfile(body);
       setProfile(payload);
-      setProfileImageFile(null);
-      setProfileImagePreview(payload.profile_image_url || "");
-      setRemoveProfileImage(false);
+      resetProfileEditor(payload);
       await refreshSession();
       setIsEditing(false);
       toast.success("Profile updated.");
@@ -220,12 +250,14 @@ export default function ProfilePage() {
   const visibleName = fullName.trim() || profile?.full_name || profile?.email || "Profile";
   const visibleInitials = initialsForUser(visibleName);
   const roleLabel = roleLabelForProfile(profile);
+  const hasPasswordChanges = Boolean(currentPassword || newPassword || confirmNewPassword);
   const hasProfileChanges = useMemo(
     () =>
       fullName.trim() !== (profile?.full_name || "") ||
       Boolean(profileImageFile) ||
-      removeProfileImage,
-    [fullName, profile?.full_name, profileImageFile, removeProfileImage]
+      removeProfileImage ||
+      hasPasswordChanges,
+    [fullName, profile?.full_name, profileImageFile, removeProfileImage, hasPasswordChanges]
   );
 
   if (loading) {
@@ -322,6 +354,58 @@ export default function ProfilePage() {
                   </label>
                 </div>
               </div>
+
+              <section className="detail-main profile-password-card">
+                <div className="panel-header">
+                  <div className="profile-section-heading">
+                    <h2>Change Password</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => setPasswordSectionOpen((current) => !current)}
+                  >
+                    {passwordSectionOpen ? "Hide" : "Expand"}
+                  </button>
+                </div>
+
+                {passwordSectionOpen ? (
+                  <div className="profile-password-panel">
+                    <div className="profile-password-grid">
+                      <label className="field-span-full">
+                        <span className="fact-label">Current Password</span>
+                        <input
+                          type="password"
+                          value={currentPassword}
+                          onChange={(event) => setCurrentPassword(event.target.value)}
+                          autoComplete="current-password"
+                          placeholder="Current password"
+                        />
+                      </label>
+                      <label>
+                        <span className="fact-label">New Password</span>
+                        <input
+                          type="password"
+                          value={newPassword}
+                          onChange={(event) => setNewPassword(event.target.value)}
+                          autoComplete="new-password"
+                          placeholder="New password"
+                        />
+                      </label>
+                      <label>
+                        <span className="fact-label">Confirm New Password</span>
+                        <input
+                          type="password"
+                          value={confirmNewPassword}
+                          onChange={(event) => setConfirmNewPassword(event.target.value)}
+                          autoComplete="new-password"
+                          placeholder="Confirm new password"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
 
               <div className="profile-save-bar">
                 <button type="submit" className="primary-button" disabled={savingProfile || !hasProfileChanges}>

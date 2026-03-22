@@ -1,3 +1,5 @@
+from datetime import time
+
 from django.db import models
 
 from apps.common.models import ReviewState, TimeStampedModel, UUIDPrimaryKeyModel
@@ -26,6 +28,7 @@ class SubmissionStatus(models.TextChoices):
     NEEDS_REVIEW = "needs_review", "Needs review"
     READY = "ready", "Ready"
     FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
     DUPLICATE = "duplicate", "Duplicate candidate"
 
 
@@ -34,6 +37,7 @@ class JobStatus(models.TextChoices):
     PROCESSING = "processing", "Processing"
     SUCCEEDED = "succeeded", "Succeeded"
     FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
 
 
 class JobType(models.TextChoices):
@@ -49,8 +53,24 @@ class DuplicateReviewStatus(models.TextChoices):
     MERGED = "merged", "Merged"
 
 
+class CatalogCurationMode(models.TextChoices):
+    PENDING = "pending", "Pending only"
+    ALL = "all", "All tracked books"
+
+
+class CatalogCurationTrigger(models.TextChoices):
+    MANUAL = "manual", "Manual"
+    SCHEDULED = "scheduled", "Scheduled"
+
+
+class SubmissionOrigin(models.TextChoices):
+    USER = "user", "User"
+    CURATION = "curation", "Source curation"
+    AUTOMATION = "automation", "Daily automation"
+
+
 class SourceCatalogEntry(UUIDPrimaryKeyModel, TimeStampedModel):
-    source_url = models.URLField(unique=True)
+    source_url = models.URLField(max_length=1000, unique=True)
     title = models.CharField(max_length=255)
     author_line = models.CharField(max_length=255, blank=True)
     normalized_title = models.CharField(max_length=255, db_index=True)
@@ -62,6 +82,50 @@ class SourceCatalogEntry(UUIDPrimaryKeyModel, TimeStampedModel):
         ordering = ["title"]
 
 
+class CatalogAutomationSettings(UUIDPrimaryKeyModel, TimeStampedModel):
+    singleton_key = models.CharField(max_length=32, unique=True, default="default")
+    enabled = models.BooleanField(default=False)
+    daily_run_time = models.TimeField(default=time(2, 0))
+    mode = models.CharField(max_length=16, choices=CatalogCurationMode.choices, default=CatalogCurationMode.PENDING)
+    refresh_max_pages = models.PositiveIntegerField(default=80)
+    updated_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="catalog_automation_updates",
+    )
+
+    class Meta:
+        ordering = ["singleton_key"]
+
+
+class CatalogCurationRun(UUIDPrimaryKeyModel, TimeStampedModel):
+    trigger = models.CharField(max_length=16, choices=CatalogCurationTrigger.choices, default=CatalogCurationTrigger.MANUAL)
+    mode = models.CharField(max_length=16, choices=CatalogCurationMode.choices, default=CatalogCurationMode.PENDING)
+    status = models.CharField(max_length=16, choices=JobStatus.choices, default=JobStatus.QUEUED)
+    refresh_catalog = models.BooleanField(default=True)
+    refresh_max_pages = models.PositiveIntegerField(default=80)
+    requested_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="catalog_curation_runs",
+    )
+    task_id = models.CharField(max_length=255, blank=True)
+    queue_name = models.CharField(max_length=100, blank=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    cancel_requested = models.BooleanField(default=False)
+    summary = models.JSONField(default=dict, blank=True)
+    last_error = models.TextField(blank=True)
+    started_at = models.DateTimeField(blank=True, null=True)
+    finished_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
 class BookSubmission(UUIDPrimaryKeyModel, TimeStampedModel):
     submitter = models.ForeignKey(
         "accounts.User",
@@ -71,9 +135,10 @@ class BookSubmission(UUIDPrimaryKeyModel, TimeStampedModel):
         related_name="submissions",
     )
     input_type = models.CharField(max_length=16, choices=SubmissionInputType.choices)
+    origin = models.CharField(max_length=16, choices=SubmissionOrigin.choices, default=SubmissionOrigin.USER, db_index=True)
     original_input = models.TextField()
     normalized_input = models.TextField(blank=True)
-    resolved_url = models.URLField(blank=True)
+    resolved_url = models.URLField(max_length=1000, blank=True)
     resolution_status = models.CharField(
         max_length=24,
         choices=ResolutionStatus.choices,
@@ -116,7 +181,7 @@ class TitleResolutionAttempt(UUIDPrimaryKeyModel, TimeStampedModel):
     normalized_query = models.TextField(blank=True)
     status = models.CharField(max_length=24, choices=ResolutionStatus.choices, default=ResolutionStatus.UNRESOLVED)
     confidence = models.FloatField(default=0.0)
-    resolved_url = models.URLField(blank=True)
+    resolved_url = models.URLField(max_length=1000, blank=True)
     raw_results = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
 
@@ -133,7 +198,7 @@ class MatchCandidate(UUIDPrimaryKeyModel, TimeStampedModel):
     rank = models.PositiveIntegerField(default=0)
     candidate_title = models.CharField(max_length=255)
     candidate_author = models.CharField(max_length=255, blank=True)
-    candidate_url = models.URLField()
+    candidate_url = models.URLField(max_length=1000)
     confidence = models.FloatField(default=0.0)
     metadata = models.JSONField(default=dict, blank=True)
     is_selected = models.BooleanField(default=False)
@@ -160,6 +225,7 @@ class ProcessingJob(UUIDPrimaryKeyModel, TimeStampedModel):
     task_id = models.CharField(max_length=255, blank=True)
     queue_name = models.CharField(max_length=100, blank=True)
     retry_count = models.PositiveIntegerField(default=0)
+    cancel_requested = models.BooleanField(default=False)
     payload = models.JSONField(default=dict, blank=True)
     last_error = models.TextField(blank=True)
     started_at = models.DateTimeField(blank=True, null=True)

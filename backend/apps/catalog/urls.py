@@ -2,8 +2,10 @@ from django.urls import path
 
 from apps.catalog.views import (
     BookDetailView,
+    BookEpubReplaceView,
     BookListView,
     BookMetadataUpdateView,
+    BookRegenerateView,
     MetadataReviewListCreateView,
     MetadataReviewUpdateView,
     MetadataVersionListView,
@@ -16,6 +18,16 @@ urlpatterns = [
         "books/<path:slug>/metadata/",
         BookMetadataUpdateView.as_view(),
         name="catalog-book-metadata-update",
+    ),
+    path(
+        "books/<path:slug>/assets/epub/",
+        BookEpubReplaceView.as_view(),
+        name="catalog-book-epub-replace",
+    ),
+    path(
+        "books/<path:slug>/regenerate/",
+        BookRegenerateView.as_view(),
+        name="catalog-book-regenerate",
     ),
     path(
         "books/<path:slug>/metadata-versions/",
