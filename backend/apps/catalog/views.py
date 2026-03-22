@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import OuterRef, Q, Subquery
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import generics
@@ -6,6 +6,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.ingestion.models import BookSubmission
 from apps.catalog.models import Book, MetadataReview, MetadataVersion
 from apps.catalog.serializers import (
     BookDetailSerializer,
@@ -50,15 +51,32 @@ class BookListView(generics.ListAPIView):
             .filter(deleted_at__isnull=True)
             .distinct()
         )
+        ownership = self.request.query_params.get("ownership", "").strip()
+
+        if ownership == "mine":
+            latest_submission = (
+                BookSubmission.objects.filter(
+                    linked_book=OuterRef("pk"),
+                    submitter=self.request.user,
+                )
+                .order_by("-created_at")
+                .values("created_at")[:1]
+            )
+            queryset = queryset.annotate(
+                latest_submission_at=Subquery(latest_submission)
+            ).filter(latest_submission_at__isnull=False)
 
         query = self.request.query_params.get("q", "").strip()
         if query:
+            submission_query = Q(linked_submissions__original_input__icontains=query)
+            if ownership == "mine":
+                submission_query &= Q(linked_submissions__submitter=self.request.user)
             queryset = queryset.filter(
                 Q(title__icontains=query)
                 | Q(book_contributors__contributor__name__icontains=query)
                 | Q(book_series__series__name__icontains=query)
                 | Q(book_categories__category__name__icontains=query)
-                | Q(linked_submissions__original_input__icontains=query)
+                | submission_query
             )
 
         author = self.request.query_params.get("author", "").strip()
@@ -97,10 +115,27 @@ class BookListView(generics.ListAPIView):
             queryset = queryset.filter(processing_jobs__status=processing_status)
 
         queryset = apply_created_at_filters(queryset, self.request)
-        sort = self.request.query_params.get("sort", "-created_at")
-        if sort not in {"title", "-title", "created_at", "-created_at"}:
-            sort = "-created_at"
-        return queryset.order_by(sort)
+        sort = self.request.query_params.get(
+            "sort",
+            "-requested_at" if ownership == "mine" else "-created_at",
+        )
+        sort_map = {
+            "title": "title",
+            "-title": "-title",
+            "created_at": "created_at",
+            "-created_at": "-created_at",
+        }
+        if ownership == "mine":
+            sort_map.update(
+                {
+                    "requested_at": "latest_submission_at",
+                    "-requested_at": "-latest_submission_at",
+                }
+            )
+        sort_field = sort_map.get(sort, "-latest_submission_at" if ownership == "mine" else "-created_at")
+        if sort_field in {"created_at", "-created_at"}:
+            return queryset.order_by(sort_field)
+        return queryset.order_by(sort_field, "-created_at")
 
 
 class BookDetailView(generics.RetrieveAPIView):

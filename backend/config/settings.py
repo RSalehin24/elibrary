@@ -78,6 +78,7 @@ SUPER_ADMIN_EMAIL = env("SUPER_ADMIN_EMAIL", "rsalehin24@gmail.com")
 SUPER_ADMIN_PASSWORD = env("SUPER_ADMIN_PASSWORD", "")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "noreply@banglalibrary.local")
 SOURCE_SITE_HOST = "www.ebanglalibrary.com"
+OTP_TOTP_ISSUER = env("OTP_TOTP_ISSUER", "RSalehin24 Library")
 
 
 INSTALLED_APPS = [
@@ -107,6 +108,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django_otp.middleware.OTPMiddleware",
+    "apps.common.middleware.RequireTotpSetupMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

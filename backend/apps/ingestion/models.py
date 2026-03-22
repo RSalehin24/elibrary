@@ -96,6 +96,13 @@ class BookSubmission(UUIDPrimaryKeyModel, TimeStampedModel):
         null=True,
         related_name="duplicate_submissions",
     )
+    canonical_submission = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="deduplicated_submissions",
+    )
     raw_payload = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
 

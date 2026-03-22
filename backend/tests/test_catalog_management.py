@@ -1,6 +1,8 @@
 import json
+from datetime import timedelta
 
 import pytest
+from django.utils import timezone
 
 from apps.access.models import PermissionGrant, PermissionScope
 from apps.accounts.models import User
@@ -158,3 +160,64 @@ def test_metadata_review_endpoints_update_book_review_state(client):
     assert updated.status_code == 200
     book.refresh_from_db()
     assert book.review_state == "rejected"
+
+
+@pytest.mark.django_db
+def test_catalog_can_filter_books_created_by_current_user(client):
+    owner = User.objects.create_user(email="owner@example.com", password="strong-password-123")
+    other_user = User.objects.create_user(email="other@example.com", password="strong-password-123")
+    owner_book = Book.objects.create(title="আমার বই", state="ready", review_state="approved")
+    shared_book = Book.objects.create(title="শেয়ার্ড বই", state="ready", review_state="approved")
+    other_book = Book.objects.create(title="অন্য বই", state="ready", review_state="approved")
+
+    older_submission = BookSubmission.objects.create(
+        submitter=owner,
+        input_type="title",
+        original_input="আমার বই",
+        normalized_input="আমার বই",
+        linked_book=owner_book,
+        status="ready",
+        resolution_status="resolved",
+    )
+    newest_owner_submission = BookSubmission.objects.create(
+        submitter=owner,
+        input_type="title",
+        original_input="শেয়ার্ড বই",
+        normalized_input="শেয়ার্ড বই",
+        linked_book=shared_book,
+        status="ready",
+        resolution_status="resolved",
+    )
+    BookSubmission.objects.create(
+        submitter=other_user,
+        input_type="title",
+        original_input="শেয়ার্ড বই",
+        normalized_input="শেয়ার্ড বই",
+        linked_book=shared_book,
+        status="ready",
+        resolution_status="resolved",
+    )
+    BookSubmission.objects.create(
+        submitter=other_user,
+        input_type="title",
+        original_input="অন্য বই",
+        normalized_input="অন্য বই",
+        linked_book=other_book,
+        status="ready",
+        resolution_status="resolved",
+    )
+
+    older_timestamp = timezone.now() - timedelta(days=2)
+    newest_timestamp = timezone.now() - timedelta(hours=2)
+    BookSubmission.objects.filter(pk=older_submission.pk).update(created_at=older_timestamp)
+    BookSubmission.objects.filter(pk=newest_owner_submission.pk).update(created_at=newest_timestamp)
+
+    client.force_login(owner)
+    response = client.get("/api/catalog/books/?ownership=mine&sort=-requested_at")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [entry["slug"] for entry in payload] == [shared_book.slug, owner_book.slug]
+    assert other_book.slug not in {entry["slug"] for entry in payload}
+    assert payload[0]["latest_submission_at"]
+    assert payload[1]["latest_submission_at"]

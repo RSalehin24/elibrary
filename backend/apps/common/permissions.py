@@ -2,6 +2,7 @@ from django.db import models
 from rest_framework.permissions import BasePermission
 
 from apps.access.models import PermissionGrant, PermissionScope
+from apps.catalog.models import ContributorRole
 
 
 def granted_scope_queryset(user, book=None):
@@ -10,9 +11,17 @@ def granted_scope_queryset(user, book=None):
 
     queryset = PermissionGrant.objects.active_for_user(user)
     if book is None:
-        return queryset.filter(book__isnull=True)
+        return queryset.filter(book__isnull=True, category__isnull=True, contributor__isnull=True)
 
-    return queryset.filter(models.Q(book__isnull=True) | models.Q(book=book))
+    return queryset.filter(
+        models.Q(book__isnull=True, category__isnull=True, contributor__isnull=True)
+        | models.Q(book=book)
+        | models.Q(category__books=book)
+        | models.Q(
+            contributor__book_contributions__book=book,
+            contributor__book_contributions__role=ContributorRole.AUTHOR,
+        )
+    ).distinct()
 
 
 def user_has_scope(user, scopes, book=None):

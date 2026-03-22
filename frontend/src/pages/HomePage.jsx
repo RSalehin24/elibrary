@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch } from "../api/client";
+import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
-import StatusPill from "../components/StatusPill";
 
 function emptyEntry() {
   return { id: crypto.randomUUID(), value: "" };
@@ -15,6 +15,8 @@ export default function HomePage() {
   const [entries, setEntries] = useState([emptyEntry()]);
   const [results, setResults] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [dismissedDialogIds, setDismissedDialogIds] = useState([]);
+  const [actionLoading, setActionLoading] = useState("");
 
   function updateEntry(id, value) {
     setEntries((current) => current.map((entry) => (entry.id === id ? { ...entry, value } : entry)));
@@ -52,6 +54,7 @@ export default function HomePage() {
       });
       setResults(payload);
       setEntries([emptyEntry()]);
+      setDismissedDialogIds([]);
 
       const readyCount = payload.filter((submission) => submission.linked_book_slug).length;
       const reusedCount = payload.filter((submission) => submission.served_from_database).length;
@@ -83,8 +86,134 @@ export default function HomePage() {
     }
   }
 
+  useEffect(() => {
+    const pendingIds = results
+      .filter(
+        (submission) =>
+          !submission.linked_book_slug &&
+          ["pending_resolution", "queued", "processing"].includes(submission.status)
+      )
+      .map((submission) => submission.id);
+
+    if (!pendingIds.length) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const payloads = await Promise.all(
+          pendingIds.map((id) =>
+            apiFetch(`/ingestion/submissions/${id}/`).catch(() => null)
+          )
+        );
+        const payloadMap = new Map(payloads.filter(Boolean).map((entry) => [entry.id, entry]));
+        if (!payloadMap.size) {
+          return;
+        }
+        setResults((current) =>
+          current.map((submission) => payloadMap.get(submission.id) || submission)
+        );
+      } catch (error) {
+        // Keep the landing page quiet while background polling is happening.
+      }
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [results]);
+
+  async function getActionLinks(submissionId) {
+    const payload = await apiFetch(`/ingestion/submissions/${submissionId}/action-links/`, {
+      method: "POST",
+      body: {}
+    });
+    return payload;
+  }
+
+  function openUrl(url) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  async function readBook(submission) {
+    const payload = await getActionLinks(submission.id);
+    if (!payload.launch_url) {
+      throw new Error("Reader is not available yet.");
+    }
+    openUrl(payload.launch_url);
+  }
+
+  async function downloadBook(submission) {
+    const payload = await getActionLinks(submission.id);
+    const downloadUrl = payload.epub_download_url || payload.html_preview_url;
+    if (!downloadUrl) {
+      throw new Error("Download is not available yet.");
+    }
+    openUrl(downloadUrl);
+  }
+
+  async function runBookAction(submission, action) {
+    const key = `${submission.id}:${action}`;
+    try {
+      setActionLoading(key);
+      if (action === "read") {
+        await readBook(submission);
+      } else if (action === "download") {
+        await downloadBook(submission);
+      } else {
+        const payload = await getActionLinks(submission.id);
+        const downloadUrl = payload.epub_download_url || payload.html_preview_url;
+        if (!payload.launch_url) {
+          throw new Error("Reader is not available yet.");
+        }
+        if (!downloadUrl) {
+          throw new Error("Download is not available yet.");
+        }
+        openUrl(payload.launch_url);
+        openUrl(downloadUrl);
+      }
+      dismissDialog(submission.id);
+      toast.success("Action started.");
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading("");
+    }
+  }
+
+  function dismissDialog(submissionId) {
+    setDismissedDialogIds((current) => (current.includes(submissionId) ? current : [...current, submissionId]));
+  }
+
+  function reopenDialog(submissionId) {
+    setDismissedDialogIds((current) => current.filter((entryId) => entryId !== submissionId));
+  }
+
+  const dialogSubmission =
+    results.find(
+      (submission) =>
+        !dismissedDialogIds.includes(submission.id) &&
+        submission.resolution_status === "ambiguous" &&
+        submission.candidates?.length
+    ) ||
+    results.find(
+      (submission) =>
+        !dismissedDialogIds.includes(submission.id) &&
+        submission.linked_book_slug &&
+        submission.status === "ready"
+    );
+
+  const dialogMode = dialogSubmission?.resolution_status === "ambiguous" ? "candidate" : "actions";
+  const dialogStepLabel = dialogMode === "candidate" ? "Step 1 of 2" : "Step 2 of 2";
+  const dialogLead =
+    dialogMode === "candidate"
+      ? "Choose one exact match before we continue."
+      : authenticated
+        ? "This book is now tied to your account. Pick the next step."
+        : "Pick the next step. Visitor previews stay available only in this tab.";
+
+  const shellClassName = results.length ? "landing-shell" : "landing-shell landing-shell-centered";
+
   return (
-    <div className="landing-shell">
+    <div className={shellClassName}>
       <section className="landing-panel landing-create-panel">
         <div className="landing-create-stack">
           <h1>Create EPUB</h1>
@@ -129,7 +258,14 @@ export default function HomePage() {
       {results.length ? (
         <section className="landing-results">
           <div className="section-header compact-section-header">
-            <h2>Results</h2>
+            <div className="compact-copy">
+              <h2>This Session</h2>
+              <p className="muted-copy">
+                {authenticated
+                  ? "These requests update live here. Ready books also appear in My Created Books."
+                  : "These requests stay visible only until you leave or refresh this page."}
+              </p>
+            </div>
           </div>
           <div className="submission-list">
             {results.map((submission) => (
@@ -151,39 +287,128 @@ export default function HomePage() {
                     <span>{(submission.linked_book.series || []).join(", ") || "Standalone"}</span>
                   </div>
                 ) : null}
-                {submission.linked_book_slug ? (
-                  authenticated ? (
-                    <Link to={`/books/${submission.linked_book_slug}`} className="primary-link">
-                      Open record
-                    </Link>
-                  ) : (
-                    <p className="muted-copy">Sign in to open the record.</p>
-                  )
+                {submission.resolution_status === "ambiguous" && submission.candidates?.length ? (
+                  <div className="submission-card-actions">
+                    <p className="muted-copy">
+                      {submission.candidates.length} possible match{submission.candidates.length === 1 ? "" : "es"} found.
+                    </p>
+                    <button type="button" className="ghost-button" onClick={() => reopenDialog(submission.id)}>
+                      Review match
+                    </button>
+                  </div>
+                ) : null}
+                {submission.linked_book_slug && submission.status === "ready" ? (
+                  <div className="submission-card-actions">
+                    <button type="button" className="ghost-button" onClick={() => reopenDialog(submission.id)}>
+                      Choose action
+                    </button>
+                    {authenticated ? (
+                      <Link to={`/books/${submission.linked_book_slug}`} className="primary-link">
+                        Open record
+                      </Link>
+                    ) : (
+                      <p className="muted-copy">Sign in to keep this book after the session ends.</p>
+                    )}
+                  </div>
                 ) : null}
                 {submission.error_message ? <p className="form-feedback">{submission.error_message}</p> : null}
-                {submission.candidates?.length ? (
-                  authenticated ? (
-                    <div className="candidate-stack">
-                      {submission.candidates.map((candidate) => (
-                        <button
-                          type="button"
-                          key={candidate.id}
-                          className="candidate-button"
-                          onClick={() => confirmCandidate(submission.id, candidate.id)}
-                        >
-                          <span>{candidate.candidate_title}</span>
-                          <small>{Math.round(candidate.confidence * 100)}% confidence</small>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="muted-copy">Sign in to choose a match.</p>
-                  )
-                ) : null}
               </article>
             ))}
           </div>
         </section>
+      ) : null}
+
+      {dialogSubmission ? (
+        <div className="dialog-backdrop" role="presentation">
+          <section
+            className="dialog-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`submission-dialog-${dialogSubmission.id}`}
+          >
+            <div className="dialog-header">
+              <div>
+                <span className="dialog-step">{dialogStepLabel}</span>
+                <h2 id={`submission-dialog-${dialogSubmission.id}`}>
+                  {dialogSubmission.linked_book?.title || dialogSubmission.original_input}
+                </h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button icon-button-muted"
+                aria-label="Close dialog"
+                onClick={() => dismissDialog(dialogSubmission.id)}
+              >
+                ×
+              </button>
+            </div>
+
+            {dialogMode === "candidate" ? (
+              <>
+                <p className="muted-copy">{dialogLead}</p>
+                <div className="dialog-stack">
+                  {dialogSubmission.candidates.map((candidate) => (
+                    <button
+                      type="button"
+                      key={candidate.id}
+                      className="candidate-button"
+                      onClick={() => confirmCandidate(dialogSubmission.id, candidate.id)}
+                    >
+                      <span>{candidate.candidate_title}</span>
+                      <small>{candidate.candidate_author || `${Math.round(candidate.confidence * 100)}% confidence`}</small>
+                    </button>
+                  ))}
+                </div>
+                <div className="dialog-footer">
+                  <p className="muted-copy dialog-note">We only continue after you choose one exact source.</p>
+                  <button type="button" className="ghost-button" onClick={() => dismissDialog(dialogSubmission.id)}>
+                    Not now
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted-copy">{dialogLead}</p>
+                <div className="dialog-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => runBookAction(dialogSubmission, "read")}
+                    disabled={actionLoading === `${dialogSubmission.id}:read`}
+                  >
+                    Open reader
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => runBookAction(dialogSubmission, "download")}
+                    disabled={actionLoading === `${dialogSubmission.id}:download`}
+                  >
+                    Download file
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => runBookAction(dialogSubmission, "read-download")}
+                    disabled={actionLoading === `${dialogSubmission.id}:read-download`}
+                  >
+                    Open + download
+                  </button>
+                </div>
+                <div className="dialog-footer">
+                  <p className="muted-copy dialog-note">
+                    {authenticated
+                      ? "You can reopen this action panel from the session results whenever you need it."
+                      : "Visitor access stays tied to this live session only."}
+                  </p>
+                  <button type="button" className="ghost-button" onClick={() => dismissDialog(dialogSubmission.id)}>
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
       ) : null}
     </div>
   );

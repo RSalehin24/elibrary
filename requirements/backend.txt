@@ -11,3 +11,4 @@ beautifulsoup4==4.14.3
 ebooklib==0.20
 Jinja2==3.1.6
 requests==2.32.5
+qrcode==8.2

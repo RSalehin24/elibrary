@@ -2,6 +2,7 @@ import hashlib
 import logging
 from pathlib import Path
 
+from django.conf import settings
 from django.core.files import File
 from django.db import transaction
 from django.utils import timezone
@@ -50,27 +51,53 @@ from apps.ingestion.services.legacy_adapter import (
     validate_source_url,
 )
 from apps.ingestion.services.normalization import normalize_scraped_book
-from apps.ingestion.services.resolution import TitleResolver
+from apps.ingestion.services.resolution import (
+    TitleResolver,
+    fetch_source_page_metadata,
+    upsert_source_catalog_entry,
+)
 
 logger = logging.getLogger(__name__)
 
+REUSABLE_SUBMISSION_STATUSES = (
+    SubmissionStatus.PENDING_RESOLUTION,
+    SubmissionStatus.QUEUED,
+    SubmissionStatus.PROCESSING,
+    SubmissionStatus.NEEDS_REVIEW,
+    SubmissionStatus.READY,
+    SubmissionStatus.DUPLICATE,
+)
 
-def ensure_preview_session(user, book, submission=None):
-    if not user:
+SUBMISSION_PAYLOAD_KEYS_TO_SHARE = (
+    "served_from_database",
+    "existing_book_source",
+    "linked_book_slug",
+    "source_page_metadata",
+    "normalized_url",
+    "scraped_preview",
+)
+
+
+def ensure_preview_session(user, book, submission=None, allow_guest=False):
+    if not user and not allow_guest:
         return None
-    existing_session = (
-        PreviewAccessSession.objects.filter(
-            user=user,
-            book=book,
-            expires_at__gt=timezone.now(),
-        )
-        .order_by("-created_at")
-        .first()
-    )
+
+    filters = {
+        "book": book,
+        "expires_at__gt": timezone.now(),
+    }
+    if user:
+        filters["user"] = user
+    else:
+        filters["user__isnull"] = True
+        if submission is not None:
+            filters["source_submission"] = submission
+
+    existing_session = PreviewAccessSession.objects.filter(**filters).order_by("-created_at").first()
     if existing_session:
         return existing_session
     return PreviewAccessSession.objects.create(
-        user=user,
+        user=user if user else None,
         book=book,
         source_submission=submission,
     )
@@ -85,9 +112,101 @@ def record_job_log(job, level, message, details=None):
     )
 
 
+def capture_source_page_metadata(source_url):
+    try:
+        metadata = fetch_source_page_metadata(source_url)
+    except Exception:
+        return None
+
+    upsert_source_catalog_entry(metadata)
+    return metadata
+
+
 def primary_source_url_for_book(book):
     source = book.source_urls.order_by("-is_primary", "-created_at").first()
     return source.normalized_source_url if source else ""
+
+
+def root_submission(submission):
+    return submission.canonical_submission or submission
+
+
+def sync_submission_from_canonical(submission, canonical_submission):
+    canonical_submission = root_submission(canonical_submission)
+    if submission.pk == canonical_submission.pk:
+        return submission
+
+    update_fields = []
+    field_names = (
+        "resolved_url",
+        "resolution_status",
+        "resolution_confidence",
+        "status",
+        "review_state",
+        "linked_book",
+        "duplicate_of_book",
+        "error_message",
+    )
+    for field_name in field_names:
+        canonical_value = getattr(canonical_submission, field_name)
+        if getattr(submission, field_name) != canonical_value:
+            setattr(submission, field_name, canonical_value)
+            update_fields.append(field_name)
+
+    if submission.canonical_submission_id != canonical_submission.id:
+        submission.canonical_submission = canonical_submission
+        update_fields.append("canonical_submission")
+
+    next_payload = {
+        **submission.raw_payload,
+        "deduplicated": True,
+        "canonical_submission_id": str(canonical_submission.id),
+    }
+    for key in SUBMISSION_PAYLOAD_KEYS_TO_SHARE:
+        if key in canonical_submission.raw_payload:
+            next_payload[key] = canonical_submission.raw_payload[key]
+    if submission.raw_payload != next_payload:
+        submission.raw_payload = next_payload
+        update_fields.append("raw_payload")
+
+    if update_fields:
+        submission.save(update_fields=[*update_fields, "updated_at"])
+
+    if submission.status == SubmissionStatus.READY and submission.linked_book_id and submission.submitter_id:
+        ensure_preview_session(submission.submitter, submission.linked_book, submission=submission)
+
+    return submission
+
+
+def sync_deduplicated_submissions(submission):
+    submission = root_submission(submission)
+    for dependent_submission in submission.deduplicated_submissions.select_related("submitter", "linked_book"):
+        sync_submission_from_canonical(dependent_submission, submission)
+
+
+def find_reusable_submission(*, normalized_input="", resolved_url="", exclude_submission_id=None):
+    queryset = BookSubmission.objects.select_related(
+        "linked_book",
+        "duplicate_of_book",
+        "submitter",
+    ).filter(
+        canonical_submission__isnull=True,
+        status__in=REUSABLE_SUBMISSION_STATUSES,
+    )
+    if exclude_submission_id:
+        queryset = queryset.exclude(pk=exclude_submission_id)
+
+    if resolved_url:
+        submission = queryset.filter(resolved_url=resolved_url).order_by("-created_at").first()
+        if submission:
+            return submission
+
+    if normalized_input:
+        submission = queryset.filter(normalized_input=normalized_input).order_by("-created_at").first()
+        if submission:
+            return submission
+
+    return None
 
 
 def create_local_resolution_attempt(submission, book, confidence=1.0):
@@ -131,6 +250,7 @@ def fulfill_submission_with_existing_book(
         "linked_book_slug": book.slug,
     }
     submission.save()
+    sync_deduplicated_submissions(submission)
 
     ensure_preview_session(submission.submitter, book, submission=submission)
     AuditLog.objects.create(
@@ -184,10 +304,16 @@ def resolve_submission(submission, force_refresh=False):
         submission.error_message = "No confident catalog match was found."
 
     submission.save()
+    sync_deduplicated_submissions(submission)
     return submission
 
 
 def queue_submission(submission, actor=None):
+    submission = root_submission(submission)
+    existing_job = submission.processing_jobs.filter(status__in=[JobStatus.QUEUED, JobStatus.PROCESSING]).first()
+    if existing_job:
+        return existing_job
+
     job = ProcessingJob.objects.create(
         submission=submission,
         job_type=JobType.INGESTION,
@@ -199,12 +325,28 @@ def queue_submission(submission, actor=None):
     )
     submission.status = SubmissionStatus.QUEUED
     submission.save(update_fields=["status", "updated_at"])
+    sync_deduplicated_submissions(submission)
 
     from apps.ingestion.tasks import process_submission_task
 
-    async_result = process_submission_task.delay(str(job.id))
-    job.task_id = getattr(async_result, "id", "")
-    job.save(update_fields=["task_id", "updated_at"])
+    try:
+        async_result = process_submission_task.delay(str(job.id))
+        job.task_id = getattr(async_result, "id", "")
+        job.queue_name = "celery"
+        job.save(update_fields=["task_id", "queue_name", "updated_at"])
+    except Exception as exc:
+        logger.warning("Celery dispatch failed, falling back to inline processing", exc_info=True)
+        job.queue_name = "inline-fallback"
+        job.last_error = f"Celery dispatch failed: {exc}"
+        job.save(update_fields=["queue_name", "last_error", "updated_at"])
+        record_job_log(
+            job,
+            "warning",
+            "Celery dispatch failed, processing inline instead.",
+            {"error": str(exc), "always_eager": settings.CELERY_TASK_ALWAYS_EAGER},
+        )
+        process_submission_job(str(job.id), retry_count=job.retry_count, task_id="")
+        job.refresh_from_db()
     return job
 
 
@@ -234,6 +376,20 @@ def create_submission_records(submitter, parsed_entries, auto_process=True):
         if entry["kind"] == "url":
             try:
                 submission.resolved_url = validate_source_url(entry["value"])
+                reusable_submission = find_reusable_submission(
+                    resolved_url=submission.resolved_url,
+                    exclude_submission_id=submission.id,
+                )
+                if reusable_submission:
+                    sync_submission_from_canonical(submission, reusable_submission)
+                    submissions.append(submission)
+                    continue
+                source_metadata = capture_source_page_metadata(submission.resolved_url)
+                if source_metadata:
+                    submission.raw_payload = {
+                        **submission.raw_payload,
+                        "source_page_metadata": source_metadata["raw_data"],
+                    }
                 existing_book = find_existing_book_by_source_url(submission.resolved_url)
                 if existing_book:
                     fulfill_submission_with_existing_book(
@@ -267,8 +423,25 @@ def create_submission_records(submitter, parsed_entries, auto_process=True):
                 submissions.append(submission)
                 continue
 
+            reusable_submission = find_reusable_submission(
+                normalized_input=submission.normalized_input,
+                exclude_submission_id=submission.id,
+            )
+            if reusable_submission:
+                sync_submission_from_canonical(submission, reusable_submission)
+                submissions.append(submission)
+                continue
+
             resolve_submission(submission)
             if submission.resolved_url:
+                reusable_submission = find_reusable_submission(
+                    resolved_url=submission.resolved_url,
+                    exclude_submission_id=submission.id,
+                )
+                if reusable_submission:
+                    sync_submission_from_canonical(submission, reusable_submission)
+                    submissions.append(submission)
+                    continue
                 existing_book = find_existing_book_by_source_url(submission.resolved_url)
                 if existing_book:
                     fulfill_submission_with_existing_book(
@@ -438,6 +611,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
 
     submission.status = SubmissionStatus.PROCESSING
     submission.save(update_fields=["status", "updated_at"])
+    sync_deduplicated_submissions(submission)
     record_job_log(job, "info", "Started processing submission.", {"submission_id": str(submission.id)})
 
     try:
@@ -448,9 +622,17 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                 job.finished_at = timezone.now()
                 job.save(update_fields=["status", "finished_at", "updated_at"])
                 record_job_log(job, "warning", "Submission requires review before processing can continue.")
+                sync_deduplicated_submissions(submission)
                 return job
 
         normalized_url = normalize_source_url(submission.resolved_url)
+        source_page_metadata = capture_source_page_metadata(normalized_url)
+        if source_page_metadata:
+            submission.raw_payload = {
+                **submission.raw_payload,
+                "source_page_metadata": source_page_metadata["raw_data"],
+            }
+            submission.save(update_fields=["raw_payload", "updated_at"])
         source_duplicate = find_existing_book_by_source_url(normalized_url)
         if source_duplicate:
             fulfill_submission_with_existing_book(
@@ -522,6 +704,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                 },
             }
             submission.save()
+            sync_deduplicated_submissions(submission)
             DuplicateReview.objects.create(
                 submission=submission,
                 existing_book=metadata_duplicate,
@@ -542,6 +725,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         submission.review_state = ReviewState.PENDING
         submission.raw_payload = {**submission.raw_payload, "normalized_url": normalized_url}
         submission.save()
+        sync_deduplicated_submissions(submission)
         job.book = book
         job.status = JobStatus.SUCCEEDED
         job.finished_at = timezone.now()
@@ -564,6 +748,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         submission.status = SubmissionStatus.FAILED
         submission.error_message = str(exc)
         submission.save(update_fields=["status", "error_message", "updated_at"])
+        sync_deduplicated_submissions(submission)
         job.status = JobStatus.FAILED
         job.last_error = str(exc)
         job.finished_at = timezone.now()

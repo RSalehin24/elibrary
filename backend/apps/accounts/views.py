@@ -3,6 +3,7 @@ from django.db import transaction
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,6 +15,8 @@ from apps.accounts.serializers import (
     ManagedUserUpdateSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    ProfileSerializer,
+    ProfileUpdateSerializer,
     RegisterSerializer,
     SessionSerializer,
     TOTPConfirmSerializer,
@@ -31,7 +34,7 @@ class SessionView(APIView):
     def get(self, request):
         user = request.user if request.user.is_authenticated else None
         return Response(
-            SessionSerializer({"authenticated": bool(user), "user": user}).data
+            SessionSerializer({"authenticated": bool(user), "user": user}, context={"request": request}).data
         )
 
 
@@ -60,7 +63,7 @@ class LoginView(APIView):
                 return Response({"detail": str(detail), "code": str(code)}, status=status.HTTP_400_BAD_REQUEST)
             raise
         login(request, serializer.validated_data["user"])
-        return Response(UserSerializer(request.user).data)
+        return Response(UserSerializer(request.user, context={"request": request}).data)
 
 
 class LogoutView(APIView):
@@ -102,6 +105,8 @@ class TOTPStatusView(APIView):
                 {
                     "enabled": request.user.has_totp_enabled,
                     "pending_setup": pending_setup,
+                    "required": request.user.totp_required,
+                    "setup_required": request.user.requires_totp_setup,
                 }
             ).data
         )
@@ -137,6 +142,46 @@ class TOTPConfirmView(APIView):
         return Response({"detail": "TOTP is now enabled."})
 
 
+class TOTPCancelSetupView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        TOTPDevice.objects.filter(user=request.user, confirmed=False).delete()
+        return Response({"detail": "Pending TOTP setup canceled."})
+
+
+class TOTPDisableView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        if request.user.totp_required:
+            return Response(
+                {"detail": "An administrator requires TOTP for this account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deleted, _ = TOTPDevice.objects.filter(user=request.user).delete()
+        if not deleted:
+            return Response({"detail": "TOTP is not enabled for this account."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": "TOTP has been disabled."})
+
+
+class ProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get(self, request):
+        return Response(ProfileSerializer(request.user, context={"request": request}).data)
+
+    def patch(self, request):
+        serializer = ProfileUpdateSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ProfileSerializer(request.user, context={"request": request}).data)
+
+
 class ManagedUserListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, IsSuperAdmin]
 
@@ -153,7 +198,7 @@ class ManagedUserListCreateView(generics.ListCreateAPIView):
         queryset = self.get_queryset()
         payload = [
             {
-                **ManagedUserSerializer(user).data,
+                **ManagedUserSerializer(user, context={"request": request}).data,
                 "grant_count": user.permission_grants.count(),
             }
             for user in queryset
@@ -161,7 +206,7 @@ class ManagedUserListCreateView(generics.ListCreateAPIView):
         return Response(payload)
 
 
-class ManagedUserDetailView(generics.RetrieveUpdateAPIView):
+class ManagedUserDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def get_queryset(self):
@@ -171,5 +216,14 @@ class ManagedUserDetailView(generics.RetrieveUpdateAPIView):
         if self.request.method in {"PUT", "PATCH"}:
             return ManagedUserUpdateSerializer
         return ManagedUserSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.is_superuser:
+            return Response({"detail": "Super admin users cannot be deleted."}, status=status.HTTP_400_BAD_REQUEST)
+        if instance.pk == request.user.pk:
+            return Response({"detail": "You cannot delete your own account."}, status=status.HTTP_400_BAD_REQUEST)
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 # Create your views here.

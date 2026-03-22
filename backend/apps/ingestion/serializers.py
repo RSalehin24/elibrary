@@ -77,13 +77,22 @@ class MatchCandidateSerializer(serializers.ModelSerializer):
 
 
 class ProcessingJobSerializer(serializers.ModelSerializer):
+    submission_input = serializers.CharField(source="submission.original_input", read_only=True)
+    submission_status = serializers.CharField(source="submission.status", read_only=True)
+    submission_resolution_status = serializers.CharField(source="submission.resolution_status", read_only=True)
+    queue_name = serializers.CharField(read_only=True)
+
     class Meta:
         model = ProcessingJob
         fields = [
             "id",
             "job_type",
             "status",
+            "queue_name",
             "retry_count",
+            "submission_input",
+            "submission_status",
+            "submission_resolution_status",
             "last_error",
             "created_at",
             "started_at",
@@ -97,6 +106,8 @@ class SubmissionSerializer(serializers.ModelSerializer):
     linked_book_slug = serializers.SerializerMethodField()
     linked_book = serializers.SerializerMethodField()
     served_from_database = serializers.SerializerMethodField()
+    canonical_submission_id = serializers.SerializerMethodField()
+    uses_existing_request = serializers.SerializerMethodField()
 
     class Meta:
         model = BookSubmission
@@ -113,19 +124,28 @@ class SubmissionSerializer(serializers.ModelSerializer):
             "linked_book_slug",
             "linked_book",
             "served_from_database",
+            "canonical_submission_id",
+            "uses_existing_request",
             "candidates",
             "latest_job",
             "created_at",
         ]
 
+    def canonical_submission_for(self, obj):
+        return obj.canonical_submission or obj
+
     def get_candidates(self, obj):
         attempt = obj.resolution_attempts.first()
+        if not attempt and obj.canonical_submission_id:
+            attempt = obj.canonical_submission.resolution_attempts.first()
         if not attempt:
             return []
         return MatchCandidateSerializer(attempt.match_candidates.all()[:3], many=True).data
 
     def get_latest_job(self, obj):
         job = obj.processing_jobs.first()
+        if not job and obj.canonical_submission_id:
+            job = obj.canonical_submission.processing_jobs.first()
         return ProcessingJobSerializer(job).data if job else None
 
     def get_linked_book_slug(self, obj):
@@ -138,6 +158,13 @@ class SubmissionSerializer(serializers.ModelSerializer):
 
     def get_served_from_database(self, obj):
         return bool(obj.raw_payload.get("served_from_database"))
+
+    def get_canonical_submission_id(self, obj):
+        canonical = obj.canonical_submission
+        return str(canonical.id) if canonical else ""
+
+    def get_uses_existing_request(self, obj):
+        return bool(obj.canonical_submission_id)
 
 
 class DuplicateReviewSerializer(serializers.ModelSerializer):

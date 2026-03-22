@@ -1,4 +1,9 @@
+from urllib.parse import quote
+
+from django.conf import settings
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
@@ -7,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.access.models import PermissionScope
+from apps.catalog.models import GeneratedAssetStatus, GeneratedAssetType
 from apps.common.permissions import CanManageProcessing, user_has_scope
 from apps.common.throttles import SubmissionRateThrottle
 from apps.ingestion.models import (
@@ -27,11 +33,28 @@ from apps.ingestion.serializers import (
 )
 from apps.ingestion.services.submissions import (
     create_submission_records,
+    ensure_preview_session,
     find_existing_book_by_source_url,
     fulfill_submission_with_existing_book,
     queue_submission,
+    sync_deduplicated_submissions,
 )
 from apps.ingestion.services.resolution import TitleResolver
+
+
+def submission_base_queryset():
+    return BookSubmission.objects.select_related(
+        "linked_book",
+        "duplicate_of_book",
+        "submitter",
+        "canonical_submission",
+        "canonical_submission__linked_book",
+    ).prefetch_related(
+        "resolution_attempts__match_candidates",
+        "processing_jobs",
+        "canonical_submission__resolution_attempts__match_candidates",
+        "canonical_submission__processing_jobs",
+    )
 
 
 def apply_created_at_filters(queryset, request):
@@ -52,13 +75,29 @@ def apply_created_at_filters(queryset, request):
 
 
 def visible_submissions_queryset(user):
-    queryset = BookSubmission.objects.select_related("linked_book", "duplicate_of_book").prefetch_related(
-        "resolution_attempts__match_candidates",
-        "processing_jobs",
-    )
+    queryset = submission_base_queryset()
     if user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]):
         return queryset
     return queryset.filter(submitter=user)
+
+
+def is_public_submission(submission):
+    return submission.submitter_id is None and bool(submission.raw_payload.get("submitted_publicly"))
+
+
+def get_accessible_submission(request, pk):
+    submission = get_object_or_404(submission_base_queryset(), pk=pk)
+    user = request.user
+    if getattr(user, "is_authenticated", False):
+        if user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]):
+            return submission
+        if submission.submitter_id == user.id:
+            return submission
+
+    if is_public_submission(submission):
+        return submission
+
+    raise PermissionDenied("You do not have access to this submission.")
 
 
 class SubmissionListCreateView(APIView):
@@ -114,42 +153,47 @@ class SubmissionListCreateView(APIView):
 
 
 class SubmissionDetailView(generics.RetrieveAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     serializer_class = SubmissionSerializer
     lookup_field = "pk"
 
-    def get_queryset(self):
-        return visible_submissions_queryset(self.request.user)
+    def get_object(self):
+        return get_accessible_submission(self.request, self.kwargs["pk"])
 
 
 class SubmissionConfirmCandidateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request, pk):
-        submission = visible_submissions_queryset(request.user).get(pk=pk)
+        submission = get_accessible_submission(request, pk)
+        target_submission = submission.canonical_submission or submission
         candidate_id = request.data.get("candidate_id")
         if not candidate_id:
             return Response({"detail": "candidate_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        candidate = MatchCandidate.objects.select_related("resolution_attempt__submission").get(pk=candidate_id)
-        if candidate.resolution_attempt.submission_id != submission.id:
+        candidate = get_object_or_404(
+            MatchCandidate.objects.select_related("resolution_attempt__submission"),
+            pk=candidate_id,
+        )
+        if candidate.resolution_attempt.submission_id != target_submission.id:
             raise PermissionDenied("This candidate does not belong to the specified submission.")
 
         MatchCandidate.objects.filter(resolution_attempt=candidate.resolution_attempt).update(is_selected=False)
         candidate.is_selected = True
         candidate.save(update_fields=["is_selected", "updated_at"])
 
-        submission.resolved_url = candidate.candidate_url
-        submission.resolution_status = ResolutionStatus.RESOLVED
-        submission.resolution_confidence = candidate.confidence
-        submission.status = SubmissionStatus.QUEUED
-        submission.error_message = ""
-        submission.save()
+        target_submission.resolved_url = candidate.candidate_url
+        target_submission.resolution_status = ResolutionStatus.RESOLVED
+        target_submission.resolution_confidence = candidate.confidence
+        target_submission.status = SubmissionStatus.QUEUED
+        target_submission.error_message = ""
+        target_submission.save()
+        sync_deduplicated_submissions(target_submission)
 
         existing_book = find_existing_book_by_source_url(candidate.candidate_url)
         if existing_book:
             fulfill_submission_with_existing_book(
-                submission,
+                target_submission,
                 existing_book,
                 source="confirmed_candidate_source_url",
                 confidence=candidate.confidence,
@@ -157,8 +201,56 @@ class SubmissionConfirmCandidateView(APIView):
             )
             return Response(SubmissionSerializer(submission, context={"request": request}).data)
 
-        queue_submission(submission, actor=request.user)
+        queue_submission(target_submission, actor=request.user if request.user.is_authenticated else None)
         return Response(SubmissionSerializer(submission, context={"request": request}).data)
+
+
+class SubmissionActionLinksView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, pk):
+        submission = get_accessible_submission(request, pk)
+        if submission.status != SubmissionStatus.READY or not submission.linked_book_id:
+            return Response({"detail": "This submission is not ready yet."}, status=status.HTTP_400_BAD_REQUEST)
+
+        preview_session = ensure_preview_session(
+            request.user if request.user.is_authenticated else None,
+            submission.linked_book,
+            submission=submission,
+            allow_guest=not request.user.is_authenticated,
+        )
+        if preview_session is None:
+            return Response({"detail": "Could not prepare access for this book."}, status=status.HTTP_400_BAD_REQUEST)
+
+        assets = submission.linked_book.generated_assets
+        has_epub = assets.filter(asset_type=GeneratedAssetType.EPUB, status=GeneratedAssetStatus.READY).exists()
+        has_html = assets.filter(asset_type=GeneratedAssetType.HTML, status=GeneratedAssetStatus.READY).exists()
+        manifest_url = request.build_absolute_uri(
+            reverse("access-reader-manifest", kwargs={"token": preview_session.token})
+        )
+        launch_url = f"{settings.EPUB_READER_BASE_URL.rstrip('/')}/?manifest={quote(manifest_url, safe='')}"
+
+        return Response(
+            {
+                "book": {
+                    "title": submission.linked_book.title,
+                    "slug": submission.linked_book.slug,
+                },
+                "launch_url": launch_url,
+                "manifest_url": manifest_url,
+                "epub_download_url": request.build_absolute_uri(
+                    reverse("access-reader-epub", kwargs={"token": preview_session.token})
+                )
+                if has_epub
+                else "",
+                "html_preview_url": request.build_absolute_uri(
+                    reverse("access-reader-html", kwargs={"token": preview_session.token})
+                )
+                if has_html
+                else "",
+                "expires_at": preview_session.expires_at,
+            }
+        )
 
 
 class ProcessingJobListView(generics.ListAPIView):
@@ -187,13 +279,14 @@ class SubmissionRetryView(APIView):
 
     def post(self, request, pk):
         submission = visible_submissions_queryset(request.user).get(pk=pk)
+        target_submission = submission.canonical_submission or submission
         can_manage_processing = user_has_scope(request.user, [PermissionScope.PROCESSING_MANAGE])
         if not request.user.is_staff and not can_manage_processing and submission.submitter_id != request.user.id:
             raise PermissionDenied("You cannot retry this submission.")
-        if not submission.resolved_url:
+        if not target_submission.resolved_url and target_submission.input_type != "title":
             return Response({"detail": "This submission does not have a resolved URL yet."}, status=status.HTTP_400_BAD_REQUEST)
 
-        job = queue_submission(submission, actor=request.user)
+        job = queue_submission(target_submission, actor=request.user)
         return Response(ProcessingJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
 

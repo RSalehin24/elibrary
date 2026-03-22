@@ -1,6 +1,18 @@
 import { Link } from "react-router-dom";
 import StatusPill from "./StatusPill";
 
+function formatDate(value) {
+  if (!value) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    year: "numeric",
+    month: "short",
+    day: "numeric"
+  }).format(new Date(value));
+}
+
 export default function BookCard({ book }) {
   return (
     <article className="book-card">
@@ -18,6 +30,9 @@ export default function BookCard({ book }) {
           {(book.series || []).join(" · ") || "Standalone"} {(book.categories || []).length ? "• " : ""}
           {(book.categories || []).join(" · ")}
         </p>
+        {book.latest_submission_at ? (
+          <p className="book-timestamp">Added by you on {formatDate(book.latest_submission_at)}</p>
+        ) : null}
         <Link to={`/books/${book.slug}`} className="primary-link">
           Open record
         </Link>

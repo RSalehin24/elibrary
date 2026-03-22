@@ -111,6 +111,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+If queue processing is enabled with `CELERY_TASK_ALWAYS_EAGER=0`, make sure the `redis` and `worker` services are running. The backend now falls back to inline processing if Celery dispatch fails, but the intended local queue setup is still Docker Compose with Redis plus the Celery worker.
+
 Services:
 
 - Django API: `http://localhost:8000`
@@ -179,6 +181,12 @@ Run the verified frontend production build with:
 cd frontend
 npm run build
 ```
+
+## ebanglalibrary URL Findings
+
+The current URL normalization and metadata lookup notes are documented in:
+
+- `docs/ebanglalibrary-url-metadata.md`
 
 ## What Is Still Incomplete
 

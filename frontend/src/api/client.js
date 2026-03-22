@@ -28,6 +28,7 @@ async function parseResponse(response) {
 
 export async function apiFetch(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
     await ensureCsrfCookie();
   }
@@ -36,7 +37,7 @@ export async function apiFetch(path, options = {}) {
   if (!headers.has("Accept")) {
     headers.set("Accept", "application/json");
   }
-  if (options.body && !headers.has("Content-Type")) {
+  if (options.body && !isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
@@ -51,7 +52,13 @@ export async function apiFetch(path, options = {}) {
     method,
     headers,
     credentials: "include",
-    body: typeof options.body === "string" ? options.body : options.body ? JSON.stringify(options.body) : undefined
+    body: isFormData
+      ? options.body
+      : typeof options.body === "string"
+        ? options.body
+        : options.body
+          ? JSON.stringify(options.body)
+          : undefined
   });
 
   const payload = await parseResponse(response);
@@ -71,11 +78,16 @@ export const authApi = {
   session: () => apiFetch("/auth/session/"),
   login: (body) => apiFetch("/auth/login/", { method: "POST", body }),
   logout: () => apiFetch("/auth/logout/", { method: "POST" }),
+  profile: () => apiFetch("/auth/profile/"),
+  updateProfile: (body) => apiFetch("/auth/profile/", { method: "PATCH", body }),
   users: () => apiFetch("/auth/users/"),
   createUser: (body) => apiFetch("/auth/users/", { method: "POST", body }),
   updateUser: (id, body) => apiFetch(`/auth/users/${id}/`, { method: "PATCH", body }),
+  deleteUser: (id) => apiFetch(`/auth/users/${id}/`, { method: "DELETE" }),
   passwordReset: (body) => apiFetch("/auth/password-reset/", { method: "POST", body }),
   twoFactorStatus: () => apiFetch("/auth/2fa/status/"),
   twoFactorSetup: () => apiFetch("/auth/2fa/setup/", { method: "POST" }),
-  twoFactorConfirm: (body) => apiFetch("/auth/2fa/confirm/", { method: "POST", body })
+  twoFactorConfirm: (body) => apiFetch("/auth/2fa/confirm/", { method: "POST", body }),
+  twoFactorCancel: () => apiFetch("/auth/2fa/cancel/", { method: "POST", body: {} }),
+  twoFactorDisable: () => apiFetch("/auth/2fa/disable/", { method: "POST", body: {} })
 };

@@ -11,9 +11,17 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.access.models import Bookmark, PermissionGrant, PermissionScope, PreviewAccessSession, ReadingSession
+from apps.access.models import (
+    ACCOUNT_MANAGEABLE_PERMISSION_SCOPES,
+    SCOPED_PERMISSION_SCOPES,
+    Bookmark,
+    PermissionGrant,
+    PermissionScope,
+    PreviewAccessSession,
+    ReadingSession,
+)
 from apps.access.serializers import BookmarkSerializer, PermissionGrantSerializer, ReadingSessionSerializer
-from apps.catalog.models import Book, GeneratedAsset, GeneratedAssetType
+from apps.catalog.models import Book, Contributor, ContributorRole, Category, GeneratedAsset, GeneratedAssetType
 from apps.common.permissions import IsSuperAdmin, user_has_scope
 
 
@@ -60,7 +68,7 @@ def open_asset_stream(asset):
 class PermissionGrantListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsSuperAdmin]
     serializer_class = PermissionGrantSerializer
-    queryset = PermissionGrant.objects.select_related("user", "book").all()
+    queryset = PermissionGrant.objects.select_related("user", "book", "category", "contributor").all()
 
     def perform_create(self, serializer):
         serializer.save(granted_by=self.request.user)
@@ -69,7 +77,7 @@ class PermissionGrantListCreateView(generics.ListCreateAPIView):
 class PermissionGrantDetailView(generics.DestroyAPIView):
     permission_classes = [IsSuperAdmin]
     serializer_class = PermissionGrantSerializer
-    queryset = PermissionGrant.objects.select_related("user", "book").all()
+    queryset = PermissionGrant.objects.select_related("user", "book", "category", "contributor").all()
 
 
 class AccessReferenceDataView(APIView):
@@ -92,8 +100,28 @@ class AccessReferenceDataView(APIView):
             {"id": book.id, "title": book.title, "slug": book.slug}
             for book in Book.objects.order_by("title")
         ]
-        scopes = [{"value": scope.value, "label": scope.label} for scope in PermissionScope]
-        return Response({"users": users, "books": books, "scopes": scopes})
+        categories = [
+            {"id": category.id, "name": category.name, "slug": category.slug}
+            for category in Category.objects.order_by("name")
+        ]
+        writers = [
+            {"id": contributor.id, "name": contributor.name, "slug": contributor.slug}
+            for contributor in Contributor.objects.filter(book_contributions__role=ContributorRole.AUTHOR)
+            .distinct()
+            .order_by("name")
+        ]
+        account_scopes = [{"value": scope.value, "label": scope.label} for scope in ACCOUNT_MANAGEABLE_PERMISSION_SCOPES]
+        scoped_scopes = [{"value": scope.value, "label": scope.label} for scope in SCOPED_PERMISSION_SCOPES]
+        return Response(
+            {
+                "users": users,
+                "books": books,
+                "categories": categories,
+                "writers": writers,
+                "account_scopes": account_scopes,
+                "scoped_scopes": scoped_scopes,
+            }
+        )
 
 
 class BookAssetDownloadView(APIView):
@@ -160,12 +188,23 @@ class ReaderManifestView(APIView):
         if epub_asset is None:
             raise Http404("EPUB asset is unavailable.")
 
-        reading_session, _ = ReadingSession.objects.get_or_create(
-            user=session.user,
-            book=session.book,
-            defaults={"preview_session": session},
-        )
-        bookmarks = Bookmark.objects.filter(user=session.user, book=session.book)
+        reading_session = None
+        bookmarks = []
+        reading_session_url = ""
+        bookmarks_url = ""
+        if session.user_id:
+            reading_session, _ = ReadingSession.objects.get_or_create(
+                user=session.user,
+                book=session.book,
+                defaults={"preview_session": session},
+            )
+            bookmarks = Bookmark.objects.filter(user=session.user, book=session.book)
+            reading_session_url = request.build_absolute_uri(
+                reverse("access-reader-session", kwargs={"token": session.token})
+            )
+            bookmarks_url = request.build_absolute_uri(
+                reverse("access-reader-bookmark-list", kwargs={"token": session.token})
+            )
 
         return Response(
             {
@@ -181,14 +220,10 @@ class ReaderManifestView(APIView):
                 )
                 if html_asset
                 else "",
-                "reading_session_url": request.build_absolute_uri(
-                    reverse("access-reader-session", kwargs={"token": session.token})
-                ),
-                "bookmarks_url": request.build_absolute_uri(
-                    reverse("access-reader-bookmark-list", kwargs={"token": session.token})
-                ),
-                "reading_session": ReadingSessionSerializer(reading_session).data,
-                "bookmarks": BookmarkSerializer(bookmarks, many=True).data,
+                "reading_session_url": reading_session_url,
+                "bookmarks_url": bookmarks_url,
+                "reading_session": ReadingSessionSerializer(reading_session).data if reading_session else None,
+                "bookmarks": BookmarkSerializer(bookmarks, many=True).data if bookmarks else [],
             }
         )
 
@@ -223,6 +258,8 @@ class ReaderSessionTokenView(APIView):
 
     def get(self, request, token):
         session = get_token_preview_session(token)
+        if session.user_id is None:
+            raise PermissionDenied("Reader progress is unavailable for guest sessions.")
         reading_session, _ = ReadingSession.objects.get_or_create(
             user=session.user,
             book=session.book,
@@ -232,6 +269,8 @@ class ReaderSessionTokenView(APIView):
 
     def post(self, request, token):
         session = get_token_preview_session(token)
+        if session.user_id is None:
+            raise PermissionDenied("Reader progress is unavailable for guest sessions.")
         reading_session, _ = ReadingSession.objects.get_or_create(
             user=session.user,
             book=session.book,
@@ -249,11 +288,15 @@ class ReaderBookmarkTokenListCreateView(APIView):
 
     def get(self, request, token):
         session = get_token_preview_session(token)
+        if session.user_id is None:
+            raise PermissionDenied("Bookmarks are unavailable for guest sessions.")
         queryset = Bookmark.objects.filter(user=session.user, book=session.book)
         return Response(BookmarkSerializer(queryset, many=True).data)
 
     def post(self, request, token):
         session = get_token_preview_session(token)
+        if session.user_id is None:
+            raise PermissionDenied("Bookmarks are unavailable for guest sessions.")
         serializer = BookmarkSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save(user=session.user, book=session.book)
@@ -266,6 +309,8 @@ class ReaderBookmarkTokenDeleteView(APIView):
 
     def delete(self, request, token, pk):
         session = get_token_preview_session(token)
+        if session.user_id is None:
+            raise PermissionDenied("Bookmarks are unavailable for guest sessions.")
         bookmark = Bookmark.objects.filter(pk=pk, user=session.user, book=session.book).first()
         if bookmark is None:
             raise Http404("Bookmark not found.")

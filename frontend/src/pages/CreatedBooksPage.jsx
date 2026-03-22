@@ -1,32 +1,25 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import BookCard from "../components/BookCard";
 import EmptyState from "../components/EmptyState";
-import { useSession } from "../hooks/useSession";
-import { useToast } from "../hooks/useToast";
 import { toQueryString } from "../utils/query";
 
 const defaultFilters = {
   q: "",
   author: "",
-  contributor: "",
   series: "",
   category: "",
-  ownership: "",
   state: "",
   review_state: "",
-  created_after: "",
-  created_before: "",
-  sort: "-created_at"
+  sort: "-requested_at",
+  ownership: "mine"
 };
 
-export default function LibraryPage() {
-  const { authenticated } = useSession();
-  const toast = useToast();
+export default function CreatedBooksPage() {
   const [books, setBooks] = useState([]);
   const [filters, setFilters] = useState(defaultFilters);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [savedFilters, setSavedFilters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -43,71 +36,42 @@ export default function LibraryPage() {
     }
   }
 
-  async function loadSavedFilters() {
-    if (!authenticated) {
-      setSavedFilters([]);
-      return;
-    }
-
-    try {
-      const payload = await apiFetch("/saved-filters/?target=catalog");
-      setSavedFilters(payload);
-    } catch (nextError) {
-      toast.error(nextError.message);
-    }
-  }
-
   useEffect(() => {
     loadBooks(defaultFilters);
   }, []);
 
-  useEffect(() => {
-    loadSavedFilters();
-  }, [authenticated]);
-
-  async function applyFilters(event) {
+  async function handleSearch(event) {
     event.preventDefault();
     await loadBooks(filters);
-  }
-
-  function applySavedFilter(savedFilter) {
-    const nextFilters = { ...defaultFilters, ...(savedFilter.params || {}) };
-    setFilters(nextFilters);
-    loadBooks(nextFilters);
-    toast.success(`Applied "${savedFilter.name}".`);
-  }
-
-  async function deleteSavedFilter(id) {
-    try {
-      await apiFetch(`/saved-filters/${id}/`, { method: "DELETE" });
-      toast.success("Filter removed.");
-      await loadSavedFilters();
-    } catch (nextError) {
-      toast.error(nextError.message);
-    }
   }
 
   return (
     <div className="page-stack">
       <section className="detail-card toolbar-panel">
         <div className="panel-header">
-          <h1>Library</h1>
-          <button type="button" className="ghost-button" onClick={() => setFiltersExpanded((current) => !current)}>
-            {filtersExpanded ? "Hide filters" : "Filters"}
-          </button>
+          <h1>My Created Books</h1>
+          <div className="inline-pills">
+            <button type="button" className="ghost-button" onClick={() => setFiltersExpanded((current) => !current)}>
+              {filtersExpanded ? "Hide filters" : "Filters"}
+            </button>
+            <Link to="/create" className="primary-button">
+              Create Books
+            </Link>
+          </div>
         </div>
-        <form className="stack-form" onSubmit={applyFilters}>
+        <form className="stack-form" onSubmit={handleSearch}>
           <div className="search-inline">
             <input
               type="search"
               value={filters.q}
               onChange={(event) => setFilters({ ...filters, q: event.target.value })}
-              placeholder="Search library"
+              placeholder="Search created books"
             />
             <button type="submit" className="primary-button">
               Search
             </button>
           </div>
+
           {filtersExpanded ? (
             <>
               <div className="detail-facts">
@@ -116,29 +80,12 @@ export default function LibraryPage() {
                   <input value={filters.author} onChange={(event) => setFilters({ ...filters, author: event.target.value })} />
                 </label>
                 <label>
-                  <span className="fact-label">Contributor</span>
-                  <input
-                    value={filters.contributor}
-                    onChange={(event) => setFilters({ ...filters, contributor: event.target.value })}
-                  />
-                </label>
-                <label>
                   <span className="fact-label">Series</span>
                   <input value={filters.series} onChange={(event) => setFilters({ ...filters, series: event.target.value })} />
                 </label>
                 <label>
                   <span className="fact-label">Category</span>
                   <input value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })} />
-                </label>
-                <label>
-                  <span className="fact-label">Ownership</span>
-                  <select
-                    value={filters.ownership}
-                    onChange={(event) => setFilters({ ...filters, ownership: event.target.value })}
-                  >
-                    <option value="">All books</option>
-                    <option value="mine">My created books</option>
-                  </select>
                 </label>
                 <label>
                   <span className="fact-label">State</span>
@@ -166,28 +113,12 @@ export default function LibraryPage() {
                   </select>
                 </label>
                 <label>
-                  <span className="fact-label">Created after</span>
-                  <input
-                    type="date"
-                    value={filters.created_after}
-                    onChange={(event) => setFilters({ ...filters, created_after: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span className="fact-label">Created before</span>
-                  <input
-                    type="date"
-                    value={filters.created_before}
-                    onChange={(event) => setFilters({ ...filters, created_before: event.target.value })}
-                  />
-                </label>
-                <label>
                   <span className="fact-label">Sort</span>
                   <select value={filters.sort} onChange={(event) => setFilters({ ...filters, sort: event.target.value })}>
                     <option value="-requested_at">Newest request first</option>
                     <option value="requested_at">Oldest request first</option>
-                    <option value="-created_at">Newest first</option>
-                    <option value="created_at">Oldest first</option>
+                    <option value="-created_at">Newest book first</option>
+                    <option value="created_at">Oldest book first</option>
                     <option value="title">Title A-Z</option>
                     <option value="-title">Title Z-A</option>
                   </select>
@@ -209,28 +140,9 @@ export default function LibraryPage() {
           ) : null}
         </form>
       </section>
-      {savedFilters.length ? (
-        <section className="detail-card compact-card">
-          <h2>Saved Filters</h2>
-          <div className="queue-list">
-            {savedFilters.map((filter) => (
-              <article key={filter.id} className="queue-card">
-                <strong>{filter.name}</strong>
-                <div className="inline-pills">
-                  <button type="button" className="primary-button" onClick={() => applySavedFilter(filter)}>
-                    Apply
-                  </button>
-                  <button type="button" className="ghost-button" onClick={() => deleteSavedFilter(filter.id)}>
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
+
       {loading ? (
-        <div className="page-state">Loading catalog...</div>
+        <div className="page-state">Loading books...</div>
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : books.length ? (
@@ -240,7 +152,7 @@ export default function LibraryPage() {
           ))}
         </section>
       ) : (
-        <EmptyState title="No books found" body="Try a different search." />
+        <EmptyState title="No created books found" body="Try a different search or create a new book." />
       )}
     </div>
   );

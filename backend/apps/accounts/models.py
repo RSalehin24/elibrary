@@ -1,3 +1,6 @@
+from pathlib import Path
+import uuid
+
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 
@@ -35,10 +38,17 @@ class UserManager(BaseUserManager):
         return self._create_user(email, password, **extra_fields)
 
 
+def profile_image_upload_to(instance, filename):
+    suffix = Path(filename or "").suffix.lower() or ".bin"
+    return f"profile-images/{uuid.uuid4()}{suffix}"
+
+
 class User(AbstractUser, TimeStampedModel):
     username = None
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=255, blank=True)
+    profile_image = models.FileField(upload_to=profile_image_upload_to, blank=True)
+    totp_required = models.BooleanField(default=False)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
@@ -60,6 +70,28 @@ class User(AbstractUser, TimeStampedModel):
             return False
 
         return TOTPDevice.objects.filter(user=self, confirmed=True).exists()
+
+    @property
+    def requires_totp_setup(self):
+        return self.totp_required and not self.has_totp_enabled
+
+    @property
+    def global_grant_scopes(self):
+        if self.is_superuser:
+            return []
+
+        try:
+            from apps.access.models import PermissionGrant
+        except Exception:
+            return []
+
+        return sorted(
+            set(
+                PermissionGrant.objects.active_for_user(self)
+                .filter(book__isnull=True, category__isnull=True, contributor__isnull=True)
+                .values_list("scope", flat=True)
+            )
+        )
 
     @property
     def capability_scopes(self):

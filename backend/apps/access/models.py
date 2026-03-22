@@ -26,6 +26,23 @@ class PermissionScope(models.TextChoices):
     ADMIN_FULL_CONTROL = "admin:full_control", "Admin/full control"
 
 
+ACCOUNT_MANAGEABLE_PERMISSION_SCOPES = (
+    PermissionScope.PREVIEW_READ_ONCE,
+    PermissionScope.READ_DURABLE,
+    PermissionScope.DOWNLOAD_FILE,
+    PermissionScope.METADATA_EDIT,
+    PermissionScope.PROCESSING_MANAGE,
+    PermissionScope.ACCESS_MANAGE,
+)
+
+SCOPED_PERMISSION_SCOPES = (
+    PermissionScope.PREVIEW_READ_ONCE,
+    PermissionScope.READ_DURABLE,
+    PermissionScope.DOWNLOAD_FILE,
+    PermissionScope.METADATA_EDIT,
+)
+
+
 class PermissionGrantQuerySet(models.QuerySet):
     def active(self):
         now = timezone.now()
@@ -46,6 +63,20 @@ class PermissionGrant(UUIDPrimaryKeyModel, TimeStampedModel):
         blank=True,
         null=True,
     )
+    category = models.ForeignKey(
+        "catalog.Category",
+        on_delete=models.CASCADE,
+        related_name="permission_grants",
+        blank=True,
+        null=True,
+    )
+    contributor = models.ForeignKey(
+        "catalog.Contributor",
+        on_delete=models.CASCADE,
+        related_name="permission_grants",
+        blank=True,
+        null=True,
+    )
     scope = models.CharField(max_length=32, choices=PermissionScope.choices)
     is_active = models.BooleanField(default=True)
     expires_at = models.DateTimeField(blank=True, null=True)
@@ -61,17 +92,27 @@ class PermissionGrant(UUIDPrimaryKeyModel, TimeStampedModel):
     objects = PermissionGrantQuerySet.as_manager()
 
     class Meta:
-        ordering = ["user__email", "scope", "book__title"]
+        ordering = ["user__email", "scope", "book__title", "category__name", "contributor__name"]
 
     def __str__(self):
         if self.book_id:
             return f"{self.user} / {self.scope} / {self.book}"
+        if self.category_id:
+            return f"{self.user} / {self.scope} / {self.category}"
+        if self.contributor_id:
+            return f"{self.user} / {self.scope} / {self.contributor}"
         return f"{self.user} / {self.scope}"
 
 
 class PreviewAccessSession(UUIDPrimaryKeyModel, TimeStampedModel):
     token = models.CharField(max_length=128, unique=True, default=generate_access_token)
-    user = models.ForeignKey("accounts.User", on_delete=models.CASCADE, related_name="preview_sessions")
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="preview_sessions",
+        blank=True,
+        null=True,
+    )
     book = models.ForeignKey("catalog.Book", on_delete=models.CASCADE, related_name="preview_sessions")
     source_submission = models.ForeignKey(
         "ingestion.BookSubmission",

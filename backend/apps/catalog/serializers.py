@@ -39,6 +39,7 @@ class BookListSerializer(serializers.ModelSerializer):
     series = serializers.SerializerMethodField()
     categories = serializers.SerializerMethodField()
     cover_download_url = serializers.SerializerMethodField()
+    latest_submission_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Book
@@ -52,6 +53,7 @@ class BookListSerializer(serializers.ModelSerializer):
             "series",
             "categories",
             "cover_download_url",
+            "latest_submission_at",
             "created_at",
         ]
 
@@ -78,6 +80,9 @@ class BookListSerializer(serializers.ModelSerializer):
             kwargs={"slug": obj.slug, "asset_type": "cover"},
             request=request,
         )
+
+    def get_latest_submission_at(self, obj):
+        return getattr(obj, "latest_submission_at", None)
 
 
 class BookDetailSerializer(BookListSerializer):

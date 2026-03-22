@@ -4,7 +4,18 @@ import pytest
 
 from apps.access.models import PermissionGrant, PermissionScope
 from apps.accounts.models import User
-from apps.catalog.models import Book, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType
+from apps.catalog.models import (
+    Book,
+    BookCategory,
+    BookContributor,
+    Category,
+    Contributor,
+    ContributorRole,
+    GeneratedAsset,
+    GeneratedAssetStatus,
+    GeneratedAssetType,
+)
+from apps.common.permissions import user_has_scope
 
 
 @pytest.mark.django_db
@@ -94,6 +105,11 @@ def test_only_superadmin_can_manage_grants(client):
     client.force_login(superadmin)
     references = client.get("/api/access/references/")
     assert references.status_code == 200
+    reference_payload = references.json()
+    assert "account_scopes" in reference_payload
+    assert "scoped_scopes" in reference_payload
+    assert "admin:full_control" not in {scope["value"] for scope in reference_payload["account_scopes"]}
+    assert "access:manage" not in {scope["value"] for scope in reference_payload["scoped_scopes"]}
 
     created = client.post(
         "/api/access/grants/",
@@ -108,6 +124,27 @@ def test_only_superadmin_can_manage_grants(client):
 
     deleted = client.delete(f"/api/access/grants/{created.json()['id']}/")
     assert deleted.status_code == 204
+
+
+@pytest.mark.django_db
+def test_category_and_writer_scoped_permissions_apply_to_matching_books():
+    user = User.objects.create_user(email="scoped@example.com", password="strong-password-123")
+    category = Category.objects.create(name="Thriller")
+    writer = Contributor.objects.create(name="Writer One")
+    category_book = Book.objects.create(title="Category Book", state="ready", review_state="approved")
+    writer_book = Book.objects.create(title="Writer Book", state="ready", review_state="approved")
+    other_book = Book.objects.create(title="Other Book", state="ready", review_state="approved")
+
+    BookCategory.objects.create(book=category_book, category=category)
+    BookContributor.objects.create(book=writer_book, contributor=writer, role=ContributorRole.AUTHOR)
+
+    PermissionGrant.objects.create(user=user, category=category, scope=PermissionScope.DOWNLOAD_FILE)
+    PermissionGrant.objects.create(user=user, contributor=writer, scope=PermissionScope.READ_DURABLE)
+
+    assert user_has_scope(user, [PermissionScope.DOWNLOAD_FILE], book=category_book) is True
+    assert user_has_scope(user, [PermissionScope.DOWNLOAD_FILE], book=other_book) is False
+    assert user_has_scope(user, [PermissionScope.READ_DURABLE], book=writer_book) is True
+    assert user_has_scope(user, [PermissionScope.READ_DURABLE], book=category_book) is False
 
 
 @pytest.mark.django_db
