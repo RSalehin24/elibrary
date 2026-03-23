@@ -2,20 +2,43 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import ToastViewport from "../components/ToastViewport";
 
 const ToastContext = createContext(null);
+const DEFAULT_TOAST_COPY = {
+  success: {
+    title: "Success",
+    description: "The action completed."
+  },
+  error: {
+    title: "Something went wrong",
+    description: "Please try again."
+  },
+  info: {
+    title: "Notice",
+    description: ""
+  }
+};
+
+function cleanToastText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 function normalizeToast(input, fallbackType = "info") {
+  const defaults = DEFAULT_TOAST_COPY[fallbackType] || DEFAULT_TOAST_COPY.info;
+
   if (typeof input === "string") {
     return {
-      title: input,
-      description: "",
+      title: defaults.title,
+      description: cleanToastText(input) || defaults.description,
       type: fallbackType
     };
   }
 
+  const title = cleanToastText(input?.title || input?.message);
+  const description = cleanToastText(input?.description);
+
   return {
-    title: input.title || input.message || "Notice",
-    description: input.description || "",
-    type: input.type || fallbackType
+    title: title || defaults.title,
+    description: description || (!title ? defaults.description : ""),
+    type: input?.type || fallbackType
   };
 }
 

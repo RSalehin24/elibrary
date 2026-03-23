@@ -15,7 +15,7 @@ export default function LoginPage() {
     try {
       await login(form);
       toast.success("Signed in.");
-      navigate("/create", { replace: true });
+      navigate("/home", { replace: true });
     } catch (error) {
       const code = error?.payload?.code;
       if (code === "otp_required") {

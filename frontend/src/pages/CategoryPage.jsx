@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import CatalogToolbar from "../components/CatalogToolbar";
+import PageLoader from "../components/PageLoader";
+import PropertyTableControls, { useClientPagination } from "../components/PropertyTableControls";
 import { formatBookDate } from "../utils/bookPresentation";
 import { cleanQueryParams, filtersFromSearchParams, toQueryString } from "../utils/query";
 
@@ -50,6 +52,7 @@ export default function CategoryPage() {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const pagination = useClientPagination(categories);
 
   useEffect(() => {
     const nextFilters = filtersFromSearchParams(defaultFilters, searchParams);
@@ -73,10 +76,12 @@ export default function CategoryPage() {
 
   function applyFilters(event) {
     event.preventDefault();
+    pagination.resetPage();
     setSearchParams(cleanQueryParams(filters));
   }
 
   function resetFilters() {
+    pagination.resetPage();
     setFilters(defaultFilters);
     setSearchParams(cleanQueryParams(defaultFilters));
   }
@@ -90,28 +95,53 @@ export default function CategoryPage() {
   }
 
   const resultCount = error || loading ? "" : `${categories.length}`;
+  const sortOptions = filterFields.find((field) => field.key === "sort")?.options || [];
+  const tableControls = (
+    <PropertyTableControls
+      sortValue={filters.sort}
+      sortOptions={sortOptions}
+      onSortChange={(nextSort) => {
+        const nextFilters = { ...filters, sort: nextSort };
+        pagination.resetPage();
+        setFilters(nextFilters);
+        setSearchParams(cleanQueryParams(nextFilters));
+      }}
+      rowsPerPage={pagination.rowsPerPage}
+      onRowsPerPageChange={pagination.setRowsPerPage}
+      page={pagination.page}
+      pageCount={pagination.pageCount}
+      hasPrevious={pagination.hasPrevious}
+      hasNext={pagination.hasNext}
+      onPageChange={pagination.setPage}
+      disabled={loading}
+    />
+  );
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header">
-        <h1>Category Page</h1>
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--stacked">
+        <h1>Categories</h1>
+
+        <CatalogToolbar
+          filters={filters}
+          setFilters={setFilters}
+          fields={filterFields}
+          defaultFilters={defaultFilters}
+          filtersExpanded={filtersExpanded}
+          setFiltersExpanded={setFiltersExpanded}
+          onSubmit={applyFilters}
+          onReset={resetFilters}
+          searchPlaceholder="Search categories or codes..."
+          resultCount={resultCount}
+          secondaryContent={tableControls}
+          secondaryBelow
+          searchRowCompact
+          inline
+        />
       </header>
 
-      <CatalogToolbar
-        filters={filters}
-        setFilters={setFilters}
-        fields={filterFields}
-        defaultFilters={defaultFilters}
-        filtersExpanded={filtersExpanded}
-        setFiltersExpanded={setFiltersExpanded}
-        onSubmit={applyFilters}
-        onReset={resetFilters}
-        searchPlaceholder="Search categories or codes..."
-        resultCount={resultCount}
-      />
-
       {loading ? (
-        <div className="page-state">Loading categories...</div>
+        <PageLoader label="Loading categories" detail="Fetching category counts and related book totals." />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : categories.length ? (
@@ -129,7 +159,7 @@ export default function CategoryPage() {
               </tr>
             </thead>
             <tbody>
-              {categories.map((category) => (
+              {pagination.items.map((category) => (
                 <tr key={category.id}>
                   <td className="table-code-cell">{category.catalog_code}</td>
                   <td>

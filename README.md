@@ -1,11 +1,11 @@
 # Bangla Library Platform
 
-This repository is now organized as two independently deployable apps:
+This repository is organized as two app codebases with one unified Docker runtime:
 
 - `backend/`: Django API, auth, catalog, ingestion, reader access, Celery worker/beat support, and the integrated legacy scraper/export pipeline under `backend/apps/ingestion/legacy/`.
 - `frontend/`: React/Vite client that talks to the backend over `VITE_API_BASE_URL`.
 
-The apps can still be developed together locally from this repo, but they are now structured so each one can be deployed from its own folder in a separate environment.
+The browser-facing runtime is now the same locally and on the server: Nginx serves the frontend bundle and proxies Django over the internal Docker network.
 
 ## Folder Layout
 
@@ -20,22 +20,11 @@ The apps can still be developed together locally from this repo, but they are no
   - `src/`, `package.json`, `vite.config.js`
   - `.env.example`
 - `docker-compose.yml`
-  - optional local full-stack integration only
-
-## Separate Deployment
-
-Deploy the backend from the [`backend/`](./backend) folder.
-
-Deploy the frontend from the [`frontend/`](./frontend) folder.
-
-Each folder now has its own environment example and deployment notes:
-
-- [`backend/README.md`](./backend/README.md)
-- [`frontend/README.md`](./frontend/README.md)
+  - unified local/server stack with public Nginx and private app services
 
 ## Local Full Stack
 
-If you still want the whole stack together locally:
+The same Docker command is used locally and on the server:
 
 ```bash
 cp .env.example .env
@@ -44,13 +33,12 @@ docker-compose up --build
 
 Services:
 
-- Backend: `http://localhost:8000`
-- Frontend: `http://localhost:5173`
-- PostgreSQL: `localhost:5432`
-- Redis: `localhost:6379`
+- App: `http://localhost`
+- Django API/admin: behind Nginx on the same origin
+- Worker/beat/postgres/redis: internal Docker network only
 
 ## Notes
 
 - The old root-level `code/` dependency is now integrated into `backend/apps/ingestion/legacy/`, so the backend is self-contained.
 - Retained generated HTML, EPUB, and cover assets live under `backend/storage/media/generated/`; `backend/outputs/` is only temporary staging during ingestion.
-- The root `.env.example` remains useful for local integrated development with `docker-compose.yml`.
+- The root `.env.example` is the main starting point for both local and server deployment.

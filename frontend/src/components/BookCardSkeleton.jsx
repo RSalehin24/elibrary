@@ -10,10 +10,10 @@ export default function BookCardSkeleton() {
           </div>
         </div>
       </div>
+
       <div className="book-card-body">
         <div className="book-card-topline">
-          <span className="status-pill skeleton-pill" />
-          <span className="status-pill skeleton-pill" />
+          <span className="skeleton-line skeleton-line-card-id" />
         </div>
         <div className="book-card-heading">
           <span className="skeleton-line skeleton-line-card-title" />

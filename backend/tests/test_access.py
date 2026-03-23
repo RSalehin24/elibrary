@@ -2,6 +2,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+from django.core.files.base import ContentFile
 
 from apps.access.models import PermissionGrant, PermissionScope, PreviewAccessSession
 from apps.accounts.models import User
@@ -228,6 +229,36 @@ def test_html_download_inlines_stale_relative_cover_references(tmp_path, client)
     body = response.content.decode("utf-8")
     assert "data:image/jpeg;base64," in body
     assert "book_image.hpg" not in body
+
+
+@pytest.mark.django_db
+def test_missing_stored_asset_returns_404_and_marks_asset_failed(client):
+    user = User.objects.create_user(email="missing-asset@example.com", password="strong-password-123")
+    book = Book.objects.create(title="Missing Asset Book", state="ready", review_state="approved")
+    asset = GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.COVER,
+        status=GeneratedAssetStatus.READY,
+        content_type="image/jpeg",
+    )
+    asset.file.save("book_cover.jpg", ContentFile(b"cover-bytes"), save=True)
+    broken_path = Path(asset.file.path)
+    broken_path.unlink()
+
+    PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.PREVIEW_READ_ONCE)
+    client.force_login(user)
+
+    response = client.get(f"/api/access/books/{book.slug}/download/cover/")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "This file is no longer available in storage. Please regenerate the book."
+
+    asset.refresh_from_db()
+    book.refresh_from_db()
+    assert asset.status == GeneratedAssetStatus.FAILED
+    assert asset.file.name == ""
+    assert book.state == "needs_review"
+    assert book.review_state == "needs_review"
 
 
 @pytest.mark.django_db

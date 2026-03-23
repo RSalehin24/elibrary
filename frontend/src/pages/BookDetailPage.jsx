@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { apiFetch } from "../api/client";
+import { apiFetch, resolveAppUrl } from "../api/client";
 import BookCoverArt from "../components/BookCoverArt";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import BookDetailSkeleton from "../components/BookDetailSkeleton";
@@ -95,6 +95,45 @@ function renderFilterLinks(values, queryKey, emptyLabel = "", extraFilters = {})
       {index < values.length - 1 ? <span className="meta-divider">, </span> : null}
     </Fragment>
   ));
+}
+
+function normalizeIdentityLabel(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function normalizeFrontMatterEntries(entries, bookIdValue) {
+  if (!entries?.length) {
+    return [];
+  }
+
+  let replacedIdentity = false;
+
+  return entries.reduce((normalizedEntries, entry) => {
+    const normalizedLabel = normalizeIdentityLabel(entry.label);
+    const normalizedKey = normalizeIdentityLabel(entry.key);
+    const isIdentityEntry = ["unique id", "book id", "catalog code", "catalog id", "id"].includes(normalizedLabel)
+      || ["unique id", "book id", "catalog code", "catalog id", "id"].includes(normalizedKey);
+
+    if (isIdentityEntry) {
+      if (!replacedIdentity) {
+        normalizedEntries.push({
+          ...entry,
+          key: "book_id",
+          label: "Book ID",
+          value: bookIdValue
+        });
+        replacedIdentity = true;
+      }
+      return normalizedEntries;
+    }
+
+    normalizedEntries.push(entry);
+    return normalizedEntries;
+  }, []);
 }
 
 export default function BookDetailPage() {
@@ -317,7 +356,7 @@ export default function BookDetailPage() {
         method: "POST",
         body: {}
       });
-      window.open(payload.launch_url, "_blank", "noopener,noreferrer");
+      window.open(resolveAppUrl(payload.launch_url), "_blank", "noopener,noreferrer");
       const { sessionPayload, bookmarkPayload } = await fetchReaderCollections(slug);
       applyReaderState(sessionPayload);
       setBookmarks(bookmarkPayload);
@@ -543,7 +582,8 @@ export default function BookDetailPage() {
   const contributorGroups = getContributorGroups(book);
   const primaryContributorGroup = getPrimaryContributorGroup(book);
   const supportingContributorGroups = contributorGroups.filter((group) => group.role !== primaryContributorGroup?.role);
-  const frontMatter = book.front_matter || [];
+  const bookIdValue = book.catalog_code || "Pending";
+  const frontMatter = normalizeFrontMatterEntries(book.front_matter || [], bookIdValue);
   const hasFrontMatter = Boolean(frontMatter.length || book.book_info_html?.trim());
   const hasDedication = Boolean(book.dedication_html?.trim());
   const hasToc = Boolean(book.toc?.length);
@@ -596,7 +636,7 @@ export default function BookDetailPage() {
         </div>
 
         <div className="book-hero-copy">
-          <p className="eyebrow">Book</p>
+          <strong className="book-hero-id">{bookIdValue}</strong>
           <h1>{book.title}</h1>
           {primaryContributorGroup ? (
             primaryContributorGroup.role === "author" ? (
@@ -658,7 +698,13 @@ export default function BookDetailPage() {
               </span>
             </button>
             {downloadableAssets.map((asset) => (
-              <a key={asset.id} className="ghost-button asset-link" href={asset.download_url} target="_blank" rel="noreferrer">
+              <a
+                key={asset.id}
+                className="ghost-button asset-link"
+                href={resolveAppUrl(asset.download_url)}
+                target="_blank"
+                rel="noreferrer"
+              >
                 {assetLabels[asset.asset_type] || `Download ${asset.asset_type.toUpperCase()}`}
               </a>
             ))}
@@ -987,12 +1033,12 @@ export default function BookDetailPage() {
       ) : null}
 
       {book.raw_provenance && Object.keys(book.raw_provenance).length ? (
-        <section className="detail-card">
+        <section className="detail-card raw-provenance-card">
           <div className="section-title-block">
             <p className="eyebrow">Staff</p>
             <h2>Raw Provenance</h2>
           </div>
-          <pre className="json-block">{JSON.stringify(book.raw_provenance, null, 2)}</pre>
+          <pre className="json-block raw-provenance-block">{JSON.stringify(book.raw_provenance, null, 2)}</pre>
         </section>
       ) : null}
 

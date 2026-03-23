@@ -9,6 +9,7 @@ from apps.common.text import clean_display_text, normalize_catalog_text
 
 ROLE_PATTERNS = {
     ContributorRole.TRANSLATOR: ["অনুবাদ", "অনুবাদক", "translation", "translator"],
+    ContributorRole.COMPILER: ["সংকলক", "সংকলন", "compiled by", "compiler"],
     ContributorRole.EDITOR: ["সম্পাদক", "সম্পাদ", "editor"],
     ContributorRole.COVER_ARTIST: ["প্রচ্ছদ", "cover"],
     ContributorRole.ILLUSTRATOR: ["অলংকরণ", "illustration"],
@@ -50,6 +51,10 @@ MAX_METADATA_TEXT_LENGTH = 320
 MAX_METADATA_VALUE_LENGTH = 180
 MAX_TITLE_PREFIX_LENGTH = 140
 MAX_DEDICATION_BLOCK_LENGTH = 220
+MAX_CONTRIBUTOR_NAME_WORDS = 8
+MAX_CONTRIBUTOR_NAME_LENGTH = 80
+CONTRIBUTOR_CONNECTOR_PATTERN = re.compile(r"\s+(?:ও|and|&)\s+", re.IGNORECASE)
+CONTRIBUTOR_INITIAL_TOKEN_PATTERN = re.compile(r"^(?:[A-Za-z\u0980-\u09FF]{1,4}\.)+$")
 
 
 def build_metadata_label_aliases():
@@ -81,6 +86,56 @@ def split_multi_value(value):
         seen.add(normalized)
         deduped.append(cleaned)
     return deduped
+
+
+def looks_like_contributor_name(value):
+    cleaned = clean_display_text(value.strip(" -:()[]{}"))
+    if not cleaned:
+        return False
+    if re.search(r"[।!?]", cleaned):
+        return False
+    for token in cleaned.split():
+        normalized_token = token.strip("()[]{}\"'“”‘’,;:-")
+        if "." not in normalized_token:
+            continue
+        if CONTRIBUTOR_INITIAL_TOKEN_PATTERN.fullmatch(normalized_token):
+            continue
+        return False
+    if len(cleaned) > MAX_CONTRIBUTOR_NAME_LENGTH:
+        return False
+    if len(cleaned.split()) > MAX_CONTRIBUTOR_NAME_WORDS:
+        return False
+    return bool(normalize_catalog_text(cleaned))
+
+
+def split_contributor_chunks(value):
+    chunks = []
+    seen = set()
+
+    for chunk in split_multi_value(value):
+        expanded = [
+            clean_display_text(part.strip(" -:"))
+            for part in CONTRIBUTOR_CONNECTOR_PATTERN.split(chunk)
+            if clean_display_text(part.strip(" -:"))
+        ]
+        candidates = expanded if len(expanded) > 1 and all(looks_like_contributor_name(part) for part in expanded) else [chunk]
+
+        for candidate in candidates:
+            normalized = normalize_catalog_text(candidate)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            chunks.append(candidate)
+
+    return chunks
+
+
+def split_contributor_value(value):
+    chunks = split_contributor_chunks(value)
+    if not chunks:
+        return []
+
+    return [chunk for chunk in chunks if looks_like_contributor_name(chunk)]
 
 
 def plain_text_from_html(html):
@@ -145,6 +200,24 @@ def looks_like_title_prefix(prefix):
     return any(separator in prefix for separator in ("-", "–", "—")) or (2 <= word_count <= 10 and len(cleaned_prefix) >= 8)
 
 
+def is_plausible_metadata_value(entry, value):
+    cleaned_value = clean_display_text(value)
+    if not cleaned_value:
+        return False
+
+    if entry["role"]:
+        return bool(split_contributor_value(cleaned_value))
+
+    sentence_markers = count_sentence_markers(cleaned_value)
+    if sentence_markers > 1:
+        return False
+    if sentence_markers == 1 and len(cleaned_value.split()) > 6:
+        return False
+    if text_matches_patterns(cleaned_value, BODY_SECTION_PATTERNS) and len(cleaned_value) <= 80:
+        return False
+    return True
+
+
 def search_front_matter_label_value(text, strong_text="", has_break=False):
     cleaned_text = clean_display_text(text)
     cleaned_strong = clean_display_text(strong_text)
@@ -165,7 +238,7 @@ def search_front_matter_label_value(text, strong_text="", has_break=False):
             prefix = cleaned_text[: match.start()]
             cleaned_prefix = clean_display_text(prefix.strip(" -–—|/"))
             value = clean_display_text(match.group("value").strip(" -:ঃ"))
-            if not value or len(value) > MAX_METADATA_VALUE_LENGTH:
+            if not value or len(value) > MAX_METADATA_VALUE_LENGTH or not is_plausible_metadata_value(entry, value):
                 continue
 
             score = 0
@@ -293,7 +366,6 @@ def extract_main_content_segments(main_content_html):
             continue
 
         if is_dedication_heading(text, strong_text=strong_text, tag_name=block.name):
-            dedication_parts.append(str(block))
             block.decompose()
             in_dedication = True
             continue
@@ -301,7 +373,38 @@ def extract_main_content_segments(main_content_html):
         if is_separator_paragraph(text) and (book_info_parts or dedication_parts):
             block.decompose()
 
-    return "\n".join(book_info_parts), "\n".join(dedication_parts), str(soup)
+    return "\n".join(book_info_parts), clean_extracted_dedication_html("\n".join(dedication_parts)), str(soup)
+
+
+def clean_extracted_dedication_html(dedication_html):
+    if not dedication_html:
+        return ""
+
+    soup = BeautifulSoup(dedication_html, "html.parser")
+    seen_heading = False
+
+    for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+        if block.parent is None:
+            continue
+
+        text = block_text(block)
+        if not text:
+            block.decompose()
+            continue
+
+        strong_text = block_strong_text(block)
+        is_heading = is_dedication_heading(text, strong_text=strong_text, tag_name=block.name)
+        is_duplicate_heading = seen_heading and text_matches_patterns(text, DEDICATION_PATTERNS) and len(text) <= 40
+
+        if is_separator_paragraph(text) or is_heading or is_duplicate_heading:
+            seen_heading = seen_heading or is_heading
+            block.decompose()
+            continue
+
+        break
+
+    cleaned_html = str(soup).strip()
+    return cleaned_html if plain_text_from_html(cleaned_html) else ""
 
 
 def extract_leading_front_matter_html(html):
@@ -383,7 +486,7 @@ def extract_role_contributors(book_info_html):
     for entry in extract_front_matter_entries(book_info_html):
         if not entry["role"]:
             continue
-        for name in split_multi_value(entry["value"]):
+        for name in split_contributor_value(entry["value"]):
             extracted.append({"name": name, "role": entry["role"], "raw_value": entry["value"]})
     return extracted
 

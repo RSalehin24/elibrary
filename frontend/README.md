@@ -13,12 +13,11 @@ cp .env.example .env
 Important variables:
 
 - `VITE_API_BASE_URL`
-- `VITE_DEV_PROXY_TARGET`
 
-For separate deployment, point `VITE_API_BASE_URL` at the deployed backend API origin, for example:
+For the unified Docker stack in this repo, keep:
 
 ```bash
-VITE_API_BASE_URL=https://api.example.com/api
+VITE_API_BASE_URL=/api
 ```
 
 ## Local Run
@@ -43,3 +42,11 @@ docker build -t bangla-library-frontend .
 ```
 
 The Dockerfile assumes this folder is the build root.
+
+For the full stack used both locally and on the server, use the root-level Docker Compose setup instead:
+
+```bash
+docker-compose up -d --build
+```
+
+That build copies the frontend production bundle into Nginx so the browser stays on one origin and only Nginx is public.

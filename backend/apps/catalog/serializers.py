@@ -17,13 +17,20 @@ from apps.catalog.models import (
     ManualBindingType,
     MetadataReview,
     MetadataVersion,
+    Series,
 )
 from apps.catalog.services import replace_book_relations
 from apps.catalog.services import normalize_book_contributors
 from apps.common.models import LifecycleState, ReviewState
 from apps.common.permissions import user_can_download_book_assets, user_can_view_book_cover
 from apps.common.url_utils import public_api_url
-from apps.ingestion.services.normalization import combined_front_matter_html, extract_front_matter_entries, split_multi_value
+from apps.ingestion.services.normalization import (
+    clean_extracted_dedication_html,
+    combined_front_matter_html,
+    extract_front_matter_entries,
+    looks_like_contributor_name,
+    split_contributor_value,
+)
 
 
 class GeneratedAssetSerializer(serializers.ModelSerializer):
@@ -48,6 +55,8 @@ class GeneratedAssetSerializer(serializers.ModelSerializer):
                     return ""
             elif not user_can_download_book_assets(request.user, obj.book):
                 return ""
+        if not asset_exists(obj):
+            return ""
         return public_api_url(
             "access-book-asset-download",
             kwargs={"slug": obj.book.slug, "asset_type": obj.asset_type},
@@ -55,9 +64,29 @@ class GeneratedAssetSerializer(serializers.ModelSerializer):
         )
 
 
+def asset_exists(asset):
+    if asset.file and asset.file.name:
+        try:
+            if asset.file.storage.exists(asset.file.name):
+                return True
+        except Exception:
+            pass
+        try:
+            if Path(asset.file.path).exists():
+                return True
+        except (AttributeError, NotImplementedError, TypeError, ValueError):
+            pass
+
+    if asset.legacy_path:
+        return Path(asset.legacy_path).exists()
+
+    return False
+
+
 class BookListSerializer(serializers.ModelSerializer):
     authors = serializers.SerializerMethodField()
     translators = serializers.SerializerMethodField()
+    compilers = serializers.SerializerMethodField()
     editors = serializers.SerializerMethodField()
     contributors = serializers.SerializerMethodField()
     series = serializers.SerializerMethodField()
@@ -82,6 +111,7 @@ class BookListSerializer(serializers.ModelSerializer):
             "review_state",
             "authors",
             "translators",
+            "compilers",
             "editors",
             "contributors",
             "series",
@@ -100,13 +130,22 @@ class BookListSerializer(serializers.ModelSerializer):
         contributors = self.get_contributors(obj)
         return [entry["name"] for entry in contributors if entry["role"] == ContributorRole.AUTHOR]
 
+    def relation_contributors(self, obj):
+        payload = []
+        for relation in obj.book_contributors.all():
+            if not looks_like_contributor_name(relation.contributor.name):
+                continue
+            payload.append({"name": relation.contributor.name, "role": relation.role})
+        return payload
+
     def get_contributors(self, obj):
-        return normalize_book_contributors(
-            [{"name": rel.contributor.name, "role": rel.role} for rel in obj.book_contributors.all()]
-        )
+        return normalize_book_contributors(self.relation_contributors(obj))
 
     def get_translators(self, obj):
         return [entry["name"] for entry in self.get_contributors(obj) if entry["role"] == ContributorRole.TRANSLATOR]
+
+    def get_compilers(self, obj):
+        return [entry["name"] for entry in self.get_contributors(obj) if entry["role"] == ContributorRole.COMPILER]
 
     def get_editors(self, obj):
         return [entry["name"] for entry in self.get_contributors(obj) if entry["role"] == ContributorRole.EDITOR]
@@ -125,7 +164,7 @@ class BookListSerializer(serializers.ModelSerializer):
             (
                 asset
                 for asset in obj.generated_assets.all()
-                if asset.asset_type == GeneratedAssetType.COVER and asset.status == GeneratedAssetStatus.READY
+                if asset.asset_type == GeneratedAssetType.COVER and asset.status == GeneratedAssetStatus.READY and asset_exists(asset)
             ),
             None,
         )
@@ -173,7 +212,7 @@ class BookDetailSerializer(BookListSerializer):
     front_matter = serializers.SerializerMethodField()
     latest_processing_job = serializers.SerializerMethodField()
     book_info_html = serializers.CharField()
-    dedication_html = serializers.CharField()
+    dedication_html = serializers.SerializerMethodField()
     toc = serializers.JSONField()
     raw_provenance = serializers.SerializerMethodField()
 
@@ -193,19 +232,12 @@ class BookDetailSerializer(BookListSerializer):
 
     def build_contributors_payload(self, obj):
         front_matter_html = combined_front_matter_html(obj.book_info_html, obj.main_content_html)
-        payload = []
-        for relation in obj.book_contributors.all():
-            payload.append(
-                {
-                    "name": relation.contributor.name,
-                    "role": relation.role,
-                }
-            )
+        payload = list(self.relation_contributors(obj))
 
         for entry in extract_front_matter_entries(front_matter_html):
             if not entry["role"]:
                 continue
-            for name in split_multi_value(entry["value"]):
+            for name in split_contributor_value(entry["value"]):
                 payload.append({"name": name, "role": entry["role"]})
 
         return normalize_book_contributors(payload)
@@ -225,6 +257,9 @@ class BookDetailSerializer(BookListSerializer):
     def get_front_matter(self, obj):
         front_matter_html = combined_front_matter_html(obj.book_info_html, obj.main_content_html)
         return [entry for entry in extract_front_matter_entries(front_matter_html) if not entry["role"]]
+
+    def get_dedication_html(self, obj):
+        return clean_extracted_dedication_html(obj.dedication_html)
 
     def get_latest_processing_job(self, obj):
         job = obj.processing_jobs.first()
@@ -271,7 +306,7 @@ class CategoryListSerializer(serializers.ModelSerializer):
         ]
 
 
-class WriterListSerializer(serializers.ModelSerializer):
+class ContributorListSerializer(serializers.ModelSerializer):
     book_count = serializers.IntegerField(read_only=True)
     digital_book_count = serializers.IntegerField(read_only=True)
     manual_book_count = serializers.IntegerField(read_only=True)
@@ -281,6 +316,24 @@ class WriterListSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "catalog_code",
+            "name",
+            "slug",
+            "book_count",
+            "digital_book_count",
+            "manual_book_count",
+            "created_at",
+        ]
+
+
+class SeriesListSerializer(serializers.ModelSerializer):
+    book_count = serializers.IntegerField(read_only=True)
+    digital_book_count = serializers.IntegerField(read_only=True)
+    manual_book_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Series
+        fields = [
+            "id",
             "name",
             "slug",
             "book_count",
@@ -310,6 +363,7 @@ class ManualBookCreateSerializer(serializers.Serializer):
     summary = serializers.CharField(required=False, allow_blank=True)
     writers = serializers.ListField(child=serializers.CharField(), allow_empty=False)
     translators = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
+    compilers = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
     editors = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
     categories = serializers.ListField(child=serializers.CharField(), allow_empty=False)
     series = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
@@ -339,6 +393,9 @@ class ManualBookCreateSerializer(serializers.Serializer):
     def validate_translators(self, value):
         return normalize_name_list(value)
 
+    def validate_compilers(self, value):
+        return normalize_name_list(value)
+
     def validate_editors(self, value):
         return normalize_name_list(value)
 
@@ -348,6 +405,7 @@ class ManualBookCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         writer_names = validated_data.pop("writers", [])
         translator_names = validated_data.pop("translators", [])
+        compiler_names = validated_data.pop("compilers", [])
         editor_names = validated_data.pop("editors", [])
         category_names = validated_data.pop("categories", [])
         series_names = validated_data.pop("series", [])
@@ -370,12 +428,15 @@ class ManualBookCreateSerializer(serializers.Serializer):
             contributors=[
                 *[{"name": writer_name, "role": ContributorRole.AUTHOR} for writer_name in writer_names],
                 *[{"name": translator_name, "role": ContributorRole.TRANSLATOR} for translator_name in translator_names],
+                *[{"name": compiler_name, "role": ContributorRole.COMPILER} for compiler_name in compiler_names],
                 *[{"name": editor_name, "role": ContributorRole.EDITOR} for editor_name in editor_names],
             ],
             series_names=series_names,
             category_names=category_names,
         )
         return book
+
+
 
 
 class EpubAssetReplaceSerializer(serializers.Serializer):

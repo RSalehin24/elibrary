@@ -1,0 +1,12 @@
+Hello{% if invited_user and invited_user.full_name %} {{ invited_user.full_name }}{% endif %},
+
+Your Bangla Library account has been created.
+
+Use the secure link below to choose your password and finish setup:
+{{ frontend_reset_url }}?uid={{ uid }}&token={{ token }}
+
+{% if invited_by %}
+This invitation was sent by {{ invited_by.display_name }}.
+{% endif %}
+
+If you were not expecting this email, you can ignore it.

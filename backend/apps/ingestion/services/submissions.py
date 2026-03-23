@@ -25,6 +25,7 @@ from apps.catalog.models import (
     Series,
 )
 from apps.catalog.services import (
+    find_deleted_book_by_title,
     find_existing_book_by_source_url,
     find_existing_book_by_title,
     replace_book_relations,
@@ -54,7 +55,7 @@ from apps.ingestion.services.legacy_adapter import (
     texts_are_similar,
     validate_source_url,
 )
-from apps.ingestion.services.normalization import normalize_scraped_book, promote_leading_front_matter
+from apps.ingestion.services.normalization import clean_extracted_dedication_html, normalize_scraped_book, promote_leading_front_matter
 from apps.ingestion.services.resolution import (
     TitleResolver,
     fetch_source_page_metadata,
@@ -284,6 +285,9 @@ def find_reusable_submission(*, normalized_input="", resolved_url="", exclude_su
     ).filter(
         canonical_submission__isnull=True,
         status__in=REUSABLE_SUBMISSION_STATUSES,
+    ).filter(
+        Q(linked_book__isnull=True) | Q(linked_book__deleted_at__isnull=True),
+        Q(duplicate_of_book__isnull=True) | Q(duplicate_of_book__deleted_at__isnull=True),
     )
     if exclude_submission_id:
         queryset = queryset.exclude(pk=exclude_submission_id)
@@ -612,7 +616,7 @@ def create_submission_records(submitter, parsed_entries, auto_process=True, orig
 def detect_metadata_duplicate(scraped_data):
     target_title = scraped_data.get("book_title", "")
     target_author = scraped_data.get("author", "")
-    books = Book.objects.prefetch_related("book_contributors__contributor")
+    books = Book.objects.filter(deleted_at__isnull=True).prefetch_related("book_contributors__contributor")
     for book in books:
         if not texts_are_similar(target_title, book.title):
             continue
@@ -805,16 +809,20 @@ def sync_metadata_relations(book, normalized):
 
 def persist_scraped_book(submission, job, scraped_data, target_book=None):
     normalized = normalize_scraped_book(scraped_data)
-    existing_book = target_book or find_existing_book_by_title(scraped_data["book_title"])
+    cleaned_dedication_html = clean_extracted_dedication_html(scraped_data.get("dedication", ""))
+    existing_book = target_book or find_existing_book_by_title(scraped_data["book_title"]) or find_deleted_book_by_title(
+        scraped_data["book_title"]
+    )
     if existing_book:
         book = existing_book
+        book.deleted_at = None
         book.state = LifecycleState.READY
         book.review_state = ReviewState.PENDING
         book.raw_scraped_metadata = normalized["raw_strings"]
         book.raw_scrape_payload = scraped_data
         book.main_content_html = scraped_data.get("main_content", "")
         book.book_info_html = scraped_data.get("book_info", "")
-        book.dedication_html = scraped_data.get("dedication", "")
+        book.dedication_html = cleaned_dedication_html
         book.toc = scraped_data.get("toc", [])
         book.cover_source_url = scraped_data.get("cover", "")
         book.save()
@@ -827,7 +835,7 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
             raw_scrape_payload=scraped_data,
             main_content_html=scraped_data.get("main_content", ""),
             book_info_html=scraped_data.get("book_info", ""),
-            dedication_html=scraped_data.get("dedication", ""),
+            dedication_html=cleaned_dedication_html,
             toc=scraped_data.get("toc", []),
             cover_source_url=scraped_data.get("cover", ""),
         )
@@ -856,6 +864,8 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
     job = ProcessingJob.objects.select_related("submission", "submission__submitter", "book").get(pk=job_id)
     submission = job.submission
     reprocess_book = None
+    if job.status == JobStatus.SUCCEEDED:
+        return job
     if job.status == JobStatus.CANCELLED:
         return job
     if job.cancel_requested:

@@ -135,7 +135,7 @@ export default function CreatedBooksPage() {
           setFiltersExpanded={setFiltersExpanded}
           onSubmit={applyFilters}
           onReset={resetFilters}
-          searchPlaceholder="Search your books..."
+          searchPlaceholder="Search your books by title or book ID..."
           resultCount={resultCount}
           inline
         />

@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { resolveAppUrl } from "../api/client";
 import { getPrimaryContributorName } from "../utils/bookPresentation";
 
 export default function BookCoverArt({ book, className = "", ariaHidden = false }) {
   const [imageError, setImageError] = useState(false);
-  const coverUrl = book.cover_download_url;
+  const coverUrl = resolveAppUrl(book.cover_download_url);
   const hasCover = Boolean(coverUrl) && !imageError;
   const authorName = getPrimaryContributorName(book);
   const classes = ["book-cover-surface", className].filter(Boolean).join(" ");

@@ -1,10 +1,9 @@
 import { Fragment } from "react";
 import { Link } from "react-router-dom";
 import BookCoverArt from "./BookCoverArt";
-import StatusPill from "./StatusPill";
 import {
   formatBookDate,
-  getContributorNamesByRole
+  getWriterColumnGroups
 } from "../utils/bookPresentation";
 import { toQueryString } from "../utils/query";
 
@@ -24,13 +23,10 @@ function renderFilterLinks(values, queryKey, emptyLabel) {
 }
 
 export default function BookCard({ book }) {
-  const authorNames = getContributorNamesByRole(book, "author");
-  const translatorNames = getContributorNamesByRole(book, "translator");
-  const editorNames = getContributorNamesByRole(book, "editor");
+  const contributorGroups = getWriterColumnGroups(book);
   const series = book.series || [];
   const categories = book.categories || [];
-  const fallbackRoleLabel = !authorNames.length && !translatorNames.length && editorNames.length ? "Editor" : "";
-  const fallbackNames = fallbackRoleLabel ? editorNames : [];
+  const bookIdLabel = book.catalog_code || "Pending";
 
   return (
     <article className="book-card">
@@ -40,49 +36,41 @@ export default function BookCard({ book }) {
 
       <div className="book-card-body">
         <div className="book-card-topline">
-          <StatusPill value={book.state} />
-          <StatusPill value={book.review_state} />
+          <p className="book-card-id">{bookIdLabel}</p>
         </div>
 
         <div className="book-card-heading">
           <h3>{book.title}</h3>
-          <div className="book-card-contributors">
-            {authorNames.length ? (
-              <p className="book-meta">{renderFilterLinks(authorNames, "author", "Contributor unavailable")}</p>
-            ) : null}
-            {translatorNames.length ? (
-              <p className="book-meta book-meta-secondary">
-                <span className="book-meta-role">Translator</span>
-                <span>{renderFilterLinks(translatorNames, "contributor", "")}</span>
-              </p>
-            ) : null}
-            {!authorNames.length && !translatorNames.length && fallbackNames.length ? (
-              <p className="book-meta book-meta-secondary">
-                <span className="book-meta-role">{fallbackRoleLabel}</span>
-                <span>{renderFilterLinks(fallbackNames, "contributor", "")}</span>
-              </p>
-            ) : null}
-            {!authorNames.length && !translatorNames.length && !fallbackNames.length ? (
+          <div className="book-card-contributors book-card-contributor-groups">
+            {contributorGroups.length ? (
+              contributorGroups.map((group, index) => (
+                <div key={`${book.id}-contributor-${index}`} className="table-writer-line">
+                  {group.label ? <span className="table-role-label">{group.label}</span> : null}
+                  <span className="book-meta">{renderFilterLinks(group.names, group.queryKey, "Contributor unavailable")}</span>
+                </div>
+              ))
+            ) : (
               <p className="book-meta">Contributor unavailable</p>
-            ) : null}
+            )}
           </div>
         </div>
 
         <div className="book-card-details">
           <div className="book-detail-chip">
-            <span className="fact-label">Series</span>
-            <strong>{renderFilterLinks(series, "series", "Standalone")}</strong>
-          </div>
-          <div className="book-detail-chip">
             <span className="fact-label">Categories</span>
             <strong>{renderFilterLinks(categories, "category", "Unsorted")}</strong>
+          </div>
+          <div className="book-detail-chip">
+            <span className="fact-label">Series</span>
+            <strong>{renderFilterLinks(series, "series", "Standalone")}</strong>
           </div>
         </div>
 
         <div className="book-card-footer">
-          <p className="book-timestamp">
-            {book.latest_submission_at ? `Added on ${formatBookDate(book.latest_submission_at)}` : "Library record"}
-          </p>
+          <div className="book-meta-stack">
+            <p className="book-timestamp">{book.record_type === "manual" ? "Manual entry" : "Library record"}</p>
+            {book.latest_submission_at ? <p className="book-timestamp">Added on {formatBookDate(book.latest_submission_at)}</p> : null}
+          </div>
           <Link to={`/books/${book.slug}`} className="primary-button book-card-action">
             Open record
           </Link>

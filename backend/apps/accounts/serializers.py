@@ -7,7 +7,9 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils.crypto import get_random_string
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext_lazy as _
@@ -63,6 +65,31 @@ def sync_global_grants(user, scope_values, actor=None):
             granted_by=actor,
             notes="Managed from the user administration workflow.",
         )
+
+
+def send_password_reset_email(
+    email,
+    *,
+    request,
+    subject_template_name,
+    email_template_name,
+    extra_email_context=None,
+):
+    form = PasswordResetForm(data={"email": email})
+    if not form.is_valid():
+        return
+
+    form.save(
+        request=request,
+        use_https=request.is_secure() or settings.FRONTEND_BASE_URL.startswith("https://"),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        email_template_name=email_template_name,
+        subject_template_name=subject_template_name,
+        extra_email_context={
+            "frontend_reset_url": f"{settings.FRONTEND_BASE_URL.rstrip('/')}{settings.PASSWORD_RESET_FRONTEND_PATH}",
+            **(extra_email_context or {}),
+        },
+    )
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -126,9 +153,10 @@ class ManagedUserSerializer(UserSerializer):
 
 
 class ManagedUserCreateSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=12)
+    password = serializers.CharField(write_only=True, min_length=12, required=False, allow_blank=True, trim_whitespace=False)
     is_active = serializers.BooleanField(default=True)
     totp_required = serializers.BooleanField(default=False)
+    send_invite_email = serializers.BooleanField(default=True, required=False, write_only=True)
     global_scopes = serializers.ListField(
         child=serializers.ChoiceField(choices=[scope.value for scope in MANAGEABLE_PERMISSION_SCOPES]),
         required=False,
@@ -137,18 +165,43 @@ class ManagedUserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["email", "full_name", "password", "is_active", "totp_required", "global_scopes"]
+        fields = ["email", "full_name", "password", "is_active", "totp_required", "send_invite_email", "global_scopes"]
 
     def validate_global_scopes(self, value):
         if not value:
             raise serializers.ValidationError("Select at least one account permission.")
         return value
 
+    def validate(self, attrs):
+        password = (attrs.get("password") or "").strip()
+        send_invite_email = attrs.get("send_invite_email", True)
+
+        if not password and not send_invite_email:
+            raise serializers.ValidationError({"password": "Set a password or send an invite email."})
+        if send_invite_email and not attrs.get("is_active", True):
+            raise serializers.ValidationError({"is_active": "Activate the account before sending an invite email."})
+        return attrs
+
     def create(self, validated_data):
-        password = validated_data.pop("password")
+        password = (validated_data.pop("password", "") or "").strip()
+        send_invite_email = validated_data.pop("send_invite_email", True)
         global_scopes = validated_data.pop("global_scopes", [])
-        user = User.objects.create_user(password=password, **validated_data)
-        sync_global_grants(user, global_scopes, actor=self.context["request"].user)
+        request = self.context["request"]
+
+        with transaction.atomic():
+            user = User.objects.create_user(password=password or get_random_string(24), **validated_data)
+            sync_global_grants(user, global_scopes, actor=request.user)
+            if send_invite_email:
+                send_password_reset_email(
+                    user.email,
+                    request=request,
+                    subject_template_name="registration/account_invite_subject.txt",
+                    email_template_name="registration/account_invite_email.html",
+                    extra_email_context={
+                        "invited_user": user,
+                        "invited_by": request.user,
+                    },
+                )
         return user
 
 
@@ -314,21 +367,12 @@ class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def save(self):
-        request = self.context["request"]
-        form = PasswordResetForm(data=self.validated_data)
-        if form.is_valid():
-            form.save(
-                request=request,
-                use_https=request.is_secure(),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                email_template_name="registration/password_reset_email.html",
-                subject_template_name="registration/password_reset_subject.txt",
-                extra_email_context={
-                    "frontend_reset_url": (
-                        f"{settings.FRONTEND_BASE_URL.rstrip('/')}{settings.PASSWORD_RESET_FRONTEND_PATH}"
-                    )
-                },
-            )
+        send_password_reset_email(
+            self.validated_data["email"],
+            request=self.context["request"],
+            subject_template_name="registration/password_reset_subject.txt",
+            email_template_name="registration/password_reset_email.html",
+        )
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):

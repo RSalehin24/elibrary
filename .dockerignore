@@ -1,0 +1,14 @@
+.git
+.gitignore
+.DS_Store
+.env
+.pytest_cache
+node_modules
+frontend/node_modules
+frontend/dist
+backend/__pycache__
+backend/.pytest_cache
+backend/staticfiles
+backend/storage
+ebook-scrapper
+docs

@@ -510,7 +510,8 @@ def should_update_existing_book(inspection, mode):
 
 
 def should_create_missing_book(inspection):
-    return inspection["local_book"] is None and inspection["curation_status"] in {"new", "failed"}
+    local_book = inspection["local_book"]
+    return (local_book is None or bool(local_book.deleted_at)) and inspection["curation_status"] in {"new", "failed", "deleted"}
 
 
 def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
@@ -552,10 +553,6 @@ def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
             inspection = inspect_source_catalog_entry(entry, source_map, submission_map)
             status = inspection["curation_status"]
             summary["status_counts"][status] += 1
-
-            if status == "deleted":
-                summary["skipped_deleted"] += 1
-                continue
 
             try:
                 if should_create_missing_book(inspection):

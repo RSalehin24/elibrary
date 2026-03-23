@@ -77,11 +77,12 @@ const STATUS_META = {
   }
 };
 
-const CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "editor", "illustrator", "cover_artist", "publisher", "other"];
-const PRIMARY_CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "editor"];
+const CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "compiler", "editor", "illustrator", "cover_artist", "publisher", "other"];
+const PRIMARY_CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "compiler", "editor"];
 const CONTRIBUTOR_ROLE_LABELS = {
   author: "",
   translator: "Translator",
+  compiler: "Compiler",
   editor: "Editor",
   illustrator: "Illustration",
   cover_artist: "Cover",
@@ -112,7 +113,7 @@ function getNormalizedContributorEntries(book) {
       }
 
       exactSeen.add(contributorKey);
-      if (role === "translator" || role === "editor") {
+      if (role === "translator" || role === "compiler" || role === "editor") {
         nonAuthorNames.add(normalizedName);
       }
       entries.push({ name: entry.name, role });
@@ -199,9 +200,10 @@ export function getAuthorNames(book) {
 export function getWriterColumnGroups(book) {
   const authors = getContributorNamesByRole(book, "author");
   const translators = getContributorNamesByRole(book, "translator");
+  const compilers = getContributorNamesByRole(book, "compiler");
   const editors = getContributorNamesByRole(book, "editor");
 
-  if (authors.length || translators.length) {
+  if (authors.length || translators.length || compilers.length || editors.length) {
     const groups = [];
     if (authors.length) {
       groups.push({ label: "", names: authors, queryKey: "author" });
@@ -209,11 +211,13 @@ export function getWriterColumnGroups(book) {
     if (translators.length) {
       groups.push({ label: "Translator", names: translators, queryKey: "contributor" });
     }
+    if (compilers.length) {
+      groups.push({ label: "Compiler", names: compilers, queryKey: "contributor" });
+    }
+    if (editors.length) {
+      groups.push({ label: "Editor", names: editors, queryKey: "contributor" });
+    }
     return groups;
-  }
-
-  if (editors.length) {
-    return [{ label: "Compiler/Editor", names: editors, queryKey: "contributor" }];
   }
 
   return [];
@@ -222,6 +226,7 @@ export function getWriterColumnGroups(book) {
 export function getBookIdentityContributorLine(book) {
   const authors = getContributorNamesByRole(book, "author");
   const translators = getContributorNamesByRole(book, "translator");
+  const compilers = getContributorNamesByRole(book, "compiler");
   const editors = getContributorNamesByRole(book, "editor");
   const parts = [];
 
@@ -231,8 +236,11 @@ export function getBookIdentityContributorLine(book) {
   if (translators.length) {
     parts.push(`Translator: ${translators.join(", ")}`);
   }
+  if (compilers.length) {
+    parts.push(`Compiler: ${compilers.join(", ")}`);
+  }
   if (editors.length) {
-    parts.push(`Compiler/Editor: ${editors.join(", ")}`);
+    parts.push(`Editor: ${editors.join(", ")}`);
   }
 
   return parts.join(" · ") || "Contributor unavailable";

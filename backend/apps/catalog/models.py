@@ -28,6 +28,7 @@ def build_unique_slug(model, value, instance=None):
 class ContributorRole(models.TextChoices):
     AUTHOR = "author", "Author"
     TRANSLATOR = "translator", "Translator"
+    COMPILER = "compiler", "Compiler"
     EDITOR = "editor", "Editor"
     ILLUSTRATOR = "illustrator", "Illustrator"
     COVER_ARTIST = "cover_artist", "Cover artist"

@@ -1,3 +1,4 @@
+import logging
 import base64
 import mimetypes
 import re
@@ -27,8 +28,11 @@ from apps.access.models import (
 from apps.access.serializers import BookmarkSerializer, PermissionGrantSerializer, ReadingSessionSerializer
 from apps.catalog.models import Book, Contributor, ContributorRole, Category, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType
 from apps.common.permissions import IsSuperAdmin, user_can_download_book_assets, user_can_launch_reader, user_can_view_book_cover, user_has_scope
+from apps.common.models import LifecycleState, ReviewState
 from apps.common.url_utils import public_api_url
 from apps.ingestion.services.normalization import promote_leading_front_matter
+
+logger = logging.getLogger(__name__)
 
 
 def get_active_preview_session(user, book):
@@ -58,23 +62,42 @@ def resolve_asset(book, asset_type):
 
 
 def open_asset_stream(asset):
-    if asset.file:
+    if asset.file and asset.file.name and asset_file_exists(asset.file):
         asset.file.open("rb")
         return asset.file
 
     if asset.legacy_path:
-        handle = open(asset.legacy_path, "rb")
-        return handle
+        legacy_path = Path(asset.legacy_path)
+        if legacy_path.exists():
+            return open(legacy_path, "rb")
 
     raise Http404("Asset file is not available.")
 
 
 def asset_source_name(asset):
-    if asset.file:
+    if asset.file and asset.file.name:
         return Path(asset.file.name).name
     if asset.legacy_path:
         return Path(asset.legacy_path).name
     return ""
+
+
+def asset_file_exists(file_field):
+    if not file_field or not getattr(file_field, "name", ""):
+        return False
+
+    storage = getattr(file_field, "storage", None)
+    if storage is not None:
+        try:
+            if storage.exists(file_field.name):
+                return True
+        except Exception:
+            logger.warning("Could not verify stored asset path %s", file_field.name, exc_info=True)
+
+    try:
+        return Path(file_field.path).exists()
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        return False
 
 
 def safe_download_stem(value):
@@ -102,14 +125,18 @@ def local_asset_path(asset):
     if asset is None:
         return None
 
-    if asset.file:
+    if asset.file and asset.file.name:
         try:
-            return Path(asset.file.path)
+            path = Path(asset.file.path)
+            if path.exists():
+                return path
         except (AttributeError, NotImplementedError, ValueError):
             pass
 
     if asset.legacy_path:
-        return Path(asset.legacy_path)
+        path = Path(asset.legacy_path)
+        if path.exists():
+            return path
 
     return None
 
@@ -119,7 +146,7 @@ def read_asset_bytes(asset):
     if path and path.exists():
         return path.read_bytes(), path.name, path
 
-    if asset.file:
+    if asset.file and asset.file.name and asset_file_exists(asset.file):
         asset.file.open("rb")
         try:
             return asset.file.read(), Path(asset.file.name).name, None
@@ -127,6 +154,80 @@ def read_asset_bytes(asset):
             asset.file.close()
 
     raise Http404("Asset file is not available.")
+
+
+def asset_is_available(asset):
+    if asset is None:
+        return False
+    if asset.file and asset.file.name and asset_file_exists(asset.file):
+        return True
+    if asset.legacy_path:
+        return Path(asset.legacy_path).exists()
+    return False
+
+
+def clear_missing_asset(asset):
+    update_fields = []
+    if asset.status != GeneratedAssetStatus.FAILED:
+        asset.status = GeneratedAssetStatus.FAILED
+        update_fields.append("status")
+    if asset.file and asset.file.name:
+        asset.file = ""
+        update_fields.append("file")
+    if asset.storage_path:
+        asset.storage_path = ""
+        update_fields.append("storage_path")
+    if asset.legacy_path:
+        asset.legacy_path = ""
+        update_fields.append("legacy_path")
+    if asset.file_size:
+        asset.file_size = 0
+        update_fields.append("file_size")
+    if update_fields:
+        asset.save(update_fields=[*update_fields, "updated_at"])
+
+
+def queue_missing_asset_recovery(book, actor=None):
+    from apps.ingestion.services.submissions import primary_source_url_for_book, queue_reprocess_book
+
+    if not primary_source_url_for_book(book):
+        return None, False
+
+    try:
+        return queue_reprocess_book(book, actor=actor)
+    except Exception:
+        logger.warning("Could not queue regeneration for missing asset on book %s", book.pk, exc_info=True)
+        return None, False
+
+
+def missing_asset_response(book, asset, actor=None):
+    clear_missing_asset(asset)
+    job, created = queue_missing_asset_recovery(book, actor=actor)
+
+    if job is not None:
+        return Response(
+            {
+                "detail": "This file was missing from storage. Regeneration has been queued.",
+                "job_id": str(job.id),
+                "status": job.status,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    book_update_fields = []
+    if book.state != LifecycleState.NEEDS_REVIEW:
+        book.state = LifecycleState.NEEDS_REVIEW
+        book_update_fields.append("state")
+    if book.review_state != ReviewState.NEEDS_REVIEW:
+        book.review_state = ReviewState.NEEDS_REVIEW
+        book_update_fields.append("review_state")
+    if book_update_fields:
+        book.save(update_fields=[*book_update_fields, "updated_at"])
+
+    return Response(
+        {"detail": "This file is no longer available in storage. Please regenerate the book."},
+        status=status.HTTP_404_NOT_FOUND,
+    )
 
 
 def build_data_uri(path):
@@ -332,6 +433,8 @@ class BookAssetDownloadView(APIView):
             raise PermissionDenied("You do not have download access for this book.")
 
         asset = resolve_asset(book, asset_type)
+        if not asset_is_available(asset):
+            return missing_asset_response(book, asset, actor=request.user)
         if asset.asset_type == GeneratedAssetType.HTML:
             return html_asset_response(book, asset)
         file_handle = open_asset_stream(asset)
@@ -379,6 +482,8 @@ class ReaderManifestView(APIView):
         html_asset = session.book.generated_assets.filter(asset_type=GeneratedAssetType.HTML).first()
         if epub_asset is None:
             raise Http404("EPUB asset is unavailable.")
+        if not asset_is_available(epub_asset):
+            return missing_asset_response(session.book, epub_asset, actor=session.user)
 
         reading_session = None
         bookmarks = []
@@ -402,7 +507,7 @@ class ReaderManifestView(APIView):
                 },
                 "epub_download_url": public_api_url("access-reader-epub", kwargs={"token": session.token}, request=request),
                 "html_preview_url": public_api_url("access-reader-html", kwargs={"token": session.token}, request=request)
-                if html_asset
+                if html_asset and asset_is_available(html_asset)
                 else "",
                 "reading_session_url": reading_session_url,
                 "bookmarks_url": bookmarks_url,
@@ -420,6 +525,8 @@ class ReaderEpubDownloadView(APIView):
         session = get_token_preview_session(token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.EPUB)
+        if not asset_is_available(asset):
+            return missing_asset_response(session.book, asset, actor=session.user)
         file_handle = open_asset_stream(asset)
         filename = asset_download_filename(session.book, asset)
         return FileResponse(file_handle, as_attachment=False, filename=filename)
@@ -433,6 +540,8 @@ class ReaderHtmlPreviewView(APIView):
         session = get_token_preview_session(token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.HTML)
+        if not asset_is_available(asset):
+            return missing_asset_response(session.book, asset, actor=session.user)
         return html_asset_response(session.book, asset)
 
 

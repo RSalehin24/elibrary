@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 
 from apps.access.models import PermissionScope
 from apps.catalog.models import GeneratedAssetStatus, GeneratedAssetType
+from apps.common.models import ReviewState
 from apps.common.permissions import CanManageProcessing, user_has_scope
 from apps.common.url_utils import public_api_url
 from apps.common.throttles import SubmissionRateThrottle
@@ -409,6 +410,39 @@ class SubmissionListCreateView(APIView):
         )
 
 
+class SubmissionBulkStatusView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        requested_ids = [str(value) for value in serializer.validated_data["ids"]]
+        submission_map = {
+            str(submission.id): submission
+            for submission in submission_base_queryset().filter(pk__in=requested_ids)
+        }
+
+        visible_submissions = []
+        user = request.user
+        can_manage = getattr(user, "is_authenticated", False) and can_manage_processing_records(user)
+
+        for submission_id in requested_ids:
+            submission = submission_map.get(submission_id)
+            if submission is None:
+                continue
+            if can_manage:
+                visible_submissions.append(submission)
+                continue
+            if getattr(user, "is_authenticated", False) and submission.submitter_id == user.id:
+                visible_submissions.append(submission)
+                continue
+            if is_public_submission(submission):
+                visible_submissions.append(submission)
+
+        return Response(SubmissionSerializer(visible_submissions, many=True, context={"request": request}).data)
+
+
 class SubmissionDetailView(generics.RetrieveDestroyAPIView):
     permission_classes = [AllowAny]
     serializer_class = SubmissionSerializer
@@ -489,6 +523,8 @@ class SubmissionActionLinksView(APIView):
         submission = get_accessible_submission(request, pk)
         if submission.status != SubmissionStatus.READY or not submission.linked_book_id:
             return Response({"detail": "This submission is not ready yet."}, status=status.HTTP_400_BAD_REQUEST)
+        if submission.linked_book.deleted_at:
+            return Response({"detail": "This book was deleted."}, status=status.HTTP_410_GONE)
 
         preview_session = ensure_preview_session(
             request.user if request.user.is_authenticated else None,
@@ -746,6 +782,37 @@ class SubmissionRetryView(APIView):
         if locked_response:
             return locked_response
 
+        update_fields = []
+        if target_submission.linked_book_id and target_submission.linked_book and target_submission.linked_book.deleted_at:
+            target_submission.linked_book = None
+            update_fields.append("linked_book")
+        if target_submission.duplicate_of_book_id and (
+            not target_submission.duplicate_of_book or target_submission.duplicate_of_book.deleted_at
+        ):
+            target_submission.duplicate_of_book = None
+            update_fields.append("duplicate_of_book")
+        if target_submission.error_message:
+            target_submission.error_message = ""
+            update_fields.append("error_message")
+        next_payload = dict(target_submission.raw_payload or {})
+        payload_changed = False
+        for key in ("served_from_database", "existing_book_source", "linked_book_slug"):
+            if key in next_payload:
+                next_payload.pop(key, None)
+                payload_changed = True
+        if payload_changed:
+            target_submission.raw_payload = next_payload
+            update_fields.append("raw_payload")
+        if target_submission.review_state != ReviewState.PENDING:
+            target_submission.review_state = ReviewState.PENDING
+            update_fields.append("review_state")
+        if target_submission.status not in {SubmissionStatus.QUEUED, SubmissionStatus.PROCESSING}:
+            target_submission.status = SubmissionStatus.QUEUED
+            update_fields.append("status")
+        if update_fields:
+            target_submission.save(update_fields=[*dict.fromkeys(update_fields), "updated_at"])
+            sync_deduplicated_submissions(target_submission)
+
         job = queue_submission(target_submission, actor=request.user)
         return Response(ProcessingJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
@@ -789,6 +856,8 @@ class DuplicateReviewResolveView(APIView):
         review.notes = serializer.validated_data.get("notes", "")
 
         if decision == "confirm_existing":
+            if review.existing_book.deleted_at:
+                return Response({"detail": "This existing book was deleted. Recreate it instead."}, status=status.HTTP_410_GONE)
             fulfill_submission_with_existing_book(
                 review.submission,
                 review.existing_book,
@@ -800,9 +869,45 @@ class DuplicateReviewResolveView(APIView):
             review.submission.save(update_fields=["duplicate_of_book", "updated_at"])
             review.status = DuplicateReviewStatus.CONFIRMED
         else:
-            review.submission.status = SubmissionStatus.NEEDS_REVIEW
-            review.submission.review_state = "needs_review"
-            review.submission.save(update_fields=["status", "review_state", "updated_at"])
+            target_submission = review.submission.canonical_submission or review.submission
+            update_fields = []
+            if target_submission.linked_book_id and target_submission.linked_book and target_submission.linked_book.deleted_at:
+                target_submission.linked_book = None
+                update_fields.append("linked_book")
+            if target_submission.duplicate_of_book_id:
+                target_submission.duplicate_of_book = None
+                update_fields.append("duplicate_of_book")
+            if target_submission.error_message:
+                target_submission.error_message = ""
+                update_fields.append("error_message")
+            next_payload = dict(target_submission.raw_payload or {})
+            payload_changed = False
+            for key in ("served_from_database", "existing_book_source", "linked_book_slug"):
+                if key in next_payload:
+                    next_payload.pop(key, None)
+                    payload_changed = True
+            if payload_changed:
+                target_submission.raw_payload = next_payload
+                update_fields.append("raw_payload")
+
+            can_queue_recreate = bool(target_submission.resolved_url or target_submission.input_type == "title")
+            if can_queue_recreate:
+                locked_response = automation_manual_creation_locked_response()
+                if locked_response:
+                    return locked_response
+                target_submission.review_state = ReviewState.PENDING
+                update_fields.append("review_state")
+            else:
+                target_submission.status = SubmissionStatus.NEEDS_REVIEW
+                target_submission.review_state = ReviewState.NEEDS_REVIEW
+                update_fields.extend(["status", "review_state"])
+
+            if update_fields:
+                target_submission.save(update_fields=[*dict.fromkeys(update_fields), "updated_at"])
+
+            if can_queue_recreate:
+                queue_submission(target_submission, actor=request.user)
+                review.submission.refresh_from_db()
             review.status = DuplicateReviewStatus.DISMISSED
 
         review.save(update_fields=["status", "notes", "updated_at"])
@@ -913,15 +1018,11 @@ class SourceCatalogEntryCreateBooksView(APIView):
             status_value = inspection["curation_status"]
 
             try:
-                if status_value == "deleted":
-                    summary["skipped_deleted"] += 1
-                    continue
-
                 if status_value == "processing":
                     summary["skipped_processing"] += 1
                     continue
 
-                if inspection["local_book"] is None:
+                if inspection["local_book"] is None or status_value == "deleted":
                     create_submission_records(
                         submitter=request.user,
                         parsed_entries=[{"kind": "url", "value": entry.source_url}],

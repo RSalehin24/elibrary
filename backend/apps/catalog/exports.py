@@ -40,6 +40,7 @@ def contributor_names_by_role(book, role):
 def table_contributor_lines(book):
     authors = contributor_names_by_role(book, ContributorRole.AUTHOR)
     translators = contributor_names_by_role(book, ContributorRole.TRANSLATOR)
+    compilers = contributor_names_by_role(book, ContributorRole.COMPILER)
     editors = contributor_names_by_role(book, ContributorRole.EDITOR)
 
     lines = []
@@ -47,8 +48,10 @@ def table_contributor_lines(book):
         lines.append(", ".join(authors))
     if translators:
         lines.append(f"Translator: {', '.join(translators)}")
-    elif not authors and editors:
-        lines.append(f"Compiler/Editor: {', '.join(editors)}")
+    if compilers:
+        lines.append(f"Compiler: {', '.join(compilers)}")
+    if editors:
+        lines.append(f"Editor: {', '.join(editors)}")
 
     return lines or ["Contributor unavailable"]
 
@@ -56,6 +59,7 @@ def table_contributor_lines(book):
 def identity_ticket_contributor_line(book):
     authors = contributor_names_by_role(book, ContributorRole.AUTHOR)
     translators = contributor_names_by_role(book, ContributorRole.TRANSLATOR)
+    compilers = contributor_names_by_role(book, ContributorRole.COMPILER)
     editors = contributor_names_by_role(book, ContributorRole.EDITOR)
 
     parts = []
@@ -63,8 +67,10 @@ def identity_ticket_contributor_line(book):
         parts.append(", ".join(authors))
     if translators:
         parts.append(f"Translator: {', '.join(translators)}")
+    if compilers:
+        parts.append(f"Compiler: {', '.join(compilers)}")
     if editors:
-        parts.append(f"Compiler/Editor: {', '.join(editors)}")
+        parts.append(f"Editor: {', '.join(editors)}")
     return " | ".join(parts) or "Contributor unavailable"
 
 
@@ -86,10 +92,11 @@ def build_books_csv_response(books, *, record_type):
         [
             "Book ID",
             "Title",
-            "Writer / Translator / Compiler-Editor",
+            "Writer / Translator / Compiler / Editor",
             "Writers",
             "Translators",
-            "Compiler-Editors",
+            "Compilers",
+            "Editors",
             "Categories",
             "Series",
             "Type",
@@ -109,6 +116,7 @@ def build_books_csv_response(books, *, record_type):
                 csv_value(" | ".join(table_contributor_lines(book))),
                 csv_value(", ".join(contributor_names_by_role(book, ContributorRole.AUTHOR))),
                 csv_value(", ".join(contributor_names_by_role(book, ContributorRole.TRANSLATOR))),
+                csv_value(", ".join(contributor_names_by_role(book, ContributorRole.COMPILER))),
                 csv_value(", ".join(contributor_names_by_role(book, ContributorRole.EDITOR))),
                 csv_value(", ".join(relation.category.name for relation in book.book_categories.all())),
                 csv_value(", ".join(relation.series.name for relation in book.book_series.all())),

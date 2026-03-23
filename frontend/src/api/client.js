@@ -38,6 +38,16 @@ function filenameFromDisposition(headerValue) {
   return plainMatch ? plainMatch[1] : "";
 }
 
+function fallbackDownloadFilename(contentType) {
+  if (contentType.includes("application/pdf")) {
+    return "download.pdf";
+  }
+  if (contentType.includes("text/csv")) {
+    return "download.csv";
+  }
+  return "download";
+}
+
 export async function apiFetch(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -86,13 +96,42 @@ export async function apiFetch(path, options = {}) {
   return payload;
 }
 
+export function resolveAppUrl(url) {
+  if (!url || typeof window === "undefined") {
+    return url;
+  }
+
+  try {
+    const currentOrigin = window.location.origin;
+    const apiBasePath = new URL(API_BASE_URL, currentOrigin).pathname.replace(/\/$/, "");
+    const resolved = new URL(url, currentOrigin);
+    const manifestUrl = resolved.searchParams.get("manifest");
+
+    if (resolved.pathname === apiBasePath || resolved.pathname.startsWith(`${apiBasePath}/`)) {
+      return `${currentOrigin}${resolved.pathname}${resolved.search}${resolved.hash}`;
+    }
+
+    if (manifestUrl) {
+      const normalizedManifestUrl = resolveAppUrl(manifestUrl);
+      if (normalizedManifestUrl && normalizedManifestUrl !== manifestUrl) {
+        resolved.searchParams.set("manifest", normalizedManifestUrl);
+      }
+    }
+
+    return resolved.toString();
+  } catch {
+    return url;
+  }
+}
+
 export async function downloadApiFile(path, options = {}) {
+  const downloadUrl = `${API_BASE_URL}${path}`;
   const headers = new Headers(options.headers || {});
   if (!headers.has("Accept")) {
     headers.set("Accept", "*/*");
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(downloadUrl, {
     ...options,
     method: options.method || "GET",
     headers,
@@ -107,8 +146,18 @@ export async function downloadApiFile(path, options = {}) {
     throw error;
   }
 
+  const contentType = response.headers.get("content-type") || "";
+  const disposition = response.headers.get("content-disposition") || "";
+  if (contentType.includes("application/json") && !disposition) {
+    const payload = await response.json();
+    const error = new Error(typeof payload === "string" ? payload : payload.detail || "Download failed.");
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
   const blob = await response.blob();
-  const filename = filenameFromDisposition(response.headers.get("content-disposition")) || "download";
+  const filename = filenameFromDisposition(disposition) || fallbackDownloadFilename(contentType);
   const objectUrl = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;

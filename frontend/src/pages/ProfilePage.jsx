@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authApi } from "../api/client";
+import PageLoader from "../components/PageLoader";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
@@ -261,7 +262,7 @@ export default function ProfilePage() {
   );
 
   if (loading) {
-    return <div className="page-state">Loading profile...</div>;
+    return <PageLoader label="Loading profile" detail="Fetching your account settings and security status." />;
   }
 
   return (

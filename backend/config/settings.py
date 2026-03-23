@@ -29,6 +29,18 @@ def append_unique(items, value):
     return items
 
 
+def normalized_origin(value):
+    parsed = urlparse((value or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def hostname_from_url(value):
+    parsed = urlparse((value or "").strip())
+    return parsed.hostname or ""
+
+
 def database_config(url):
     parsed = urlparse(url)
     if parsed.scheme in {"sqlite", "sqlite3"}:
@@ -60,17 +72,20 @@ def database_config(url):
 APP_ENV = env("APP_ENV", "development")
 DEBUG = env_bool("DJANGO_DEBUG", APP_ENV != "production")
 SECRET_KEY = env("DJANGO_SECRET_KEY", "development-only-insecure-secret-key")
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,backend")
-CSRF_TRUSTED_ORIGINS = env_list(
-    "DJANGO_CSRF_TRUSTED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
-)
-CORS_ALLOWED_ORIGINS = env_list(
-    "DJANGO_CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
-)
-FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", "http://localhost:5173")
-PUBLIC_API_ORIGIN = env("PUBLIC_API_ORIGIN", "http://localhost:8000")
+PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "http://localhost")
+FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", PUBLIC_BASE_URL).rstrip("/")
+PUBLIC_API_ORIGIN = env("PUBLIC_API_ORIGIN", PUBLIC_BASE_URL).rstrip("/")
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,backend,nginx")
+CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")
+CORS_ALLOWED_ORIGINS = env_list("DJANGO_CORS_ALLOWED_ORIGINS", "")
+
+for host in {hostname_from_url(FRONTEND_BASE_URL), hostname_from_url(PUBLIC_API_ORIGIN)}:
+    append_unique(ALLOWED_HOSTS, host)
+
+for origin in {normalized_origin(FRONTEND_BASE_URL), normalized_origin(PUBLIC_API_ORIGIN)}:
+    append_unique(CSRF_TRUSTED_ORIGINS, origin)
+    append_unique(CORS_ALLOWED_ORIGINS, origin)
+
 PASSWORD_RESET_FRONTEND_PATH = env("PASSWORD_RESET_FRONTEND_PATH", "/reset-password")
 EPUB_READER_BASE_URL = env("EPUB_READER_BASE_URL", "https://ereader.rsalehin24.me")
 append_unique(CORS_ALLOWED_ORIGINS, EPUB_READER_BASE_URL.rstrip("/"))
@@ -181,14 +196,20 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(env("MEDIA_ROOT", str(BASE_DIR / "storage" / "media")))
 
+public_urls_use_https = any(origin.startswith("https://") for origin in {FRONTEND_BASE_URL, PUBLIC_API_ORIGIN})
+
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", "Lax")
-SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", APP_ENV == "production")
-CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", APP_ENV == "production")
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", public_urls_use_https)
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", public_urls_use_https)
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", "Lax")
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
+USE_X_FORWARDED_HOST = env_bool("DJANGO_USE_X_FORWARDED_HOST", True)
+
+if env_bool("DJANGO_SECURE_PROXY_SSL_HEADER", True):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
@@ -196,6 +217,13 @@ CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", APP_ENV != "prod
 CELERY_TASK_EAGER_PROPAGATES = True
 
 EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", "")
+EMAIL_PORT = int(env("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
+EMAIL_TIMEOUT = int(env("EMAIL_TIMEOUT", "20"))
 
 LOGGING = {
     "version": 1,

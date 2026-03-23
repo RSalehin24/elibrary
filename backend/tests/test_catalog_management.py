@@ -202,6 +202,32 @@ def test_book_list_includes_translators_for_card_display(client):
 
 
 @pytest.mark.django_db
+def test_book_serializers_keep_author_names_with_initial_periods(client):
+    user = User.objects.create_user(email="reader-initials@example.com", password="strong-password-123")
+    book = Book.objects.create(title="২০০১ : আ স্পেস ওডিসি", state="ready", review_state="pending")
+    author = get_or_create_contributor("আর্থার সি. ক্লার্ক")
+    translator = get_or_create_contributor("মাকসুদুজ্জামান খান")
+    BookContributor.objects.create(book=book, contributor=author, role="author", sort_order=0)
+    BookContributor.objects.create(book=book, contributor=translator, role="translator", sort_order=1)
+    client.force_login(user)
+
+    list_response = client.get("/api/catalog/books/")
+    detail_response = client.get(f"/api/catalog/books/{book.slug}/")
+
+    assert list_response.status_code == 200
+    list_payload = next(entry for entry in list_response.json() if entry["slug"] == book.slug)
+    assert list_payload["authors"] == ["আর্থার সি. ক্লার্ক"]
+    assert {"name": "আর্থার সি. ক্লার্ক", "role": "author"} in list_payload["contributors"]
+    assert {"name": "মাকসুদুজ্জামান খান", "role": "translator"} in list_payload["contributors"]
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["authors"] == ["আর্থার সি. ক্লার্ক"]
+    assert {"name": "আর্থার সি. ক্লার্ক", "role": "author"} in detail_payload["contributors"]
+    assert {"name": "মাকসুদুজ্জামান খান", "role": "translator"} in detail_payload["contributors"]
+
+
+@pytest.mark.django_db
 def test_catalog_codes_are_assigned_and_book_code_encodes_category_and_writer():
     category = get_or_create_category("রহস্য")
     writer = get_or_create_contributor("লেখক কোড")
@@ -227,27 +253,53 @@ def test_catalog_codes_are_assigned_and_book_code_encodes_category_and_writer():
 
 
 @pytest.mark.django_db
-def test_category_and_writer_listing_endpoints_return_codes_and_counts(client):
+def test_category_and_contributor_listing_endpoints_return_codes_and_counts(client):
     user = User.objects.create_user(email="listing-reader@example.com", password="strong-password-123")
     category = get_or_create_category("তালিকা বিভাগ")
+    series = get_or_create_series("তালিকা সিরিজ")
     writer = get_or_create_contributor("তালিকা লেখক")
+    translator = get_or_create_contributor("তালিকা অনুবাদক")
+    compiler = get_or_create_contributor("তালিকা সংকলক")
+    editor = get_or_create_contributor("তালিকা সম্পাদক")
     book = Book.objects.create(title="তালিকা বই", state="ready", review_state="approved")
     replace_book_relations(
         book,
-        contributors=[{"name": writer.name, "role": "author"}],
+        contributors=[
+            {"name": writer.name, "role": "author"},
+            {"name": translator.name, "role": "translator"},
+            {"name": compiler.name, "role": "compiler"},
+            {"name": editor.name, "role": "editor"},
+        ],
+        series_names=[series.name],
         category_names=[category.name],
     )
     client.force_login(user)
 
     category_response = client.get("/api/catalog/categories/")
+    series_response = client.get("/api/catalog/series/")
     writer_response = client.get("/api/catalog/writers/")
+    translator_response = client.get("/api/catalog/translators/")
+    compiler_response = client.get("/api/catalog/compilers/")
+    editor_response = client.get("/api/catalog/editors/")
 
     assert category_response.status_code == 200
+    assert series_response.status_code == 200
     assert writer_response.status_code == 200
+    assert translator_response.status_code == 200
+    assert compiler_response.status_code == 200
+    assert editor_response.status_code == 200
     assert category_response.json()[0]["catalog_code"] == category.catalog_code
     assert category_response.json()[0]["book_count"] == 1
+    assert series_response.json()[0]["name"] == series.name
+    assert series_response.json()[0]["book_count"] == 1
     assert writer_response.json()[0]["catalog_code"] == writer.catalog_code
     assert writer_response.json()[0]["book_count"] == 1
+    assert translator_response.json()[0]["catalog_code"] == translator.catalog_code
+    assert translator_response.json()[0]["book_count"] == 1
+    assert compiler_response.json()[0]["catalog_code"] == compiler.catalog_code
+    assert compiler_response.json()[0]["book_count"] == 1
+    assert editor_response.json()[0]["catalog_code"] == editor.catalog_code
+    assert editor_response.json()[0]["book_count"] == 1
 
 
 @pytest.mark.django_db
@@ -263,6 +315,7 @@ def test_manual_book_creation_uses_manual_listing_and_stays_hidden_from_default_
                 "summary": "শারীরিক কপি",
                 "writers": ["ম্যানুয়াল লেখক"],
                 "translators": ["ম্যানুয়াল অনুবাদক"],
+                "compilers": ["ম্যানুয়াল সংকলক"],
                 "editors": ["ম্যানুয়াল সম্পাদক"],
                 "categories": ["ম্যানুয়াল বিভাগ"],
                 "series": ["শেলফ ১"],
@@ -280,6 +333,7 @@ def test_manual_book_creation_uses_manual_listing_and_stays_hidden_from_default_
     assert payload["record_type"] == "manual"
     assert len(payload["catalog_code"]) == CATALOG_CODE_LENGTH
     assert payload["translators"] == ["ম্যানুয়াল অনুবাদক"]
+    assert payload["compilers"] == ["ম্যানুয়াল সংকলক"]
     assert payload["editors"] == ["ম্যানুয়াল সম্পাদক"]
     assert payload["is_compilation"] is True
     assert payload["binding"] == "Paper Back"
@@ -319,6 +373,7 @@ def test_book_csv_export_includes_translator_and_editor_columns(client):
         contributors=[
             {"name": "লেখক রপ্তানি", "role": "author"},
             {"name": "অনুবাদক রপ্তানি", "role": "translator"},
+            {"name": "সংকলক রপ্তানি", "role": "compiler"},
             {"name": "সম্পাদক রপ্তানি", "role": "editor"},
         ],
         category_names=["রপ্তানি বিভাগ"],
@@ -331,9 +386,29 @@ def test_book_csv_export_includes_translator_and_editor_columns(client):
     assert response.status_code == 200
     assert response["Content-Type"].startswith("text/csv")
     csv_text = response.content.decode("utf-8-sig")
-    assert "Book ID,Title,Writer / Translator / Compiler-Editor" in csv_text
+    assert "Book ID,Title,Writer / Translator / Compiler / Editor" in csv_text
     assert "Translator: অনুবাদক রপ্তানি" in csv_text
+    assert "সংকলক রপ্তানি" in csv_text
     assert "সম্পাদক রপ্তানি" in csv_text
+
+
+@pytest.mark.django_db
+def test_book_list_can_filter_by_contributor_code_and_role(client):
+    user = User.objects.create_user(email="contributor-filter@example.com", password="strong-password-123")
+    translator = get_or_create_contributor("ফিল্টার অনুবাদক")
+    translated_book = Book.objects.create(title="অনূদিত বই", state="ready", review_state="approved")
+    edited_book = Book.objects.create(title="সম্পাদিত বই", state="ready", review_state="approved")
+    replace_book_relations(translated_book, contributors=[{"name": translator.name, "role": "translator"}])
+    replace_book_relations(edited_book, contributors=[{"name": translator.name, "role": "editor"}])
+    client.force_login(user)
+
+    response = client.get(
+        f"/api/catalog/books/?record_type=all&contributor_code={translator.catalog_code}&contributor_role=translator"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {entry["title"] for entry in payload} == {"অনূদিত বই"}
 
 
 @pytest.mark.django_db

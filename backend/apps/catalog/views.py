@@ -25,6 +25,7 @@ from apps.catalog.models import (
     GeneratedAssetType,
     MetadataReview,
     MetadataVersion,
+    Series,
 )
 from apps.catalog.exports import (
     build_book_tickets_pdf_response,
@@ -36,11 +37,12 @@ from apps.catalog.serializers import (
     BookListSerializer,
     BookMetadataUpdateSerializer,
     CategoryListSerializer,
+    ContributorListSerializer,
     EpubAssetReplaceSerializer,
     ManualBookCreateSerializer,
     MetadataReviewDecisionSerializer,
     MetadataReviewSerializer,
-    WriterListSerializer,
+    SeriesListSerializer,
 )
 from apps.access.models import PermissionScope
 from apps.common.models import LifecycleState
@@ -66,6 +68,13 @@ def apply_created_at_filters(queryset, request):
 
 
 VALID_RECORD_TYPES = {choice for choice, _ in BookRecordType.choices}
+VALID_CONTRIBUTOR_ROLES = {choice for choice, _ in ContributorRole.choices}
+CONTRIBUTOR_ROLE_BY_PAGE = {
+    "writers": ContributorRole.AUTHOR,
+    "translators": ContributorRole.TRANSLATOR,
+    "compilers": ContributorRole.COMPILER,
+    "editors": ContributorRole.EDITOR,
+}
 
 
 def requested_record_type(request, default_record_type):
@@ -150,6 +159,25 @@ def filtered_book_queryset(queryset, request, *, default_record_type):
     contributor = request.query_params.get("contributor", "").strip()
     if contributor:
         queryset = queryset.filter(book_contributors__contributor__name__icontains=contributor)
+
+    contributor_code = request.query_params.get("contributor_code", "").strip()
+    contributor_role = request.query_params.get("contributor_role", "").strip()
+    if contributor_code:
+        contributor_filters = {
+            "book_contributors__contributor__catalog_code": contributor_code,
+        }
+        if contributor_role in VALID_CONTRIBUTOR_ROLES:
+            contributor_filters["book_contributors__role"] = contributor_role
+        queryset = queryset.filter(**contributor_filters)
+
+    contributor_slug = request.query_params.get("contributor_slug", "").strip()
+    if contributor_slug:
+        contributor_filters = {
+            "book_contributors__contributor__slug": contributor_slug,
+        }
+        if contributor_role in VALID_CONTRIBUTOR_ROLES:
+            contributor_filters["book_contributors__role"] = contributor_role
+        queryset = queryset.filter(**contributor_filters)
 
     series = request.query_params.get("series", "").strip()
     if series:
@@ -340,16 +368,80 @@ class CategoryListView(generics.ListAPIView):
         return queryset.order_by(sort_field, "name")
 
 
-class WriterListView(generics.ListAPIView):
+class SeriesListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
-    serializer_class = WriterListSerializer
+    serializer_class = SeriesListSerializer
 
     def get_queryset(self):
-        queryset = Contributor.objects.filter(book_contributions__role=ContributorRole.AUTHOR).annotate(
+        queryset = Series.objects.annotate(
+            digital_book_count=Count(
+                "books",
+                filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.DIGITAL),
+                distinct=True,
+            ),
+            manual_book_count=Count(
+                "books",
+                filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.MANUAL),
+                distinct=True,
+            ),
+        )
+        record_type = requested_record_type(self.request, BookRecordType.DIGITAL)
+        if record_type == "manual":
+            queryset = queryset.annotate(
+                book_count=Count(
+                    "books",
+                    filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.MANUAL),
+                    distinct=True,
+                )
+            )
+        elif record_type == "all":
+            queryset = queryset.annotate(
+                book_count=Count("books", filter=Q(books__deleted_at__isnull=True), distinct=True)
+            )
+        else:
+            queryset = queryset.annotate(
+                book_count=Count(
+                    "books",
+                    filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.DIGITAL),
+                    distinct=True,
+                )
+            )
+
+        query = self.request.query_params.get("q", "").strip()
+        if query:
+            queryset = queryset.filter(name__icontains=query)
+        queryset = apply_created_at_filters(queryset, self.request).filter(book_count__gt=0)
+
+        sort_field = {
+            "name": "name",
+            "-name": "-name",
+            "created_at": "created_at",
+            "-created_at": "-created_at",
+            "book_count": "book_count",
+            "-book_count": "-book_count",
+        }.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
+
+        if sort_field in {"created_at", "-created_at"}:
+            return queryset.order_by(sort_field)
+        return queryset.order_by(sort_field, "name")
+
+
+class ContributorListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ContributorListSerializer
+    role_slug = "writers"
+
+    def get_contributor_role(self):
+        role_slug = self.kwargs.get("role") or getattr(self, "role_slug", "writers")
+        return CONTRIBUTOR_ROLE_BY_PAGE.get(role_slug, ContributorRole.AUTHOR)
+
+    def get_queryset(self):
+        contributor_role = self.get_contributor_role()
+        queryset = Contributor.objects.filter(book_contributions__role=contributor_role).annotate(
             digital_book_count=Count(
                 "book_contributions__book",
                 filter=Q(
-                    book_contributions__role=ContributorRole.AUTHOR,
+                    book_contributions__role=contributor_role,
                     book_contributions__book__deleted_at__isnull=True,
                     book_contributions__book__record_type=BookRecordType.DIGITAL,
                 ),
@@ -358,7 +450,7 @@ class WriterListView(generics.ListAPIView):
             manual_book_count=Count(
                 "book_contributions__book",
                 filter=Q(
-                    book_contributions__role=ContributorRole.AUTHOR,
+                    book_contributions__role=contributor_role,
                     book_contributions__book__deleted_at__isnull=True,
                     book_contributions__book__record_type=BookRecordType.MANUAL,
                 ),
@@ -371,7 +463,7 @@ class WriterListView(generics.ListAPIView):
                 book_count=Count(
                     "book_contributions__book",
                     filter=Q(
-                        book_contributions__role=ContributorRole.AUTHOR,
+                        book_contributions__role=contributor_role,
                         book_contributions__book__deleted_at__isnull=True,
                         book_contributions__book__record_type=BookRecordType.MANUAL,
                     ),
@@ -383,7 +475,7 @@ class WriterListView(generics.ListAPIView):
                 book_count=Count(
                     "book_contributions__book",
                     filter=Q(
-                        book_contributions__role=ContributorRole.AUTHOR,
+                        book_contributions__role=contributor_role,
                         book_contributions__book__deleted_at__isnull=True,
                     ),
                     distinct=True,
@@ -394,7 +486,7 @@ class WriterListView(generics.ListAPIView):
                 book_count=Count(
                     "book_contributions__book",
                     filter=Q(
-                        book_contributions__role=ContributorRole.AUTHOR,
+                        book_contributions__role=contributor_role,
                         book_contributions__book__deleted_at__isnull=True,
                         book_contributions__book__record_type=BookRecordType.DIGITAL,
                     ),

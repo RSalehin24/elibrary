@@ -25,6 +25,7 @@ from apps.ingestion.views import (
     SourceCatalogRefreshStopView,
     SubmissionBulkDeleteView,
     SubmissionActionLinksView,
+    SubmissionBulkStatusView,
     SubmissionConfirmCandidateView,
     SubmissionDetailView,
     SubmissionListCreateView,
@@ -34,6 +35,7 @@ from apps.ingestion.views import (
 
 urlpatterns = [
     path("submissions/", SubmissionListCreateView.as_view(), name="ingestion-submission-list"),
+    path("submissions/status/", SubmissionBulkStatusView.as_view(), name="ingestion-submission-bulk-status"),
     path("submissions/bulk-delete/", SubmissionBulkDeleteView.as_view(), name="ingestion-submission-bulk-delete"),
     path("submissions/<uuid:pk>/", SubmissionDetailView.as_view(), name="ingestion-submission-detail"),
     path(

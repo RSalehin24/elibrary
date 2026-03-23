@@ -69,7 +69,8 @@ export function CatalogSearchRow({
   compact = false,
   showResultCount = true,
   onSubmit,
-  buttonsDisabled = false
+  buttonsDisabled = false,
+  actionsExtra = null
 }) {
   const activeFilterCount = countActiveFilters(filters, fields, defaultFilters);
   const rowClassName = `catalog-search-row${compact ? " catalog-search-row--compact" : ""}`;
@@ -116,6 +117,7 @@ export function CatalogSearchRow({
             {resultCount}
           </span>
         ) : null}
+        {actionsExtra ? <div className="catalog-search-actions-extra">{actionsExtra}</div> : null}
       </div>
     </RowTag>
   );
@@ -139,14 +141,20 @@ export default function CatalogToolbar({
   showSearchRow = true,
   searchRowCompact = false,
   showResultCount = true,
-  buttonsDisabled = false
+  buttonsDisabled = false,
+  bare = false,
+  searchActionsExtra = null,
+  secondaryBelow = false
 }) {
-  const wrapperClassName = `catalog-toolbar-wrap${filtersExpanded ? " is-expanded" : ""}${inline ? " is-inline" : ""}`;
-  const hasSplitTopline = showSearchRow && secondaryContent;
-  const hasSecondaryOnlyTopline = !showSearchRow && secondaryContent;
+  const wrapperClassName = `catalog-toolbar-wrap${filtersExpanded ? " is-expanded" : ""}${inline ? " is-inline" : ""}${
+    bare ? " is-bare" : ""
+  }`;
+  const hasInlineSecondary = Boolean(secondaryContent && !secondaryBelow);
+  const hasSplitTopline = showSearchRow && hasInlineSecondary;
+  const hasSecondaryOnlyTopline = !showSearchRow && hasInlineSecondary;
   const toplineClassName = `catalog-toolbar-topline${hasSplitTopline ? " has-secondary" : ""}${
     hasSecondaryOnlyTopline ? " is-secondary-only" : ""
-  }`;
+  }${bare ? " is-bare" : ""}`;
   const searchRow = showSearchRow ? (
     <CatalogSearchRow
       filters={filters}
@@ -161,23 +169,28 @@ export default function CatalogToolbar({
       compact={searchRowCompact}
       showResultCount={showResultCount}
       buttonsDisabled={buttonsDisabled}
+      actionsExtra={searchActionsExtra}
     />
   ) : null;
+  const secondaryShellClassName = `catalog-toolbar-secondary-shell${hasSecondaryOnlyTopline ? " is-standalone" : ""}${
+    bare ? " is-bare" : ""
+  }${secondaryBelow ? " is-below" : ""}`;
 
   return (
     <section className={wrapperClassName}>
       <div className="catalog-toolbar-surface">
         <form className="catalog-toolbar-form" onSubmit={onSubmit}>
-          {searchRow || secondaryContent ? (
+          {searchRow || hasInlineSecondary ? (
             <div className={toplineClassName}>
-              {searchRow ? (secondaryContent ? <div className="catalog-toolbar-primary">{searchRow}</div> : searchRow) : null}
-              {secondaryContent ? (
-                <div className={`catalog-toolbar-secondary-shell${hasSecondaryOnlyTopline ? " is-standalone" : ""}`}>
+              {searchRow ? (hasInlineSecondary ? <div className={`catalog-toolbar-primary${bare ? " is-bare" : ""}`}>{searchRow}</div> : searchRow) : null}
+              {hasInlineSecondary ? (
+                <div className={secondaryShellClassName}>
                   {secondaryContent}
                 </div>
               ) : null}
             </div>
           ) : null}
+          {secondaryContent && secondaryBelow ? <div className={secondaryShellClassName}>{secondaryContent}</div> : null}
           <div
             id={drawerId}
             className={`catalog-filter-drawer${filtersExpanded ? " is-open" : ""}`}

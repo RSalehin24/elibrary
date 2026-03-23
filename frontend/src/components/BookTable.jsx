@@ -32,7 +32,7 @@ function renderWriterCell(book, linkFilters) {
   );
 }
 
-export default function BookTable({ books, emptyLabel = "No books found.", linkFilters = {} }) {
+export default function BookTable({ books, emptyLabel = "No books found.", linkFilters = {}, highlightedBookId = "" }) {
   if (!books?.length) {
     return <div className="page-state">{emptyLabel}</div>;
   }
@@ -40,16 +40,26 @@ export default function BookTable({ books, emptyLabel = "No books found.", linkF
   return (
     <div className="catalog-table-shell">
       <table className="catalog-table book-table">
+        <colgroup>
+          <col className="book-table-col-id" />
+          <col className="book-table-col-title" />
+          <col className="book-table-col-writer" />
+          <col className="book-table-col-category" />
+          <col className="book-table-col-series" />
+          <col className="book-table-col-type" />
+          <col className="book-table-col-created" />
+          <col className="book-table-col-action" />
+        </colgroup>
         <thead>
           <tr>
-            <th>ID</th>
+            <th>Book ID</th>
             <th>Title</th>
-            <th>Writer</th>
+            <th>Contributors</th>
             <th>Category</th>
             <th>Series</th>
             <th>Type</th>
             <th>Created</th>
-            <th />
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -58,7 +68,7 @@ export default function BookTable({ books, emptyLabel = "No books found.", linkF
             const series = book.series || [];
 
             return (
-              <tr key={book.id}>
+              <tr key={book.id} className={highlightedBookId === book.id ? "is-highlighted" : ""}>
                 <td className="table-code-cell">
                   <Link to={`/books/${book.slug}`} className="table-code-link">
                     {book.catalog_code || "Pending"}

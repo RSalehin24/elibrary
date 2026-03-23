@@ -39,7 +39,7 @@ def normalize_book_contributors(contributors):
             "role": role,
         }
         normalized_entries.append(normalized_entry)
-        if role in {ContributorRole.TRANSLATOR, ContributorRole.EDITOR}:
+        if role in {ContributorRole.TRANSLATOR, ContributorRole.COMPILER, ContributorRole.EDITOR}:
             non_author_names.add(normalized_name)
 
     if not non_author_names:
@@ -120,10 +120,25 @@ def find_existing_book_by_title(title):
     )
 
 
+def find_deleted_book_by_title(title):
+    normalized = normalized_book_title(title)
+    if not normalized:
+        return None
+    return (
+        Book.objects.filter(
+            source_site="ebanglalibrary.com",
+            normalized_title=normalized,
+            deleted_at__isnull=False,
+        )
+        .order_by("-deleted_at", "-created_at")
+        .first()
+    )
+
+
 def find_existing_book_by_source_url(normalized_source_url):
     source = (
         BookSource.objects.select_related("book")
-        .filter(normalized_source_url=normalized_source_url)
+        .filter(normalized_source_url=normalized_source_url, book__deleted_at__isnull=True)
         .order_by("-created_at")
         .first()
     )

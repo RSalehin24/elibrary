@@ -1,7 +1,9 @@
 import json
 
 import pytest
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django_otp.oath import totp
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework.test import APIClient
@@ -102,6 +104,39 @@ def test_only_superadmin_can_create_managed_users(client):
     )
     assert created.status_code == 201
     assert User.objects.filter(email="created@example.com", is_superuser=False, is_staff=False).exists()
+
+
+@pytest.mark.django_db
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+def test_superadmin_can_create_managed_user_and_send_invite_email(client):
+    superadmin = User.objects.create_superuser(
+        email="superadmin@example.com",
+        password="strong-password-123",
+        full_name="Super Admin",
+    )
+    client.force_login(superadmin)
+
+    created = client.post(
+        "/api/auth/users/",
+        data=json.dumps(
+            {
+                "email": "invited@example.com",
+                "full_name": "Invited User",
+                "is_active": True,
+                "send_invite_email": True,
+                "global_scopes": ["read:durable"],
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert created.status_code == 201
+    invited_user = User.objects.get(email="invited@example.com")
+    assert invited_user.check_password("") is False
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].to == ["invited@example.com"]
+    assert "Your Bangla Library account is ready" in mail.outbox[0].subject
+    assert "/reset-password?uid=" in mail.outbox[0].body
 
 
 @pytest.mark.django_db

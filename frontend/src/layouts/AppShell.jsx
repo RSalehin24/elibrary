@@ -12,10 +12,11 @@ function initialsForUser(value) {
 }
 
 const bookPropertiesItems = [
-  { to: "/library", label: "Book Page" },
-  { to: "/categories", label: "Category Page" },
-  { to: "/writers", label: "Writer Page" },
-  { to: "/manual-books", label: "Manual Books Page" }
+  { to: "/library", label: "Books" },
+  { to: "/categories", label: "Categories" },
+  { to: "/series", label: "Series" },
+  { to: "/writers", label: "Writers" },
+  { to: "/manual-books", label: "Physical Books' List" }
 ];
 
 export default function AppShell({ children }) {
@@ -27,6 +28,7 @@ export default function AppShell({ children }) {
   const propertiesMenuRef = useRef(null);
   const navigation = authenticated
     ? [
+        { to: "/home", label: "Home" },
         { to: "/create", label: "Create Books" },
         { to: "/processing", label: "Processing" },
         ...(user?.is_superuser ? [{ to: "/access", label: "Users & Access" }] : [])
@@ -35,7 +37,11 @@ export default function AppShell({ children }) {
   const isBookPropertiesActive =
     location.pathname === "/library" ||
     location.pathname === "/categories" ||
+    location.pathname === "/series" ||
     location.pathname === "/writers" ||
+    location.pathname === "/translators" ||
+    location.pathname === "/compilers" ||
+    location.pathname === "/editors" ||
     location.pathname === "/manual-books" ||
     location.pathname.startsWith("/books/");
 
@@ -74,13 +80,22 @@ export default function AppShell({ children }) {
       <div className="shell-ornament shell-ornament-right" aria-hidden="true" />
       <header className={authenticated ? "topbar" : "topbar topbar-public"}>
         <div className="brand-block">
-          <NavLink to="/library" className="brand-mark">
+          <NavLink to="/home" className="brand-mark">
             <span className="brand-mark-name">RSalehin24</span>
             <span className="brand-mark-suffix">Library</span>
           </NavLink>
         </div>
         {authenticated ? (
           <nav className="topnav" aria-label="Primary">
+            {navigation.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) => (isActive ? "nav-link is-active" : "nav-link")}
+              >
+                {item.label}
+              </NavLink>
+            ))}
             <div ref={propertiesMenuRef} className="nav-dropdown-shell">
               <button
                 type="button"
@@ -111,15 +126,6 @@ export default function AppShell({ children }) {
                 </div>
               ) : null}
             </div>
-            {navigation.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) => (isActive ? "nav-link is-active" : "nav-link")}
-              >
-                {item.label}
-              </NavLink>
-            ))}
           </nav>
         ) : null}
         <div className="session-box">

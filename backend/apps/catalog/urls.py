@@ -9,11 +9,12 @@ from apps.catalog.views import (
     BookRegenerateView,
     BookTicketExportView,
     CategoryListView,
+    ContributorListView,
     ManualBookListCreateView,
     MetadataReviewListCreateView,
     MetadataReviewUpdateView,
     MetadataVersionListView,
-    WriterListView,
+    SeriesListView,
 )
 
 
@@ -22,7 +23,11 @@ urlpatterns = [
     path("books/export/", BookExportView.as_view(), name="catalog-book-export"),
     path("books/tickets/", BookTicketExportView.as_view(), name="catalog-book-ticket-export"),
     path("categories/", CategoryListView.as_view(), name="catalog-category-list"),
-    path("writers/", WriterListView.as_view(), name="catalog-writer-list"),
+    path("series/", SeriesListView.as_view(), name="catalog-series-list"),
+    path("writers/", ContributorListView.as_view(role_slug="writers"), name="catalog-writer-list"),
+    path("translators/", ContributorListView.as_view(role_slug="translators"), name="catalog-translator-list"),
+    path("compilers/", ContributorListView.as_view(role_slug="compilers"), name="catalog-compiler-list"),
+    path("editors/", ContributorListView.as_view(role_slug="editors"), name="catalog-editor-list"),
     path("manual-books/", ManualBookListCreateView.as_view(), name="catalog-manual-book-list-create"),
     path(
         "books/<path:slug>/metadata/",

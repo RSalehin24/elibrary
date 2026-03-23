@@ -5,6 +5,7 @@ import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import EmptyState from "../components/EmptyState";
 import LoadingSpinner from "../components/LoadingSpinner";
+import PageLoader from "../components/PageLoader";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -382,7 +383,7 @@ function getCatalogPageLabel(pagination) {
 }
 
 function canCreateCatalogEntry(entry) {
-  return ["new", "failed", "unfinished"].includes(entry.curation_status);
+  return ["new", "failed", "unfinished", "deleted"].includes(entry.curation_status);
 }
 
 function RequestValue({ value, error }) {
@@ -399,6 +400,10 @@ function RequestValue({ value, error }) {
 }
 
 function BookLinkCell({ submission }) {
+  if (submission.linked_book_deleted) {
+    return <span className="table-note">{submission.linked_book?.title || "Deleted record"}</span>;
+  }
+
   if (!submission.linked_book_slug) {
     return <span className="table-note">-</span>;
   }
@@ -441,13 +446,41 @@ function CatalogStopIcon() {
   );
 }
 
-function QueueTableCard({ title, count, headerAside, toolbar, actions, children, emptyTitle, cardClassName = "" }) {
+function buildProcessingLoaderCopy(label) {
+  return {
+    label,
+    detail: "Fetching the latest data for this section."
+  };
+}
+
+function renderProcessingCardLoader(label) {
+  const copy = buildProcessingLoaderCopy(label);
+  return (
+    <div className="processing-card-loader-shell">
+      <PageLoader label={copy.label} detail={copy.detail} className="processing-card-loader" />
+    </div>
+  );
+}
+
+function QueueTableCard({
+  title,
+  count,
+  headerAside,
+  toolbar,
+  actions,
+  children,
+  emptyTitle,
+  cardClassName = "",
+  loading = false,
+  loadingLabel = ""
+}) {
   const titleBlock = (
     <div className="section-title-block">
       <h2>{title}</h2>
     </div>
   );
   const countPill = count !== undefined && count !== null ? <span className="processing-card-count">{count}</span> : null;
+  const shellContent = loading ? renderProcessingCardLoader(loadingLabel || `Loading ${title.toLowerCase()}`) : children || <EmptyState title={emptyTitle} />;
 
   return (
     <section className={`detail-card processing-card processing-list-card ${cardClassName}`.trim()}>
@@ -458,7 +491,7 @@ function QueueTableCard({ title, count, headerAside, toolbar, actions, children,
       </div>
       {toolbar ? <div className="processing-card-toolbar">{toolbar}</div> : null}
       {actions ? <div className="processing-bulk-bar">{actions}</div> : null}
-      <div className="processing-table-shell">{children || <EmptyState title={emptyTitle} />}</div>
+      <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>{shellContent}</div>
     </section>
   );
 }
@@ -782,7 +815,7 @@ export default function QueuePage() {
         method: "POST",
         body: { decision }
       });
-      toast.success(decision === "confirm_existing" ? "Existing book kept." : "New book kept.");
+      toast.success(decision === "confirm_existing" ? "Existing book kept." : "New book queued.");
       await reloadCurrent();
     } catch (nextError) {
       toast.error(nextError.message);
@@ -974,6 +1007,21 @@ export default function QueuePage() {
       return;
     }
 
+    const creatableEntryIds = entryIds.filter((id) => {
+      const entry = catalogEntries.find((catalogEntry) => catalogEntry.id === id);
+      return !entry || canCreateCatalogEntry(entry);
+    });
+
+    if (creatableEntryIds.length !== entryIds.length) {
+      const skippedIds = new Set(entryIds.filter((id) => !creatableEntryIds.includes(id)));
+      setSelectedCatalogEntryIds((current) => current.filter((id) => !skippedIds.has(id)));
+    }
+
+    if (!creatableEntryIds.length) {
+      toast.info("Only new, failed, or unfinished catalog rows can be created.");
+      return;
+    }
+
     if (rowId) {
       setBusyActionId(rowId);
     } else {
@@ -984,7 +1032,7 @@ export default function QueuePage() {
     try {
       const payload = await apiFetch("/ingestion/catalog/entries/create-books/", {
         method: "POST",
-        body: { ids: entryIds }
+        body: { ids: creatableEntryIds }
       });
       toast.success(
         summarizeResponse(payload, {
@@ -1168,9 +1216,14 @@ export default function QueuePage() {
 
   const selectedCatalogIdSet = useMemo(() => new Set(selectedCatalogEntryIds), [selectedCatalogEntryIds]);
   const catalogEntryIdsOnPage = useMemo(() => catalogEntries.map((entry) => entry.id), [catalogEntries]);
+  const creatableCatalogEntryIdsOnPage = useMemo(
+    () => catalogEntries.filter((entry) => canCreateCatalogEntry(entry)).map((entry) => entry.id),
+    [catalogEntries]
+  );
   const selectedCatalogCount = selectedCatalogEntryIds.length;
-  const selectedCatalogCountOnPage = catalogEntryIdsOnPage.filter((id) => selectedCatalogIdSet.has(id)).length;
-  const allCatalogSelected = catalogEntries.length > 0 && selectedCatalogCountOnPage === catalogEntries.length;
+  const selectedCatalogCountOnPage = creatableCatalogEntryIdsOnPage.filter((id) => selectedCatalogIdSet.has(id)).length;
+  const allCatalogSelected =
+    creatableCatalogEntryIdsOnPage.length > 0 && selectedCatalogCountOnPage === creatableCatalogEntryIdsOnPage.length;
 
   const selectedRunIdSet = useMemo(() => new Set(selectedRunIds), [selectedRunIds]);
   const runIdsOnPage = useMemo(() => curationRuns.map((run) => run.id), [curationRuns]);
@@ -1202,6 +1255,15 @@ export default function QueuePage() {
   const selectedJobResumeIds = jobs.filter((job) => selectedJobIdSet.has(job.id) && job.status === "queued" && !job.task_id).map((job) => job.id);
   const selectedJobStopIds = jobs.filter((job) => selectedJobIdSet.has(job.id) && isActiveStatus(job.status)).map((job) => job.id);
   const selectedRunStopIds = curationRuns.filter((run) => selectedRunIdSet.has(run.id) && isActiveStatus(run.status)).map((run) => run.id);
+
+  useEffect(() => {
+    setSelectedCatalogEntryIds((current) =>
+      current.filter((id) => {
+        const entry = catalogEntries.find((catalogEntry) => catalogEntry.id === id);
+        return !entry || canCreateCatalogEntry(entry);
+      })
+    );
+  }, [catalogEntries]);
 
   function renderCardHeaderSearch({
     filters,
@@ -1240,6 +1302,8 @@ export default function QueuePage() {
         title={title}
         emptyTitle="No requests"
         cardClassName={cardClassName}
+        loading={loading}
+        loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: submissionFilters,
           setFilters: setSubmissionFilters,
@@ -1476,6 +1540,15 @@ export default function QueuePage() {
                           <Link to={`/books/${submission.linked_book_slug}`} className="ghost-button">
                             Open
                           </Link>
+                        ) : submission.linked_book_deleted ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => retrySubmission(submission.id)}
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Queueing..." : "Recreate"}
+                          </button>
                         ) : submission.resolution_status === "ambiguous" && submission.candidates?.length ? (
                           <button
                             type="button"
@@ -1503,7 +1576,7 @@ export default function QueuePage() {
                           >
                             {isBusy ? "Stopping..." : "Stop"}
                           </button>
-                        ) : ["failed", "cancelled", "needs_review"].includes(submission.status) || latestJob?.status === "failed" ? (
+                        ) : ["deleted", "failed", "cancelled", "needs_review"].includes(submission.status) || latestJob?.status === "failed" ? (
                           <button
                             type="button"
                             className="ghost-button"
@@ -1550,6 +1623,8 @@ export default function QueuePage() {
         title={title}
         emptyTitle="No book creation"
         cardClassName={cardClassName}
+        loading={loading}
+        loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: jobFilters,
           setFilters: setJobFilters,
@@ -1778,6 +1853,15 @@ export default function QueuePage() {
                           <Link to={`/books/${job.target_book_slug}`} className="ghost-button">
                             Open
                           </Link>
+                        ) : job.target_book_deleted ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => retrySubmission(job.submission_id)}
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Queueing..." : "Recreate"}
+                          </button>
                         ) : null}
                         {job.status === "queued" && !job.task_id ? (
                           <button
@@ -1836,6 +1920,8 @@ export default function QueuePage() {
       <QueueTableCard
         title={title}
         emptyTitle="No duplicates"
+        loading={loading}
+        loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: reviewFilters,
           setFilters: setReviewFilters,
@@ -1890,27 +1976,29 @@ export default function QueuePage() {
                   <td className="processing-col-request">
                     <RequestValue value={review.submission?.original_input} />
                   </td>
-                  <td>{review.existing_book?.title || "-"}</td>
+                  <td>{review.existing_book?.title || (review.existing_book_deleted ? "Deleted record" : "-")}</td>
                   <td>
                     <StatusPill value={review.status} />
                   </td>
                   <td>
                     <div className="table-actions">
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => resolveDuplicate(review.id, "confirm_existing")}
-                        disabled={busyActionId === review.id || creationActionsDisabled}
-                      >
-                        Use existing
-                      </button>
+                      {!review.existing_book_deleted ? (
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => resolveDuplicate(review.id, "confirm_existing")}
+                          disabled={busyActionId === review.id || creationActionsDisabled}
+                        >
+                          Use existing
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="ghost-button"
                         onClick={() => resolveDuplicate(review.id, "dismiss")}
                         disabled={busyActionId === review.id || creationActionsDisabled}
                       >
-                        Keep new
+                        {review.existing_book_deleted ? "Recreate" : "Keep new"}
                       </button>
                     </div>
                   </td>
@@ -1924,29 +2012,39 @@ export default function QueuePage() {
   }
 
   function renderCatalogSummaryCard() {
+    const countPill = (
+      <span className="processing-card-count">
+        {loading ? <LoadingSpinner size={14} /> : catalogSummary.total}
+      </span>
+    );
+
     return (
       <section className="detail-card processing-card processing-summary-card">
         <div className="processing-card-head">
           <div className="section-title-block">
             <h2>Catalog Overview</h2>
           </div>
-          <span className="processing-card-count">{catalogSummary.total}</span>
+          {countPill}
         </div>
-        <div className="processing-summary-bar">
-          {[
-            ["New", catalogSummary.new],
-            ["Processing", catalogSummary.processing],
-            ["Failed", catalogSummary.failed],
-            ["Unfinished", catalogSummary.unfinished],
-            ["Ready", catalogSummary.ready],
-            ["Deleted", catalogSummary.deleted]
-          ].map(([label, value]) => (
-            <article key={label} className="processing-summary-stat">
-              <span className="fact-label">{label}</span>
-              <strong>{value}</strong>
-            </article>
-          ))}
-        </div>
+        {loading ? (
+          renderProcessingCardLoader("Loading catalog overview")
+        ) : (
+          <div className="processing-summary-bar">
+            {[
+              ["New", catalogSummary.new],
+              ["Processing", catalogSummary.processing],
+              ["Failed", catalogSummary.failed],
+              ["Unfinished", catalogSummary.unfinished],
+              ["Ready", catalogSummary.ready],
+              ["Deleted", catalogSummary.deleted]
+            ].map(([label, value]) => (
+              <article key={label} className="processing-summary-stat">
+                <span className="fact-label">{label}</span>
+                <strong>{value}</strong>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     );
   }
@@ -1970,6 +2068,8 @@ export default function QueuePage() {
         title="Catalog Books"
         emptyTitle="No catalog rows"
         cardClassName="processing-catalog-card"
+        loading={loading}
+        loadingLabel="Loading catalog books"
         headerAside={
           <CatalogSearchRow
             filters={catalogFilters}
@@ -2130,8 +2230,8 @@ export default function QueuePage() {
               <button
                 type="button"
                 className="ghost-button"
-                onClick={() => queueCatalogBooks(catalogEntries.map((entry) => entry.id), "", "all")}
-                disabled={!catalogEntries.length || creatingCatalog || catalogActionsDisabled}
+                onClick={() => queueCatalogBooks(creatableCatalogEntryIdsOnPage, "", "all")}
+                disabled={!creatableCatalogEntryIdsOnPage.length || creatingCatalog || catalogActionsDisabled}
                 title={catalogActionDisabledReason || undefined}
               >
                 <span className="button-label">
@@ -2169,9 +2269,10 @@ export default function QueuePage() {
                     checked={allCatalogSelected}
                     onChange={() =>
                       setSelectedCatalogEntryIds((current) =>
-                        toggleVisibleSelection(current, catalogEntryIdsOnPage, allCatalogSelected)
+                        toggleVisibleSelection(current, creatableCatalogEntryIdsOnPage, allCatalogSelected)
                       )
                     }
+                    disabled={!creatableCatalogEntryIdsOnPage.length || catalogActionsDisabled}
                     aria-label={allCatalogSelected ? "Clear visible catalog selections" : "Select all visible catalog rows"}
                   />
                 </th>
@@ -2185,6 +2286,7 @@ export default function QueuePage() {
             </thead>
             <tbody>
               {catalogEntries.map((entry) => {
+                const isSelectable = canCreateCatalogEntry(entry);
                 const isSelected = selectedCatalogIdSet.has(entry.id);
                 const isBusy = busyActionId === entry.id;
                 const isDeleting = busyDeleteId === `catalog:${entry.id}`;
@@ -2196,6 +2298,7 @@ export default function QueuePage() {
                         className="processing-checkbox"
                         checked={isSelected}
                         onChange={() => setSelectedCatalogEntryIds((current) => toggleSelectedId(current, entry.id))}
+                        disabled={!isSelectable || catalogActionsDisabled}
                         aria-label={`Select ${entry.title}`}
                       />
                     </td>
@@ -2277,6 +2380,8 @@ export default function QueuePage() {
         title={title}
         emptyTitle="No runs"
         cardClassName={cardClassName}
+        loading={loading}
+        loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: runFilters,
           setFilters: setRunFilters,
@@ -2516,6 +2621,14 @@ export default function QueuePage() {
   }
 
   function renderAutomationTab() {
+    const nextRunContent = loading ? (
+      <span className="processing-card-count">
+        <LoadingSpinner size={14} />
+      </span>
+    ) : automationState?.settings?.next_run_at ? (
+      <span className="processing-card-count">{formatBookDateTime(automationState.settings.next_run_at)}</span>
+    ) : null;
+
     return (
       <div className="processing-section-grid">
         <section className="detail-card processing-card processing-summary-card">
@@ -2524,83 +2637,90 @@ export default function QueuePage() {
               <h2>Automation</h2>
             </div>
             <div className="processing-card-head-meta">
-              {automationState?.settings?.next_run_at ? (
-                <span className="processing-card-count">{formatBookDateTime(automationState.settings.next_run_at)}</span>
+              {nextRunContent}
+              {!loading ? (
+                <label
+                  className="processing-switch"
+                  title={automationForm.enabled ? "Automation enabled" : "Automation disabled"}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={automationForm.enabled ? "Disable automation" : "Enable automation"}
+                    checked={automationForm.enabled}
+                    onChange={(event) => setAutomationForm({ ...automationForm, enabled: event.target.checked })}
+                  />
+                  <span className="processing-switch-track" aria-hidden="true">
+                    <span className="processing-switch-state">{automationForm.enabled ? "On" : "Off"}</span>
+                    <span className="processing-switch-thumb" />
+                  </span>
+                </label>
               ) : null}
-              <label className="processing-switch" title={automationForm.enabled ? "Automation enabled" : "Automation disabled"}>
-                <input
-                  type="checkbox"
-                  aria-label={automationForm.enabled ? "Disable automation" : "Enable automation"}
-                  checked={automationForm.enabled}
-                  onChange={(event) => setAutomationForm({ ...automationForm, enabled: event.target.checked })}
-                />
-                <span className="processing-switch-track" aria-hidden="true">
-                  <span className="processing-switch-state">{automationForm.enabled ? "On" : "Off"}</span>
-                  <span className="processing-switch-thumb" />
-                </span>
-              </label>
             </div>
           </div>
-          <form className="stack-form" onSubmit={saveAutomation}>
-            <div className="detail-facts processing-automation-grid">
-              <label>
-                <span className="fact-label">Time</span>
-                <input
-                  type="time"
-                  value={automationForm.daily_run_time}
-                  onChange={(event) => setAutomationForm({ ...automationForm, daily_run_time: event.target.value })}
-                />
-              </label>
-              <label>
-                <span className="fact-label">Frequency</span>
-                <select
-                  value={automationForm.frequency}
-                  onChange={(event) => setAutomationForm({ ...automationForm, frequency: event.target.value })}
-                >
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="biweekly">Bi-weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="bimonthly">Bi-monthly</option>
-                  <option value="quarterly">Every 3 months</option>
-                  <option value="four_monthly">Every 4 months</option>
-                  <option value="half_yearly">Half-yearly</option>
-                </select>
-              </label>
-              <label>
-                <span className="fact-label">Mode</span>
-                <select
-                  value={automationForm.mode}
-                  onChange={(event) => setAutomationForm({ ...automationForm, mode: event.target.value })}
-                >
-                  <option value="pending">New + unfinished</option>
-                  <option value="all">All tracked</option>
-                </select>
-              </label>
-              <label>
-                <span className="fact-label">Pages</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="80"
-                  value={automationForm.refresh_max_pages}
-                  onChange={(event) => setAutomationForm({ ...automationForm, refresh_max_pages: event.target.value })}
-                />
-              </label>
-            </div>
-            <div className="processing-card-actions">
-              <button type="submit" className="primary-button" disabled={savingAutomation}>
-                <span className="button-label">
-                  {savingAutomation ? <LoadingSpinner size={14} /> : null}
-                  {savingAutomation ? "Saving..." : "Save"}
-                </span>
-              </button>
-            </div>
-          </form>
+          {loading ? (
+            renderProcessingCardLoader("Loading automation settings")
+          ) : (
+            <form className="stack-form" onSubmit={saveAutomation}>
+              <div className="detail-facts processing-automation-grid">
+                <label>
+                  <span className="fact-label">Time</span>
+                  <input
+                    type="time"
+                    value={automationForm.daily_run_time}
+                    onChange={(event) => setAutomationForm({ ...automationForm, daily_run_time: event.target.value })}
+                  />
+                </label>
+                <label>
+                  <span className="fact-label">Frequency</span>
+                  <select
+                    value={automationForm.frequency}
+                    onChange={(event) => setAutomationForm({ ...automationForm, frequency: event.target.value })}
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Bi-weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="bimonthly">Bi-monthly</option>
+                    <option value="quarterly">Every 3 months</option>
+                    <option value="four_monthly">Every 4 months</option>
+                    <option value="half_yearly">Half-yearly</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="fact-label">Mode</span>
+                  <select
+                    value={automationForm.mode}
+                    onChange={(event) => setAutomationForm({ ...automationForm, mode: event.target.value })}
+                  >
+                    <option value="pending">New + unfinished</option>
+                    <option value="all">All tracked</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="fact-label">Pages</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="80"
+                    value={automationForm.refresh_max_pages}
+                    onChange={(event) => setAutomationForm({ ...automationForm, refresh_max_pages: event.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="processing-card-actions">
+                <button type="submit" className="primary-button" disabled={savingAutomation}>
+                  <span className="button-label">
+                    {savingAutomation ? <LoadingSpinner size={14} /> : null}
+                    {savingAutomation ? "Saving..." : "Save"}
+                  </span>
+                </button>
+              </div>
+            </form>
+          )}
         </section>
         {renderSubmissionsCard("Automation Requests")}
-        {renderRunsCard("Run History", "processing-secondary-height-card")}
-        {renderJobsCard("Book Creation", "processing-catalog-height-card")}
+        {renderJobsCard("Book Creation")}
+        {renderRunsCard("Run History")}
         {renderDuplicateCard("Duplicate Checks")}
       </div>
     );

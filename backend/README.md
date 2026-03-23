@@ -25,10 +25,7 @@ Important variables:
 - `DATABASE_URL`
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND`
-- `FRONTEND_BASE_URL`
-- `DJANGO_ALLOWED_HOSTS`
-- `DJANGO_CORS_ALLOWED_ORIGINS`
-- `DJANGO_CSRF_TRUSTED_ORIGINS`
+- `PUBLIC_BASE_URL`
 - `SUPER_ADMIN_EMAIL`
 - `SUPER_ADMIN_PASSWORD`
 
@@ -86,13 +83,7 @@ Or with the local virtualenv:
 
 ## Docker Build / Deploy
 
-This folder can now be deployed directly as its own build context:
-
-```bash
-docker build -t bangla-library-backend .
-```
-
-The Dockerfile assumes this folder is the build root.
+For the unified stack used both locally and on the server, run Docker from the repo root with [`docker-compose.yml`](../docker-compose.yml).
 
 ## Legacy Scraper
 

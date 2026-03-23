@@ -7,8 +7,8 @@ from django.utils import timezone
 
 from apps.access.models import PreviewAccessSession
 from apps.accounts.models import User
-from apps.catalog.models import Book, BookSource, Category, Contributor, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType, Series
-from apps.common.models import LifecycleState
+from apps.catalog.models import Book, BookContributor, BookSource, Category, Contributor, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType, Series
+from apps.common.models import LifecycleState, ReviewState
 from apps.ingestion.models import (
     CatalogAutomationFrequency,
     BookSubmission,
@@ -34,12 +34,22 @@ from apps.ingestion.services.curation import (
 )
 from apps.ingestion.services.legacy_adapter import normalize_text
 from apps.ingestion.services.normalization import (
+    clean_extracted_dedication_html,
+    extract_main_content_segments,
     extract_front_matter_entries,
     normalize_scraped_book,
     promote_leading_front_matter,
 )
 from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver
-from apps.ingestion.services.submissions import create_submission_records, process_submission_job, queue_submission, sync_assets
+from apps.ingestion.services.submissions import (
+    create_submission_records,
+    detect_metadata_duplicate,
+    process_submission_job,
+    queue_submission,
+    sync_assets,
+)
+from apps.ingestion.tasks import process_submission_task
+from apps.catalog.services import find_existing_book_by_source_url
 
 
 def test_legacy_normalize_text_preserves_bengali_combining_marks():
@@ -77,6 +87,43 @@ def test_title_submission_surfaces_exact_match_without_guessing(client, settings
     assert payload["resolution_status"] == "exact_match"
     assert payload["status"] == "queued"
     assert payload["resolved_url"] == "https://www.ebanglalibrary.com/books/sample-book/"
+
+
+@pytest.mark.django_db
+def test_submission_bulk_status_returns_requested_visible_submissions_in_order(client):
+    user = User.objects.create_user(email="bulk-status@example.com", password="strong-password-123")
+    other_user = User.objects.create_user(email="bulk-status-other@example.com", password="strong-password-123")
+    first = BookSubmission.objects.create(
+        submitter=user,
+        input_type="title",
+        original_input="প্রথম",
+        normalized_input="প্রথম",
+        status=SubmissionStatus.QUEUED,
+    )
+    second = BookSubmission.objects.create(
+        submitter=user,
+        input_type="title",
+        original_input="দ্বিতীয়",
+        normalized_input="দ্বিতীয়",
+        status=SubmissionStatus.PROCESSING,
+    )
+    hidden = BookSubmission.objects.create(
+        submitter=other_user,
+        input_type="title",
+        original_input="লুকানো",
+        normalized_input="লুকানো",
+        status=SubmissionStatus.READY,
+    )
+    client.force_login(user)
+
+    response = client.post(
+        "/api/ingestion/submissions/status/",
+        data=json.dumps({"ids": [str(second.id), str(hidden.id), str(first.id)]}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert [entry["id"] for entry in response.json()] == [str(second.id), str(first.id)]
 
 
 @pytest.mark.django_db
@@ -613,6 +660,65 @@ def test_processing_manager_can_queue_selected_catalog_entries_for_creation(clie
 
 
 @pytest.mark.django_db
+def test_find_existing_book_by_source_url_ignores_soft_deleted_books():
+    book = Book.objects.create(title="Deleted source book", state="soft_deleted", review_state="pending")
+    Book.objects.filter(pk=book.pk).update(deleted_at=timezone.now())
+    book.refresh_from_db()
+    BookSource.objects.create(
+        book=book,
+        source_url="https://www.ebanglalibrary.com/books/deleted-source-book/",
+        normalized_source_url="httpswwwebanglalibrarycombooksdeletedsourcebook",
+    )
+
+    existing = find_existing_book_by_source_url("httpswwwebanglalibrarycombooksdeletedsourcebook")
+
+    assert existing is None
+
+
+@pytest.mark.django_db
+def test_processing_manager_can_queue_deleted_catalog_entry_for_recreation(client, monkeypatch):
+    admin = User.objects.create_superuser(email="catalog-recreate-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+    deleted_book = Book.objects.create(title="Deleted Book", state="soft_deleted", review_state="pending")
+    Book.objects.filter(pk=deleted_book.pk).update(deleted_at=timezone.now())
+    deleted_book.refresh_from_db()
+    entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/deleted-book/",
+        title="Deleted Book",
+        author_line="Writer",
+        normalized_title=normalize_text("Deleted Book"),
+        normalized_display=normalize_text("Deleted Book Writer"),
+    )
+    BookSource.objects.create(
+        book=deleted_book,
+        source_url=entry.source_url,
+        normalized_source_url=entry.source_url,
+        source_title=entry.title,
+    )
+    queued_entries = []
+
+    def fake_create_submission_records(*, submitter, parsed_entries, auto_process, origin):
+        queued_entries.extend(parsed_entries)
+        assert submitter == admin
+        assert auto_process is True
+        assert origin == SubmissionOrigin.CURATION
+        return []
+
+    monkeypatch.setattr("apps.ingestion.views.create_submission_records", fake_create_submission_records)
+
+    response = client.post(
+        "/api/ingestion/catalog/entries/create-books/",
+        data=json.dumps({"ids": [str(entry.id)]}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 202
+    assert response.json()["queued_creates"] == 1
+    assert response.json()["skipped_deleted"] == 0
+    assert queued_entries == [{"kind": "url", "value": entry.source_url}]
+
+
+@pytest.mark.django_db
 def test_sync_assets_marks_book_for_review_when_epub_is_missing(tmp_path):
     submission = BookSubmission.objects.create(
         input_type="url",
@@ -968,6 +1074,97 @@ def test_front_matter_promotion_extracts_title_prefixed_translator_and_publicati
     )
 
 
+def test_normalize_scraped_book_ignores_translator_biography_and_keeps_only_name():
+    normalized = normalize_scraped_book(
+        {
+            "book_title": "উদাহরণ",
+            "author": "লেখক এক",
+            "series": "",
+            "book_type": "",
+            "book_info": """
+            <p><strong>অনুবাদক</strong>: মাকসুদুজ্জামান খান বায়োটেকনোলজি এন্ড জেনেটিক ইঞ্জিনিয়ারিং এ পড়ালেখা করছেন।
+            তিনি আর্থার সি ক্লার্ক ও আইজাক আসিমভের বেশ কিছু লেখা ভাষান্তর করেছেন।, মাকসুদুজ্জামান খান</p>
+            """,
+        }
+    )
+
+    translators = [entry["name"] for entry in normalized["contributors"] if entry["role"] == "translator"]
+
+    assert translators == ["মাকসুদুজ্জামান খান"]
+
+
+def test_normalize_scraped_book_splits_multiple_translators_joined_with_connector():
+    normalized = normalize_scraped_book(
+        {
+            "book_title": "উদাহরণ",
+            "author": "লেখক এক",
+            "series": "",
+            "book_type": "",
+            "book_info": """
+            <p><strong>অনুবাদ</strong>: সালমান হক ও ইশরাক অর্ণব</p>
+            """,
+        }
+    )
+
+    translators = [entry["name"] for entry in normalized["contributors"] if entry["role"] == "translator"]
+
+    assert translators == ["সালমান হক", "ইশরাক অর্ণব"]
+
+
+def test_front_matter_extraction_rejects_translator_prose_without_name_like_values():
+    book_info_html = """
+    <p><strong>অনুবাদক</strong>: তিনি আর্থার সি ক্লার্ক ও আইজাক আসিমভের বেশ কিছু লেখা ভাষান্তর করেছেন।</p>
+    """
+
+    entries = extract_front_matter_entries(book_info_html)
+    normalized = normalize_scraped_book(
+        {
+            "book_title": "উদাহরণ",
+            "author": "লেখক এক",
+            "series": "",
+            "book_type": "",
+            "book_info": book_info_html,
+        }
+    )
+
+    assert not any(entry["role"] == "translator" for entry in entries)
+    assert not any(contributor["role"] == "translator" for contributor in normalized["contributors"])
+
+
+def test_clean_extracted_dedication_html_removes_repeated_dedication_heading():
+    dedication_html = clean_extracted_dedication_html(
+        """
+        <p>উৎসর্গ</p>
+        <p><strong>উৎসর্গ</strong></p>
+        <p>আহমেদ নাফিস শাহরিয়ারকে</p>
+        <p>২২ আগস্ট, ১৯৯৪</p>
+        """
+    )
+
+    assert "আহমেদ নাফিস শাহরিয়ারকে" in dedication_html
+    assert "২২ আগস্ট, ১৯৯৪" in dedication_html
+    assert "উৎসর্গ" not in dedication_html
+
+
+def test_extract_main_content_segments_omits_dedication_heading_from_extracted_dedication():
+    _, dedication_html, cleaned_main_content = extract_main_content_segments(
+        """
+        <div>
+          <p>উৎসর্গ</p>
+          <p><strong>উৎসর্গ</strong></p>
+          <p>আহমেদ নাফিস শাহরিয়ারকে</p>
+          <p>২২ আগস্ট, ১৯৯৪</p>
+          <p><strong>ভূমিকা</strong></p>
+          <p>এটাই মূল কনটেন্ট।</p>
+        </div>
+        """
+    )
+
+    assert "আহমেদ নাফিস শাহরিয়ারকে" in dedication_html
+    assert "উৎসর্গ" not in dedication_html
+    assert "এটাই মূল কনটেন্ট।" in cleaned_main_content
+
+
 def test_normalize_scraped_book_drops_author_role_when_same_person_is_translator_or_editor():
     normalized = normalize_scraped_book(
         {
@@ -1025,6 +1222,31 @@ def test_queue_submission_falls_back_to_inline_processing_when_celery_dispatch_f
 
 
 @pytest.mark.django_db
+def test_process_submission_task_returns_serializable_job_payload(monkeypatch):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/2001-space-odyssey/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/2001-space-odyssey/"),
+        resolved_url="https://www.ebanglalibrary.com/books/2001-space-odyssey/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(submission=submission, status=JobStatus.SUCCEEDED)
+
+    monkeypatch.setattr("apps.ingestion.tasks.process_submission_job", lambda *args, **kwargs: job)
+
+    result = process_submission_task.apply(args=[str(job.id)])
+
+    assert result.result == {
+        "job_id": str(job.id),
+        "submission_id": str(submission.id),
+        "book_id": "",
+        "status": JobStatus.SUCCEEDED,
+    }
+    json.dumps(result.result)
+
+
+@pytest.mark.django_db
 def test_repeated_requests_reuse_canonical_submission_and_existing_job(monkeypatch):
     user = User.objects.create_user(email="repeat@example.com", password="strong-password-123")
     canonical_submission = BookSubmission.objects.create(
@@ -1058,6 +1280,173 @@ def test_repeated_requests_reuse_canonical_submission_and_existing_job(monkeypat
 
     assert returned_job.id == existing_job.id
     assert ProcessingJob.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_new_url_submission_does_not_reuse_deleted_ready_submission(monkeypatch):
+    user = User.objects.create_user(email="deleted-reuse@example.com", password="strong-password-123")
+    deleted_book = Book.objects.create(title="মুছে ফেলা বই", state="soft_deleted", review_state="approved")
+    Book.objects.filter(pk=deleted_book.pk).update(deleted_at=timezone.now())
+    deleted_book.refresh_from_db()
+    BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/deleted-book/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/deleted-book/"),
+        resolved_url="https://www.ebanglalibrary.com/books/deleted-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.READY,
+        linked_book=deleted_book,
+    )
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.capture_source_page_metadata", lambda url: None)
+
+    recreated_submission = create_submission_records(
+        submitter=user,
+        parsed_entries=[{"kind": "url", "value": "https://www.ebanglalibrary.com/books/deleted-book/"}],
+        auto_process=False,
+    )[0]
+
+    assert recreated_submission.linked_book_id is None
+    assert recreated_submission.canonical_submission_id is None
+    assert recreated_submission.status == SubmissionStatus.QUEUED
+    assert recreated_submission.resolved_url == "https://www.ebanglalibrary.com/books/deleted-book/"
+
+
+@pytest.mark.django_db
+def test_retrying_deleted_submission_clears_reused_state_and_queues_recreation(client, monkeypatch):
+    user = User.objects.create_user(email="retry-deleted@example.com", password="strong-password-123")
+    url = (
+        "https://www.ebanglalibrary.com/books/"
+        "%E0%A7%A8%E0%A7%A6%E0%A7%A6%E0%A7%A7-%E0%A6%86-%E0%A6%B8%E0%A7%8D%E0%A6%AA%E0%A7%87%E0%A6%B8-"
+        "%E0%A6%93%E0%A6%A1%E0%A6%BF%E0%A6%B8%E0%A6%BF-%E0%A6%86%E0%A6%B0%E0%A7%8D%E0%A6%A5%E0%A6%BE%E0%A6%B0/"
+    )
+    deleted_book = Book.objects.create(title="২০০১ : আ স্পেস ওডিসি", state="soft_deleted", review_state="approved")
+    Book.objects.filter(pk=deleted_book.pk).update(deleted_at=timezone.now())
+    deleted_book.refresh_from_db()
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input=url,
+        normalized_input=normalize_text(url),
+        resolved_url=url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.READY,
+        review_state=ReviewState.APPROVED,
+        linked_book=deleted_book,
+        duplicate_of_book=deleted_book,
+        raw_payload={
+            "served_from_database": True,
+            "existing_book_source": "source_url",
+            "linked_book_slug": deleted_book.slug,
+        },
+    )
+    monkeypatch.setattr("apps.ingestion.services.submissions.dispatch_processing_job", lambda job, force=False: job)
+    client.force_login(user)
+
+    response = client.post(
+        f"/api/ingestion/submissions/{submission.id}/retry/",
+        data=json.dumps({}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 202
+    submission.refresh_from_db()
+    assert submission.status == SubmissionStatus.QUEUED
+    assert submission.review_state == ReviewState.PENDING
+    assert submission.linked_book_id is None
+    assert submission.duplicate_of_book_id is None
+    assert submission.raw_payload.get("served_from_database") is None
+    assert submission.raw_payload.get("existing_book_source") is None
+    assert submission.raw_payload.get("linked_book_slug") is None
+    assert ProcessingJob.objects.filter(submission=submission, status=JobStatus.QUEUED).count() == 1
+
+
+@pytest.mark.django_db
+def test_detect_metadata_duplicate_ignores_deleted_books():
+    deleted_book = Book.objects.create(title="ম্যালিস", state="soft_deleted", review_state="approved")
+    contributor = Contributor.objects.create(name="সৈকত মুখোপাধ্যায়")
+    BookContributor.objects.create(book=deleted_book, contributor=contributor, role="author")
+    Book.objects.filter(pk=deleted_book.pk).update(deleted_at=timezone.now())
+
+    duplicate = detect_metadata_duplicate({"book_title": "ম্যালিস", "author": "সৈকত মুখোপাধ্যায়"})
+
+    assert duplicate is None
+
+
+@pytest.mark.django_db
+def test_successful_deleted_book_recreation_is_not_reprocessed_again(tmp_path, monkeypatch):
+    user = User.objects.create_user(email="recreate-2001@example.com", password="strong-password-123")
+    url = (
+        "https://www.ebanglalibrary.com/books/"
+        "%E0%A7%A8%E0%A7%A6%E0%A7%A6%E0%A7%A7-%E0%A6%86-%E0%A6%B8%E0%A7%8D%E0%A6%AA%E0%A7%87%E0%A6%B8-"
+        "%E0%A6%93%E0%A6%A1%E0%A6%BF%E0%A6%B8%E0%A6%BF-%E0%A6%86%E0%A6%B0%E0%A7%8D%E0%A6%A5%E0%A6%BE%E0%A6%B0/"
+    )
+    deleted_book = Book.objects.create(title="২০০১ : আ স্পেস ওডিসি", state="soft_deleted", review_state=ReviewState.APPROVED)
+    Book.objects.filter(pk=deleted_book.pk).update(deleted_at=timezone.now())
+    deleted_book.refresh_from_db()
+    BookSource.objects.create(
+        book=deleted_book,
+        source_url=url,
+        normalized_source_url=url,
+        source_title=deleted_book.title,
+    )
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input=url,
+        normalized_input=normalize_text(url),
+        resolved_url=url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        resolution_confidence=1.0,
+        status=SubmissionStatus.QUEUED,
+        review_state=ReviewState.PENDING,
+    )
+    job = ProcessingJob.objects.create(submission=submission)
+
+    sample = {
+        "book_title": "২০০১ : আ স্পেস ওডিসি",
+        "author": "আর্থার সি ক্লার্ক",
+        "series": "",
+        "book_type": "",
+        "cover": "book_cover.jpg",
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [{"title": "অধ্যায় ১", "content": "<p>বিষয়বস্তু</p>", "type": "lesson", "parent": None}],
+        "output_folder": str(tmp_path),
+    }
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.capture_source_page_metadata", lambda url: None)
+    monkeypatch.setattr("apps.ingestion.services.submissions.scrape_book", lambda url: sample)
+
+    def fake_generate_exports(book_data):
+        output_dir = Path(book_data["output_folder"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "book.html").write_text("<html><body>book</body></html>", encoding="utf-8")
+        (output_dir / "২০০১ : আ স্পেস ওডিসি.epub").write_bytes(b"epub-bytes")
+        (output_dir / "book_cover.jpg").write_bytes(b"cover-bytes")
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.generate_exports", fake_generate_exports)
+
+    process_submission_job(str(job.id))
+    submission.refresh_from_db()
+    assert submission.status == SubmissionStatus.READY
+    assert submission.raw_payload["served_from_database"] is False
+    first_linked_book_id = submission.linked_book_id
+    assert first_linked_book_id == deleted_book.id
+    assert submission.linked_book.deleted_at is None
+
+    repeated_job = process_submission_job(str(job.id))
+    submission.refresh_from_db()
+
+    assert repeated_job.id == job.id
+    assert submission.status == SubmissionStatus.READY
+    assert submission.raw_payload["served_from_database"] is False
+    assert submission.linked_book_id == first_linked_book_id
+    assert submission.linked_book.deleted_at is None
+    assert BookSource.objects.get(normalized_source_url=url).book_id == first_linked_book_id
 
 
 @pytest.mark.django_db
@@ -1183,6 +1572,111 @@ def test_public_submission_action_links_create_guest_preview_session(tmp_path, c
     guest_bookmarks = client.get(f"/api/access/reader/{preview_session.token}/bookmarks/")
     assert guest_session_state.status_code == 403
     assert guest_bookmarks.status_code == 403
+
+
+@pytest.mark.django_db
+def test_submission_detail_marks_soft_deleted_linked_book_as_deleted(client):
+    user = User.objects.create_user(email="deleted-submission@example.com", password="strong-password-123")
+    book = Book.objects.create(title="মুছে ফেলা বই", state="soft_deleted", review_state="approved")
+    Book.objects.filter(pk=book.pk).update(deleted_at=timezone.now())
+    book.refresh_from_db()
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="title",
+        original_input="মুছে ফেলা বই",
+        normalized_input=normalize_text("মুছে ফেলা বই"),
+        linked_book=book,
+        resolved_url="https://www.ebanglalibrary.com/books/deleted-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        resolution_confidence=1.0,
+        status=SubmissionStatus.READY,
+    )
+    client.force_login(user)
+
+    response = client.get(f"/api/ingestion/submissions/{submission.id}/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "deleted"
+    assert payload["linked_book_deleted"] is True
+    assert payload["linked_book_slug"] == ""
+    assert payload["linked_book"]["title"] == "মুছে ফেলা বই"
+
+
+@pytest.mark.django_db
+def test_submission_action_links_reject_soft_deleted_linked_book(client):
+    user = User.objects.create_user(email="deleted-action-links@example.com", password="strong-password-123")
+    book = Book.objects.create(title="মুছে ফেলা বই", state="soft_deleted", review_state="approved")
+    Book.objects.filter(pk=book.pk).update(deleted_at=timezone.now())
+    book.refresh_from_db()
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="title",
+        original_input="মুছে ফেলা বই",
+        normalized_input=normalize_text("মুছে ফেলা বই"),
+        linked_book=book,
+        resolved_url="https://www.ebanglalibrary.com/books/deleted-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        resolution_confidence=1.0,
+        status=SubmissionStatus.READY,
+    )
+    client.force_login(user)
+
+    response = client.post(
+        f"/api/ingestion/submissions/{submission.id}/action-links/",
+        data=json.dumps({}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 410
+    assert response.json()["detail"] == "This book was deleted."
+
+
+@pytest.mark.django_db
+def test_duplicate_review_keep_new_queues_recreate_for_deleted_existing_book(client, settings, monkeypatch):
+    settings.CELERY_TASK_ALWAYS_EAGER = False
+    admin = User.objects.create_superuser(email="deleted-review-admin@example.com", password="strong-password-123")
+    deleted_book = Book.objects.create(title="মুছে ফেলা বই", state="soft_deleted", review_state="approved")
+    Book.objects.filter(pk=deleted_book.pk).update(deleted_at=timezone.now())
+    deleted_book.refresh_from_db()
+    submission = BookSubmission.objects.create(
+        submitter=admin,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/deleted-book/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/deleted-book/"),
+        resolved_url="https://www.ebanglalibrary.com/books/deleted-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.DUPLICATE,
+        review_state="needs_review",
+        linked_book=deleted_book,
+        duplicate_of_book=deleted_book,
+        raw_payload={"served_from_database": True, "linked_book_slug": deleted_book.slug},
+    )
+    review = DuplicateReview.objects.create(
+        submission=submission,
+        existing_book=deleted_book,
+        detected_by="normalized_metadata",
+        status=DuplicateReviewStatus.PENDING,
+    )
+    monkeypatch.setattr("apps.ingestion.services.submissions.dispatch_processing_job", lambda job, force=False: job)
+    client.force_login(admin)
+
+    response = client.post(
+        f"/api/ingestion/duplicate-reviews/{review.id}/resolve/",
+        data=json.dumps({"decision": "dismiss"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    review.refresh_from_db()
+    submission.refresh_from_db()
+    assert review.status == DuplicateReviewStatus.DISMISSED
+    assert submission.status == SubmissionStatus.QUEUED
+    assert submission.review_state == "pending"
+    assert submission.linked_book_id is None
+    assert submission.duplicate_of_book_id is None
+    assert submission.raw_payload.get("served_from_database") is None
+    assert ProcessingJob.objects.filter(submission=submission, status=JobStatus.QUEUED).count() == 1
 
 
 @pytest.mark.django_db
@@ -1328,6 +1822,7 @@ def test_process_submission_job_persists_metadata_and_assets(tmp_path, monkeypat
     assert ("লেখক দুই", "author") in contributor_roles
     assert ("অনুবাদক এক", "translator") in contributor_roles
     assert ("সম্পাদক এক", "editor") in contributor_roles
+    assert book.dedication_html == ""
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.HTML).exists()
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.EPUB).exists()
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.COVER).exists()

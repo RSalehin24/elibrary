@@ -3,6 +3,7 @@ import AppShell from "./layouts/AppShell";
 import AccessPage from "./pages/AccessPage";
 import BookDetailPage from "./pages/BookDetailPage";
 import CategoryPage from "./pages/CategoryPage";
+import CreateBooksPage from "./pages/CreateBooksPage";
 import CreatedBooksPage from "./pages/CreatedBooksPage";
 import HomePage from "./pages/HomePage";
 import LibraryPage from "./pages/LibraryPage";
@@ -11,7 +12,9 @@ import ManualBooksPage from "./pages/ManualBooksPage";
 import PasswordResetPage from "./pages/PasswordResetPage";
 import ProfilePage from "./pages/ProfilePage";
 import QueuePage from "./pages/QueuePage";
+import SeriesPage from "./pages/SeriesPage";
 import WriterPage from "./pages/WriterPage";
+import PageLoader from "./components/PageLoader";
 import { useSession } from "./hooks/useSession";
 
 function ProtectedRoute({ children }) {
@@ -19,7 +22,7 @@ function ProtectedRoute({ children }) {
   const location = useLocation();
 
   if (loading) {
-    return <div className="page-state">Loading your session...</div>;
+    return <PageLoader label="Loading your session" detail="Checking sign-in and workspace access." />;
   }
 
   if (!authenticated) {
@@ -41,17 +44,25 @@ export default function App() {
           path="/"
           element={
             <ProtectedRoute>
-              <Navigate to="/create" replace />
+              <Navigate to="/home" replace />
             </ProtectedRoute>
           }
         />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/reset-password" element={<PasswordResetPage />} />
         <Route
-          path="/create"
+          path="/home"
           element={
             <ProtectedRoute>
               <HomePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/create"
+          element={
+            <ProtectedRoute>
+              <CreateBooksPage />
             </ProtectedRoute>
           }
         />
@@ -72,7 +83,39 @@ export default function App() {
           }
         />
         <Route
+          path="/series"
+          element={
+            <ProtectedRoute>
+              <SeriesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/writers"
+          element={
+            <ProtectedRoute>
+              <WriterPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/translators"
+          element={
+            <ProtectedRoute>
+              <WriterPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/compilers"
+          element={
+            <ProtectedRoute>
+              <WriterPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/editors"
           element={
             <ProtectedRoute>
               <WriterPage />

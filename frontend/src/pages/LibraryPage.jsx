@@ -1,16 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { apiFetch, downloadApiFile } from "../api/client";
+import { apiFetch } from "../api/client";
 import BookTable from "../components/BookTable";
 import CatalogToolbar from "../components/CatalogToolbar";
+import ExportActions from "../components/ExportActions";
+import PageLoader from "../components/PageLoader";
+import PropertyTableControls, { useClientPagination } from "../components/PropertyTableControls";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
+import { getExportBlockState } from "../utils/export";
+import { clearPendingExport, readPendingExport, writePendingExport } from "../utils/exportSession";
 import { cleanQueryParams, filtersFromSearchParams, toQueryString } from "../utils/query";
+
+const EXPORT_STORAGE_KEY = "catalog-books-export";
 
 const defaultFilters = {
   q: "",
   book_code: "",
   writer_code: "",
+  contributor_code: "",
+  contributor_role: "",
   category_code: "",
   author: "",
   contributor: "",
@@ -30,6 +40,7 @@ const defaultFilters = {
 const libraryFilterFields = [
   { key: "book_code", label: "Book code" },
   { key: "writer_code", label: "Writer code" },
+  { key: "contributor_code", label: "Contributor code" },
   { key: "category_code", label: "Category code" },
   { key: "author", label: "Writer" },
   { key: "contributor", label: "Contributor" },
@@ -129,9 +140,28 @@ const libraryFilterFields = [
   }
 ];
 
+function waitForExportUi() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(resolve);
+    });
+  });
+}
+
+function waitForMinimumLoader(startedAt, minimumMs = 240) {
+  const elapsed = Date.now() - startedAt;
+  const remaining = minimumMs - elapsed;
+  if (remaining <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => window.setTimeout(resolve, remaining));
+}
+
 export default function LibraryPage() {
   const { authenticated } = useSession();
   const toast = useToast();
+  const pendingExportRef = useRef(readPendingExport(EXPORT_STORAGE_KEY));
+  const resumedPendingExportRef = useRef(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
   const [filters, setFilters] = useState(() => filtersFromSearchParams(defaultFilters, searchParams));
@@ -139,7 +169,8 @@ export default function LibraryPage() {
   const [savedFilters, setSavedFilters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [downloadState, setDownloadState] = useState("");
+  const [downloadState, setDownloadState] = useState(() => pendingExportRef.current?.mode || "");
+  const pagination = useClientPagination(books);
 
   async function loadBooks(nextFilters = filters) {
     try {
@@ -178,18 +209,56 @@ export default function LibraryPage() {
     loadSavedFilters();
   }, [authenticated]);
 
+  useEffect(() => {
+    const pendingExport = pendingExportRef.current;
+    if (!pendingExport || resumedPendingExportRef.current) {
+      return;
+    }
+
+    resumedPendingExportRef.current = true;
+
+    async function resumePendingExport() {
+      try {
+        setDownloadState(pendingExport.mode);
+        const startedAt = Date.now();
+        await waitForExportUi();
+
+        if (pendingExport.mode === "csv") {
+          exportBooksToCsv(pendingExport.items, pendingExport.filename || "catalog-books.csv");
+          toast.success("CSV export started.");
+        } else {
+          await exportBooksToPdf(pendingExport.items, pendingExport.title || "Books Export");
+          toast.success("PDF export downloaded.");
+        }
+
+        await waitForMinimumLoader(startedAt);
+      } catch (nextError) {
+        toast.error(nextError.message);
+      } finally {
+        clearPendingExport(EXPORT_STORAGE_KEY);
+        pendingExportRef.current = null;
+        setDownloadState("");
+      }
+    }
+
+    resumePendingExport();
+  }, [toast]);
+
   function applyFilters(event) {
     event.preventDefault();
+    pagination.resetPage();
     setSearchParams(cleanQueryParams(filters));
   }
 
   function resetFilters() {
+    pagination.resetPage();
     setFilters(defaultFilters);
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
   function applySavedFilter(savedFilter) {
     const nextFilters = { ...defaultFilters, ...(savedFilter.params || {}) };
+    pagination.resetPage();
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
     toast.success(`Applied "${savedFilter.name}".`);
@@ -206,57 +275,98 @@ export default function LibraryPage() {
   }
 
   async function runDownload(mode) {
-    const endpoint =
-      mode === "tickets"
-        ? `/catalog/books/tickets/${toQueryString(filters)}`
-        : `/catalog/books/export/${toQueryString({ ...filters, format: mode })}`;
+    const blocked = getExportBlockState({
+      items: books,
+      loading,
+      error,
+      nounSingular: "book",
+      nounPlural: "books"
+    });
+    if (blocked) {
+      toast[blocked.type](blocked.message);
+      return;
+    }
+
     try {
+      const exportRequest = writePendingExport(EXPORT_STORAGE_KEY, {
+        mode,
+        items: books,
+        title: "Books Export",
+        filename: "catalog-books.csv"
+      });
+      pendingExportRef.current = exportRequest;
       setDownloadState(mode);
-      await downloadApiFile(endpoint);
+      const startedAt = Date.now();
+      await waitForExportUi();
+
+      if (mode === "csv") {
+        exportBooksToCsv(exportRequest.items, exportRequest.filename);
+        toast.success("CSV export started.");
+      } else {
+        await exportBooksToPdf(exportRequest.items, exportRequest.title);
+        toast.success("PDF export downloaded.");
+      }
+
+      await waitForMinimumLoader(startedAt);
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
+      clearPendingExport(EXPORT_STORAGE_KEY);
+      pendingExportRef.current = null;
       setDownloadState("");
     }
   }
 
   const resultCount = error || loading ? "" : `${books.length}`;
+  const sortOptions = libraryFilterFields.find((field) => field.key === "sort")?.options || [];
   const exportActions = (
-    <div className="catalog-export-panel">
-      <span className="fact-label">Export</span>
-      <div className="catalog-export-actions">
-        <button type="button" className="ghost-button" onClick={() => runDownload("csv")} disabled={downloadState !== ""}>
-          {downloadState === "csv" ? "Downloading..." : "CSV"}
-        </button>
-        <button type="button" className="ghost-button" onClick={() => runDownload("pdf")} disabled={downloadState !== ""}>
-          {downloadState === "pdf" ? "Downloading..." : "PDF"}
-        </button>
-        <button type="button" className="primary-button" onClick={() => runDownload("tickets")} disabled={downloadState !== ""}>
-          {downloadState === "tickets" ? "Downloading..." : "Tickets"}
-        </button>
-      </div>
-    </div>
+    <ExportActions loading={downloadState} onExport={runDownload} ariaLabel="Export books" bare />
+  );
+  const tableControls = (
+    <PropertyTableControls
+      sortValue={filters.sort}
+      sortOptions={sortOptions}
+      onSortChange={(nextSort) => {
+        const nextFilters = { ...filters, sort: nextSort };
+        pagination.resetPage();
+        setFilters(nextFilters);
+        setSearchParams(cleanQueryParams(nextFilters));
+      }}
+      rowsPerPage={pagination.rowsPerPage}
+      onRowsPerPageChange={pagination.setRowsPerPage}
+      page={pagination.page}
+      pageCount={pagination.pageCount}
+      hasPrevious={pagination.hasPrevious}
+      hasNext={pagination.hasNext}
+      onPageChange={pagination.setPage}
+      disabled={loading}
+    />
   );
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header">
-        <h1>Book Page</h1>
-      </header>
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--stacked">
+        <h1>Books</h1>
 
-      <CatalogToolbar
-        filters={filters}
-        setFilters={setFilters}
-        fields={libraryFilterFields}
-        defaultFilters={defaultFilters}
-        filtersExpanded={filtersExpanded}
-        setFiltersExpanded={setFiltersExpanded}
-        onSubmit={applyFilters}
-        onReset={resetFilters}
-        searchPlaceholder="Search books, codes, writers, categories..."
-        resultCount={resultCount}
-        secondaryContent={exportActions}
-      />
+        <CatalogToolbar
+          filters={filters}
+          setFilters={setFilters}
+          fields={libraryFilterFields}
+          defaultFilters={defaultFilters}
+          filtersExpanded={filtersExpanded}
+          setFiltersExpanded={setFiltersExpanded}
+          onSubmit={applyFilters}
+          onReset={resetFilters}
+          searchPlaceholder="Search books, book IDs, writers, categories..."
+          resultCount={resultCount}
+          searchActionsExtra={exportActions}
+          secondaryContent={tableControls}
+          secondaryBelow
+          searchRowCompact
+          inline
+          bare
+        />
+      </header>
 
       {savedFilters.length ? (
         <section className="catalog-saved-strip" aria-label="Saved filters">
@@ -279,11 +389,11 @@ export default function LibraryPage() {
       ) : null}
 
       {loading ? (
-        <div className="page-state">Loading books...</div>
+        <PageLoader label="Loading books" detail="Fetching the current catalog view and book statuses." />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : (
-        <BookTable books={books} emptyLabel="No books found." />
+        <BookTable books={pagination.items} emptyLabel="No books found." />
       )}
     </div>
   );

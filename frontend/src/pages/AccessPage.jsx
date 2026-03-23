@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, authApi } from "../api/client";
 import ConfirmationDialog from "../components/ConfirmationDialog";
+import PageLoader from "../components/PageLoader";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
@@ -39,6 +40,7 @@ function createInitialUserForm() {
     password: "",
     is_active: true,
     totp_required: false,
+    send_invite_email: true,
     global_scopes: []
   };
 }
@@ -69,6 +71,7 @@ export default function AccessPage() {
   const [grants, setGrants] = useState([]);
   const [references, setReferences] = useState(initialReferences);
   const [managedUsers, setManagedUsers] = useState([]);
+  const [loadingAdminData, setLoadingAdminData] = useState(true);
   const [userForm, setUserForm] = useState(() => createInitialUserForm());
   const [editingUserId, setEditingUserId] = useState(null);
   const [pendingDeleteUser, setPendingDeleteUser] = useState(null);
@@ -128,10 +131,12 @@ export default function AccessPage() {
       setManagedUsers([]);
       setGrants([]);
       setReferences(initialReferences);
+      setLoadingAdminData(false);
       return;
     }
 
     try {
+      setLoadingAdminData(true);
       const [userPayload, grantPayload, referencePayload] = await Promise.all([
         authApi.users(),
         apiFetch("/access/grants/"),
@@ -148,6 +153,8 @@ export default function AccessPage() {
       });
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setLoadingAdminData(false);
     }
   }
 
@@ -269,6 +276,7 @@ export default function AccessPage() {
       password: "",
       is_active: entry.is_active,
       totp_required: entry.totp_required,
+      send_invite_email: true,
       global_scopes: sortValues(entry.global_scopes || [])
     });
     setActiveTab("users");
@@ -280,8 +288,8 @@ export default function AccessPage() {
   async function submitUser(event) {
     event.preventDefault();
 
-    if (!editingUserId && !userForm.password.trim()) {
-      toast.error("Password is required when creating a user.");
+    if (!editingUserId && !userForm.send_invite_email && !userForm.password.trim()) {
+      toast.error("Enter a password or send an invite email.");
       return;
     }
     if (!userForm.global_scopes.length) {
@@ -297,8 +305,9 @@ export default function AccessPage() {
     if (!isEditingUser) {
       payload.email = userForm.email.trim();
       payload.full_name = userForm.full_name.trim();
+      payload.send_invite_email = userForm.send_invite_email;
     }
-    if (!isEditingUser && userForm.password.trim()) {
+    if (!isEditingUser && !userForm.send_invite_email && userForm.password.trim()) {
       payload.password = userForm.password;
     }
 
@@ -308,7 +317,7 @@ export default function AccessPage() {
         toast.success("User updated.");
       } else {
         await authApi.createUser(payload);
-        toast.success("User created.");
+        toast.success(userForm.send_invite_email ? "User created and invite email sent." : "User created.");
       }
       resetUserForm();
       await loadAdminData();
@@ -317,7 +326,8 @@ export default function AccessPage() {
         formatApiError(error, {
           global_scopes: "Account permissions",
           email: "Email",
-          password: "Password"
+          password: "Password",
+          is_active: "Active account"
         })
       );
     }
@@ -442,6 +452,10 @@ export default function AccessPage() {
     return <div className="page-state">Users & access settings are available only to the super admin account.</div>;
   }
 
+  if (loadingAdminData) {
+    return <PageLoader label="Loading users and access" detail="Fetching accounts, permissions, and reference data." />;
+  }
+
   return (
     <div className="page-stack access-page">
       <section className="detail-card admin-hero-card">
@@ -506,8 +520,22 @@ export default function AccessPage() {
                 </label>
                 <label>
                   <div className="field-header">
-                    <span className="fact-label">Password</span>
-                    {!isEditingUser ? (
+                    <span className="fact-label">Password Setup</span>
+                  </div>
+                  {isEditingUser ? (
+                    <input
+                      type="password"
+                      value=""
+                      placeholder="Password changes are disabled here"
+                      disabled
+                      readOnly
+                    />
+                  ) : userForm.send_invite_email ? (
+                    <p className="muted-copy access-invite-note">
+                      A setup email with a password-reset link will be sent after the account is created.
+                    </p>
+                  ) : (
+                    <>
                       <div className="field-header-actions">
                         <button
                           type="button"
@@ -528,22 +556,39 @@ export default function AccessPage() {
                           ⧉
                         </button>
                       </div>
-                    ) : null}
-                  </div>
-                  <input
-                    type="password"
-                    value={isEditingUser ? "" : userForm.password}
-                    onChange={(event) => setUserForm({ ...userForm, password: event.target.value })}
-                    placeholder={isEditingUser ? "Password changes are disabled here" : "Create password"}
-                    disabled={isEditingUser}
-                    readOnly={isEditingUser}
-                  />
+                      <input
+                        type="password"
+                        value={userForm.password}
+                        onChange={(event) => setUserForm({ ...userForm, password: event.target.value })}
+                        placeholder="Create password"
+                      />
+                    </>
+                  )}
                 </label>
               </div>
 
               <div className="settings-list">
                 <span className="fact-label">Account Settings</span>
                 <div className="settings-options-grid">
+                  {!isEditingUser ? (
+                    <label className="setting-option-card">
+                      <div className="setting-option-copy">
+                        <strong>Send Setup Email</strong>
+                        <span>Send a reset link so the user can choose their own password.</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={userForm.send_invite_email}
+                        onChange={(event) =>
+                          setUserForm({
+                            ...userForm,
+                            send_invite_email: event.target.checked,
+                            password: event.target.checked ? "" : userForm.password
+                          })
+                        }
+                      />
+                    </label>
+                  ) : null}
                   <label className="setting-option-card">
                     <div className="setting-option-copy">
                       <strong>Active Account</strong>

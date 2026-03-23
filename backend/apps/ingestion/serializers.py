@@ -91,6 +91,7 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
     queue_name = serializers.CharField(read_only=True)
     target_book_slug = serializers.SerializerMethodField()
     target_book_title = serializers.SerializerMethodField()
+    target_book_deleted = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcessingJob
@@ -109,6 +110,7 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
             "submission_resolution_status",
             "target_book_slug",
             "target_book_title",
+            "target_book_deleted",
             "last_error",
             "created_at",
             "updated_at",
@@ -116,28 +118,43 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
             "finished_at",
         ]
 
+    def linked_book_for(self, submission):
+        return submission.linked_book if submission.linked_book_id else None
+
     def get_target_book(self, obj):
-        if obj.book_id:
+        if obj.book_id and not obj.book.deleted_at:
             return obj.book
         submission = obj.submission
-        if submission.linked_book_id:
+        linked_book = self.linked_book_for(submission)
+        if linked_book and not linked_book.deleted_at:
             return submission.linked_book
         return None
+
+    def get_raw_target_book(self, obj):
+        if obj.book_id:
+            return obj.book
+        return self.linked_book_for(obj.submission)
 
     def get_target_book_slug(self, obj):
         book = self.get_target_book(obj)
         return book.slug if book else ""
 
     def get_target_book_title(self, obj):
-        book = self.get_target_book(obj)
+        book = self.get_raw_target_book(obj)
         return book.title if book else ""
+
+    def get_target_book_deleted(self, obj):
+        book = self.get_raw_target_book(obj)
+        return bool(book and book.deleted_at)
 
 
 class SubmissionSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
     candidates = serializers.SerializerMethodField()
     latest_job = serializers.SerializerMethodField()
     linked_book_slug = serializers.SerializerMethodField()
     linked_book = serializers.SerializerMethodField()
+    linked_book_deleted = serializers.SerializerMethodField()
     served_from_database = serializers.SerializerMethodField()
     canonical_submission_id = serializers.SerializerMethodField()
     uses_existing_request = serializers.SerializerMethodField()
@@ -157,6 +174,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
             "error_message",
             "linked_book_slug",
             "linked_book",
+            "linked_book_deleted",
             "served_from_database",
             "canonical_submission_id",
             "uses_existing_request",
@@ -168,6 +186,15 @@ class SubmissionSerializer(serializers.ModelSerializer):
 
     def canonical_submission_for(self, obj):
         return obj.canonical_submission or obj
+
+    def linked_book_for(self, obj):
+        return obj.linked_book if obj.linked_book_id else None
+
+    def get_status(self, obj):
+        linked_book = self.linked_book_for(obj)
+        if linked_book and linked_book.deleted_at:
+            return "deleted"
+        return obj.status
 
     def get_candidates(self, obj):
         attempt = obj.resolution_attempts.first()
@@ -184,12 +211,18 @@ class SubmissionSerializer(serializers.ModelSerializer):
         return ProcessingJobSerializer(job).data if job else None
 
     def get_linked_book_slug(self, obj):
-        return obj.linked_book.slug if obj.linked_book_id else ""
+        linked_book = self.linked_book_for(obj)
+        return linked_book.slug if linked_book and not linked_book.deleted_at else ""
 
     def get_linked_book(self, obj):
-        if not obj.linked_book_id:
+        linked_book = self.linked_book_for(obj)
+        if not linked_book:
             return None
-        return BookListSerializer(obj.linked_book, context=self.context).data
+        return BookListSerializer(linked_book, context=self.context).data
+
+    def get_linked_book_deleted(self, obj):
+        linked_book = self.linked_book_for(obj)
+        return bool(linked_book and linked_book.deleted_at)
 
     def get_served_from_database(self, obj):
         return bool(obj.raw_payload.get("served_from_database"))
@@ -205,6 +238,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
 class DuplicateReviewSerializer(serializers.ModelSerializer):
     submission = SubmissionSerializer(read_only=True)
     existing_book = BookListSerializer(read_only=True)
+    existing_book_deleted = serializers.SerializerMethodField()
 
     class Meta:
         model = DuplicateReview
@@ -216,8 +250,12 @@ class DuplicateReviewSerializer(serializers.ModelSerializer):
             "raw_evidence",
             "submission",
             "existing_book",
+            "existing_book_deleted",
             "created_at",
         ]
+
+    def get_existing_book_deleted(self, obj):
+        return bool(obj.existing_book_id and obj.existing_book.deleted_at)
 
 
 class DuplicateReviewDecisionSerializer(serializers.Serializer):
