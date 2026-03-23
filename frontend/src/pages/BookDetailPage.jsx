@@ -39,15 +39,27 @@ function RefreshIcon({ spinning = false }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      width="24"
-      height="24"
+      width="22"
+      height="22"
       aria-hidden="true"
       focusable="false"
       className={spinning ? "icon-spin" : ""}
     >
       <path
-        d="M12 4.75a7.25 7.25 0 0 1 6.86 4.92l.32-.9a.75.75 0 1 1 1.41.49l-1.03 2.92a.75.75 0 0 1-.95.46l-2.92-1.03a.75.75 0 0 1 .5-1.42l1.18.41A5.75 5.75 0 1 0 17.1 16a.75.75 0 1 1 1.3.75A7.25 7.25 0 1 1 12 4.75Z"
-        fill="currentColor"
+        d="M20 5v5h-5M4 19v-5h5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M20 10a8 8 0 0 0-13.66-5.66L4 6.5M4 14a8 8 0 0 0 13.66 5.66L20 17.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -541,6 +553,7 @@ export default function BookDetailPage() {
   );
   const hasFailedProcessing = latestProcessingJob?.status === "failed";
   const epubAsset = (book.assets || []).find((asset) => asset.asset_type === "epub");
+  const downloadableAssets = (book.assets || []).filter((asset) => asset.download_url);
   const processingHeading =
     latestProcessingJob?.job_type === "reprocess" ? "Regenerating book" : "Processing book";
   const processingBody = hasFailedProcessing
@@ -638,7 +651,7 @@ export default function BookDetailPage() {
                 {launchingReader ? "Opening..." : "Open reader"}
               </span>
             </button>
-            {(book.assets || []).map((asset) => (
+            {downloadableAssets.map((asset) => (
               <a key={asset.id} className="ghost-button asset-link" href={asset.download_url} target="_blank" rel="noreferrer">
                 {assetLabels[asset.asset_type] || `Download ${asset.asset_type.toUpperCase()}`}
               </a>

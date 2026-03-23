@@ -56,6 +56,71 @@ function renderField(field, filters, setFilters) {
   );
 }
 
+export function CatalogSearchRow({
+  filters,
+  setFilters,
+  fields,
+  defaultFilters,
+  filtersExpanded,
+  setFiltersExpanded,
+  searchPlaceholder,
+  resultCount,
+  drawerId,
+  compact = false,
+  showResultCount = true,
+  onSubmit,
+  buttonsDisabled = false
+}) {
+  const activeFilterCount = countActiveFilters(filters, fields, defaultFilters);
+  const rowClassName = `catalog-search-row${compact ? " catalog-search-row--compact" : ""}`;
+  const RowTag = onSubmit ? "form" : "div";
+  const handleSubmit = onSubmit
+    ? (event) => {
+        if (buttonsDisabled) {
+          event.preventDefault();
+          return;
+        }
+        onSubmit(event);
+      }
+    : undefined;
+
+  return (
+    <RowTag className={rowClassName} onSubmit={handleSubmit}>
+      <label className="catalog-search-field" aria-label={searchPlaceholder}>
+        <span className="catalog-search-icon">
+          <SearchIcon />
+        </span>
+        <input
+          type="search"
+          value={filters.q || ""}
+          onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+          placeholder={searchPlaceholder}
+          autoComplete="off"
+        />
+      </label>
+      <div className="catalog-search-actions">
+        <button
+          type="button"
+          className={`catalog-filter-toggle${filtersExpanded ? " is-active" : ""}`}
+          onClick={() => setFiltersExpanded((current) => !current)}
+          aria-expanded={filtersExpanded}
+          aria-controls={drawerId}
+          disabled={buttonsDisabled}
+        >
+          <FilterIcon />
+          <span>Filters</span>
+          {activeFilterCount ? <span className="catalog-filter-count">{activeFilterCount}</span> : null}
+        </button>
+        {showResultCount && resultCount !== "" && resultCount !== undefined && resultCount !== null ? (
+          <span className="catalog-result-count" aria-label={`${resultCount} results`}>
+            {resultCount}
+          </span>
+        ) : null}
+      </div>
+    </RowTag>
+  );
+}
+
 export default function CatalogToolbar({
   filters,
   setFilters,
@@ -67,50 +132,54 @@ export default function CatalogToolbar({
   onReset,
   searchPlaceholder,
   resultCount,
+  secondaryContent = null,
   submitLabel = "Apply filters",
-  inline = false
+  inline = false,
+  drawerId = "catalog-filter-drawer",
+  showSearchRow = true,
+  searchRowCompact = false,
+  showResultCount = true,
+  buttonsDisabled = false
 }) {
-  const activeFilterCount = countActiveFilters(filters, fields, defaultFilters);
   const wrapperClassName = `catalog-toolbar-wrap${filtersExpanded ? " is-expanded" : ""}${inline ? " is-inline" : ""}`;
+  const hasSplitTopline = showSearchRow && secondaryContent;
+  const hasSecondaryOnlyTopline = !showSearchRow && secondaryContent;
+  const toplineClassName = `catalog-toolbar-topline${hasSplitTopline ? " has-secondary" : ""}${
+    hasSecondaryOnlyTopline ? " is-secondary-only" : ""
+  }`;
+  const searchRow = showSearchRow ? (
+    <CatalogSearchRow
+      filters={filters}
+      setFilters={setFilters}
+      fields={fields}
+      defaultFilters={defaultFilters}
+      filtersExpanded={filtersExpanded}
+      setFiltersExpanded={setFiltersExpanded}
+      searchPlaceholder={searchPlaceholder}
+      resultCount={resultCount}
+      drawerId={drawerId}
+      compact={searchRowCompact}
+      showResultCount={showResultCount}
+      buttonsDisabled={buttonsDisabled}
+    />
+  ) : null;
 
   return (
     <section className={wrapperClassName}>
       <div className="catalog-toolbar-surface">
         <form className="catalog-toolbar-form" onSubmit={onSubmit}>
-          <div className="catalog-search-row">
-            <label className="catalog-search-field" aria-label={searchPlaceholder}>
-              <span className="catalog-search-icon">
-                <SearchIcon />
-              </span>
-              <input
-                type="search"
-                value={filters.q || ""}
-                onChange={(event) => setFilters({ ...filters, q: event.target.value })}
-                placeholder={searchPlaceholder}
-                autoComplete="off"
-              />
-            </label>
-            <div className="catalog-search-actions">
-              <button
-                type="button"
-                className={`catalog-filter-toggle${filtersExpanded ? " is-active" : ""}`}
-                onClick={() => setFiltersExpanded((current) => !current)}
-                aria-expanded={filtersExpanded}
-                aria-controls="catalog-filter-drawer"
-              >
-                <FilterIcon />
-                <span>Filters</span>
-                {activeFilterCount ? <span className="catalog-filter-count">{activeFilterCount}</span> : null}
-              </button>
-              {resultCount !== "" && resultCount !== undefined && resultCount !== null ? (
-                <span className="catalog-result-count" aria-label={`${resultCount} results`}>
-                  {resultCount}
-                </span>
+          {searchRow || secondaryContent ? (
+            <div className={toplineClassName}>
+              {searchRow ? (secondaryContent ? <div className="catalog-toolbar-primary">{searchRow}</div> : searchRow) : null}
+              {secondaryContent ? (
+                <div className={`catalog-toolbar-secondary-shell${hasSecondaryOnlyTopline ? " is-standalone" : ""}`}>
+                  {secondaryContent}
+                </div>
               ) : null}
             </div>
-          </div>
+          ) : null}
           <div
-            id="catalog-filter-drawer"
+            id={drawerId}
             className={`catalog-filter-drawer${filtersExpanded ? " is-open" : ""}`}
             aria-hidden={filtersExpanded ? "false" : "true"}
           >
@@ -123,10 +192,10 @@ export default function CatalogToolbar({
               ))}
             </div>
             <div className="catalog-filter-actions">
-              <button type="submit" className="primary-button">
+              <button type="submit" className="primary-button" disabled={buttonsDisabled}>
                 {submitLabel}
               </button>
-              <button type="button" className="ghost-button" onClick={onReset}>
+              <button type="button" className="ghost-button" onClick={onReset} disabled={buttonsDisabled}>
                 Reset
               </button>
             </div>

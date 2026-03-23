@@ -139,15 +139,21 @@ class TitleResolver:
                 break
             page_signatures.add(signature)
 
+            page_added_count = 0
             for entry in page_entries:
                 if entry["source_url"] in seen:
                     continue
                 seen.add(entry["source_url"])
-                SourceCatalogEntry.objects.update_or_create(
+                _, created = SourceCatalogEntry.objects.update_or_create(
                     source_url=entry["source_url"],
                     defaults=entry,
                 )
-                refreshed.append(entry)
+                if created:
+                    refreshed.append(entry)
+                    page_added_count += 1
+
+            if page_added_count == 0:
+                break
 
         return refreshed
 

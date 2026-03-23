@@ -142,8 +142,8 @@ export default function CreatedBooksPage() {
       </header>
 
       {loading ? (
-        <section className="book-grid">
-          {Array.from({ length: 4 }).map((_, index) => (
+        <section className="book-grid book-grid-loading">
+          {Array.from({ length: 6 }).map((_, index) => (
             <BookCardSkeleton key={index} />
           ))}
         </section>

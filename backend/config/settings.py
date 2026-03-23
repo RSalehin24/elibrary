@@ -70,6 +70,7 @@ CORS_ALLOWED_ORIGINS = env_list(
     "http://localhost:5173,http://127.0.0.1:5173",
 )
 FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", "http://localhost:5173")
+PUBLIC_API_ORIGIN = env("PUBLIC_API_ORIGIN", "http://localhost:8000")
 PASSWORD_RESET_FRONTEND_PATH = env("PASSWORD_RESET_FRONTEND_PATH", "/reset-password")
 EPUB_READER_BASE_URL = env("EPUB_READER_BASE_URL", "https://ereader.rsalehin24.me")
 append_unique(CORS_ALLOWED_ORIGINS, EPUB_READER_BASE_URL.rstrip("/"))

@@ -1,7 +1,7 @@
 import hashlib
 
 from django.core.files.base import ContentFile
-from django.db.models import OuterRef, Q, Subquery
+from django.db.models import Exists, OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
 from django.http import Http404
 from django.utils import timezone
@@ -51,6 +51,10 @@ class BookListView(generics.ListAPIView):
     serializer_class = BookListSerializer
 
     def get_queryset(self):
+        owned_submission = BookSubmission.objects.filter(
+            linked_book=OuterRef("pk"),
+            submitter=self.request.user,
+        )
         queryset = (
             Book.objects.prefetch_related(
                 "book_contributors__contributor",
@@ -59,6 +63,7 @@ class BookListView(generics.ListAPIView):
                 "generated_assets",
                 "source_urls",
             )
+            .annotate(user_owns_book=Exists(owned_submission))
             .filter(deleted_at__isnull=True)
             .distinct()
         )
@@ -155,6 +160,10 @@ class BookDetailView(generics.RetrieveDestroyAPIView):
     lookup_field = "slug"
 
     def get_queryset(self):
+        owned_submission = BookSubmission.objects.filter(
+            linked_book=OuterRef("pk"),
+            submitter=self.request.user,
+        )
         return (
             Book.objects.prefetch_related(
                 "book_contributors__contributor",
@@ -164,6 +173,7 @@ class BookDetailView(generics.RetrieveDestroyAPIView):
                 "source_urls",
                 "processing_jobs",
             )
+            .annotate(user_owns_book=Exists(owned_submission))
             .filter(deleted_at__isnull=True)
         )
 

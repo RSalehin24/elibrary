@@ -36,6 +36,35 @@ def user_has_scope(user, scopes, book=None):
     ).exists()
 
 
+def user_owns_book(user, book):
+    if not getattr(user, "is_authenticated", False) or book is None:
+        return False
+    owned_flag = getattr(book, "user_owns_book", None)
+    if owned_flag is not None:
+        return bool(owned_flag)
+    return book.linked_submissions.filter(submitter=user).exists()
+
+
+def user_can_download_book_assets(user, book):
+    return user_has_scope(user, [PermissionScope.DOWNLOAD_FILE], book=book) or user_owns_book(user, book)
+
+
+def user_can_launch_reader(user, book):
+    return user_has_scope(
+        user,
+        [
+            PermissionScope.PREVIEW_READ_ONCE,
+            PermissionScope.READ_DURABLE,
+            PermissionScope.DOWNLOAD_FILE,
+        ],
+        book=book,
+    ) or user_owns_book(user, book)
+
+
+def user_can_view_book_cover(user, book):
+    return user_can_launch_reader(user, book)
+
+
 class ScopePermission(BasePermission):
     required_scopes = ()
     allow_book_scoped = False

@@ -1,14 +1,16 @@
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-import requests
 from django.utils import timezone
 
 from apps.access.models import PreviewAccessSession
 from apps.accounts.models import User
 from apps.catalog.models import Book, BookSource, Category, Contributor, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType, Series
+from apps.common.models import LifecycleState
 from apps.ingestion.models import (
+    CatalogAutomationFrequency,
     BookSubmission,
     CatalogCurationRun,
     DuplicateReview,
@@ -18,18 +20,25 @@ from apps.ingestion.models import (
     ProcessingJob,
     ResolutionStatus,
     SourceCatalogEntry,
+    SourceCatalogRefreshState,
+    SourceCatalogRefreshStatus,
     SubmissionOrigin,
     SubmissionStatus,
     TitleResolutionAttempt,
 )
-from apps.ingestion.services.curation import get_catalog_automation_settings, run_due_catalog_automation, source_catalog_entry_snapshots
+from apps.ingestion.services.curation import (
+    get_catalog_automation_settings,
+    next_catalog_automation_run_at,
+    run_due_catalog_automation,
+    source_catalog_entry_snapshots,
+)
 from apps.ingestion.services.legacy_adapter import normalize_text
 from apps.ingestion.services.normalization import (
     extract_front_matter_entries,
     normalize_scraped_book,
     promote_leading_front_matter,
 )
-from apps.ingestion.services.resolution import TitleResolver
+from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver
 from apps.ingestion.services.submissions import create_submission_records, process_submission_job, queue_submission, sync_assets
 
 
@@ -263,14 +272,11 @@ def test_direct_url_submission_stores_source_page_metadata(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_source_catalog_refresh_returns_bad_gateway_when_upstream_fails(client, monkeypatch):
+def test_source_catalog_refresh_starts_background_sync_and_returns_state(client, monkeypatch):
     admin = User.objects.create_superuser(email="catalog-refresh@example.com", password="strong-password-123")
     client.force_login(admin)
 
-    def raise_upstream_error(self, max_pages=1, bucket=""):
-        raise requests.RequestException("upstream unavailable")
-
-    monkeypatch.setattr(TitleResolver, "refresh_catalog", raise_upstream_error)
+    monkeypatch.setattr("apps.ingestion.services.curation.dispatch_source_catalog_refresh", lambda state: state)
 
     response = client.post(
         "/api/ingestion/catalog/refresh/",
@@ -278,8 +284,76 @@ def test_source_catalog_refresh_returns_bad_gateway_when_upstream_fails(client, 
         content_type="application/json",
     )
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == "Could not refresh the source catalog right now. Please try again in a moment."
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["max_pages"] == 3
+    assert payload["requested_by_email"] == admin.email
+
+    sync_state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+    assert sync_state.status == SourceCatalogRefreshStatus.QUEUED
+    assert sync_state.max_pages == 3
+    assert sync_state.requested_by == admin
+
+
+@pytest.mark.django_db
+def test_source_catalog_entries_include_sync_state(client):
+    admin = User.objects.create_superuser(email="catalog-sync-state@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    SourceCatalogRefreshState.objects.create(
+        singleton_key="default",
+        status=SourceCatalogRefreshStatus.PROCESSING,
+        max_pages=6,
+    )
+
+    response = client.get("/api/ingestion/catalog/entries/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync_state"]["status"] == "processing"
+    assert payload["sync_state"]["max_pages"] == 6
+
+
+@pytest.mark.django_db
+def test_source_catalog_entries_apply_status_filter_before_pagination_and_return_counts(client):
+    admin = User.objects.create_superuser(email="catalog-filter@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    ready_book = Book.objects.create(title="A Ready Book", state=LifecycleState.READY)
+    BookSource.objects.create(
+        book=ready_book,
+        source_url="https://www.ebanglalibrary.com/books/ready-book/",
+        normalized_source_url="https://www.ebanglalibrary.com/books/ready-book/",
+    )
+    GeneratedAsset.objects.create(book=ready_book, asset_type=GeneratedAssetType.HTML, status=GeneratedAssetStatus.READY)
+    GeneratedAsset.objects.create(book=ready_book, asset_type=GeneratedAssetType.EPUB, status=GeneratedAssetStatus.READY)
+
+    SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/ready-book/",
+        title="A Ready Book",
+        author_line="Author",
+        normalized_title="a ready book",
+        normalized_display="a ready book author",
+    )
+    SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/new-book/",
+        title="Z New Book",
+        author_line="Author",
+        normalized_title="z new book",
+        normalized_display="z new book author",
+    )
+
+    response = client.get("/api/ingestion/catalog/entries/?limit=1&status=new")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["total"] == 1
+    assert payload["summary"]["new"] == 1
+    assert payload["pagination"]["total_count"] == 1
+    assert payload["pagination"]["page_count"] == 1
+    assert len(payload["entries"]) == 1
+    assert payload["entries"][0]["title"] == "Z New Book"
 
 
 @pytest.mark.django_db
@@ -320,6 +394,67 @@ def test_title_resolver_refresh_catalog_accepts_long_source_urls():
     entry = SourceCatalogEntry.objects.get(source_url=long_url)
     assert entry.title == "কালীগুণীন ও বজ্র-সিন্দুক রহস্য"
     assert entry.author_line == "সৌমিক দে"
+
+
+@pytest.mark.django_db
+def test_title_resolver_refresh_catalog_stops_when_a_page_adds_no_new_books():
+    existing_url = "https://www.ebanglalibrary.com/books/existing-book/"
+    new_url = "https://www.ebanglalibrary.com/books/new-book/"
+    SourceCatalogEntry.objects.create(
+        source_url=existing_url,
+        title="Existing Book",
+        author_line="Known Author",
+        normalized_title=normalize_text("Existing Book"),
+        normalized_display=normalize_text("Existing Book Known Author"),
+    )
+
+    first_page = f"""
+    <div class="facetwp-template" data-name="books">
+      <div class="fwpl-result">
+        <div class="fwpl-item el-97dha">
+          <a href="{existing_url}">Existing Book - Known Author</a>
+        </div>
+      </div>
+    </div>
+    """
+    second_page = f"""
+    <div class="facetwp-template" data-name="books">
+      <div class="fwpl-result">
+        <div class="fwpl-item el-97dha">
+          <a href="{new_url}">New Book - New Author</a>
+        </div>
+      </div>
+    </div>
+    """
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+            self.calls = []
+
+        def get(self, url, params=None, timeout=30):
+            params = params or {}
+            self.calls.append((url, params))
+            page_number = params.get("_paged", 1)
+            if page_number == 1:
+                return FakeResponse(first_page)
+            return FakeResponse(second_page)
+
+    session = FakeSession()
+    resolver = TitleResolver(session=session)
+
+    refreshed = resolver.refresh_catalog(max_pages=2)
+
+    assert refreshed == []
+    assert session.calls == [(CATALOG_URL, {})]
+    assert SourceCatalogEntry.objects.filter(source_url=new_url).count() == 0
 
 
 @pytest.mark.django_db
@@ -378,6 +513,7 @@ def test_source_catalog_entry_snapshots_mark_new_and_ready_books():
         source_url="https://www.ebanglalibrary.com/books/missing-book/",
         title="Missing Book",
         author_line="Writer One",
+        raw_data={"category": "Mystery"},
         normalized_title=normalize_text("Missing Book"),
         normalized_display=normalize_text("Missing Book Writer One"),
     )
@@ -397,14 +533,116 @@ def test_source_catalog_entry_snapshots_mark_new_and_ready_books():
     )
     GeneratedAsset.objects.create(book=ready_book, asset_type=GeneratedAssetType.HTML, status=GeneratedAssetStatus.READY)
     GeneratedAsset.objects.create(book=ready_book, asset_type=GeneratedAssetType.EPUB, status=GeneratedAssetStatus.READY)
+    ready_book.categories.add(Category.objects.create(name="Novel"))
 
     snapshots, summary = source_catalog_entry_snapshots(SourceCatalogEntry.objects.order_by("title"))
     by_url = {snapshot["source_url"]: snapshot for snapshot in snapshots}
 
     assert by_url[missing_entry.source_url]["curation_status"] == "new"
+    assert by_url[missing_entry.source_url]["categories"] == "Mystery"
     assert by_url[ready_entry.source_url]["curation_status"] == "ready"
+    assert by_url[ready_entry.source_url]["categories"] == "Novel"
     assert summary["new"] == 1
     assert summary["ready"] == 1
+
+
+@pytest.mark.django_db
+def test_source_catalog_entry_snapshots_surface_failed_creation_before_local_book_exists():
+    entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/failed-book/",
+        title="Failed Book",
+        author_line="Writer",
+        normalized_title=normalize_text("Failed Book"),
+        normalized_display=normalize_text("Failed Book Writer"),
+    )
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        origin=SubmissionOrigin.CURATION,
+        original_input=entry.source_url,
+        normalized_input=normalize_text(entry.source_url),
+        resolved_url=entry.source_url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.FAILED,
+        error_message="Missing generated assets: EPUB.",
+    )
+    ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.FAILED,
+        last_error="Missing generated assets: EPUB.",
+    )
+
+    snapshots, summary = source_catalog_entry_snapshots(SourceCatalogEntry.objects.filter(pk=entry.pk))
+
+    assert snapshots[0]["curation_status"] == "failed"
+    assert snapshots[0]["latest_submission_status"] == "failed"
+    assert snapshots[0]["latest_job_status"] == "failed"
+    assert summary["failed"] == 1
+
+
+@pytest.mark.django_db
+def test_processing_manager_can_queue_selected_catalog_entries_for_creation(client, monkeypatch):
+    admin = User.objects.create_superuser(email="catalog-create-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+    new_entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/new-book/",
+        title="New Book",
+        author_line="Writer",
+        normalized_title=normalize_text("New Book"),
+        normalized_display=normalize_text("New Book Writer"),
+    )
+    queued_entries = []
+
+    def fake_create_submission_records(*, submitter, parsed_entries, auto_process, origin):
+        queued_entries.extend(parsed_entries)
+        assert submitter == admin
+        assert auto_process is True
+        assert origin == SubmissionOrigin.CURATION
+        return []
+
+    monkeypatch.setattr("apps.ingestion.views.create_submission_records", fake_create_submission_records)
+
+    response = client.post(
+        "/api/ingestion/catalog/entries/create-books/",
+        data=json.dumps({"ids": [str(new_entry.id)]}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 202
+    assert response.json()["queued_creates"] == 1
+    assert queued_entries == [{"kind": "url", "value": new_entry.source_url}]
+
+
+@pytest.mark.django_db
+def test_sync_assets_marks_book_for_review_when_epub_is_missing(tmp_path):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/missing-epub/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/missing-epub/"),
+        resolved_url="https://www.ebanglalibrary.com/books/missing-epub/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.PROCESSING,
+    )
+    job = ProcessingJob.objects.create(submission=submission, status=JobStatus.PROCESSING)
+    book = Book.objects.create(title="Missing EPUB", state="ready", review_state="pending")
+    html_path = tmp_path / "book.html"
+    html_path.write_text("<html><body>ok</body></html>", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Missing generated assets: EPUB"):
+        sync_assets(
+            book,
+            job,
+            {
+                "book_title": "Missing EPUB",
+                "output_folder": str(tmp_path),
+                "cover": "",
+            },
+        )
+
+    book.refresh_from_db()
+    assert book.state == "needs_review"
+    assert book.review_state == "needs_review"
+    assert GeneratedAsset.objects.get(book=book, asset_type=GeneratedAssetType.HTML).status == GeneratedAssetStatus.READY
+    assert GeneratedAsset.objects.get(book=book, asset_type=GeneratedAssetType.EPUB).status == GeneratedAssetStatus.FAILED
 
 
 @pytest.mark.django_db
@@ -444,6 +682,7 @@ def test_processing_manager_can_update_catalog_automation_settings(client):
             {
                 "enabled": True,
                 "daily_run_time": "03:45",
+                "frequency": "weekly",
                 "mode": "all",
                 "refresh_max_pages": 40,
             }
@@ -455,6 +694,7 @@ def test_processing_manager_can_update_catalog_automation_settings(client):
     payload = response.json()["settings"]
     assert payload["enabled"] is True
     assert payload["daily_run_time"].startswith("03:45")
+    assert payload["frequency"] == "weekly"
     assert payload["mode"] == "all"
     assert payload["refresh_max_pages"] == 40
 
@@ -598,6 +838,62 @@ def test_due_catalog_automation_queues_one_scheduled_run_per_day(monkeypatch):
     assert CatalogCurationRun.objects.filter(trigger="scheduled").count() == 1
     assert second_result["ran"] is False
     assert second_result["reason"] == "already_ran"
+
+
+@pytest.mark.django_db
+def test_weekly_catalog_automation_waits_until_the_next_week(monkeypatch):
+    now = timezone.localtime(timezone.now()).replace(hour=10, minute=0, second=0, microsecond=0)
+    settings_obj = get_catalog_automation_settings()
+    settings_obj.enabled = True
+    settings_obj.daily_run_time = now.replace(hour=9, minute=0).time()
+    settings_obj.frequency = CatalogAutomationFrequency.WEEKLY
+    settings_obj.save()
+    type(settings_obj).objects.filter(pk=settings_obj.pk).update(updated_at=now - timedelta(days=10))
+    settings_obj.refresh_from_db()
+
+    latest_run = CatalogCurationRun.objects.create(
+        trigger="scheduled",
+        mode="pending",
+        status="succeeded",
+        refresh_catalog=True,
+        refresh_max_pages=10,
+    )
+    CatalogCurationRun.objects.filter(pk=latest_run.pk).update(created_at=now - timedelta(days=3))
+
+    result = run_due_catalog_automation(now=now)
+
+    assert result["ran"] is False
+    assert result["reason"] == "already_ran"
+
+
+@pytest.mark.django_db
+def test_next_catalog_automation_run_at_uses_monthly_frequency_from_latest_run():
+    timezone_value = timezone.get_current_timezone()
+    now = timezone.make_aware(datetime(2026, 3, 23, 10, 0, 0), timezone_value)
+    settings_obj = get_catalog_automation_settings()
+    settings_obj.enabled = True
+    settings_obj.daily_run_time = now.astimezone(timezone_value).replace(hour=6, minute=30).time()
+    settings_obj.frequency = CatalogAutomationFrequency.MONTHLY
+    settings_obj.save()
+    type(settings_obj).objects.filter(pk=settings_obj.pk).update(updated_at=now - timedelta(days=90))
+    settings_obj.refresh_from_db()
+
+    latest_run = CatalogCurationRun.objects.create(
+        trigger="scheduled",
+        mode="pending",
+        status="succeeded",
+        refresh_catalog=True,
+        refresh_max_pages=10,
+    )
+    CatalogCurationRun.objects.filter(pk=latest_run.pk).update(
+        created_at=timezone.make_aware(datetime(2026, 1, 31, 6, 30, 0), timezone_value)
+    )
+    latest_run.refresh_from_db()
+
+    next_run_at = next_catalog_automation_run_at(settings_obj, now=now)
+
+    assert timezone.localtime(next_run_at).month == 2
+    assert timezone.localtime(next_run_at).day in {28, 29}
 
 
 def test_front_matter_extraction_handles_inline_labels_and_role_detection():

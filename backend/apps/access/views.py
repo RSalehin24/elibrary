@@ -25,8 +25,9 @@ from apps.access.models import (
     ReadingSession,
 )
 from apps.access.serializers import BookmarkSerializer, PermissionGrantSerializer, ReadingSessionSerializer
-from apps.catalog.models import Book, Contributor, ContributorRole, Category, GeneratedAsset, GeneratedAssetType
-from apps.common.permissions import IsSuperAdmin, user_has_scope
+from apps.catalog.models import Book, Contributor, ContributorRole, Category, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType
+from apps.common.permissions import IsSuperAdmin, user_can_download_book_assets, user_can_launch_reader, user_can_view_book_cover, user_has_scope
+from apps.common.url_utils import public_api_url
 from apps.ingestion.services.normalization import promote_leading_front_matter
 
 
@@ -50,7 +51,7 @@ def get_token_preview_session(token):
 
 
 def resolve_asset(book, asset_type):
-    asset = book.generated_assets.filter(asset_type=asset_type).first()
+    asset = book.generated_assets.filter(asset_type=asset_type, status=GeneratedAssetStatus.READY).first()
     if asset is None:
         raise Http404("Requested asset does not exist.")
     return asset
@@ -322,7 +323,12 @@ class BookAssetDownloadView(APIView):
 
     def get(self, request, slug, asset_type):
         book = Book.objects.get(slug=slug)
-        if not user_has_scope(request.user, [PermissionScope.DOWNLOAD_FILE], book=book):
+        can_access = (
+            user_can_view_book_cover(request.user, book)
+            if asset_type == GeneratedAssetType.COVER
+            else user_can_download_book_assets(request.user, book)
+        )
+        if not can_access:
             raise PermissionDenied("You do not have download access for this book.")
 
         asset = resolve_asset(book, asset_type)
@@ -339,15 +345,7 @@ class ReaderLaunchView(APIView):
 
     def post(self, request, slug):
         book = Book.objects.get(slug=slug)
-        allowed = user_has_scope(
-            request.user,
-            [
-                PermissionScope.PREVIEW_READ_ONCE,
-                PermissionScope.READ_DURABLE,
-                PermissionScope.DOWNLOAD_FILE,
-            ],
-            book=book,
-        )
+        allowed = user_can_launch_reader(request.user, book)
         session = get_active_preview_session(request.user, book)
         if not allowed and session is None:
             raise PermissionDenied("You do not have reader access for this book.")
@@ -358,9 +356,7 @@ class ReaderLaunchView(APIView):
         session.launch_count += 1
         session.save(update_fields=["launch_count", "updated_at"])
 
-        manifest_url = request.build_absolute_uri(
-            reverse("access-reader-manifest", kwargs={"token": session.token})
-        )
+        manifest_url = public_api_url("access-reader-manifest", kwargs={"token": session.token}, request=request)
         launch_url = f"{settings.EPUB_READER_BASE_URL.rstrip('/')}/?manifest={quote(manifest_url, safe='')}"
 
         return Response(
@@ -395,12 +391,8 @@ class ReaderManifestView(APIView):
                 defaults={"preview_session": session},
             )
             bookmarks = Bookmark.objects.filter(user=session.user, book=session.book)
-            reading_session_url = request.build_absolute_uri(
-                reverse("access-reader-session", kwargs={"token": session.token})
-            )
-            bookmarks_url = request.build_absolute_uri(
-                reverse("access-reader-bookmark-list", kwargs={"token": session.token})
-            )
+            reading_session_url = public_api_url("access-reader-session", kwargs={"token": session.token}, request=request)
+            bookmarks_url = public_api_url("access-reader-bookmark-list", kwargs={"token": session.token}, request=request)
 
         return Response(
             {
@@ -408,12 +400,8 @@ class ReaderManifestView(APIView):
                     "title": session.book.title,
                     "slug": session.book.slug,
                 },
-                "epub_download_url": request.build_absolute_uri(
-                    reverse("access-reader-epub", kwargs={"token": session.token})
-                ),
-                "html_preview_url": request.build_absolute_uri(
-                    reverse("access-reader-html", kwargs={"token": session.token})
-                )
+                "epub_download_url": public_api_url("access-reader-epub", kwargs={"token": session.token}, request=request),
+                "html_preview_url": public_api_url("access-reader-html", kwargs={"token": session.token}, request=request)
                 if html_asset
                 else "",
                 "reading_session_url": reading_session_url,

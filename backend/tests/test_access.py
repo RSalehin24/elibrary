@@ -17,6 +17,7 @@ from apps.catalog.models import (
     GeneratedAssetType,
 )
 from apps.common.permissions import user_has_scope
+from apps.ingestion.models import BookSubmission, ResolutionStatus, SubmissionStatus
 
 
 def assert_content_disposition_filename(header_value, expected_filename):
@@ -72,6 +73,76 @@ def test_download_and_reader_launch_are_protected(tmp_path, client):
     assert manifest.json()["book"]["slug"] == book.slug
     assert manifest.json()["reading_session_url"]
     assert manifest.json()["bookmarks_url"]
+
+
+@pytest.mark.django_db
+def test_book_owner_can_access_cover_downloads_and_reader_without_explicit_grants(tmp_path, client):
+    user = User.objects.create_user(email="owner-access@example.com", password="strong-password-123")
+    book = Book.objects.create(title="Owned Book", state="ready", review_state="approved")
+    cover_path = Path(tmp_path) / "book_cover.jpg"
+    html_path = Path(tmp_path) / "book.html"
+    epub_path = Path(tmp_path) / "owned-book.epub"
+    cover_path.write_bytes(b"cover")
+    html_path.write_text("<html></html>", encoding="utf-8")
+    epub_path.write_bytes(b"epub")
+
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.COVER,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(cover_path),
+        content_type="image/jpeg",
+        file_size=cover_path.stat().st_size,
+    )
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.HTML,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(html_path),
+        content_type="text/html",
+        file_size=html_path.stat().st_size,
+    )
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.EPUB,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(epub_path),
+        content_type="application/epub+zip",
+        file_size=epub_path.stat().st_size,
+    )
+    BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/owned-book/",
+        normalized_input="https://www.ebanglalibrary.com/books/owned-book/",
+        resolved_url="https://www.ebanglalibrary.com/books/owned-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.READY,
+        linked_book=book,
+    )
+
+    client.force_login(user)
+
+    list_response = client.get("/api/catalog/books/?ownership=mine")
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["cover_download_url"].endswith(f"/api/access/books/{book.slug}/download/cover/")
+
+    detail_response = client.get(f"/api/catalog/books/{book.slug}/")
+    assert detail_response.status_code == 200
+    asset_urls = {asset["asset_type"]: asset["download_url"] for asset in detail_response.json()["assets"]}
+    assert asset_urls["cover"].endswith(f"/api/access/books/{book.slug}/download/cover/")
+    assert asset_urls["html"].endswith(f"/api/access/books/{book.slug}/download/html/")
+    assert asset_urls["epub"].endswith(f"/api/access/books/{book.slug}/download/epub/")
+
+    cover_response = client.get(f"/api/access/books/{book.slug}/download/cover/")
+    html_response = client.get(f"/api/access/books/{book.slug}/download/html/")
+    epub_response = client.get(f"/api/access/books/{book.slug}/download/epub/")
+    assert cover_response.status_code == 200
+    assert html_response.status_code == 200
+    assert epub_response.status_code == 200
+
+    launch = client.post(f"/api/access/books/{book.slug}/reader-launch/")
+    assert launch.status_code == 200
 
 
 @pytest.mark.django_db

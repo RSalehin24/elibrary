@@ -9,10 +9,10 @@ from apps.ingestion.models import (
     CatalogCurationMode,
     CatalogCurationRun,
     DuplicateReview,
-    CatalogCurationTrigger,
     MatchCandidate,
     ProcessingJob,
     SourceCatalogEntry,
+    SourceCatalogRefreshState,
     SubmissionInputType,
 )
 from apps.catalog.serializers import BookListSerializer
@@ -89,6 +89,8 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
     submission_status = serializers.CharField(source="submission.status", read_only=True)
     submission_resolution_status = serializers.CharField(source="submission.resolution_status", read_only=True)
     queue_name = serializers.CharField(read_only=True)
+    target_book_slug = serializers.SerializerMethodField()
+    target_book_title = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcessingJob
@@ -105,11 +107,30 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
             "submission_input",
             "submission_status",
             "submission_resolution_status",
+            "target_book_slug",
+            "target_book_title",
             "last_error",
             "created_at",
+            "updated_at",
             "started_at",
             "finished_at",
         ]
+
+    def get_target_book(self, obj):
+        if obj.book_id:
+            return obj.book
+        submission = obj.submission
+        if submission.linked_book_id:
+            return submission.linked_book
+        return None
+
+    def get_target_book_slug(self, obj):
+        book = self.get_target_book(obj)
+        return book.slug if book else ""
+
+    def get_target_book_title(self, obj):
+        book = self.get_target_book(obj)
+        return book.title if book else ""
 
 
 class SubmissionSerializer(serializers.ModelSerializer):
@@ -142,6 +163,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
             "candidates",
             "latest_job",
             "created_at",
+            "updated_at",
         ]
 
     def canonical_submission_for(self, obj):
@@ -207,14 +229,18 @@ class SourceCatalogEntrySnapshotSerializer(serializers.Serializer):
     id = serializers.CharField()
     title = serializers.CharField()
     author_line = serializers.CharField(allow_blank=True)
+    categories = serializers.CharField(allow_blank=True)
     source_url = serializers.URLField()
+    created_at = serializers.DateTimeField()
     last_seen_at = serializers.DateTimeField()
     curation_status = serializers.CharField()
     local_book_slug = serializers.CharField(allow_blank=True)
     local_book_title = serializers.CharField(allow_blank=True)
     local_book_state = serializers.CharField(allow_blank=True)
+    latest_submission_status = serializers.CharField(allow_blank=True)
     latest_job_status = serializers.CharField(allow_blank=True)
     latest_job_error = serializers.CharField(allow_blank=True)
+    activity_at = serializers.DateTimeField(allow_null=True)
     updated_at = serializers.DateTimeField(allow_null=True)
 
 
@@ -238,6 +264,7 @@ class CatalogCurationRunSerializer(serializers.ModelSerializer):
             "summary",
             "last_error",
             "created_at",
+            "updated_at",
             "started_at",
             "finished_at",
         ]
@@ -249,6 +276,27 @@ class CatalogCurationRunCreateSerializer(serializers.Serializer):
     refresh_max_pages = serializers.IntegerField(required=False, min_value=1, max_value=80, default=80)
 
 
+class SourceCatalogRefreshStateSerializer(serializers.ModelSerializer):
+    requested_by_email = serializers.EmailField(source="requested_by.email", read_only=True)
+
+    class Meta:
+        model = SourceCatalogRefreshState
+        fields = [
+            "status",
+            "max_pages",
+            "task_id",
+            "queue_name",
+            "retry_count",
+            "refreshed_entries",
+            "last_error",
+            "requested_by_email",
+            "created_at",
+            "updated_at",
+            "started_at",
+            "finished_at",
+        ]
+
+
 class CatalogAutomationSettingsSerializer(serializers.ModelSerializer):
     next_run_at = serializers.SerializerMethodField()
 
@@ -257,6 +305,7 @@ class CatalogAutomationSettingsSerializer(serializers.ModelSerializer):
         fields = [
             "enabled",
             "daily_run_time",
+            "frequency",
             "mode",
             "refresh_max_pages",
             "next_run_at",
@@ -272,6 +321,11 @@ class CatalogAutomationSettingsUpdateSerializer(serializers.ModelSerializer):
         fields = [
             "enabled",
             "daily_run_time",
+            "frequency",
             "mode",
             "refresh_max_pages",
         ]
+
+
+class BulkIdsSerializer(serializers.Serializer):
+    ids = serializers.ListField(child=serializers.UUIDField(), allow_empty=False, max_length=200)

@@ -83,6 +83,11 @@ SUBMISSION_PAYLOAD_KEYS_TO_SHARE = (
 
 ACTIVE_JOB_STATUSES = (JobStatus.QUEUED, JobStatus.PROCESSING)
 JOB_CANCEL_MESSAGE = "Stopped by user."
+REQUIRED_GENERATED_ASSET_TYPES = (GeneratedAssetType.HTML, GeneratedAssetType.EPUB)
+GENERATED_ASSET_LABELS = {
+    GeneratedAssetType.HTML: "HTML",
+    GeneratedAssetType.EPUB: "EPUB",
+}
 
 
 def ensure_preview_session(user, book, submission=None, allow_guest=False):
@@ -719,6 +724,7 @@ def cleanup_staged_asset_files(output_folder, synced_paths):
 
 def sync_assets(book, job, scraped_data):
     synced_paths = []
+    ready_asset_types = set()
     for asset_type, path in candidate_asset_paths(scraped_data).items():
         asset, _ = GeneratedAsset.objects.get_or_create(book=book, asset_type=asset_type)
         if not path or not Path(path).exists():
@@ -741,8 +747,20 @@ def sync_assets(book, job, scraped_data):
         asset.legacy_path = ""
         asset.save()
         synced_paths.append(path)
+        ready_asset_types.add(asset_type)
 
     cleanup_staged_asset_files(scraped_data.get("output_folder"), synced_paths)
+
+    missing_required_assets = [
+        GENERATED_ASSET_LABELS[asset_type]
+        for asset_type in REQUIRED_GENERATED_ASSET_TYPES
+        if asset_type not in ready_asset_types
+    ]
+    if missing_required_assets:
+        book.state = LifecycleState.NEEDS_REVIEW
+        book.review_state = ReviewState.NEEDS_REVIEW
+        book.save(update_fields=["state", "review_state", "updated_at"])
+        raise ValueError(f"Missing generated assets: {', '.join(missing_required_assets)}.")
 
 
 def complete_processed_submission(submission, book, normalized_url, source="scrape"):

@@ -212,7 +212,7 @@ export default function LibraryPage() {
       ) : null}
 
       {loading ? (
-        <section className="book-grid">
+        <section className="book-grid book-grid-loading">
           {Array.from({ length: 6 }).map((_, index) => (
             <BookCardSkeleton key={index} />
           ))}

@@ -8,11 +8,15 @@ from apps.catalog.models import (
     Book,
     ContributorRole,
     GeneratedAsset,
+    GeneratedAssetStatus,
+    GeneratedAssetType,
     MetadataReview,
     MetadataVersion,
 )
 from apps.catalog.services import replace_book_relations
 from apps.catalog.services import normalize_book_contributors
+from apps.common.permissions import user_can_download_book_assets, user_can_view_book_cover
+from apps.common.url_utils import public_api_url
 from apps.ingestion.services.normalization import combined_front_matter_html, extract_front_matter_entries, split_multi_value
 
 
@@ -32,7 +36,13 @@ class GeneratedAssetSerializer(serializers.ModelSerializer):
 
     def get_download_url(self, obj):
         request = self.context.get("request")
-        return reverse(
+        if request is not None:
+            if obj.asset_type == GeneratedAssetType.COVER:
+                if not user_can_view_book_cover(request.user, obj.book):
+                    return ""
+            elif not user_can_download_book_assets(request.user, obj.book):
+                return ""
+        return public_api_url(
             "access-book-asset-download",
             kwargs={"slug": obj.book.slug, "asset_type": obj.asset_type},
             request=request,
@@ -83,10 +93,19 @@ class BookListSerializer(serializers.ModelSerializer):
 
     def get_cover_download_url(self, obj):
         request = self.context.get("request")
-        cover = next((asset for asset in obj.generated_assets.all() if asset.asset_type == "cover"), None)
+        if request is not None and not user_can_view_book_cover(request.user, obj):
+            return ""
+        cover = next(
+            (
+                asset
+                for asset in obj.generated_assets.all()
+                if asset.asset_type == GeneratedAssetType.COVER and asset.status == GeneratedAssetStatus.READY
+            ),
+            None,
+        )
         if not cover:
             return ""
-        return reverse(
+        return public_api_url(
             "access-book-asset-download",
             kwargs={"slug": obj.slug, "asset_type": "cover"},
             request=request,

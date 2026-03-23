@@ -63,6 +63,25 @@ class CatalogCurationTrigger(models.TextChoices):
     SCHEDULED = "scheduled", "Scheduled"
 
 
+class CatalogAutomationFrequency(models.TextChoices):
+    DAILY = "daily", "Daily"
+    WEEKLY = "weekly", "Weekly"
+    BIWEEKLY = "biweekly", "Bi-weekly"
+    MONTHLY = "monthly", "Monthly"
+    BIMONTHLY = "bimonthly", "Bi-monthly"
+    QUARTERLY = "quarterly", "Every 3 months"
+    FOUR_MONTHLY = "four_monthly", "Every 4 months"
+    HALF_YEARLY = "half_yearly", "Half-yearly"
+
+
+class SourceCatalogRefreshStatus(models.TextChoices):
+    IDLE = "idle", "Idle"
+    QUEUED = "queued", "Queued"
+    PROCESSING = "processing", "Processing"
+    SUCCEEDED = "succeeded", "Succeeded"
+    FAILED = "failed", "Failed"
+
+
 class SubmissionOrigin(models.TextChoices):
     USER = "user", "User"
     CURATION = "curation", "Source curation"
@@ -86,6 +105,11 @@ class CatalogAutomationSettings(UUIDPrimaryKeyModel, TimeStampedModel):
     singleton_key = models.CharField(max_length=32, unique=True, default="default")
     enabled = models.BooleanField(default=False)
     daily_run_time = models.TimeField(default=time(2, 0))
+    frequency = models.CharField(
+        max_length=24,
+        choices=CatalogAutomationFrequency.choices,
+        default=CatalogAutomationFrequency.DAILY,
+    )
     mode = models.CharField(max_length=16, choices=CatalogCurationMode.choices, default=CatalogCurationMode.PENDING)
     refresh_max_pages = models.PositiveIntegerField(default=80)
     updated_by = models.ForeignKey(
@@ -95,6 +119,33 @@ class CatalogAutomationSettings(UUIDPrimaryKeyModel, TimeStampedModel):
         null=True,
         related_name="catalog_automation_updates",
     )
+
+    class Meta:
+        ordering = ["singleton_key"]
+
+
+class SourceCatalogRefreshState(UUIDPrimaryKeyModel, TimeStampedModel):
+    singleton_key = models.CharField(max_length=32, unique=True, default="default")
+    status = models.CharField(
+        max_length=16,
+        choices=SourceCatalogRefreshStatus.choices,
+        default=SourceCatalogRefreshStatus.IDLE,
+    )
+    max_pages = models.PositiveIntegerField(default=80)
+    task_id = models.CharField(max_length=255, blank=True)
+    queue_name = models.CharField(max_length=100, blank=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    refreshed_entries = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    requested_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="source_catalog_refreshes",
+    )
+    started_at = models.DateTimeField(blank=True, null=True)
+    finished_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         ordering = ["singleton_key"]
