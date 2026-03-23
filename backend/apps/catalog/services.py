@@ -4,9 +4,13 @@ from apps.catalog.models import (
     BookContributor,
     BookSeries,
     BookSource,
+    build_book_catalog_code,
     Category,
     Contributor,
     ContributorRole,
+    is_entity_catalog_code,
+    CATEGORY_ENTITY_TAG,
+    WRITER_ENTITY_TAG,
     Series,
 )
 from apps.common.text import clean_display_text, normalize_catalog_text
@@ -60,6 +64,11 @@ def get_or_create_contributor(name):
         normalized_name=normalized,
         defaults={"name": cleaned},
     )
+    if not contributor.catalog_code or not is_entity_catalog_code(
+        contributor.catalog_code,
+        entity_tag=WRITER_ENTITY_TAG,
+    ):
+        contributor.save()
     return contributor
 
 
@@ -84,6 +93,11 @@ def get_or_create_category(name):
         normalized_name=normalized,
         defaults={"name": cleaned},
     )
+    if not category.catalog_code or not is_entity_catalog_code(
+        category.catalog_code,
+        entity_tag=CATEGORY_ENTITY_TAG,
+    ):
+        category.save()
     return category
 
 
@@ -114,6 +128,18 @@ def find_existing_book_by_source_url(normalized_source_url):
         .first()
     )
     return source.book if source else None
+
+
+def sync_book_catalog_code(book):
+    if not book.pk:
+        book.save()
+        return book
+
+    next_code = build_book_catalog_code(book)
+    if next_code != book.catalog_code:
+        book.catalog_code = next_code
+        book.save(update_fields=["catalog_code", "updated_at"])
+    return book
 
 
 def replace_book_relations(book, contributors=None, series_names=None, category_names=None):
@@ -166,4 +192,5 @@ def replace_book_relations(book, contributors=None, series_names=None, category_
                 raw_value=category_name,
             )
 
+    sync_book_catalog_code(book)
     return book

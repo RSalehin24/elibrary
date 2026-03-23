@@ -14,10 +14,28 @@ from apps.catalog.models import (
     Series,
 )
 
-admin.site.register(Contributor)
+@admin.register(Contributor)
+class ContributorAdmin(admin.ModelAdmin):
+    list_display = ("name", "catalog_code", "slug", "created_at")
+    search_fields = ("name", "catalog_code", "slug")
+
+
 admin.site.register(Series)
-admin.site.register(Category)
-admin.site.register(Book)
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ("name", "catalog_code", "slug", "created_at")
+    search_fields = ("name", "catalog_code", "slug")
+
+
+@admin.register(Book)
+class BookAdmin(admin.ModelAdmin):
+    list_display = ("title", "catalog_code", "record_type", "state", "review_state", "created_at")
+    list_filter = ("record_type", "state", "review_state")
+    search_fields = ("title", "catalog_code", "slug")
+
+
 admin.site.register(BookContributor)
 admin.site.register(BookSeries)
 admin.site.register(BookCategory)

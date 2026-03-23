@@ -1,9 +1,9 @@
 import hashlib
 
 from django.core.files.base import ContentFile
-from django.db.models import Exists, OuterRef, Q, Subquery
-from django.shortcuts import get_object_or_404
 from django.http import Http404
+from django.db.models import Count, Exists, OuterRef, Q, Subquery
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.text import slugify
@@ -14,14 +14,33 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ingestion.models import BookSubmission
-from apps.catalog.models import Book, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType, MetadataReview, MetadataVersion
+from apps.catalog.models import (
+    Book,
+    BookRecordType,
+    Category,
+    Contributor,
+    ContributorRole,
+    GeneratedAsset,
+    GeneratedAssetStatus,
+    GeneratedAssetType,
+    MetadataReview,
+    MetadataVersion,
+)
+from apps.catalog.exports import (
+    build_book_tickets_pdf_response,
+    build_books_csv_response,
+    build_books_pdf_response,
+)
 from apps.catalog.serializers import (
     BookDetailSerializer,
-    EpubAssetReplaceSerializer,
     BookListSerializer,
     BookMetadataUpdateSerializer,
+    CategoryListSerializer,
+    EpubAssetReplaceSerializer,
+    ManualBookCreateSerializer,
     MetadataReviewDecisionSerializer,
     MetadataReviewSerializer,
+    WriterListSerializer,
 )
 from apps.access.models import PermissionScope
 from apps.common.models import LifecycleState
@@ -46,16 +65,156 @@ def apply_created_at_filters(queryset, request):
     return queryset
 
 
-class BookListView(generics.ListAPIView):
-    permission_classes = [IsAuthenticated]
-    serializer_class = BookListSerializer
+VALID_RECORD_TYPES = {choice for choice, _ in BookRecordType.choices}
 
-    def get_queryset(self):
+
+def requested_record_type(request, default_record_type):
+    record_type = request.query_params.get("record_type", "").strip()
+    if record_type == "all":
+        return "all"
+    if record_type in VALID_RECORD_TYPES:
+        return record_type
+    return default_record_type
+
+
+def apply_book_record_type_filter(queryset, request, *, default_record_type):
+    record_type = requested_record_type(request, default_record_type)
+    if record_type == "all":
+        return queryset
+    return queryset.filter(record_type=record_type)
+
+
+def export_record_type(request, default_record_type):
+    record_type = requested_record_type(request, default_record_type)
+    if record_type == "all":
+        return "all"
+    return record_type
+
+
+def filtered_book_queryset(queryset, request, *, default_record_type):
+    queryset = apply_book_record_type_filter(queryset, request, default_record_type=default_record_type)
+    ownership = request.query_params.get("ownership", "").strip()
+
+    if ownership == "mine":
+        latest_submission = (
+            BookSubmission.objects.filter(
+                linked_book=OuterRef("pk"),
+                submitter=request.user,
+            )
+            .order_by("-created_at")
+            .values("created_at")[:1]
+        )
+        queryset = queryset.annotate(latest_submission_at=Subquery(latest_submission)).filter(latest_submission_at__isnull=False)
+
+    query = request.query_params.get("q", "").strip()
+    if query:
+        submission_query = Q(linked_submissions__original_input__icontains=query)
+        if ownership == "mine":
+            submission_query &= Q(linked_submissions__submitter=request.user)
+        queryset = queryset.filter(
+            Q(catalog_code__icontains=query)
+            | Q(title__icontains=query)
+            | Q(book_contributors__contributor__name__icontains=query)
+            | Q(book_contributors__contributor__catalog_code__icontains=query)
+            | Q(book_series__series__name__icontains=query)
+            | Q(book_categories__category__name__icontains=query)
+            | Q(book_categories__category__catalog_code__icontains=query)
+            | submission_query
+        )
+
+    book_code = request.query_params.get("book_code", "").strip()
+    if book_code:
+        queryset = queryset.filter(catalog_code__icontains=book_code)
+
+    author = request.query_params.get("author", "").strip() or request.query_params.get("writer", "").strip()
+    if author:
+        queryset = queryset.filter(
+            book_contributors__role=ContributorRole.AUTHOR,
+            book_contributors__contributor__name__icontains=author,
+        )
+
+    writer_code = request.query_params.get("writer_code", "").strip()
+    if writer_code:
+        queryset = queryset.filter(
+            book_contributors__role=ContributorRole.AUTHOR,
+            book_contributors__contributor__catalog_code=writer_code,
+        )
+
+    writer_slug = request.query_params.get("writer_slug", "").strip()
+    if writer_slug:
+        queryset = queryset.filter(
+            book_contributors__role=ContributorRole.AUTHOR,
+            book_contributors__contributor__slug=writer_slug,
+        )
+
+    contributor = request.query_params.get("contributor", "").strip()
+    if contributor:
+        queryset = queryset.filter(book_contributors__contributor__name__icontains=contributor)
+
+    series = request.query_params.get("series", "").strip()
+    if series:
+        queryset = queryset.filter(book_series__series__name__icontains=series)
+
+    category = request.query_params.get("category", "").strip()
+    if category:
+        queryset = queryset.filter(book_categories__category__name__icontains=category)
+
+    category_code = request.query_params.get("category_code", "").strip()
+    if category_code:
+        queryset = queryset.filter(book_categories__category__catalog_code=category_code)
+
+    category_slug = request.query_params.get("category_slug", "").strip()
+    if category_slug:
+        queryset = queryset.filter(book_categories__category__slug=category_slug)
+
+    state = request.query_params.get("state", "").strip()
+    if state:
+        queryset = queryset.filter(state=state)
+
+    review_state = request.query_params.get("review_state", "").strip()
+    if review_state:
+        queryset = queryset.filter(review_state=review_state)
+
+    submission_status = request.query_params.get("submission_status", "").strip()
+    if submission_status:
+        queryset = queryset.filter(linked_submissions__status=submission_status)
+
+    processing_status = request.query_params.get("processing_status", "").strip()
+    if processing_status:
+        queryset = queryset.filter(processing_jobs__status=processing_status)
+
+    queryset = apply_created_at_filters(queryset, request).distinct()
+    sort = request.query_params.get("sort", "-requested_at" if ownership == "mine" else "-created_at")
+    sort_map = {
+        "catalog_code": "catalog_code",
+        "-catalog_code": "-catalog_code",
+        "title": "title",
+        "-title": "-title",
+        "created_at": "created_at",
+        "-created_at": "-created_at",
+    }
+    if ownership == "mine":
+        sort_map.update(
+            {
+                "requested_at": "latest_submission_at",
+                "-requested_at": "-latest_submission_at",
+            }
+        )
+    sort_field = sort_map.get(sort, "-latest_submission_at" if ownership == "mine" else "-created_at")
+    if sort_field in {"created_at", "-created_at"}:
+        return queryset.order_by(sort_field)
+    return queryset.order_by(sort_field, "-created_at")
+
+
+class BookQueryMixin:
+    default_record_type = BookRecordType.DIGITAL
+
+    def base_queryset(self):
         owned_submission = BookSubmission.objects.filter(
             linked_book=OuterRef("pk"),
             submitter=self.request.user,
         )
-        queryset = (
+        return (
             Book.objects.prefetch_related(
                 "book_contributors__contributor",
                 "book_series__series",
@@ -65,93 +224,203 @@ class BookListView(generics.ListAPIView):
             )
             .annotate(user_owns_book=Exists(owned_submission))
             .filter(deleted_at__isnull=True)
-            .distinct()
         )
-        ownership = self.request.query_params.get("ownership", "").strip()
 
-        if ownership == "mine":
-            latest_submission = (
-                BookSubmission.objects.filter(
-                    linked_book=OuterRef("pk"),
-                    submitter=self.request.user,
-                )
-                .order_by("-created_at")
-                .values("created_at")[:1]
-            )
+    def get_queryset(self):
+        return filtered_book_queryset(self.base_queryset(), self.request, default_record_type=self.default_record_type)
+
+
+class BookListView(BookQueryMixin, generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = BookListSerializer
+
+
+class BookExportView(BookQueryMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        export_format = request.query_params.get("format", "csv").strip().lower()
+        books = list(self.get_queryset())
+        record_type = export_record_type(request, self.default_record_type)
+        if export_format == "csv":
+            return build_books_csv_response(books, record_type=record_type)
+        if export_format == "pdf":
+            try:
+                return build_books_pdf_response(books, record_type=record_type)
+            except RuntimeError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({"detail": "format must be csv or pdf."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class BookTicketExportView(BookQueryMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        books = list(self.get_queryset())
+        record_type = export_record_type(request, self.default_record_type)
+        try:
+            return build_book_tickets_pdf_response(books, record_type=record_type)
+        except RuntimeError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class ManualBookListCreateView(BookQueryMixin, generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticated]
+    default_record_type = BookRecordType.MANUAL
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return ManualBookCreateSerializer
+        return BookListSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        book = serializer.save()
+        return Response(BookDetailSerializer(book, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
+class CategoryListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = CategoryListSerializer
+
+    def get_queryset(self):
+        queryset = Category.objects.annotate(
+            digital_book_count=Count(
+                "books",
+                filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.DIGITAL),
+                distinct=True,
+            ),
+            manual_book_count=Count(
+                "books",
+                filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.MANUAL),
+                distinct=True,
+            ),
+        )
+        record_type = requested_record_type(self.request, BookRecordType.DIGITAL)
+        if record_type == "manual":
             queryset = queryset.annotate(
-                latest_submission_at=Subquery(latest_submission)
-            ).filter(latest_submission_at__isnull=False)
+                book_count=Count(
+                    "books",
+                    filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.MANUAL),
+                    distinct=True,
+                )
+            )
+        elif record_type == "all":
+            queryset = queryset.annotate(
+                book_count=Count("books", filter=Q(books__deleted_at__isnull=True), distinct=True)
+            )
+        else:
+            queryset = queryset.annotate(
+                book_count=Count(
+                    "books",
+                    filter=Q(books__deleted_at__isnull=True, books__record_type=BookRecordType.DIGITAL),
+                    distinct=True,
+                )
+            )
 
         query = self.request.query_params.get("q", "").strip()
         if query:
-            submission_query = Q(linked_submissions__original_input__icontains=query)
-            if ownership == "mine":
-                submission_query &= Q(linked_submissions__submitter=self.request.user)
-            queryset = queryset.filter(
-                Q(title__icontains=query)
-                | Q(book_contributors__contributor__name__icontains=query)
-                | Q(book_series__series__name__icontains=query)
-                | Q(book_categories__category__name__icontains=query)
-                | submission_query
-            )
+            queryset = queryset.filter(Q(name__icontains=query) | Q(catalog_code__icontains=query))
+        queryset = apply_created_at_filters(queryset, self.request).filter(book_count__gt=0)
 
-        author = self.request.query_params.get("author", "").strip()
-        if author:
-            queryset = queryset.filter(
-                book_contributors__role="author",
-                book_contributors__contributor__name__icontains=author,
-            )
-
-        contributor = self.request.query_params.get("contributor", "").strip()
-        if contributor:
-            queryset = queryset.filter(book_contributors__contributor__name__icontains=contributor)
-
-        series = self.request.query_params.get("series", "").strip()
-        if series:
-            queryset = queryset.filter(book_series__series__name__icontains=series)
-
-        category = self.request.query_params.get("category", "").strip()
-        if category:
-            queryset = queryset.filter(book_categories__category__name__icontains=category)
-
-        state = self.request.query_params.get("state")
-        if state:
-            queryset = queryset.filter(state=state)
-
-        review_state = self.request.query_params.get("review_state")
-        if review_state:
-            queryset = queryset.filter(review_state=review_state)
-
-        submission_status = self.request.query_params.get("submission_status", "").strip()
-        if submission_status:
-            queryset = queryset.filter(linked_submissions__status=submission_status)
-
-        processing_status = self.request.query_params.get("processing_status", "").strip()
-        if processing_status:
-            queryset = queryset.filter(processing_jobs__status=processing_status)
-
-        queryset = apply_created_at_filters(queryset, self.request)
-        sort = self.request.query_params.get(
-            "sort",
-            "-requested_at" if ownership == "mine" else "-created_at",
-        )
-        sort_map = {
-            "title": "title",
-            "-title": "-title",
+        sort_field = {
+            "catalog_code": "catalog_code",
+            "-catalog_code": "-catalog_code",
+            "name": "name",
+            "-name": "-name",
             "created_at": "created_at",
             "-created_at": "-created_at",
-        }
-        if ownership == "mine":
-            sort_map.update(
-                {
-                    "requested_at": "latest_submission_at",
-                    "-requested_at": "-latest_submission_at",
-                }
-            )
-        sort_field = sort_map.get(sort, "-latest_submission_at" if ownership == "mine" else "-created_at")
+            "book_count": "book_count",
+            "-book_count": "-book_count",
+        }.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
+
         if sort_field in {"created_at", "-created_at"}:
             return queryset.order_by(sort_field)
-        return queryset.order_by(sort_field, "-created_at")
+        return queryset.order_by(sort_field, "name")
+
+
+class WriterListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = WriterListSerializer
+
+    def get_queryset(self):
+        queryset = Contributor.objects.filter(book_contributions__role=ContributorRole.AUTHOR).annotate(
+            digital_book_count=Count(
+                "book_contributions__book",
+                filter=Q(
+                    book_contributions__role=ContributorRole.AUTHOR,
+                    book_contributions__book__deleted_at__isnull=True,
+                    book_contributions__book__record_type=BookRecordType.DIGITAL,
+                ),
+                distinct=True,
+            ),
+            manual_book_count=Count(
+                "book_contributions__book",
+                filter=Q(
+                    book_contributions__role=ContributorRole.AUTHOR,
+                    book_contributions__book__deleted_at__isnull=True,
+                    book_contributions__book__record_type=BookRecordType.MANUAL,
+                ),
+                distinct=True,
+            ),
+        ).distinct()
+        record_type = requested_record_type(self.request, BookRecordType.DIGITAL)
+        if record_type == "manual":
+            queryset = queryset.annotate(
+                book_count=Count(
+                    "book_contributions__book",
+                    filter=Q(
+                        book_contributions__role=ContributorRole.AUTHOR,
+                        book_contributions__book__deleted_at__isnull=True,
+                        book_contributions__book__record_type=BookRecordType.MANUAL,
+                    ),
+                    distinct=True,
+                )
+            )
+        elif record_type == "all":
+            queryset = queryset.annotate(
+                book_count=Count(
+                    "book_contributions__book",
+                    filter=Q(
+                        book_contributions__role=ContributorRole.AUTHOR,
+                        book_contributions__book__deleted_at__isnull=True,
+                    ),
+                    distinct=True,
+                )
+            )
+        else:
+            queryset = queryset.annotate(
+                book_count=Count(
+                    "book_contributions__book",
+                    filter=Q(
+                        book_contributions__role=ContributorRole.AUTHOR,
+                        book_contributions__book__deleted_at__isnull=True,
+                        book_contributions__book__record_type=BookRecordType.DIGITAL,
+                    ),
+                    distinct=True,
+                )
+            )
+
+        query = self.request.query_params.get("q", "").strip()
+        if query:
+            queryset = queryset.filter(Q(name__icontains=query) | Q(catalog_code__icontains=query))
+        queryset = apply_created_at_filters(queryset, self.request).filter(book_count__gt=0)
+
+        sort_field = {
+            "catalog_code": "catalog_code",
+            "-catalog_code": "-catalog_code",
+            "name": "name",
+            "-name": "-name",
+            "created_at": "created_at",
+            "-created_at": "-created_at",
+            "book_count": "book_count",
+            "-book_count": "-book_count",
+        }.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
+
+        if sort_field in {"created_at", "-created_at"}:
+            return queryset.order_by(sort_field)
+        return queryset.order_by(sort_field, "name")
 
 
 class BookDetailView(generics.RetrieveDestroyAPIView):

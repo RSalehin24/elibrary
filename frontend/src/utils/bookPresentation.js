@@ -196,6 +196,48 @@ export function getAuthorNames(book) {
   return getContributorNamesByRole(book, "author");
 }
 
+export function getWriterColumnGroups(book) {
+  const authors = getContributorNamesByRole(book, "author");
+  const translators = getContributorNamesByRole(book, "translator");
+  const editors = getContributorNamesByRole(book, "editor");
+
+  if (authors.length || translators.length) {
+    const groups = [];
+    if (authors.length) {
+      groups.push({ label: "", names: authors, queryKey: "author" });
+    }
+    if (translators.length) {
+      groups.push({ label: "Translator", names: translators, queryKey: "contributor" });
+    }
+    return groups;
+  }
+
+  if (editors.length) {
+    return [{ label: "Compiler/Editor", names: editors, queryKey: "contributor" }];
+  }
+
+  return [];
+}
+
+export function getBookIdentityContributorLine(book) {
+  const authors = getContributorNamesByRole(book, "author");
+  const translators = getContributorNamesByRole(book, "translator");
+  const editors = getContributorNamesByRole(book, "editor");
+  const parts = [];
+
+  if (authors.length) {
+    parts.push(authors.join(", "));
+  }
+  if (translators.length) {
+    parts.push(`Translator: ${translators.join(", ")}`);
+  }
+  if (editors.length) {
+    parts.push(`Compiler/Editor: ${editors.join(", ")}`);
+  }
+
+  return parts.join(" · ") || "Contributor unavailable";
+}
+
 export function getContributorGroups(book) {
   const grouped = new Map();
 

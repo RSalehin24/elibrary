@@ -82,14 +82,14 @@ function renderTocSummary(toc) {
   );
 }
 
-function renderFilterLinks(values, queryKey, emptyLabel = "") {
+function renderFilterLinks(values, queryKey, emptyLabel = "", extraFilters = {}) {
   if (!values?.length) {
     return emptyLabel || null;
   }
 
   return values.map((value, index) => (
     <Fragment key={`${queryKey}-${value}`}>
-      <Link to={`/library${toQueryString({ [queryKey]: value })}`} className="meta-link">
+      <Link to={`/library${toQueryString({ ...extraFilters, [queryKey]: value })}`} className="meta-link">
         {value}
       </Link>
       {index < values.length - 1 ? <span className="meta-divider">, </span> : null}
@@ -134,6 +134,7 @@ export default function BookDetailPage() {
   const [replacingEpub, setReplacingEpub] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const canEditMetadata = hasCapability(user, "metadata:edit");
+  const bookLinkFilters = book?.record_type === "manual" ? { record_type: "manual" } : {};
 
   function applyReaderState(sessionPayload) {
     if (sessionPayload) {
@@ -600,13 +601,13 @@ export default function BookDetailPage() {
           {primaryContributorGroup ? (
             primaryContributorGroup.role === "author" ? (
               <p className="detail-lead">
-                {renderFilterLinks(primaryContributorGroup.names, "author", "Contributor unavailable")}
+                {renderFilterLinks(primaryContributorGroup.names, "author", "Contributor unavailable", bookLinkFilters)}
               </p>
             ) : (
               <p className="detail-meta-row detail-lead-row">
                 <span className="fact-label">{primaryContributorGroup.label}</span>
                 <span className="detail-meta-values">
-                  {renderFilterLinks(primaryContributorGroup.names, "contributor", "Contributor unavailable")}
+                  {renderFilterLinks(primaryContributorGroup.names, "contributor", "Contributor unavailable", bookLinkFilters)}
                 </span>
               </p>
             )
@@ -625,20 +626,25 @@ export default function BookDetailPage() {
                 <p key={group.role} className="detail-meta-row">
                   <span className="fact-label">{group.label}</span>
                   <span className="detail-meta-values">
-                    {renderFilterLinks(group.names, group.role === "author" ? "author" : "contributor")}
+                    {renderFilterLinks(
+                      group.names,
+                      group.role === "author" ? "author" : "contributor",
+                      "",
+                      bookLinkFilters
+                    )}
                   </span>
                 </p>
               ))}
               {book.series?.length ? (
                 <p className="detail-meta-row">
                   <span className="fact-label">Series</span>
-                  <span className="detail-meta-values">{renderFilterLinks(book.series, "series")}</span>
+                  <span className="detail-meta-values">{renderFilterLinks(book.series, "series", "", bookLinkFilters)}</span>
                 </p>
               ) : null}
               {book.categories?.length ? (
                 <p className="detail-meta-row">
                   <span className="fact-label">Categories</span>
-                  <span className="detail-meta-values">{renderFilterLinks(book.categories, "category")}</span>
+                  <span className="detail-meta-values">{renderFilterLinks(book.categories, "category", "", bookLinkFilters)}</span>
                 </p>
               ) : null}
             </div>

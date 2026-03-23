@@ -1,5 +1,5 @@
-import { NavLink } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 
 function initialsForUser(value) {
@@ -11,10 +11,20 @@ function initialsForUser(value) {
     .join("") || "?";
 }
 
+const bookPropertiesItems = [
+  { to: "/library", label: "Book Page" },
+  { to: "/categories", label: "Category Page" },
+  { to: "/writers", label: "Writer Page" },
+  { to: "/manual-books", label: "Manual Books Page" }
+];
+
 export default function AppShell({ children }) {
+  const location = useLocation();
   const { authenticated, user, logout } = useSession();
   const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef(null);
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
+  const profileMenuRef = useRef(null);
+  const propertiesMenuRef = useRef(null);
   const navigation = authenticated
     ? [
         { to: "/create", label: "Create Books" },
@@ -22,15 +32,30 @@ export default function AppShell({ children }) {
         ...(user?.is_superuser ? [{ to: "/access", label: "Users & Access" }] : [])
       ]
     : [];
+  const isBookPropertiesActive =
+    location.pathname === "/library" ||
+    location.pathname === "/categories" ||
+    location.pathname === "/writers" ||
+    location.pathname === "/manual-books" ||
+    location.pathname.startsWith("/books/");
 
   useEffect(() => {
-    if (!menuOpen) {
+    setMenuOpen(false);
+    setPropertiesOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!menuOpen && !propertiesOpen) {
       return undefined;
     }
 
     function handlePointerDown(event) {
-      if (menuRef.current && !menuRef.current.contains(event.target)) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
         setMenuOpen(false);
+      }
+
+      if (propertiesMenuRef.current && !propertiesMenuRef.current.contains(event.target)) {
+        setPropertiesOpen(false);
       }
     }
 
@@ -38,7 +63,7 @@ export default function AppShell({ children }) {
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
     };
-  }, [menuOpen]);
+  }, [menuOpen, propertiesOpen]);
 
   const displayName = user?.full_name || user?.email || "";
   const initials = initialsForUser(displayName);
@@ -56,6 +81,36 @@ export default function AppShell({ children }) {
         </div>
         {authenticated ? (
           <nav className="topnav" aria-label="Primary">
+            <div ref={propertiesMenuRef} className="nav-dropdown-shell">
+              <button
+                type="button"
+                className={isBookPropertiesActive ? "nav-link is-active nav-dropdown-trigger" : "nav-link nav-dropdown-trigger"}
+                onClick={() => setPropertiesOpen((current) => !current)}
+                aria-expanded={propertiesOpen}
+                aria-haspopup="menu"
+              >
+                <span>Book Properties</span>
+                <span className={propertiesOpen ? "nav-dropdown-caret is-open" : "nav-dropdown-caret"} aria-hidden="true">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m3.5 6 4.5 4 4.5-4" />
+                  </svg>
+                </span>
+              </button>
+              {propertiesOpen ? (
+                <div className="nav-dropdown-panel" role="menu">
+                  {bookPropertiesItems.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      className={({ isActive }) => (isActive ? "nav-dropdown-link is-active" : "nav-dropdown-link")}
+                      onClick={() => setPropertiesOpen(false)}
+                    >
+                      {item.label}
+                    </NavLink>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             {navigation.map((item) => (
               <NavLink
                 key={item.to}
@@ -76,7 +131,7 @@ export default function AppShell({ children }) {
               >
                 My Books
               </NavLink>
-              <div ref={menuRef} className="profile-menu-shell">
+              <div ref={profileMenuRef} className="profile-menu-shell">
                 <button
                   type="button"
                   className="profile-menu-trigger"

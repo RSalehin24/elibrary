@@ -349,8 +349,62 @@ textarea {
   gap: 10px;
 }
 
+.nav-dropdown-shell,
 .profile-menu-shell {
   position: relative;
+}
+
+.nav-dropdown-trigger {
+  gap: 10px;
+}
+
+.nav-dropdown-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 180ms ease;
+}
+
+.nav-dropdown-caret svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nav-dropdown-caret.is-open {
+  transform: rotate(180deg);
+}
+
+.nav-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.nav-dropdown-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
+  color: var(--ink);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.nav-dropdown-link:hover,
+.nav-dropdown-link.is-active {
+  background: rgba(15, 75, 56, 0.08);
+  color: var(--accent-strong);
 }
 
 .profile-menu-trigger {
@@ -2793,6 +2847,288 @@ textarea {
   color: var(--danger);
 }
 
+.catalog-table-shell {
+  overflow: auto;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.64),
+    0 16px 28px rgba(12, 47, 36, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.catalog-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+.catalog-table th,
+.catalog-table td {
+  padding: 14px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(17, 70, 54, 0.1);
+}
+
+.catalog-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(244, 249, 246, 0.94);
+  color: rgba(11, 61, 46, 0.78);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.catalog-table tbody tr:hover {
+  background: rgba(15, 75, 56, 0.04);
+}
+
+.catalog-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table-code-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-code-link,
+.table-title-link {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.table-code-link:hover,
+.table-title-link:hover {
+  color: var(--accent-strong);
+}
+
+.table-title-cell {
+  min-width: 240px;
+}
+
+.table-secondary-line {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.table-muted {
+  color: var(--muted);
+}
+
+.table-writer-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.table-writer-line {
+  display: grid;
+  gap: 4px;
+}
+
+.table-role-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(15, 75, 56, 0.08);
+  color: var(--accent-strong);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.table-type-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.table-type-pill-digital {
+  background: rgba(15, 75, 56, 0.08);
+  color: var(--accent-strong);
+}
+
+.table-type-pill-manual {
+  background: rgba(167, 111, 33, 0.12);
+  color: #8f5a17;
+}
+
+.table-action-cell {
+  white-space: nowrap;
+}
+
+.table-row-action {
+  min-width: 88px;
+}
+
+.property-table {
+  min-width: 720px;
+}
+
+.manual-books-tabs {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.manual-books-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.52),
+    0 8px 16px rgba(12, 47, 36, 0.06);
+}
+
+.manual-books-tab.is-active {
+  background: linear-gradient(180deg, #135b45 0%, #0b3d2e 100%);
+  color: #ecfff6;
+  border-color: rgba(11, 61, 46, 0.42);
+}
+
+.manual-books-panel {
+  max-width: 920px;
+}
+
+.catalog-export-panel {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  min-height: 124px;
+  padding: 16px;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(248, 252, 250, 0.82), rgba(240, 247, 243, 0.74));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.68),
+    0 10px 18px rgba(12, 47, 36, 0.05);
+}
+
+.catalog-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manual-book-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.manual-book-form-span-3 {
+  grid-column: span 3;
+}
+
+.tag-field {
+  position: relative;
+}
+
+.tag-input-shell {
+  position: relative;
+}
+
+.tag-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.tag-input-shell.is-focused .tag-chip-list {
+  border-color: rgba(17, 70, 54, 0.24);
+  box-shadow: 0 0 0 3px rgba(15, 75, 56, 0.06);
+}
+
+.tag-chip-list input {
+  flex: 1 1 140px;
+  min-width: 140px;
+  min-height: 28px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tag-chip-list input:focus {
+  outline: none;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(15, 75, 56, 0.1);
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.tag-suggestion-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.tag-suggestion {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.tag-suggestion:hover {
+  background: rgba(15, 75, 56, 0.08);
+  color: var(--accent-strong);
+}
+
 .catalog-summary-card {
   display: flex;
   justify-content: space-between;
@@ -3741,6 +4077,7 @@ textarea {
   .book-facts-grid,
   .book-detail-grid,
   .book-admin-grid,
+  .manual-book-form-grid,
   .metadata-form-grid,
   .reader-stats-grid,
   .book-card-details,
@@ -3821,6 +4158,10 @@ textarea {
   .catalog-filter-actions .primary-button,
   .catalog-filter-actions .ghost-button {
     width: 100%;
+  }
+
+  .nav-dropdown-panel {
+    min-width: min(100%, 260px);
   }
 
   .source-record-card {
@@ -3934,6 +4275,14 @@ textarea {
   .topbar-public .session-box {
     justify-content: flex-start;
     text-align: left;
+  }
+
+  .manual-books-tabs {
+    width: 100%;
+  }
+
+  .manual-books-tab {
+    flex: 1 1 0;
   }
 }
 

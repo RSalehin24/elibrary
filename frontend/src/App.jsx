@@ -2,13 +2,16 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AppShell from "./layouts/AppShell";
 import AccessPage from "./pages/AccessPage";
 import BookDetailPage from "./pages/BookDetailPage";
+import CategoryPage from "./pages/CategoryPage";
 import CreatedBooksPage from "./pages/CreatedBooksPage";
 import HomePage from "./pages/HomePage";
 import LibraryPage from "./pages/LibraryPage";
 import LoginPage from "./pages/LoginPage";
+import ManualBooksPage from "./pages/ManualBooksPage";
 import PasswordResetPage from "./pages/PasswordResetPage";
 import ProfilePage from "./pages/ProfilePage";
 import QueuePage from "./pages/QueuePage";
+import WriterPage from "./pages/WriterPage";
 import { useSession } from "./hooks/useSession";
 
 function ProtectedRoute({ children }) {
@@ -57,6 +60,30 @@ export default function App() {
           element={
             <ProtectedRoute>
               <LibraryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/categories"
+          element={
+            <ProtectedRoute>
+              <CategoryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/writers"
+          element={
+            <ProtectedRoute>
+              <WriterPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/manual-books"
+          element={
+            <ProtectedRoute>
+              <ManualBooksPage />
             </ProtectedRoute>
           }
         />

@@ -1,0 +1,98 @@
+import { Fragment } from "react";
+import { Link } from "react-router-dom";
+import { formatBookDate, getWriterColumnGroups } from "../utils/bookPresentation";
+import { toQueryString } from "../utils/query";
+
+function renderLinkedValues(values, queryKey, linkFilters) {
+  return values.map((value, index) => (
+    <Fragment key={`${queryKey}-${value}`}>
+      <Link to={`/library${toQueryString({ ...(linkFilters || {}), [queryKey]: value })}`} className="meta-link">
+        {value}
+      </Link>
+      {index < values.length - 1 ? <span className="meta-divider">, </span> : null}
+    </Fragment>
+  ));
+}
+
+function renderWriterCell(book, linkFilters) {
+  const groups = getWriterColumnGroups(book);
+  if (!groups.length) {
+    return <span className="table-muted">Contributor unavailable</span>;
+  }
+
+  return (
+    <div className="table-writer-stack">
+      {groups.map((group, index) => (
+        <div key={`${book.id}-writer-${index}`} className="table-writer-line">
+          {group.label ? <span className="table-role-label">{group.label}</span> : null}
+          <span>{renderLinkedValues(group.names, group.queryKey, linkFilters)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function BookTable({ books, emptyLabel = "No books found.", linkFilters = {} }) {
+  if (!books?.length) {
+    return <div className="page-state">{emptyLabel}</div>;
+  }
+
+  return (
+    <div className="catalog-table-shell">
+      <table className="catalog-table book-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Writer</th>
+            <th>Category</th>
+            <th>Series</th>
+            <th>Type</th>
+            <th>Created</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {books.map((book) => {
+            const categories = book.categories || [];
+            const series = book.series || [];
+
+            return (
+              <tr key={book.id}>
+                <td className="table-code-cell">
+                  <Link to={`/books/${book.slug}`} className="table-code-link">
+                    {book.catalog_code || "Pending"}
+                  </Link>
+                </td>
+                <td className="table-title-cell">
+                  <Link to={`/books/${book.slug}`} className="table-title-link">
+                    {book.title}
+                  </Link>
+                  <span className="table-secondary-line">
+                    {book.primary_source?.display_path || (book.record_type === "manual" ? "Manual entry" : "Library record")}
+                  </span>
+                </td>
+                <td>{renderWriterCell(book, linkFilters)}</td>
+                <td>
+                  {categories.length ? renderLinkedValues(categories, "category", linkFilters) : <span className="table-muted">Unsorted</span>}
+                </td>
+                <td>{series.length ? series.join(", ") : <span className="table-muted">Standalone</span>}</td>
+                <td>
+                  <span className={`table-type-pill table-type-pill-${book.record_type || "digital"}`}>
+                    {book.record_type === "manual" ? "Manual" : "Digital"}
+                  </span>
+                </td>
+                <td>{formatBookDate(book.created_at)}</td>
+                <td className="table-action-cell">
+                  <Link to={`/books/${book.slug}`} className="ghost-button table-row-action">
+                    Open
+                  </Link>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}

@@ -26,6 +26,18 @@ async function parseResponse(response) {
   return response.text();
 }
 
+function filenameFromDisposition(headerValue) {
+  if (!headerValue) {
+    return "";
+  }
+  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+  const plainMatch = headerValue.match(/filename="?([^"]+)"?/i);
+  return plainMatch ? plainMatch[1] : "";
+}
+
 export async function apiFetch(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -72,6 +84,39 @@ export async function apiFetch(path, options = {}) {
   }
 
   return payload;
+}
+
+export async function downloadApiFile(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "*/*");
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    method: options.method || "GET",
+    headers,
+    credentials: "include"
+  });
+
+  if (!response.ok) {
+    const payload = await parseResponse(response);
+    const error = new Error(typeof payload === "string" ? payload : payload.detail || "Request failed.");
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  const blob = await response.blob();
+  const filename = filenameFromDisposition(response.headers.get("content-disposition")) || "download";
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
 }
 
 export const authApi = {
