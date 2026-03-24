@@ -5,13 +5,15 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/deploy-ec2.sh <user@ip> [branch]
+  scripts/deploy.sh
 
 Example:
-  scripts/deploy-ec2.sh ubuntu@54.169.28.248 reyan-ebook-library
+  cp scripts/.env.example scripts/.env
+  nano scripts/.env
+  scripts/deploy.sh
 
 What it does:
-  1) SSH (agent-forwarded) to EC2
+  1) SSH (agent-forwarded) to remote server
   2) Clones/pulls repo into ~/library_app
   3) Ensures .env exists from .env.example
   4) Sets PUBLIC_BASE_URL and NGINX_SERVER_NAME for library.rsalehin24.me
@@ -20,14 +22,32 @@ What it does:
 EOF
 }
 
-if [ "${1:-}" = "" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   usage
   exit 0
 fi
 
-TARGET="$1"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
+
+if [ ! -f "$ENV_FILE" ]; then
+  printf 'Missing %s\n' "$ENV_FILE"
+  printf 'Create it from scripts/.env.example and retry.\n'
+  exit 1
+fi
+
+set -a
+. "$ENV_FILE"
+set +a
+
+if [ -z "${DEPLOY_USER_NAME:-}" ] || [ -z "${DEPLOY_IP:-}" ]; then
+  printf 'DEPLOY_USER_NAME and DEPLOY_IP must be set in %s\n' "$ENV_FILE"
+  exit 1
+fi
+
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
-BRANCH="${2:-$CURRENT_BRANCH}"
+BRANCH="${DEPLOY_BRANCH_NAME:-$CURRENT_BRANCH}"
+TARGET="${DEPLOY_USER_NAME}@${DEPLOY_IP}"
 REPO_SSH="${REPO_SSH:-git@github.com:RSalehin24/ebook-scrapping.git}"
 APP_DIR='~/library_app'
 DOMAIN="${DOMAIN:-library.rsalehin24.me}"
@@ -100,4 +120,4 @@ esac
 
 printf '\n[4/4] Done.\n'
 printf 'DNS requirement: point %s -> %s\n' "$DOMAIN" "$TARGET"
-printf 'If another app uses port 80 on this host, use scripts/switch-app.sh on EC2 to swap.\n'
+printf 'If another app uses port 80 on this host, keep switch-app.sh at ~/switch-app.sh on EC2 to swap.\n'

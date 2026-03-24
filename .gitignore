@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+scripts/.env
 .idea/
 .pytest_cache/
 .ruff_cache/
