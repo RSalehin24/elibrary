@@ -209,6 +209,19 @@ fi
 $COMPOSE_CMD down --remove-orphans || true
 $COMPOSE_CMD up -d --build --force-recreate
 
+if ! $COMPOSE_CMD exec -T backend python - <<'PY'
+import socket
+
+socket.getaddrinfo('ebanglalibrary.com', 443)
+print('ok')
+PY
+then
+  echo "Action required: container DNS cannot resolve ebanglalibrary.com"
+  echo "Check server resolver/network egress and rerun: bash scripts/deploy.sh"
+  $COMPOSE_CMD logs --tail=60 backend worker
+  exit 1
+fi
+
 published_port=''
 attempt=0
 while [ "$attempt" -lt 15 ]; do
