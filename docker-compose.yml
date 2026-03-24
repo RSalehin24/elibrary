@@ -45,7 +45,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/csrf/', timeout=5)"
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/csrf/', timeout=5)",
         ]
       interval: 5s
       timeout: 5s
@@ -54,7 +54,11 @@ services:
     depends_on:
       - postgres
       - redis
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     networks:
+      - public
       - internal
 
   worker:
@@ -73,7 +77,11 @@ services:
     depends_on:
       - postgres
       - redis
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     networks:
+      - public
       - internal
 
   beat:
@@ -92,7 +100,11 @@ services:
     depends_on:
       - postgres
       - redis
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     networks:
+      - public
       - internal
 
   nginx:

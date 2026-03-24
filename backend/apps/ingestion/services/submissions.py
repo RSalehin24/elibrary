@@ -23,6 +23,7 @@ from apps.catalog.models import (
     GeneratedAssetType,
     MetadataVersion,
     Series,
+    ContributorRole,
 )
 from apps.catalog.services import (
     find_deleted_book_by_title,
@@ -68,9 +69,7 @@ REUSABLE_SUBMISSION_STATUSES = (
     SubmissionStatus.PENDING_RESOLUTION,
     SubmissionStatus.QUEUED,
     SubmissionStatus.PROCESSING,
-    SubmissionStatus.NEEDS_REVIEW,
     SubmissionStatus.READY,
-    SubmissionStatus.DUPLICATE,
 )
 
 SUBMISSION_PAYLOAD_KEYS_TO_SHARE = (
@@ -824,6 +823,7 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
         book.book_info_html = scraped_data.get("book_info", "")
         book.dedication_html = cleaned_dedication_html
         book.toc = scraped_data.get("toc", [])
+        book.content_items = scraped_data.get("content_items", [])
         book.cover_source_url = scraped_data.get("cover", "")
         book.save()
     else:
@@ -837,6 +837,7 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
             book_info_html=scraped_data.get("book_info", ""),
             dedication_html=cleaned_dedication_html,
             toc=scraped_data.get("toc", []),
+            content_items=scraped_data.get("content_items", []),
             cover_source_url=scraped_data.get("cover", ""),
         )
     sync_metadata_relations(book, normalized)
@@ -850,8 +851,31 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
         },
     )
     MetadataVersion.objects.create(book=book, snapshot=scraped_data, source="scrape")
-    sync_assets(book, job, scraped_data)
     return book
+
+
+def export_payload_from_book(book, scraped_data):
+    author_names = [
+        relation.contributor.name
+        for relation in book.book_contributors.all()
+        if relation.role == ContributorRole.AUTHOR
+    ]
+    series_names = [relation.series.name for relation in book.book_series.all()]
+    category_names = [relation.category.name for relation in book.book_categories.all()]
+
+    return {
+        "book_title": book.title,
+        "author": author_names or scraped_data.get("author", ""),
+        "series": series_names or scraped_data.get("series", ""),
+        "book_type": category_names or scraped_data.get("book_type", ""),
+        "cover": book.cover_source_url or scraped_data.get("cover", ""),
+        "main_content": book.main_content_html or "",
+        "book_info": book.book_info_html or "",
+        "dedication": book.dedication_html or "",
+        "toc": book.toc or [],
+        "content_items": book.content_items or [],
+        "output_folder": scraped_data["output_folder"],
+    }
 
 
 def cancel_requested_for_job(job):
@@ -938,6 +962,11 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         if cancel_requested_for_job(job):
             return finalize_cancelled_job(job)
         scraped_data = scrape_book(submission.resolved_url)
+        if not isinstance(scraped_data, dict):
+            raise ValueError(
+                f"Source scraping returned no content for {submission.resolved_url}. "
+                "Verify the source URL is valid and publicly reachable."
+            )
         promoted_book_info, cleaned_main_content = promote_leading_front_matter(
             scraped_data.get("book_info", ""),
             scraped_data.get("main_content", ""),
@@ -947,9 +976,6 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         record_job_log(job, "info", "Scraped source content.", {"title": scraped_data.get("book_title", "")})
         if cancel_requested_for_job(job):
             return finalize_cancelled_job(job)
-        generate_exports(scraped_data)
-        record_job_log(job, "info", "Generated HTML and EPUB exports.")
-
         exact_title_duplicate = None if reprocess_book else find_exact_existing_book(scraped_data)
         if exact_title_duplicate:
             fulfill_submission_with_existing_book(
@@ -1007,6 +1033,10 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             return job
 
         book = persist_scraped_book(submission, job, scraped_data, target_book=reprocess_book)
+        export_payload = export_payload_from_book(book, scraped_data)
+        generate_exports(export_payload)
+        sync_assets(book, job, export_payload)
+        record_job_log(job, "info", "Generated HTML and EPUB exports from canonical book data.")
         complete_processed_submission(
             submission,
             book,

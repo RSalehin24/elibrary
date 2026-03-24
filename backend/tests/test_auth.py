@@ -199,6 +199,53 @@ def test_superadmin_can_create_update_and_delete_managed_users_with_grants_and_t
 
 
 @pytest.mark.django_db
+def test_superadmin_cannot_edit_own_account_from_managed_users_endpoint(client):
+    superadmin = User.objects.create_superuser(
+        email="self-edit-block@example.com",
+        password="strong-password-123",
+    )
+    client.force_login(superadmin)
+
+    response = client.patch(
+        f"/api/auth/users/{superadmin.id}/",
+        data=json.dumps(
+            {
+                "full_name": "Attempted Self Edit",
+                "global_scopes": ["read:durable"],
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "You cannot edit your own account from Users & Access."
+
+
+@pytest.mark.django_db
+def test_password_reset_confirm_requires_logout_when_authenticated(client):
+    user = User.objects.create_user(
+        email="reset-auth-block@example.com",
+        password="strong-password-123",
+    )
+    client.force_login(user)
+
+    response = client.post(
+        "/api/auth/password-reset/confirm/",
+        data=json.dumps(
+            {
+                "uid": "invalid",
+                "token": "invalid",
+                "new_password": "strong-password-456",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Please log out first before resetting a password from this link."
+
+
+@pytest.mark.django_db
 def test_totp_required_users_are_limited_to_setup_endpoints_until_configured(client):
     user = User.objects.create_user(
         email="setup-required@example.com",

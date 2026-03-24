@@ -23,14 +23,14 @@ const defaultSubmissionFilters = {
   status: "",
   review_state: "",
   resolution_status: "",
-  input_type: ""
+  input_type: "",
 };
 
 const defaultJobFilters = {
   q: "",
   status: "",
   submission_status: "",
-  job_type: ""
+  job_type: "",
 };
 
 const defaultCatalogFilters = {
@@ -38,7 +38,7 @@ const defaultCatalogFilters = {
   status: "",
   sort: "status_recent",
   page: 1,
-  limit: 180
+  limit: 180,
 };
 
 const defaultCatalogPagination = {
@@ -47,18 +47,18 @@ const defaultCatalogPagination = {
   total_count: 0,
   page_count: 1,
   has_previous: false,
-  has_next: false
+  has_next: false,
 };
 
 const defaultRunFilters = {
   q: "",
   status: "",
-  mode: ""
+  mode: "",
 };
 
 const defaultReviewFilters = {
   q: "",
-  status: ""
+  status: "",
 };
 
 const defaultCatalogSummary = {
@@ -68,7 +68,7 @@ const defaultCatalogSummary = {
   unfinished: 0,
   failed: 0,
   ready: 0,
-  deleted: 0
+  deleted: 0,
 };
 
 const submissionFilterFields = [
@@ -85,8 +85,8 @@ const submissionFilterFields = [
       { value: "ready", label: "Ready" },
       { value: "failed", label: "Failed" },
       { value: "cancelled", label: "Stopped" },
-      { value: "duplicate", label: "Duplicate" }
-    ]
+      { value: "duplicate", label: "Duplicate" },
+    ],
   },
   {
     key: "review_state",
@@ -97,8 +97,8 @@ const submissionFilterFields = [
       { value: "pending", label: "Pending" },
       { value: "needs_review", label: "Needs review" },
       { value: "approved", label: "Approved" },
-      { value: "rejected", label: "Rejected" }
-    ]
+      { value: "rejected", label: "Rejected" },
+    ],
   },
   {
     key: "resolution_status",
@@ -110,8 +110,8 @@ const submissionFilterFields = [
       { value: "exact_match", label: "Exact match" },
       { value: "ambiguous", label: "Ambiguous" },
       { value: "invalid", label: "Invalid" },
-      { value: "unresolved", label: "Unresolved" }
-    ]
+      { value: "unresolved", label: "Unresolved" },
+    ],
   },
   {
     key: "input_type",
@@ -121,9 +121,9 @@ const submissionFilterFields = [
       { value: "", label: "Any" },
       { value: "url", label: "URL" },
       { value: "title", label: "Title" },
-      { value: "csv", label: "CSV" }
-    ]
-  }
+      { value: "csv", label: "CSV" },
+    ],
+  },
 ];
 
 const jobFilterFields = [
@@ -137,8 +137,8 @@ const jobFilterFields = [
       { value: "processing", label: "Processing" },
       { value: "failed", label: "Failed" },
       { value: "cancelled", label: "Stopped" },
-      { value: "succeeded", label: "Complete" }
-    ]
+      { value: "succeeded", label: "Complete" },
+    ],
   },
   {
     key: "submission_status",
@@ -151,8 +151,8 @@ const jobFilterFields = [
       { value: "needs_review", label: "Needs review" },
       { value: "failed", label: "Failed" },
       { value: "ready", label: "Ready" },
-      { value: "cancelled", label: "Stopped" }
-    ]
+      { value: "cancelled", label: "Stopped" },
+    ],
   },
   {
     key: "job_type",
@@ -162,9 +162,9 @@ const jobFilterFields = [
       { value: "", label: "Any" },
       { value: "ingestion", label: "Create" },
       { value: "resolution", label: "Match" },
-      { value: "reprocess", label: "Regenerate" }
-    ]
-  }
+      { value: "reprocess", label: "Regenerate" },
+    ],
+  },
 ];
 
 const catalogFilterFields = [
@@ -179,9 +179,9 @@ const catalogFilterFields = [
       { value: "failed", label: "Failed" },
       { value: "unfinished", label: "Unfinished" },
       { value: "ready", label: "Ready" },
-      { value: "deleted", label: "Deleted" }
-    ]
-  }
+      { value: "deleted", label: "Deleted" },
+    ],
+  },
 ];
 
 const runFilterFields = [
@@ -195,8 +195,8 @@ const runFilterFields = [
       { value: "processing", label: "Processing" },
       { value: "failed", label: "Failed" },
       { value: "cancelled", label: "Stopped" },
-      { value: "succeeded", label: "Complete" }
-    ]
+      { value: "succeeded", label: "Complete" },
+    ],
   },
   {
     key: "mode",
@@ -205,9 +205,9 @@ const runFilterFields = [
     options: [
       { value: "", label: "Any" },
       { value: "pending", label: "New + unfinished" },
-      { value: "all", label: "All tracked" }
-    ]
-  }
+      { value: "all", label: "All tracked" },
+    ],
+  },
 ];
 
 const reviewFilterFields = [
@@ -220,9 +220,9 @@ const reviewFilterFields = [
       { value: "pending", label: "Pending" },
       { value: "confirmed", label: "Confirmed" },
       { value: "dismissed", label: "Dismissed" },
-      { value: "merged", label: "Merged" }
-    ]
-  }
+      { value: "merged", label: "Merged" },
+    ],
+  },
 ];
 
 function normalizeTimeInput(value) {
@@ -259,7 +259,9 @@ function safeDecode(value) {
 }
 
 function toggleSelectedId(currentIds, id) {
-  return currentIds.includes(id) ? currentIds.filter((currentId) => currentId !== id) : [...currentIds, id];
+  return currentIds.includes(id)
+    ? currentIds.filter((currentId) => currentId !== id)
+    : [...currentIds, id];
 }
 
 function toggleVisibleSelection(currentIds, visibleIds, allSelected) {
@@ -292,7 +294,10 @@ function getRequestPrimaryText(value) {
   try {
     const url = new URL(trimmed);
     const path = safeDecode(url.pathname).replace(/^\/+|\/+$/g, "");
-    const label = path.replace(/^books\//, "").replace(/-/g, " ").trim();
+    const label = path
+      .replace(/^books\//, "")
+      .replace(/-/g, " ")
+      .trim();
     return label || safeDecode(trimmed);
   } catch {
     return safeDecode(trimmed);
@@ -339,7 +344,7 @@ function runSummaryLabel(run) {
   return [
     `${summary.queued_creates || 0} create`,
     `${summary.queued_updates || 0} update`,
-    `${summary.skipped_ready || 0} ready`
+    `${summary.skipped_ready || 0} ready`,
   ].join(" · ");
 }
 
@@ -383,7 +388,9 @@ function getCatalogPageLabel(pagination) {
 }
 
 function canCreateCatalogEntry(entry) {
-  return ["new", "failed", "unfinished", "deleted"].includes(entry.curation_status);
+  return ["new", "failed", "unfinished", "deleted"].includes(
+    entry.curation_status,
+  );
 }
 
 function RequestValue({ value, error }) {
@@ -401,7 +408,11 @@ function RequestValue({ value, error }) {
 
 function BookLinkCell({ submission }) {
   if (submission.linked_book_deleted) {
-    return <span className="table-note">{submission.linked_book?.title || "Deleted record"}</span>;
+    return (
+      <span className="table-note">
+        {submission.linked_book?.title || "Deleted record"}
+      </span>
+    );
   }
 
   if (!submission.linked_book_slug) {
@@ -441,7 +452,14 @@ function CatalogRefreshIcon() {
 function CatalogStopIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor" />
+      <rect
+        x="6.5"
+        y="6.5"
+        width="11"
+        height="11"
+        rx="2.5"
+        fill="currentColor"
+      />
     </svg>
   );
 }
@@ -449,7 +467,7 @@ function CatalogStopIcon() {
 function buildProcessingLoaderCopy(label) {
   return {
     label,
-    detail: "Fetching the latest data for this section."
+    detail: "Fetching the latest data for this section.",
   };
 }
 
@@ -457,7 +475,11 @@ function renderProcessingCardLoader(label) {
   const copy = buildProcessingLoaderCopy(label);
   return (
     <div className="processing-card-loader-shell">
-      <PageLoader label={copy.label} detail={copy.detail} className="processing-card-loader" />
+      <PageLoader
+        label={copy.label}
+        detail={copy.detail}
+        className="processing-card-loader"
+      />
     </div>
   );
 }
@@ -472,26 +494,48 @@ function QueueTableCard({
   emptyTitle,
   cardClassName = "",
   loading = false,
-  loadingLabel = ""
+  loadingLabel = "",
 }) {
   const titleBlock = (
     <div className="section-title-block">
       <h2>{title}</h2>
     </div>
   );
-  const countPill = count !== undefined && count !== null ? <span className="processing-card-count">{count}</span> : null;
-  const shellContent = loading ? renderProcessingCardLoader(loadingLabel || `Loading ${title.toLowerCase()}`) : children || <EmptyState title={emptyTitle} />;
+  const countPill =
+    count !== undefined && count !== null ? (
+      <span className="processing-card-count">{count}</span>
+    ) : null;
+  const shellContent = loading
+    ? renderProcessingCardLoader(
+        loadingLabel || `Loading ${title.toLowerCase()}`,
+      )
+    : children || <EmptyState title={emptyTitle} />;
 
   return (
-    <section className={`detail-card processing-card processing-list-card ${cardClassName}`.trim()}>
+    <section
+      className={`detail-card processing-card processing-list-card ${cardClassName}`.trim()}
+    >
       <div className="processing-card-head">
-        {headerAside ? <div className="processing-card-head-meta">{titleBlock}{countPill}</div> : titleBlock}
+        {headerAside ? (
+          <div className="processing-card-head-meta">
+            {titleBlock}
+            {countPill}
+          </div>
+        ) : (
+          titleBlock
+        )}
         {headerAside ? null : countPill}
-        {headerAside ? <div className="processing-card-head-aside">{headerAside}</div> : null}
+        {headerAside ? (
+          <div className="processing-card-head-aside">{headerAside}</div>
+        ) : null}
       </div>
-      {toolbar ? <div className="processing-card-toolbar">{toolbar}</div> : null}
+      {toolbar ? (
+        <div className="processing-card-toolbar">{toolbar}</div>
+      ) : null}
       {actions ? <div className="processing-bulk-bar">{actions}</div> : null}
-      <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>{shellContent}</div>
+      <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>
+        {shellContent}
+      </div>
     </section>
   );
 }
@@ -508,14 +552,19 @@ export default function QueuePage() {
   const [catalogEntries, setCatalogEntries] = useState([]);
   const [curationRuns, setCurationRuns] = useState([]);
   const [catalogSyncState, setCatalogSyncState] = useState(null);
-  const [catalogPagination, setCatalogPagination] = useState(defaultCatalogPagination);
+  const [catalogPagination, setCatalogPagination] = useState(
+    defaultCatalogPagination,
+  );
   const [catalogSummary, setCatalogSummary] = useState(defaultCatalogSummary);
-  const [submissionFilters, setSubmissionFilters] = useState(defaultSubmissionFilters);
+  const [submissionFilters, setSubmissionFilters] = useState(
+    defaultSubmissionFilters,
+  );
   const [jobFilters, setJobFilters] = useState(defaultJobFilters);
   const [catalogFilters, setCatalogFilters] = useState(defaultCatalogFilters);
   const [runFilters, setRunFilters] = useState(defaultRunFilters);
   const [reviewFilters, setReviewFilters] = useState(defaultReviewFilters);
-  const [submissionFiltersExpanded, setSubmissionFiltersExpanded] = useState(false);
+  const [submissionFiltersExpanded, setSubmissionFiltersExpanded] =
+    useState(false);
   const [jobFiltersExpanded, setJobFiltersExpanded] = useState(false);
   const [catalogFiltersExpanded, setCatalogFiltersExpanded] = useState(false);
   const [runFiltersExpanded, setRunFiltersExpanded] = useState(false);
@@ -530,7 +579,7 @@ export default function QueuePage() {
     daily_run_time: "02:00",
     frequency: "daily",
     mode: "pending",
-    refresh_max_pages: "80"
+    refresh_max_pages: "80",
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -554,15 +603,16 @@ export default function QueuePage() {
             { id: USER_TAB, label: "My Requests" },
             { id: SOURCE_TAB, label: "Catalog Books" },
             { id: AUTOMATION_TAB, label: "Automation" },
-            { id: ALL_TAB, label: "All Activity" }
+            { id: ALL_TAB, label: "All Activity" },
           ]
         : [{ id: USER_TAB, label: "My Requests" }],
-    [canManageProcessing]
+    [canManageProcessing],
   );
   const catalogSyncActive = isCatalogSyncActive(catalogSyncState?.status);
   const refreshingCatalog = catalogSyncActive && !catalogSyncDismissed;
   const automationRunning = isActiveStatus(automationState?.latest_run?.status);
-  const sourceTabButtonsDisabled = activeTab === SOURCE_TAB && refreshingCatalog;
+  const sourceTabButtonsDisabled =
+    activeTab === SOURCE_TAB && refreshingCatalog;
   const catalogActionsDisabled = refreshingCatalog || automationRunning;
   const creationActionsDisabled = sourceTabButtonsDisabled || automationRunning;
   const catalogActionDisabledReason = automationRunning
@@ -580,7 +630,7 @@ export default function QueuePage() {
       nextRunFilters = runFilters,
       nextReviewFilters = reviewFilters,
       preserveAutomationForm = false,
-      silent = false
+      silent = false,
     } = options;
 
     if (!silent) {
@@ -606,18 +656,32 @@ export default function QueuePage() {
 
       const requests = [
         apiFetch(`/ingestion/jobs/${toQueryString(nextJobsParams)}`),
-        apiFetch(`/ingestion/submissions/${toQueryString(nextSubmissionParams)}`)
+        apiFetch(
+          `/ingestion/submissions/${toQueryString(nextSubmissionParams)}`,
+        ),
       ];
 
       if (canManageProcessing) {
-        requests.push(apiFetch(`/ingestion/duplicate-reviews/${toQueryString(nextReviewParams)}`));
+        requests.push(
+          apiFetch(
+            `/ingestion/duplicate-reviews/${toQueryString(nextReviewParams)}`,
+          ),
+        );
 
         if (nextTab === SOURCE_TAB) {
-          requests.push(apiFetch(`/ingestion/catalog/entries/${toQueryString({ ...nextCatalogFilters, limit: 180 })}`));
+          requests.push(
+            apiFetch(
+              `/ingestion/catalog/entries/${toQueryString({ ...nextCatalogFilters, limit: 180 })}`,
+            ),
+          );
         }
 
         if (nextTab === AUTOMATION_TAB || nextTab === ALL_TAB) {
-          requests.push(apiFetch(`/ingestion/catalog/curation-runs/${toQueryString(nextRunParams)}`));
+          requests.push(
+            apiFetch(
+              `/ingestion/catalog/curation-runs/${toQueryString(nextRunParams)}`,
+            ),
+          );
         }
 
         requests.push(apiFetch("/ingestion/catalog/automation/"));
@@ -638,7 +702,9 @@ export default function QueuePage() {
           const catalogPayload = payloads[offset] || null;
           setCatalogEntries(catalogPayload?.entries || []);
           setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
-          setCatalogPagination(catalogPayload?.pagination || defaultCatalogPagination);
+          setCatalogPagination(
+            catalogPayload?.pagination || defaultCatalogPagination,
+          );
           setCatalogSyncState(catalogPayload?.sync_state || null);
           setCurationRuns([]);
         } else if (nextTab === AUTOMATION_TAB) {
@@ -651,10 +717,14 @@ export default function QueuePage() {
           if (!preserveAutomationForm && automationPayload?.settings) {
             setAutomationForm({
               enabled: Boolean(automationPayload.settings.enabled),
-              daily_run_time: normalizeTimeInput(automationPayload.settings.daily_run_time),
+              daily_run_time: normalizeTimeInput(
+                automationPayload.settings.daily_run_time,
+              ),
               frequency: automationPayload.settings.frequency || "daily",
               mode: automationPayload.settings.mode || "pending",
-              refresh_max_pages: String(automationPayload.settings.refresh_max_pages || 80)
+              refresh_max_pages: String(
+                automationPayload.settings.refresh_max_pages || 80,
+              ),
             });
           }
         } else if (nextTab === ALL_TAB) {
@@ -703,10 +773,20 @@ export default function QueuePage() {
 
   useEffect(() => {
     const hasActiveJobs = jobs.some((job) => isActiveStatus(job.status));
-    const hasActiveRuns = curationRuns.some((run) => isActiveStatus(run.status));
-    const hasActiveCatalogSync = activeTab === SOURCE_TAB && isCatalogSyncActive(catalogSyncState?.status);
-    const hasActiveAutomationRun = isActiveStatus(automationState?.latest_run?.status);
-    if (!hasActiveJobs && !hasActiveRuns && !hasActiveCatalogSync && !hasActiveAutomationRun) {
+    const hasActiveRuns = curationRuns.some((run) =>
+      isActiveStatus(run.status),
+    );
+    const hasActiveCatalogSync =
+      activeTab === SOURCE_TAB && isCatalogSyncActive(catalogSyncState?.status);
+    const hasActiveAutomationRun = isActiveStatus(
+      automationState?.latest_run?.status,
+    );
+    if (
+      !hasActiveJobs &&
+      !hasActiveRuns &&
+      !hasActiveCatalogSync &&
+      !hasActiveAutomationRun
+    ) {
       return undefined;
     }
 
@@ -717,7 +797,18 @@ export default function QueuePage() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [jobs, curationRuns, catalogSyncState, automationState, activeTab, jobFilters, submissionFilters, catalogFilters, runFilters, reviewFilters]);
+  }, [
+    jobs,
+    curationRuns,
+    catalogSyncState,
+    automationState,
+    activeTab,
+    jobFilters,
+    submissionFilters,
+    catalogFilters,
+    runFilters,
+    reviewFilters,
+  ]);
 
   useEffect(() => {
     setSelectedSubmissionIds([]);
@@ -734,15 +825,23 @@ export default function QueuePage() {
   }, [catalogSyncActive]);
 
   useEffect(() => {
-    setSelectedSubmissionIds((current) => current.filter((id) => submissions.some((submission) => submission.id === id)));
+    setSelectedSubmissionIds((current) =>
+      current.filter((id) =>
+        submissions.some((submission) => submission.id === id),
+      ),
+    );
   }, [submissions]);
 
   useEffect(() => {
-    setSelectedJobIds((current) => current.filter((id) => jobs.some((job) => job.id === id)));
+    setSelectedJobIds((current) =>
+      current.filter((id) => jobs.some((job) => job.id === id)),
+    );
   }, [jobs]);
 
   useEffect(() => {
-    setSelectedRunIds((current) => current.filter((id) => curationRuns.some((run) => run.id === id)));
+    setSelectedRunIds((current) =>
+      current.filter((id) => curationRuns.some((run) => run.id === id)),
+    );
   }, [curationRuns]);
 
   function resetWithLoad(nextValue, setter, key) {
@@ -752,7 +851,10 @@ export default function QueuePage() {
 
   function applyCatalogFilters(nextFilters) {
     setCatalogFilters(nextFilters);
-    load({ nextCatalogFilters: nextFilters, preserveAutomationForm: true }).catch(() => {});
+    load({
+      nextCatalogFilters: nextFilters,
+      preserveAutomationForm: true,
+    }).catch(() => {});
   }
 
   function updateCatalogFilters(nextPatch, options = {}) {
@@ -760,7 +862,7 @@ export default function QueuePage() {
     const nextFilters = {
       ...catalogFilters,
       ...nextPatch,
-      page: resetPage ? 1 : nextPatch.page ?? catalogFilters.page
+      page: resetPage ? 1 : (nextPatch.page ?? catalogFilters.page),
     };
     applyCatalogFilters(nextFilters);
   }
@@ -777,7 +879,7 @@ export default function QueuePage() {
     try {
       await apiFetch(`/ingestion/submissions/${submissionId}/retry/`, {
         method: "POST",
-        body: {}
+        body: {},
       });
       toast.success("Request queued.");
       await reloadCurrent();
@@ -794,10 +896,13 @@ export default function QueuePage() {
     }
     setBusyActionId(submissionId);
     try {
-      await apiFetch(`/ingestion/submissions/${submissionId}/confirm-candidate/`, {
-        method: "POST",
-        body: { candidate_id: candidateId }
-      });
+      await apiFetch(
+        `/ingestion/submissions/${submissionId}/confirm-candidate/`,
+        {
+          method: "POST",
+          body: { candidate_id: candidateId },
+        },
+      );
       setReviewSubmission(null);
       toast.success("Source selected.");
       await reloadCurrent();
@@ -813,9 +918,13 @@ export default function QueuePage() {
     try {
       await apiFetch(`/ingestion/duplicate-reviews/${reviewId}/resolve/`, {
         method: "POST",
-        body: { decision }
+        body: { decision },
       });
-      toast.success(decision === "confirm_existing" ? "Existing book kept." : "New book queued.");
+      toast.success(
+        decision === "confirm_existing"
+          ? "Existing book kept."
+          : "New book queued.",
+      );
       await reloadCurrent();
     } catch (nextError) {
       toast.error(nextError.message);
@@ -832,7 +941,7 @@ export default function QueuePage() {
     try {
       await apiFetch(`/ingestion/jobs/${jobId}/resume/`, {
         method: "POST",
-        body: {}
+        body: {},
       });
       toast.success("Book creation started.");
       await reloadCurrent();
@@ -848,7 +957,7 @@ export default function QueuePage() {
     try {
       await apiFetch(`/ingestion/jobs/${jobId}/stop/`, {
         method: "POST",
-        body: {}
+        body: {},
       });
       toast.success("Book creation stopped.");
       await reloadCurrent();
@@ -863,9 +972,11 @@ export default function QueuePage() {
     setBusyDeleteId(`submission:${submissionId}`);
     try {
       await apiFetch(`/ingestion/submissions/${submissionId}/`, {
-        method: "DELETE"
+        method: "DELETE",
       });
-      setSelectedSubmissionIds((current) => current.filter((id) => id !== submissionId));
+      setSelectedSubmissionIds((current) =>
+        current.filter((id) => id !== submissionId),
+      );
       toast.success("Request deleted.");
       await reloadCurrent();
     } catch (nextError) {
@@ -879,7 +990,7 @@ export default function QueuePage() {
     setBusyDeleteId(`job:${jobId}`);
     try {
       await apiFetch(`/ingestion/jobs/${jobId}/`, {
-        method: "DELETE"
+        method: "DELETE",
       });
       setSelectedJobIds((current) => current.filter((id) => id !== jobId));
       toast.success("Book creation deleted.");
@@ -895,7 +1006,7 @@ export default function QueuePage() {
     setBusyDeleteId(`run:${runId}`);
     try {
       await apiFetch(`/ingestion/catalog/curation-runs/${runId}/`, {
-        method: "DELETE"
+        method: "DELETE",
       });
       setSelectedRunIds((current) => current.filter((id) => id !== runId));
       toast.success("Run deleted.");
@@ -911,9 +1022,11 @@ export default function QueuePage() {
     setBusyDeleteId(`catalog:${entryId}`);
     try {
       await apiFetch(`/ingestion/catalog/entries/${entryId}/`, {
-        method: "DELETE"
+        method: "DELETE",
       });
-      setSelectedCatalogEntryIds((current) => current.filter((id) => id !== entryId));
+      setSelectedCatalogEntryIds((current) =>
+        current.filter((id) => id !== entryId),
+      );
       toast.success("Catalog row deleted.");
       await reloadCurrent();
     } catch (nextError) {
@@ -954,7 +1067,7 @@ export default function QueuePage() {
       setCatalogSyncDismissed(false);
       const payload = await apiFetch("/ingestion/catalog/refresh/", {
         method: "POST",
-        body: { max_pages: 80 }
+        body: { max_pages: 80 },
       });
       setCatalogSyncState(payload);
       await reloadCurrent({ silent: true });
@@ -978,14 +1091,14 @@ export default function QueuePage() {
             status: "idle",
             task_id: "",
             queue_name: "",
-            finished_at: new Date().toISOString()
+            finished_at: new Date().toISOString(),
           }
-        : current
+        : current,
     );
     try {
       const payload = await apiFetch("/ingestion/catalog/refresh/stop/", {
         method: "POST",
-        body: {}
+        body: {},
       });
       setCatalogSyncState(payload);
       await reloadCurrent({ silent: true });
@@ -1008,17 +1121,25 @@ export default function QueuePage() {
     }
 
     const creatableEntryIds = entryIds.filter((id) => {
-      const entry = catalogEntries.find((catalogEntry) => catalogEntry.id === id);
+      const entry = catalogEntries.find(
+        (catalogEntry) => catalogEntry.id === id,
+      );
       return !entry || canCreateCatalogEntry(entry);
     });
 
     if (creatableEntryIds.length !== entryIds.length) {
-      const skippedIds = new Set(entryIds.filter((id) => !creatableEntryIds.includes(id)));
-      setSelectedCatalogEntryIds((current) => current.filter((id) => !skippedIds.has(id)));
+      const skippedIds = new Set(
+        entryIds.filter((id) => !creatableEntryIds.includes(id)),
+      );
+      setSelectedCatalogEntryIds((current) =>
+        current.filter((id) => !skippedIds.has(id)),
+      );
     }
 
     if (!creatableEntryIds.length) {
-      toast.info("Only new, failed, or unfinished catalog rows can be created.");
+      toast.info(
+        "Only new, failed, or unfinished catalog rows can be created.",
+      );
       return;
     }
 
@@ -1030,16 +1151,19 @@ export default function QueuePage() {
     }
 
     try {
-      const payload = await apiFetch("/ingestion/catalog/entries/create-books/", {
-        method: "POST",
-        body: { ids: creatableEntryIds }
-      });
+      const payload = await apiFetch(
+        "/ingestion/catalog/entries/create-books/",
+        {
+          method: "POST",
+          body: { ids: creatableEntryIds },
+        },
+      );
       toast.success(
         summarizeResponse(payload, {
           queued_creates: "create",
           queued_updates: "update",
-          skipped_processing: "busy"
-        }) || "Book creation queued."
+          skipped_processing: "busy",
+        }) || "Book creation queued.",
       );
       setSelectedCatalogEntryIds([]);
       await reloadCurrent();
@@ -1060,7 +1184,7 @@ export default function QueuePage() {
     try {
       await apiFetch(`/ingestion/catalog/curation-runs/${runId}/stop/`, {
         method: "POST",
-        body: {}
+        body: {},
       });
       toast.success("Run stopped.");
       await reloadCurrent();
@@ -1082,8 +1206,8 @@ export default function QueuePage() {
           daily_run_time: automationForm.daily_run_time,
           frequency: automationForm.frequency,
           mode: automationForm.mode,
-          refresh_max_pages: Number(automationForm.refresh_max_pages) || 80
-        }
+          refresh_max_pages: Number(automationForm.refresh_max_pages) || 80,
+        },
       });
       setAutomationState(payload);
       if (payload.settings) {
@@ -1092,7 +1216,7 @@ export default function QueuePage() {
           daily_run_time: normalizeTimeInput(payload.settings.daily_run_time),
           frequency: payload.settings.frequency || "daily",
           mode: payload.settings.mode || "pending",
-          refresh_max_pages: String(payload.settings.refresh_max_pages || 80)
+          refresh_max_pages: String(payload.settings.refresh_max_pages || 80),
         });
       }
       toast.success("Automation saved.");
@@ -1130,17 +1254,19 @@ export default function QueuePage() {
           () =>
             apiFetch("/ingestion/submissions/bulk-delete/", {
               method: "POST",
-              body: { ids }
+              body: { ids },
             }),
           (payload) =>
             summarizeResponse(payload, {
               deleted_count: "deleted",
-              skipped_active: "active"
-            }) || "Requests deleted."
+              skipped_active: "active",
+            }) || "Requests deleted.",
         );
         if (payload) {
           const deletedIdSet = new Set(ids);
-          setSelectedSubmissionIds((current) => current.filter((id) => !deletedIdSet.has(id)));
+          setSelectedSubmissionIds((current) =>
+            current.filter((id) => !deletedIdSet.has(id)),
+          );
         }
       } else if (scope === "job-bulk") {
         const payload = await runBulkAction(
@@ -1148,17 +1274,19 @@ export default function QueuePage() {
           () =>
             apiFetch("/ingestion/jobs/bulk-delete/", {
               method: "POST",
-              body: { ids }
+              body: { ids },
             }),
           (payload) =>
             summarizeResponse(payload, {
               deleted_count: "deleted",
-              skipped_active: "active"
-            }) || "Book creation deleted."
+              skipped_active: "active",
+            }) || "Book creation deleted.",
         );
         if (payload) {
           const deletedIdSet = new Set(ids);
-          setSelectedJobIds((current) => current.filter((id) => !deletedIdSet.has(id)));
+          setSelectedJobIds((current) =>
+            current.filter((id) => !deletedIdSet.has(id)),
+          );
         }
       } else if (scope === "run-bulk") {
         const payload = await runBulkAction(
@@ -1166,17 +1294,19 @@ export default function QueuePage() {
           () =>
             apiFetch("/ingestion/catalog/curation-runs/bulk-delete/", {
               method: "POST",
-              body: { ids }
+              body: { ids },
             }),
           (payload) =>
             summarizeResponse(payload, {
               deleted_count: "deleted",
-              skipped_active: "active"
-            }) || "Runs deleted."
+              skipped_active: "active",
+            }) || "Runs deleted.",
         );
         if (payload) {
           const deletedIdSet = new Set(ids);
-          setSelectedRunIds((current) => current.filter((id) => !deletedIdSet.has(id)));
+          setSelectedRunIds((current) =>
+            current.filter((id) => !deletedIdSet.has(id)),
+          );
         }
       } else if (scope === "catalog-bulk") {
         const payload = await runBulkAction(
@@ -1184,16 +1314,18 @@ export default function QueuePage() {
           () =>
             apiFetch("/ingestion/catalog/entries/bulk-delete/", {
               method: "POST",
-              body: { ids }
+              body: { ids },
             }),
           (payload) =>
             summarizeResponse(payload, {
-              deleted_count: "deleted"
-            }) || "Catalog rows deleted."
+              deleted_count: "deleted",
+            }) || "Catalog rows deleted.",
         );
         if (payload) {
           const deletedIdSet = new Set(ids);
-          setSelectedCatalogEntryIds((current) => current.filter((id) => !deletedIdSet.has(id)));
+          setSelectedCatalogEntryIds((current) =>
+            current.filter((id) => !deletedIdSet.has(id)),
+          );
         }
       }
     } finally {
@@ -1202,34 +1334,71 @@ export default function QueuePage() {
     }
   }
 
-  const selectedSubmissionIdSet = useMemo(() => new Set(selectedSubmissionIds), [selectedSubmissionIds]);
-  const submissionIdsOnPage = useMemo(() => submissions.map((submission) => submission.id), [submissions]);
+  const selectedSubmissionIdSet = useMemo(
+    () => new Set(selectedSubmissionIds),
+    [selectedSubmissionIds],
+  );
+  const submissionIdsOnPage = useMemo(
+    () => submissions.map((submission) => submission.id),
+    [submissions],
+  );
   const selectedSubmissionCount = selectedSubmissionIds.length;
-  const selectedSubmissionCountOnPage = submissionIdsOnPage.filter((id) => selectedSubmissionIdSet.has(id)).length;
-  const allSubmissionsSelected = submissions.length > 0 && selectedSubmissionCountOnPage === submissions.length;
+  const selectedSubmissionCountOnPage = submissionIdsOnPage.filter((id) =>
+    selectedSubmissionIdSet.has(id),
+  ).length;
+  const allSubmissionsSelected =
+    submissions.length > 0 &&
+    selectedSubmissionCountOnPage === submissions.length;
 
-  const selectedJobIdSet = useMemo(() => new Set(selectedJobIds), [selectedJobIds]);
+  const selectedJobIdSet = useMemo(
+    () => new Set(selectedJobIds),
+    [selectedJobIds],
+  );
   const jobIdsOnPage = useMemo(() => jobs.map((job) => job.id), [jobs]);
   const selectedJobCount = selectedJobIds.length;
-  const selectedJobCountOnPage = jobIdsOnPage.filter((id) => selectedJobIdSet.has(id)).length;
-  const allJobsSelected = jobs.length > 0 && selectedJobCountOnPage === jobs.length;
+  const selectedJobCountOnPage = jobIdsOnPage.filter((id) =>
+    selectedJobIdSet.has(id),
+  ).length;
+  const allJobsSelected =
+    jobs.length > 0 && selectedJobCountOnPage === jobs.length;
 
-  const selectedCatalogIdSet = useMemo(() => new Set(selectedCatalogEntryIds), [selectedCatalogEntryIds]);
-  const catalogEntryIdsOnPage = useMemo(() => catalogEntries.map((entry) => entry.id), [catalogEntries]);
+  const selectedCatalogIdSet = useMemo(
+    () => new Set(selectedCatalogEntryIds),
+    [selectedCatalogEntryIds],
+  );
+  const catalogEntryIdsOnPage = useMemo(
+    () => catalogEntries.map((entry) => entry.id),
+    [catalogEntries],
+  );
   const creatableCatalogEntryIdsOnPage = useMemo(
-    () => catalogEntries.filter((entry) => canCreateCatalogEntry(entry)).map((entry) => entry.id),
-    [catalogEntries]
+    () =>
+      catalogEntries
+        .filter((entry) => canCreateCatalogEntry(entry))
+        .map((entry) => entry.id),
+    [catalogEntries],
   );
   const selectedCatalogCount = selectedCatalogEntryIds.length;
-  const selectedCatalogCountOnPage = creatableCatalogEntryIdsOnPage.filter((id) => selectedCatalogIdSet.has(id)).length;
+  const selectedCatalogCountOnPage = creatableCatalogEntryIdsOnPage.filter(
+    (id) => selectedCatalogIdSet.has(id),
+  ).length;
   const allCatalogSelected =
-    creatableCatalogEntryIdsOnPage.length > 0 && selectedCatalogCountOnPage === creatableCatalogEntryIdsOnPage.length;
+    creatableCatalogEntryIdsOnPage.length > 0 &&
+    selectedCatalogCountOnPage === creatableCatalogEntryIdsOnPage.length;
 
-  const selectedRunIdSet = useMemo(() => new Set(selectedRunIds), [selectedRunIds]);
-  const runIdsOnPage = useMemo(() => curationRuns.map((run) => run.id), [curationRuns]);
+  const selectedRunIdSet = useMemo(
+    () => new Set(selectedRunIds),
+    [selectedRunIds],
+  );
+  const runIdsOnPage = useMemo(
+    () => curationRuns.map((run) => run.id),
+    [curationRuns],
+  );
   const selectedRunCount = selectedRunIds.length;
-  const selectedRunCountOnPage = runIdsOnPage.filter((id) => selectedRunIdSet.has(id)).length;
-  const allRunsSelected = curationRuns.length > 0 && selectedRunCountOnPage === curationRuns.length;
+  const selectedRunCountOnPage = runIdsOnPage.filter((id) =>
+    selectedRunIdSet.has(id),
+  ).length;
+  const allRunsSelected =
+    curationRuns.length > 0 && selectedRunCountOnPage === curationRuns.length;
 
   const submissionResumeIds = submissions
     .map((submission) => submission.latest_job)
@@ -1239,9 +1408,15 @@ export default function QueuePage() {
     .map((submission) => submission.latest_job)
     .filter((job) => job && isActiveStatus(job.status))
     .map((job) => job.id);
-  const jobResumeIds = jobs.filter((job) => job.status === "queued" && !job.task_id).map((job) => job.id);
-  const jobStopIds = jobs.filter((job) => isActiveStatus(job.status)).map((job) => job.id);
-  const runStopIds = curationRuns.filter((run) => isActiveStatus(run.status)).map((run) => run.id);
+  const jobResumeIds = jobs
+    .filter((job) => job.status === "queued" && !job.task_id)
+    .map((job) => job.id);
+  const jobStopIds = jobs
+    .filter((job) => isActiveStatus(job.status))
+    .map((job) => job.id);
+  const runStopIds = curationRuns
+    .filter((run) => isActiveStatus(run.status))
+    .map((run) => run.id);
   const selectedSubmissionResumeIds = submissions
     .filter((submission) => selectedSubmissionIdSet.has(submission.id))
     .map((submission) => submission.latest_job)
@@ -1252,16 +1427,27 @@ export default function QueuePage() {
     .map((submission) => submission.latest_job)
     .filter((job) => job && isActiveStatus(job.status))
     .map((job) => job.id);
-  const selectedJobResumeIds = jobs.filter((job) => selectedJobIdSet.has(job.id) && job.status === "queued" && !job.task_id).map((job) => job.id);
-  const selectedJobStopIds = jobs.filter((job) => selectedJobIdSet.has(job.id) && isActiveStatus(job.status)).map((job) => job.id);
-  const selectedRunStopIds = curationRuns.filter((run) => selectedRunIdSet.has(run.id) && isActiveStatus(run.status)).map((run) => run.id);
+  const selectedJobResumeIds = jobs
+    .filter(
+      (job) =>
+        selectedJobIdSet.has(job.id) && job.status === "queued" && !job.task_id,
+    )
+    .map((job) => job.id);
+  const selectedJobStopIds = jobs
+    .filter((job) => selectedJobIdSet.has(job.id) && isActiveStatus(job.status))
+    .map((job) => job.id);
+  const selectedRunStopIds = curationRuns
+    .filter((run) => selectedRunIdSet.has(run.id) && isActiveStatus(run.status))
+    .map((run) => run.id);
 
   useEffect(() => {
     setSelectedCatalogEntryIds((current) =>
       current.filter((id) => {
-        const entry = catalogEntries.find((catalogEntry) => catalogEntry.id === id);
+        const entry = catalogEntries.find(
+          (catalogEntry) => catalogEntry.id === id,
+        );
         return !entry || canCreateCatalogEntry(entry);
-      })
+      }),
     );
   }, [catalogEntries]);
 
@@ -1276,7 +1462,8 @@ export default function QueuePage() {
     resultCount,
     drawerId,
     onSubmit,
-    buttonsDisabled = false
+    onSearchClear,
+    buttonsDisabled = false,
   }) {
     return (
       <CatalogSearchRow
@@ -1291,6 +1478,7 @@ export default function QueuePage() {
         drawerId={drawerId}
         compact
         onSubmit={onSubmit}
+        onSearchClear={onSearchClear}
         buttonsDisabled={buttonsDisabled}
       />
     );
@@ -1316,9 +1504,16 @@ export default function QueuePage() {
           drawerId: `${activeTab}-submission-filters`,
           onSubmit: (event) => {
             event.preventDefault();
-            reloadCurrent({ nextSubmissionFilters: submissionFilters }).catch(() => {});
+            reloadCurrent({ nextSubmissionFilters: submissionFilters }).catch(
+              () => {},
+            );
           },
-          buttonsDisabled: sourceTabButtonsDisabled
+          onSearchClear: (nextFilters) => {
+            reloadCurrent({ nextSubmissionFilters: nextFilters }).catch(
+              () => {},
+            );
+          },
+          buttonsDisabled: sourceTabButtonsDisabled,
         })}
         toolbar={
           <CatalogToolbar
@@ -1330,9 +1525,17 @@ export default function QueuePage() {
             setFiltersExpanded={setSubmissionFiltersExpanded}
             onSubmit={(event) => {
               event.preventDefault();
-              reloadCurrent({ nextSubmissionFilters: submissionFilters }).catch(() => {});
+              reloadCurrent({ nextSubmissionFilters: submissionFilters }).catch(
+                () => {},
+              );
             }}
-            onReset={() => resetWithLoad(defaultSubmissionFilters, setSubmissionFilters, "nextSubmissionFilters")}
+            onReset={() =>
+              resetWithLoad(
+                defaultSubmissionFilters,
+                setSubmissionFilters,
+                "nextSubmissionFilters",
+              )
+            }
             searchPlaceholder="Search requests"
             resultCount={submissions.length}
             showSearchRow={false}
@@ -1347,130 +1550,171 @@ export default function QueuePage() {
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!selectedSubmissionResumeIds.length || bulkActionKey === "submissions:resume" || creationActionsDisabled}
+                disabled={
+                  !selectedSubmissionResumeIds.length ||
+                  bulkActionKey === "submissions:resume" ||
+                  creationActionsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "submissions:resume",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-resume/", {
                         method: "POST",
-                        body: { ids: selectedSubmissionResumeIds }
+                        body: { ids: selectedSubmissionResumeIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         resumed_count: "started",
-                        skipped_invalid: "skipped"
-                      }) || "Requests started."
+                        skipped_invalid: "skipped",
+                      }) || "Requests started.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "submissions:resume" ? <LoadingSpinner size={14} /> : null}
-                  {selectedActionLabel("Resume selected", selectedSubmissionResumeIds.length)}
+                  {bulkActionKey === "submissions:resume" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  {selectedActionLabel(
+                    "Resume selected",
+                    selectedSubmissionResumeIds.length,
+                  )}
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!selectedSubmissionStopIds.length || bulkActionKey === "submissions:stop" || sourceTabButtonsDisabled}
+                disabled={
+                  !selectedSubmissionStopIds.length ||
+                  bulkActionKey === "submissions:stop" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "submissions:stop",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-stop/", {
                         method: "POST",
-                        body: { ids: selectedSubmissionStopIds }
+                        body: { ids: selectedSubmissionStopIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         stopped_count: "stopped",
-                        skipped_complete: "done"
-                      }) || "Requests stopped."
+                        skipped_complete: "done",
+                      }) || "Requests stopped.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "submissions:stop" ? <LoadingSpinner size={14} /> : null}
-                  {selectedActionLabel("Stop selected", selectedSubmissionStopIds.length)}
+                  {bulkActionKey === "submissions:stop" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  {selectedActionLabel(
+                    "Stop selected",
+                    selectedSubmissionStopIds.length,
+                  )}
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button danger-button processing-inline-danger"
-                disabled={!selectedSubmissionCount || bulkActionKey === "submissions:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !selectedSubmissionCount ||
+                  bulkActionKey === "submissions:delete" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   openDeleteDialog(
                     "submission-bulk",
                     selectedSubmissionIds,
                     "Delete selected requests",
-                    "This will remove the selected requests in this list."
+                    "This will remove the selected requests in this list.",
                   )
                 }
               >
-                {selectedActionLabel("Delete selected", selectedSubmissionCount)}
+                {selectedActionLabel(
+                  "Delete selected",
+                  selectedSubmissionCount,
+                )}
               </button>
             </div>
             <div className="processing-card-action-row">
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!submissionResumeIds.length || bulkActionKey === "submissions:resume" || creationActionsDisabled}
+                disabled={
+                  !submissionResumeIds.length ||
+                  bulkActionKey === "submissions:resume" ||
+                  creationActionsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "submissions:resume",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-resume/", {
                         method: "POST",
-                        body: { ids: submissionResumeIds }
+                        body: { ids: submissionResumeIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         resumed_count: "started",
-                        skipped_invalid: "skipped"
-                      }) || "Requests started."
+                        skipped_invalid: "skipped",
+                      }) || "Requests started.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "submissions:resume" ? <LoadingSpinner size={14} /> : null}
+                  {bulkActionKey === "submissions:resume" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
                   Resume all
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!submissionStopIds.length || bulkActionKey === "submissions:stop" || sourceTabButtonsDisabled}
+                disabled={
+                  !submissionStopIds.length ||
+                  bulkActionKey === "submissions:stop" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "submissions:stop",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-stop/", {
                         method: "POST",
-                        body: { ids: submissionStopIds }
+                        body: { ids: submissionStopIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         stopped_count: "stopped",
-                        skipped_complete: "done"
-                      }) || "Requests stopped."
+                        skipped_complete: "done",
+                      }) || "Requests stopped.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "submissions:stop" ? <LoadingSpinner size={14} /> : null}
+                  {bulkActionKey === "submissions:stop" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
                   Stop all
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button danger-button processing-inline-danger"
-                disabled={!submissions.length || bulkActionKey === "submissions:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !submissions.length ||
+                  bulkActionKey === "submissions:delete" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   openDeleteDialog(
                     "submission-bulk",
                     submissions.map((submission) => submission.id),
                     "Delete requests",
-                    "This will remove every visible request in this list."
+                    "This will remove every visible request in this list.",
                   )
                 }
               >
@@ -1491,10 +1735,18 @@ export default function QueuePage() {
                     checked={allSubmissionsSelected}
                     onChange={() =>
                       setSelectedSubmissionIds((current) =>
-                        toggleVisibleSelection(current, submissionIdsOnPage, allSubmissionsSelected)
+                        toggleVisibleSelection(
+                          current,
+                          submissionIdsOnPage,
+                          allSubmissionsSelected,
+                        ),
                       )
                     }
-                    aria-label={allSubmissionsSelected ? "Clear visible request selections" : "Select all visible requests"}
+                    aria-label={
+                      allSubmissionsSelected
+                        ? "Clear visible request selections"
+                        : "Select all visible requests"
+                    }
                   />
                 </th>
                 <th className="processing-col-request">Request</th>
@@ -1507,10 +1759,14 @@ export default function QueuePage() {
             <tbody>
               {submissions.map((submission) => {
                 const latestJob = submission.latest_job || null;
-                const isBusy = busyActionId === submission.id || busyActionId === latestJob?.id;
-                const isDeleting = busyDeleteId === `submission:${submission.id}`;
+                const isBusy =
+                  busyActionId === submission.id ||
+                  busyActionId === latestJob?.id;
+                const isDeleting =
+                  busyDeleteId === `submission:${submission.id}`;
                 const isSelected = selectedSubmissionIdSet.has(submission.id);
-                const primaryError = submission.error_message || latestJob?.last_error || "";
+                const primaryError =
+                  submission.error_message || latestJob?.last_error || "";
                 const showDelete = true;
 
                 return (
@@ -1520,12 +1776,19 @@ export default function QueuePage() {
                         type="checkbox"
                         className="processing-checkbox"
                         checked={isSelected}
-                        onChange={() => setSelectedSubmissionIds((current) => toggleSelectedId(current, submission.id))}
+                        onChange={() =>
+                          setSelectedSubmissionIds((current) =>
+                            toggleSelectedId(current, submission.id),
+                          )
+                        }
                         aria-label={`Select request ${getRequestPrimaryText(submission.original_input)}`}
                       />
                     </td>
                     <td className="processing-col-request">
-                      <RequestValue value={submission.original_input} error={primaryError} />
+                      <RequestValue
+                        value={submission.original_input}
+                        error={primaryError}
+                      />
                     </td>
                     <td>
                       <StatusPill value={submission.status} />
@@ -1533,11 +1796,16 @@ export default function QueuePage() {
                     <td>
                       <BookLinkCell submission={submission} />
                     </td>
-                    <td>{formatBookDateTime(getSubmissionActivityAt(submission))}</td>
+                    <td>
+                      {formatBookDateTime(getSubmissionActivityAt(submission))}
+                    </td>
                     <td>
                       <div className="table-actions">
                         {submission.linked_book_slug ? (
-                          <Link to={`/books/${submission.linked_book_slug}`} className="ghost-button">
+                          <Link
+                            to={`/books/${submission.linked_book_slug}`}
+                            className="ghost-button"
+                          >
                             Open
                           </Link>
                         ) : submission.linked_book_deleted ? (
@@ -1549,7 +1817,8 @@ export default function QueuePage() {
                           >
                             {isBusy ? "Queueing..." : "Recreate"}
                           </button>
-                        ) : submission.resolution_status === "ambiguous" && submission.candidates?.length ? (
+                        ) : submission.resolution_status === "ambiguous" &&
+                          submission.candidates?.length ? (
                           <button
                             type="button"
                             className="ghost-button"
@@ -1558,7 +1827,8 @@ export default function QueuePage() {
                           >
                             Review
                           </button>
-                        ) : latestJob?.status === "queued" && !latestJob.task_id ? (
+                        ) : latestJob?.status === "queued" &&
+                          !latestJob.task_id ? (
                           <button
                             type="button"
                             className="ghost-button"
@@ -1576,7 +1846,13 @@ export default function QueuePage() {
                           >
                             {isBusy ? "Stopping..." : "Stop"}
                           </button>
-                        ) : ["deleted", "failed", "cancelled", "needs_review"].includes(submission.status) || latestJob?.status === "failed" ? (
+                        ) : [
+                            "deleted",
+                            "failed",
+                            "cancelled",
+                            "needs_review",
+                          ].includes(submission.status) ||
+                          latestJob?.status === "failed" ? (
                           <button
                             type="button"
                             className="ghost-button"
@@ -1597,7 +1873,7 @@ export default function QueuePage() {
                                 "submission-single",
                                 [submission.id],
                                 "Delete request",
-                                "This request will be removed from the queue."
+                                "This request will be removed from the queue.",
                               )
                             }
                             disabled={isDeleting || sourceTabButtonsDisabled}
@@ -1639,7 +1915,10 @@ export default function QueuePage() {
             event.preventDefault();
             reloadCurrent({ nextJobFilters: jobFilters }).catch(() => {});
           },
-          buttonsDisabled: sourceTabButtonsDisabled
+          onSearchClear: (nextFilters) => {
+            reloadCurrent({ nextJobFilters: nextFilters }).catch(() => {});
+          },
+          buttonsDisabled: sourceTabButtonsDisabled,
         })}
         toolbar={
           <CatalogToolbar
@@ -1653,7 +1932,9 @@ export default function QueuePage() {
               event.preventDefault();
               reloadCurrent({ nextJobFilters: jobFilters }).catch(() => {});
             }}
-            onReset={() => resetWithLoad(defaultJobFilters, setJobFilters, "nextJobFilters")}
+            onReset={() =>
+              resetWithLoad(defaultJobFilters, setJobFilters, "nextJobFilters")
+            }
             searchPlaceholder="Search book creation"
             resultCount={jobs.length}
             showSearchRow={false}
@@ -1668,63 +1949,85 @@ export default function QueuePage() {
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!selectedJobResumeIds.length || bulkActionKey === "jobs:resume" || creationActionsDisabled}
+                disabled={
+                  !selectedJobResumeIds.length ||
+                  bulkActionKey === "jobs:resume" ||
+                  creationActionsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "jobs:resume",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-resume/", {
                         method: "POST",
-                        body: { ids: selectedJobResumeIds }
+                        body: { ids: selectedJobResumeIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         resumed_count: "started",
-                        skipped_invalid: "skipped"
-                      }) || "Book creation started."
+                        skipped_invalid: "skipped",
+                      }) || "Book creation started.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "jobs:resume" ? <LoadingSpinner size={14} /> : null}
-                  {selectedActionLabel("Resume selected", selectedJobResumeIds.length)}
+                  {bulkActionKey === "jobs:resume" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  {selectedActionLabel(
+                    "Resume selected",
+                    selectedJobResumeIds.length,
+                  )}
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!selectedJobStopIds.length || bulkActionKey === "jobs:stop" || sourceTabButtonsDisabled}
+                disabled={
+                  !selectedJobStopIds.length ||
+                  bulkActionKey === "jobs:stop" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "jobs:stop",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-stop/", {
                         method: "POST",
-                        body: { ids: selectedJobStopIds }
+                        body: { ids: selectedJobStopIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         stopped_count: "stopped",
-                        skipped_complete: "done"
-                      }) || "Book creation stopped."
+                        skipped_complete: "done",
+                      }) || "Book creation stopped.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "jobs:stop" ? <LoadingSpinner size={14} /> : null}
-                  {selectedActionLabel("Stop selected", selectedJobStopIds.length)}
+                  {bulkActionKey === "jobs:stop" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  {selectedActionLabel(
+                    "Stop selected",
+                    selectedJobStopIds.length,
+                  )}
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button danger-button processing-inline-danger"
-                disabled={!selectedJobCount || bulkActionKey === "jobs:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !selectedJobCount ||
+                  bulkActionKey === "jobs:delete" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   openDeleteDialog(
                     "job-bulk",
                     selectedJobIds,
                     "Delete selected book creation rows",
-                    "This will remove the selected book creation rows."
+                    "This will remove the selected book creation rows.",
                   )
                 }
               >
@@ -1735,63 +2038,79 @@ export default function QueuePage() {
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!jobResumeIds.length || bulkActionKey === "jobs:resume" || creationActionsDisabled}
+                disabled={
+                  !jobResumeIds.length ||
+                  bulkActionKey === "jobs:resume" ||
+                  creationActionsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "jobs:resume",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-resume/", {
                         method: "POST",
-                        body: { ids: jobResumeIds }
+                        body: { ids: jobResumeIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         resumed_count: "started",
-                        skipped_invalid: "skipped"
-                      }) || "Book creation started."
+                        skipped_invalid: "skipped",
+                      }) || "Book creation started.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "jobs:resume" ? <LoadingSpinner size={14} /> : null}
+                  {bulkActionKey === "jobs:resume" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
                   Resume all
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!jobStopIds.length || bulkActionKey === "jobs:stop" || sourceTabButtonsDisabled}
+                disabled={
+                  !jobStopIds.length ||
+                  bulkActionKey === "jobs:stop" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "jobs:stop",
                     () =>
                       apiFetch("/ingestion/jobs/bulk-stop/", {
                         method: "POST",
-                        body: { ids: jobStopIds }
+                        body: { ids: jobStopIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         stopped_count: "stopped",
-                        skipped_complete: "done"
-                      }) || "Book creation stopped."
+                        skipped_complete: "done",
+                      }) || "Book creation stopped.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "jobs:stop" ? <LoadingSpinner size={14} /> : null}
+                  {bulkActionKey === "jobs:stop" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
                   Stop all
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button danger-button processing-inline-danger"
-                disabled={!jobs.length || bulkActionKey === "jobs:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !jobs.length ||
+                  bulkActionKey === "jobs:delete" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   openDeleteDialog(
                     "job-bulk",
                     jobs.map((job) => job.id),
                     "Delete book creation",
-                    "This will remove every visible row in this book creation list."
+                    "This will remove every visible row in this book creation list.",
                   )
                 }
               >
@@ -1811,9 +2130,19 @@ export default function QueuePage() {
                     className="processing-checkbox"
                     checked={allJobsSelected}
                     onChange={() =>
-                      setSelectedJobIds((current) => toggleVisibleSelection(current, jobIdsOnPage, allJobsSelected))
+                      setSelectedJobIds((current) =>
+                        toggleVisibleSelection(
+                          current,
+                          jobIdsOnPage,
+                          allJobsSelected,
+                        ),
+                      )
                     }
-                    aria-label={allJobsSelected ? "Clear visible book creation selections" : "Select all visible book creation rows"}
+                    aria-label={
+                      allJobsSelected
+                        ? "Clear visible book creation selections"
+                        : "Select all visible book creation rows"
+                    }
                   />
                 </th>
                 <th className="processing-col-request">Request</th>
@@ -1835,12 +2164,19 @@ export default function QueuePage() {
                         type="checkbox"
                         className="processing-checkbox"
                         checked={isSelected}
-                        onChange={() => setSelectedJobIds((current) => toggleSelectedId(current, job.id))}
+                        onChange={() =>
+                          setSelectedJobIds((current) =>
+                            toggleSelectedId(current, job.id),
+                          )
+                        }
                         aria-label={`Select job ${getRequestPrimaryText(job.submission_input)}`}
                       />
                     </td>
                     <td className="processing-col-request">
-                      <RequestValue value={job.submission_input} error={job.last_error} />
+                      <RequestValue
+                        value={job.submission_input}
+                        error={job.last_error}
+                      />
                     </td>
                     <td>
                       <StatusPill value={job.status} />
@@ -1850,7 +2186,10 @@ export default function QueuePage() {
                     <td>
                       <div className="table-actions">
                         {job.target_book_slug ? (
-                          <Link to={`/books/${job.target_book_slug}`} className="ghost-button">
+                          <Link
+                            to={`/books/${job.target_book_slug}`}
+                            className="ghost-button"
+                          >
                             Open
                           </Link>
                         ) : job.target_book_deleted ? (
@@ -1892,7 +2231,7 @@ export default function QueuePage() {
                               "job-single",
                               [job.id],
                               "Delete book creation",
-                              "This row will be removed from book creation history."
+                              "This row will be removed from book creation history.",
                             )
                           }
                           disabled={isDeleting || sourceTabButtonsDisabled}
@@ -1936,7 +2275,10 @@ export default function QueuePage() {
             event.preventDefault();
             reloadCurrent({ nextReviewFilters: reviewFilters }).catch(() => {});
           },
-          buttonsDisabled: sourceTabButtonsDisabled
+          onSearchClear: (nextFilters) => {
+            reloadCurrent({ nextReviewFilters: nextFilters }).catch(() => {});
+          },
+          buttonsDisabled: sourceTabButtonsDisabled,
         })}
         toolbar={
           <CatalogToolbar
@@ -1948,9 +2290,17 @@ export default function QueuePage() {
             setFiltersExpanded={setReviewFiltersExpanded}
             onSubmit={(event) => {
               event.preventDefault();
-              reloadCurrent({ nextReviewFilters: reviewFilters }).catch(() => {});
+              reloadCurrent({ nextReviewFilters: reviewFilters }).catch(
+                () => {},
+              );
             }}
-            onReset={() => resetWithLoad(defaultReviewFilters, setReviewFilters, "nextReviewFilters")}
+            onReset={() =>
+              resetWithLoad(
+                defaultReviewFilters,
+                setReviewFilters,
+                "nextReviewFilters",
+              )
+            }
             searchPlaceholder="Search duplicate checks"
             resultCount={duplicateReviews.length}
             showSearchRow={false}
@@ -1976,7 +2326,10 @@ export default function QueuePage() {
                   <td className="processing-col-request">
                     <RequestValue value={review.submission?.original_input} />
                   </td>
-                  <td>{review.existing_book?.title || (review.existing_book_deleted ? "Deleted record" : "-")}</td>
+                  <td>
+                    {review.existing_book?.title ||
+                      (review.existing_book_deleted ? "Deleted record" : "-")}
+                  </td>
                   <td>
                     <StatusPill value={review.status} />
                   </td>
@@ -1986,8 +2339,13 @@ export default function QueuePage() {
                         <button
                           type="button"
                           className="ghost-button"
-                          onClick={() => resolveDuplicate(review.id, "confirm_existing")}
-                          disabled={busyActionId === review.id || creationActionsDisabled}
+                          onClick={() =>
+                            resolveDuplicate(review.id, "confirm_existing")
+                          }
+                          disabled={
+                            busyActionId === review.id ||
+                            creationActionsDisabled
+                          }
                         >
                           Use existing
                         </button>
@@ -1996,7 +2354,9 @@ export default function QueuePage() {
                         type="button"
                         className="ghost-button"
                         onClick={() => resolveDuplicate(review.id, "dismiss")}
-                        disabled={busyActionId === review.id || creationActionsDisabled}
+                        disabled={
+                          busyActionId === review.id || creationActionsDisabled
+                        }
                       >
                         {review.existing_book_deleted ? "Recreate" : "Keep new"}
                       </button>
@@ -2036,7 +2396,7 @@ export default function QueuePage() {
               ["Failed", catalogSummary.failed],
               ["Unfinished", catalogSummary.unfinished],
               ["Ready", catalogSummary.ready],
-              ["Deleted", catalogSummary.deleted]
+              ["Deleted", catalogSummary.deleted],
             ].map(([label, value]) => (
               <article key={label} className="processing-summary-stat">
                 <span className="fact-label">{label}</span>
@@ -2087,6 +2447,9 @@ export default function QueuePage() {
               event.preventDefault();
               applyCatalogFilters({ ...catalogFilters, page: 1 });
             }}
+            onSearchClear={(nextFilters) => {
+              applyCatalogFilters({ ...nextFilters, page: 1 });
+            }}
           />
         }
         toolbar={
@@ -2101,7 +2464,13 @@ export default function QueuePage() {
               event.preventDefault();
               applyCatalogFilters({ ...catalogFilters, page: 1 });
             }}
-            onReset={() => resetWithLoad(defaultCatalogFilters, setCatalogFilters, "nextCatalogFilters")}
+            onReset={() =>
+              resetWithLoad(
+                defaultCatalogFilters,
+                setCatalogFilters,
+                "nextCatalogFilters",
+              )
+            }
             searchPlaceholder="Search catalog books"
             resultCount={catalogPagination.total_count}
             showSearchRow={false}
@@ -2111,21 +2480,37 @@ export default function QueuePage() {
                   <button
                     type="button"
                     className={`icon-button catalog-toolbar-sync-button${refreshingCatalog || stoppingCatalogSync ? " warning-button" : ""}`}
-                    onClick={refreshingCatalog ? stopCatalogRefresh : refreshCatalog}
-                    disabled={stoppingCatalogSync || (!refreshingCatalog && catalogActionsDisabled)}
+                    onClick={
+                      refreshingCatalog ? stopCatalogRefresh : refreshCatalog
+                    }
+                    disabled={
+                      stoppingCatalogSync ||
+                      (!refreshingCatalog && catalogActionsDisabled)
+                    }
                     title={catalogSyncControlTitle}
                     aria-label={catalogSyncControlLabel}
                   >
-                    {stoppingCatalogSync ? <LoadingSpinner size={18} /> : refreshingCatalog ? <CatalogStopIcon /> : <CatalogRefreshIcon />}
+                    {stoppingCatalogSync ? (
+                      <LoadingSpinner size={18} />
+                    ) : refreshingCatalog ? (
+                      <CatalogStopIcon />
+                    ) : (
+                      <CatalogRefreshIcon />
+                    )}
                   </button>
                 </div>
-                <div className="catalog-toolbar-secondary">
+                <div className="catalog-toolbar-secondary catalog-toolbar-secondary--catalog-card">
                   <label className="catalog-toolbar-field catalog-toolbar-field-sort">
                     <span className="fact-label">Sort</span>
                     <select
                       className="catalog-toolbar-select"
                       value={catalogFilters.sort}
-                      onChange={(event) => updateCatalogFilters({ sort: event.target.value }, { resetPage: true })}
+                      onChange={(event) =>
+                        updateCatalogFilters(
+                          { sort: event.target.value },
+                          { resetPage: true },
+                        )
+                      }
                       disabled={sourceTabButtonsDisabled}
                     >
                       <option value="status_recent">Status + recent</option>
@@ -2143,7 +2528,10 @@ export default function QueuePage() {
                       className="catalog-toolbar-select"
                       value={String(catalogFilters.limit)}
                       onChange={(event) =>
-                        updateCatalogFilters({ limit: Number(event.target.value) || 180 }, { resetPage: true })
+                        updateCatalogFilters(
+                          { limit: Number(event.target.value) || 180 },
+                          { resetPage: true },
+                        )
                       }
                       disabled={sourceTabButtonsDisabled}
                     >
@@ -2153,28 +2541,48 @@ export default function QueuePage() {
                     </select>
                   </label>
                   <div className="catalog-pagination">
-                    <span className="catalog-page-indicator">{getCatalogPageLabel(catalogPagination)}</span>
+                    <span className="catalog-page-indicator">
+                      {getCatalogPageLabel(catalogPagination)}
+                    </span>
                     <div className="catalog-pagination-actions">
                       <button
                         type="button"
                         className="ghost-button"
                         onClick={() => updateCatalogFilters({ page: 1 })}
-                        disabled={isFirstCatalogPage || sourceTabButtonsDisabled}
+                        disabled={
+                          isFirstCatalogPage || sourceTabButtonsDisabled
+                        }
                       >
                         First
                       </button>
                       <button
                         type="button"
                         className="ghost-button"
-                        onClick={() => updateCatalogFilters({ page: Math.max(1, (catalogPagination.page || 1) - 1) })}
-                        disabled={isFirstCatalogPage || sourceTabButtonsDisabled}
+                        onClick={() =>
+                          updateCatalogFilters({
+                            page: Math.max(
+                              1,
+                              (catalogPagination.page || 1) - 1,
+                            ),
+                          })
+                        }
+                        disabled={
+                          isFirstCatalogPage || sourceTabButtonsDisabled
+                        }
                       >
                         Prev
                       </button>
                       <button
                         type="button"
                         className="ghost-button"
-                        onClick={() => updateCatalogFilters({ page: Math.min(catalogPageCount, (catalogPagination.page || 1) + 1) })}
+                        onClick={() =>
+                          updateCatalogFilters({
+                            page: Math.min(
+                              catalogPageCount,
+                              (catalogPagination.page || 1) + 1,
+                            ),
+                          })
+                        }
                         disabled={isLastCatalogPage || sourceTabButtonsDisabled}
                       >
                         Next
@@ -2182,7 +2590,9 @@ export default function QueuePage() {
                       <button
                         type="button"
                         className="ghost-button"
-                        onClick={() => updateCatalogFilters({ page: catalogPageCount })}
+                        onClick={() =>
+                          updateCatalogFilters({ page: catalogPageCount })
+                        }
                         disabled={isLastCatalogPage || sourceTabButtonsDisabled}
                       >
                         Last
@@ -2203,12 +2613,20 @@ export default function QueuePage() {
               <button
                 type="button"
                 className="primary-button"
-                onClick={() => queueCatalogBooks(selectedCatalogEntryIds, "", "selected")}
-                disabled={!selectedCatalogCount || creatingCatalog || catalogActionsDisabled}
+                onClick={() =>
+                  queueCatalogBooks(selectedCatalogEntryIds, "", "selected")
+                }
+                disabled={
+                  !selectedCatalogCount ||
+                  creatingCatalog ||
+                  catalogActionsDisabled
+                }
                 title={catalogActionDisabledReason || undefined}
               >
                 <span className="button-label">
-                  {creatingCatalog && catalogActionMode === "selected" ? <LoadingSpinner size={14} /> : null}
+                  {creatingCatalog && catalogActionMode === "selected" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
                   {selectedActionLabel("Create selected", selectedCatalogCount)}
                 </span>
               </button>
@@ -2220,22 +2638,34 @@ export default function QueuePage() {
                     "catalog-bulk",
                     selectedCatalogEntryIds,
                     "Delete selected catalog rows",
-                    "This will remove the selected catalog rows."
+                    "This will remove the selected catalog rows.",
                   )
                 }
-                disabled={!selectedCatalogCount || bulkActionKey === "catalog:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !selectedCatalogCount ||
+                  bulkActionKey === "catalog:delete" ||
+                  sourceTabButtonsDisabled
+                }
               >
                 {selectedActionLabel("Delete selected", selectedCatalogCount)}
               </button>
               <button
                 type="button"
                 className="ghost-button"
-                onClick={() => queueCatalogBooks(creatableCatalogEntryIdsOnPage, "", "all")}
-                disabled={!creatableCatalogEntryIdsOnPage.length || creatingCatalog || catalogActionsDisabled}
+                onClick={() =>
+                  queueCatalogBooks(creatableCatalogEntryIdsOnPage, "", "all")
+                }
+                disabled={
+                  !creatableCatalogEntryIdsOnPage.length ||
+                  creatingCatalog ||
+                  catalogActionsDisabled
+                }
                 title={catalogActionDisabledReason || undefined}
               >
                 <span className="button-label">
-                  {creatingCatalog && catalogActionMode === "all" ? <LoadingSpinner size={14} /> : null}
+                  {creatingCatalog && catalogActionMode === "all" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
                   Create all
                 </span>
               </button>
@@ -2247,10 +2677,14 @@ export default function QueuePage() {
                     "catalog-bulk",
                     catalogEntries.map((entry) => entry.id),
                     "Delete catalog rows",
-                    "This will remove every visible catalog row."
+                    "This will remove every visible catalog row.",
                   )
                 }
-                disabled={!catalogEntries.length || bulkActionKey === "catalog:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !catalogEntries.length ||
+                  bulkActionKey === "catalog:delete" ||
+                  sourceTabButtonsDisabled
+                }
               >
                 Delete all
               </button>
@@ -2269,11 +2703,22 @@ export default function QueuePage() {
                     checked={allCatalogSelected}
                     onChange={() =>
                       setSelectedCatalogEntryIds((current) =>
-                        toggleVisibleSelection(current, creatableCatalogEntryIdsOnPage, allCatalogSelected)
+                        toggleVisibleSelection(
+                          current,
+                          creatableCatalogEntryIdsOnPage,
+                          allCatalogSelected,
+                        ),
                       )
                     }
-                    disabled={!creatableCatalogEntryIdsOnPage.length || catalogActionsDisabled}
-                    aria-label={allCatalogSelected ? "Clear visible catalog selections" : "Select all visible catalog rows"}
+                    disabled={
+                      !creatableCatalogEntryIdsOnPage.length ||
+                      catalogActionsDisabled
+                    }
+                    aria-label={
+                      allCatalogSelected
+                        ? "Clear visible catalog selections"
+                        : "Select all visible catalog rows"
+                    }
                   />
                 </th>
                 <th className="processing-col-request">Book</th>
@@ -2297,7 +2742,11 @@ export default function QueuePage() {
                         type="checkbox"
                         className="processing-checkbox"
                         checked={isSelected}
-                        onChange={() => setSelectedCatalogEntryIds((current) => toggleSelectedId(current, entry.id))}
+                        onChange={() =>
+                          setSelectedCatalogEntryIds((current) =>
+                            toggleSelectedId(current, entry.id),
+                          )
+                        }
                         disabled={!isSelectable || catalogActionsDisabled}
                         aria-label={`Select ${entry.title}`}
                       />
@@ -2305,37 +2754,60 @@ export default function QueuePage() {
                     <td className="processing-col-request">
                       <div className="table-cell-stack table-request-cell">
                         <strong>{entry.title}</strong>
-                        {entry.author_line ? <span className="table-note">{entry.author_line}</span> : null}
-                        {entry.latest_job_error ? <span className="processing-row-error">{entry.latest_job_error}</span> : null}
+                        {entry.author_line ? (
+                          <span className="table-note">
+                            {entry.author_line}
+                          </span>
+                        ) : null}
+                        {entry.latest_job_error ? (
+                          <span className="processing-row-error">
+                            {entry.latest_job_error}
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                     <td className="processing-col-category">
-                      {entry.categories ? <span>{entry.categories}</span> : <span className="table-note">-</span>}
+                      {entry.categories ? (
+                        <span>{entry.categories}</span>
+                      ) : (
+                        <span className="table-note">-</span>
+                      )}
                     </td>
                     <td>
                       <StatusPill value={entry.curation_status} />
                     </td>
                     <td>
                       {entry.local_book_slug ? (
-                        <Link to={`/books/${entry.local_book_slug}`} className="meta-link">
+                        <Link
+                          to={`/books/${entry.local_book_slug}`}
+                          className="meta-link"
+                        >
                           {entry.local_book_title}
                         </Link>
                       ) : (
                         <span className="table-note">-</span>
                       )}
                     </td>
-                    <td>{formatBookDateTime(getCatalogEntryActivityAt(entry))}</td>
+                    <td>
+                      {formatBookDateTime(getCatalogEntryActivityAt(entry))}
+                    </td>
                     <td>
                       <div className="table-actions">
-                        {entry.local_book_slug && entry.curation_status === "ready" ? (
-                          <Link to={`/books/${entry.local_book_slug}`} className="ghost-button">
+                        {entry.local_book_slug &&
+                        entry.curation_status === "ready" ? (
+                          <Link
+                            to={`/books/${entry.local_book_slug}`}
+                            className="ghost-button"
+                          >
                             Open
                           </Link>
                         ) : canCreateCatalogEntry(entry) ? (
                           <button
                             type="button"
                             className="ghost-button"
-                            onClick={() => queueCatalogBooks([entry.id], entry.id)}
+                            onClick={() =>
+                              queueCatalogBooks([entry.id], entry.id)
+                            }
                             disabled={isBusy || catalogActionsDisabled}
                           >
                             {isBusy ? "Queueing..." : "Create"}
@@ -2351,7 +2823,7 @@ export default function QueuePage() {
                               "catalog-single",
                               [entry.id],
                               "Delete catalog row",
-                              "This catalog row will be removed."
+                              "This catalog row will be removed.",
                             )
                           }
                           disabled={isDeleting || sourceTabButtonsDisabled}
@@ -2396,7 +2868,10 @@ export default function QueuePage() {
             event.preventDefault();
             reloadCurrent({ nextRunFilters: runFilters }).catch(() => {});
           },
-          buttonsDisabled: sourceTabButtonsDisabled
+          onSearchClear: (nextFilters) => {
+            reloadCurrent({ nextRunFilters: nextFilters }).catch(() => {});
+          },
+          buttonsDisabled: sourceTabButtonsDisabled,
         })}
         toolbar={
           <CatalogToolbar
@@ -2410,7 +2885,9 @@ export default function QueuePage() {
               event.preventDefault();
               reloadCurrent({ nextRunFilters: runFilters }).catch(() => {});
             }}
-            onReset={() => resetWithLoad(defaultRunFilters, setRunFilters, "nextRunFilters")}
+            onReset={() =>
+              resetWithLoad(defaultRunFilters, setRunFilters, "nextRunFilters")
+            }
             searchPlaceholder="Search runs"
             resultCount={curationRuns.length}
             showSearchRow={false}
@@ -2425,38 +2902,51 @@ export default function QueuePage() {
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!selectedRunStopIds.length || bulkActionKey === "runs:stop" || sourceTabButtonsDisabled}
+                disabled={
+                  !selectedRunStopIds.length ||
+                  bulkActionKey === "runs:stop" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "runs:stop",
                     () =>
                       apiFetch("/ingestion/catalog/curation-runs/bulk-stop/", {
                         method: "POST",
-                        body: { ids: selectedRunStopIds }
+                        body: { ids: selectedRunStopIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         stopped_count: "stopped",
-                        skipped_complete: "done"
-                      }) || "Runs stopped."
+                        skipped_complete: "done",
+                      }) || "Runs stopped.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "runs:stop" ? <LoadingSpinner size={14} /> : null}
-                  {selectedActionLabel("Stop selected", selectedRunStopIds.length)}
+                  {bulkActionKey === "runs:stop" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  {selectedActionLabel(
+                    "Stop selected",
+                    selectedRunStopIds.length,
+                  )}
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button danger-button processing-inline-danger"
-                disabled={!selectedRunCount || bulkActionKey === "runs:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !selectedRunCount ||
+                  bulkActionKey === "runs:delete" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   openDeleteDialog(
                     "run-bulk",
                     selectedRunIds,
                     "Delete selected runs",
-                    "This will remove the selected runs from history."
+                    "This will remove the selected runs from history.",
                   )
                 }
               >
@@ -2467,38 +2957,48 @@ export default function QueuePage() {
               <button
                 type="button"
                 className="ghost-button"
-                disabled={!runStopIds.length || bulkActionKey === "runs:stop" || sourceTabButtonsDisabled}
+                disabled={
+                  !runStopIds.length ||
+                  bulkActionKey === "runs:stop" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   runBulkAction(
                     "runs:stop",
                     () =>
                       apiFetch("/ingestion/catalog/curation-runs/bulk-stop/", {
                         method: "POST",
-                        body: { ids: runStopIds }
+                        body: { ids: runStopIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
                         stopped_count: "stopped",
-                        skipped_complete: "done"
-                      }) || "Runs stopped."
+                        skipped_complete: "done",
+                      }) || "Runs stopped.",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "runs:stop" ? <LoadingSpinner size={14} /> : null}
+                  {bulkActionKey === "runs:stop" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
                   Stop all
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button danger-button processing-inline-danger"
-                disabled={!curationRuns.length || bulkActionKey === "runs:delete" || sourceTabButtonsDisabled}
+                disabled={
+                  !curationRuns.length ||
+                  bulkActionKey === "runs:delete" ||
+                  sourceTabButtonsDisabled
+                }
                 onClick={() =>
                   openDeleteDialog(
                     "run-bulk",
                     curationRuns.map((run) => run.id),
                     "Delete runs",
-                    "This will remove every visible run."
+                    "This will remove every visible run.",
                   )
                 }
               >
@@ -2518,9 +3018,19 @@ export default function QueuePage() {
                     className="processing-checkbox"
                     checked={allRunsSelected}
                     onChange={() =>
-                      setSelectedRunIds((current) => toggleVisibleSelection(current, runIdsOnPage, allRunsSelected))
+                      setSelectedRunIds((current) =>
+                        toggleVisibleSelection(
+                          current,
+                          runIdsOnPage,
+                          allRunsSelected,
+                        ),
+                      )
                     }
-                    aria-label={allRunsSelected ? "Clear visible run selections" : "Select all visible runs"}
+                    aria-label={
+                      allRunsSelected
+                        ? "Clear visible run selections"
+                        : "Select all visible runs"
+                    }
                   />
                 </th>
                 <th className="processing-col-request">Run</th>
@@ -2541,15 +3051,25 @@ export default function QueuePage() {
                         type="checkbox"
                         className="processing-checkbox"
                         checked={isSelected}
-                        onChange={() => setSelectedRunIds((current) => toggleSelectedId(current, run.id))}
+                        onChange={() =>
+                          setSelectedRunIds((current) =>
+                            toggleSelectedId(current, run.id),
+                          )
+                        }
                         aria-label={`Select ${runTypeLabel(run)} run`}
                       />
                     </td>
                     <td className="processing-col-request">
                       <div className="table-cell-stack table-request-cell">
                         <strong>{runTypeLabel(run)}</strong>
-                        <span className="table-note">{runSummaryLabel(run)}</span>
-                        {run.last_error ? <span className="processing-row-error">{run.last_error}</span> : null}
+                        <span className="table-note">
+                          {runSummaryLabel(run)}
+                        </span>
+                        {run.last_error ? (
+                          <span className="processing-row-error">
+                            {run.last_error}
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                     <td>
@@ -2564,7 +3084,9 @@ export default function QueuePage() {
                             type="button"
                             className="ghost-button"
                             onClick={() => stopRun(run.id)}
-                            disabled={busyRunId === run.id || sourceTabButtonsDisabled}
+                            disabled={
+                              busyRunId === run.id || sourceTabButtonsDisabled
+                            }
                           >
                             {busyRunId === run.id ? "Stopping..." : "Stop"}
                           </button>
@@ -2579,7 +3101,7 @@ export default function QueuePage() {
                               "run-single",
                               [run.id],
                               "Delete run",
-                              "This run will be removed from history."
+                              "This run will be removed from history.",
                             )
                           }
                           disabled={isDeleting || sourceTabButtonsDisabled}
@@ -2626,7 +3148,9 @@ export default function QueuePage() {
         <LoadingSpinner size={14} />
       </span>
     ) : automationState?.settings?.next_run_at ? (
-      <span className="processing-card-count">{formatBookDateTime(automationState.settings.next_run_at)}</span>
+      <span className="processing-card-count">
+        {formatBookDateTime(automationState.settings.next_run_at)}
+      </span>
     ) : null;
 
     return (
@@ -2641,16 +3165,31 @@ export default function QueuePage() {
               {!loading ? (
                 <label
                   className="processing-switch"
-                  title={automationForm.enabled ? "Automation enabled" : "Automation disabled"}
+                  title={
+                    automationForm.enabled
+                      ? "Automation enabled"
+                      : "Automation disabled"
+                  }
                 >
                   <input
                     type="checkbox"
-                    aria-label={automationForm.enabled ? "Disable automation" : "Enable automation"}
+                    aria-label={
+                      automationForm.enabled
+                        ? "Disable automation"
+                        : "Enable automation"
+                    }
                     checked={automationForm.enabled}
-                    onChange={(event) => setAutomationForm({ ...automationForm, enabled: event.target.checked })}
+                    onChange={(event) =>
+                      setAutomationForm({
+                        ...automationForm,
+                        enabled: event.target.checked,
+                      })
+                    }
                   />
                   <span className="processing-switch-track" aria-hidden="true">
-                    <span className="processing-switch-state">{automationForm.enabled ? "On" : "Off"}</span>
+                    <span className="processing-switch-state">
+                      {automationForm.enabled ? "On" : "Off"}
+                    </span>
                     <span className="processing-switch-thumb" />
                   </span>
                 </label>
@@ -2667,14 +3206,24 @@ export default function QueuePage() {
                   <input
                     type="time"
                     value={automationForm.daily_run_time}
-                    onChange={(event) => setAutomationForm({ ...automationForm, daily_run_time: event.target.value })}
+                    onChange={(event) =>
+                      setAutomationForm({
+                        ...automationForm,
+                        daily_run_time: event.target.value,
+                      })
+                    }
                   />
                 </label>
                 <label>
                   <span className="fact-label">Frequency</span>
                   <select
                     value={automationForm.frequency}
-                    onChange={(event) => setAutomationForm({ ...automationForm, frequency: event.target.value })}
+                    onChange={(event) =>
+                      setAutomationForm({
+                        ...automationForm,
+                        frequency: event.target.value,
+                      })
+                    }
                   >
                     <option value="daily">Daily</option>
                     <option value="weekly">Weekly</option>
@@ -2690,7 +3239,12 @@ export default function QueuePage() {
                   <span className="fact-label">Mode</span>
                   <select
                     value={automationForm.mode}
-                    onChange={(event) => setAutomationForm({ ...automationForm, mode: event.target.value })}
+                    onChange={(event) =>
+                      setAutomationForm({
+                        ...automationForm,
+                        mode: event.target.value,
+                      })
+                    }
                   >
                     <option value="pending">New + unfinished</option>
                     <option value="all">All tracked</option>
@@ -2703,12 +3257,21 @@ export default function QueuePage() {
                     min="1"
                     max="80"
                     value={automationForm.refresh_max_pages}
-                    onChange={(event) => setAutomationForm({ ...automationForm, refresh_max_pages: event.target.value })}
+                    onChange={(event) =>
+                      setAutomationForm({
+                        ...automationForm,
+                        refresh_max_pages: event.target.value,
+                      })
+                    }
                   />
                 </label>
               </div>
               <div className="processing-card-actions">
-                <button type="submit" className="primary-button" disabled={savingAutomation}>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={savingAutomation}
+                >
                   <span className="button-label">
                     {savingAutomation ? <LoadingSpinner size={14} /> : null}
                     {savingAutomation ? "Saving..." : "Save"}
@@ -2747,12 +3310,20 @@ export default function QueuePage() {
           {loading ? <LoadingSpinner size={18} /> : null}
         </div>
         {tabs.length > 1 ? (
-          <div className="admin-tab-grid processing-tab-grid" role="tablist" aria-label="Processing sections">
+          <div
+            className="admin-tab-grid processing-tab-grid"
+            role="tablist"
+            aria-label="Processing sections"
+          >
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                className={activeTab === tab.id ? "admin-tab-card is-active" : "admin-tab-card"}
+                className={
+                  activeTab === tab.id
+                    ? "admin-tab-card is-active"
+                    : "admin-tab-card"
+                }
                 onClick={() => setActiveTab(tab.id)}
               >
                 <span className="admin-tab-label">{tab.label}</span>
@@ -2760,7 +3331,9 @@ export default function QueuePage() {
             ))}
           </div>
         ) : null}
-        {error ? <div className="page-state page-state-error">{error}</div> : null}
+        {error ? (
+          <div className="page-state page-state-error">{error}</div>
+        ) : null}
       </section>
 
       {activeTab === USER_TAB ? renderUserTab() : null}
@@ -2773,7 +3346,11 @@ export default function QueuePage() {
           <section className="dialog-card" role="dialog" aria-modal="true">
             <div className="dialog-header">
               <h2>Review Match</h2>
-              <button type="button" className="ghost-button" onClick={() => setReviewSubmission(null)}>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setReviewSubmission(null)}
+              >
                 Close
               </button>
             </div>
@@ -2783,10 +3360,15 @@ export default function QueuePage() {
                   key={candidate.id}
                   type="button"
                   className="candidate-button"
-                  onClick={() => confirmCandidate(reviewSubmission.id, candidate.id)}
+                  onClick={() =>
+                    confirmCandidate(reviewSubmission.id, candidate.id)
+                  }
                 >
                   <span>{candidate.candidate_title}</span>
-                  <small>{candidate.candidate_author || `${Math.round(candidate.confidence * 100)}%`}</small>
+                  <small>
+                    {candidate.candidate_author ||
+                      `${Math.round(candidate.confidence * 100)}%`}
+                  </small>
                 </button>
               ))}
             </div>

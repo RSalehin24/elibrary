@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 
-export const PROPERTY_TABLE_ROW_OPTIONS = [50, 100, 200];
+export const PROPERTY_TABLE_ROW_OPTIONS = [5, 10, 20, 35, 50, 100];
 
 function getPageLabel(page, pageCount) {
   return `Page ${page} / ${pageCount}`;
 }
 
-export function useClientPagination(items, initialRowsPerPage = PROPERTY_TABLE_ROW_OPTIONS[0]) {
+export function useClientPagination(
+  items,
+  initialRowsPerPage = PROPERTY_TABLE_ROW_OPTIONS[0],
+) {
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPageState] = useState(initialRowsPerPage);
 
@@ -23,7 +26,7 @@ export function useClientPagination(items, initialRowsPerPage = PROPERTY_TABLE_R
       rowsPerPage,
       totalCount,
       hasPrevious: currentPage > 1,
-      hasNext: currentPage < pageCount
+      hasNext: currentPage < pageCount,
     };
   }, [items, page, rowsPerPage]);
 
@@ -47,7 +50,7 @@ export function useClientPagination(items, initialRowsPerPage = PROPERTY_TABLE_R
     ...pagination,
     setPage,
     setRowsPerPage,
-    resetPage
+    resetPage,
   };
 }
 
@@ -63,12 +66,12 @@ export default function PropertyTableControls({
   hasNext,
   onPageChange,
   disabled = false,
-  leadingContent = null
+  leadingContent = null,
 }) {
   const controls = (
     <div className="catalog-toolbar-secondary property-table-controls">
       <label className="catalog-toolbar-field catalog-toolbar-field-sort">
-        <span className="fact-label">Sort</span>
+        <span className="fact-label catalog-toolbar-inline-label">Sort</span>
         <select
           className="catalog-toolbar-select"
           value={sortValue}
@@ -83,11 +86,13 @@ export default function PropertyTableControls({
         </select>
       </label>
       <label className="catalog-toolbar-field catalog-toolbar-field-rows">
-        <span className="fact-label">Rows</span>
+        <span className="fact-label catalog-toolbar-inline-label">Rows</span>
         <select
           className="catalog-toolbar-select"
           value={String(rowsPerPage)}
-          onChange={(event) => onRowsPerPageChange(Number(event.target.value) || rowsPerPage)}
+          onChange={(event) =>
+            onRowsPerPageChange(Number(event.target.value) || rowsPerPage)
+          }
           disabled={disabled}
         >
           {PROPERTY_TABLE_ROW_OPTIONS.map((option) => (
@@ -98,9 +103,16 @@ export default function PropertyTableControls({
         </select>
       </label>
       <div className="catalog-pagination">
-        <span className="catalog-page-indicator">{getPageLabel(page, pageCount)}</span>
+        <span className="catalog-page-indicator">
+          {getPageLabel(page, pageCount)}
+        </span>
         <div className="catalog-pagination-actions">
-          <button type="button" className="ghost-button" onClick={() => onPageChange(1)} disabled={disabled || !hasPrevious}>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => onPageChange(1)}
+            disabled={disabled || !hasPrevious}
+          >
             First
           </button>
           <button

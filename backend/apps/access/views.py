@@ -30,7 +30,7 @@ from apps.catalog.models import Book, Contributor, ContributorRole, Category, Ge
 from apps.common.permissions import IsSuperAdmin, user_can_download_book_assets, user_can_launch_reader, user_can_view_book_cover, user_has_scope
 from apps.common.models import LifecycleState, ReviewState
 from apps.common.url_utils import public_api_url
-from apps.ingestion.services.normalization import promote_leading_front_matter
+from apps.ingestion.services.normalization import clean_extracted_dedication_html, promote_leading_front_matter
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +291,7 @@ def normalize_preview_html(book, asset):
     source_dir = source_path.parent if source_path else None
     cover_asset = book.generated_assets.filter(asset_type=GeneratedAssetType.COVER).first()
     cover_path = local_asset_path(cover_asset)
-    updated = normalize_preview_book_sections(soup)
+    updated = normalize_preview_book_sections(soup, dedication_html=book.dedication_html)
 
     for image_tag in soup.find_all("img"):
         src = (image_tag.get("src") or "").strip()
@@ -327,30 +327,68 @@ def build_book_info_section(html_fragment):
     return fragment.find("div", class_="book-info-section")
 
 
-def normalize_preview_book_sections(soup):
-    main_content = soup.find("div", class_="main-content")
-    if main_content is None:
-        return False
-
-    book_info_content = soup.find("div", class_="book-info-content")
-    current_book_info_html = book_info_content.decode_contents() if book_info_content else ""
-    current_main_content_html = main_content.decode_contents()
-    promoted_book_info_html, cleaned_main_content_html = promote_leading_front_matter(
-        current_book_info_html,
-        current_main_content_html,
+def build_dedication_section(html_fragment):
+    fragment = BeautifulSoup(
+        f"""
+        <div class="dedication-section">
+          <h2 class="dedication-title">উৎসর্গ</h2>
+          <div class="dedication-content">{html_fragment}</div>
+        </div>
+        """,
+        "html.parser",
     )
+    return fragment.find("div", class_="dedication-section")
+
+
+def normalize_preview_book_sections(soup, dedication_html=""):
+    main_content = soup.find("div", class_="main-content")
+    container = soup.find("div", class_="container")
+    insertion_anchor = main_content or soup.find("div", class_="toc-section")
 
     updated = False
-    if cleaned_main_content_html != current_main_content_html:
-        replace_tag_contents(main_content, cleaned_main_content_html)
-        updated = True
+    if main_content is not None:
+        book_info_content = soup.find("div", class_="book-info-content")
+        current_book_info_html = book_info_content.decode_contents() if book_info_content else ""
+        current_main_content_html = main_content.decode_contents()
+        promoted_book_info_html, cleaned_main_content_html = promote_leading_front_matter(
+            current_book_info_html,
+            current_main_content_html,
+        )
 
-    if promoted_book_info_html and promoted_book_info_html != current_book_info_html:
-        if book_info_content is None:
-            main_content.insert_before(build_book_info_section(promoted_book_info_html))
-        else:
-            replace_tag_contents(book_info_content, promoted_book_info_html)
-        updated = True
+        if cleaned_main_content_html != current_main_content_html:
+            replace_tag_contents(main_content, cleaned_main_content_html)
+            updated = True
+
+        if promoted_book_info_html and promoted_book_info_html != current_book_info_html:
+            if book_info_content is None:
+                main_content.insert_before(build_book_info_section(promoted_book_info_html))
+            else:
+                replace_tag_contents(book_info_content, promoted_book_info_html)
+            updated = True
+
+    raw_book_dedication_html = (dedication_html or "").strip()
+    dedication_content = soup.find("div", class_="dedication-content")
+    if dedication_content is not None:
+        current_dedication_html = dedication_content.decode_contents()
+        cleaned_dedication_html = clean_extracted_dedication_html(current_dedication_html)
+        if cleaned_dedication_html:
+            if cleaned_dedication_html != current_dedication_html:
+                replace_tag_contents(dedication_content, cleaned_dedication_html)
+                updated = True
+        elif raw_book_dedication_html:
+            replace_tag_contents(dedication_content, raw_book_dedication_html)
+            updated = True
+    elif raw_book_dedication_html:
+        dedication_section = build_dedication_section(raw_book_dedication_html)
+        if insertion_anchor is not None:
+            insertion_anchor.insert_before(dedication_section)
+            updated = True
+        elif container is not None:
+            container.append(dedication_section)
+            updated = True
+        elif soup.body is not None:
+            soup.body.append(dedication_section)
+            updated = True
 
     return updated
 
@@ -366,6 +404,8 @@ class PermissionGrantListCreateView(generics.ListCreateAPIView):
     queryset = PermissionGrant.objects.select_related("user", "book", "category", "contributor").all()
 
     def perform_create(self, serializer):
+        if serializer.validated_data.get("user") == self.request.user:
+            raise PermissionDenied("You cannot change your own scoped access rules.")
         serializer.save(granted_by=self.request.user)
 
 
@@ -373,6 +413,12 @@ class PermissionGrantDetailView(generics.DestroyAPIView):
     permission_classes = [IsSuperAdmin]
     serializer_class = PermissionGrantSerializer
     queryset = PermissionGrant.objects.select_related("user", "book", "category", "contributor").all()
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user_id == request.user.id:
+            raise PermissionDenied("You cannot change your own scoped access rules.")
+        return super().destroy(request, *args, **kwargs)
 
 
 class AccessReferenceDataView(APIView):

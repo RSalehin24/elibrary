@@ -1,6 +1,8 @@
 from functools import lru_cache
 from urllib.parse import urlparse, urlunparse
 
+from django.conf import settings
+
 from apps.ingestion.legacy import config as legacy_config
 from apps.ingestion.legacy import epub_book, html_book, scraper
 
@@ -24,8 +26,9 @@ def normalize_source_url(url):
     if not parsed.path.startswith("/books/"):
         raise ValueError("Only direct ebanglalibrary book URLs are accepted.")
 
+    source_site_host = (getattr(settings, "SOURCE_SITE_HOST", "www.ebanglalibrary.com") or "www.ebanglalibrary.com").strip().lower()
     normalized_path = parsed.path.rstrip("/") + "/"
-    return urlunparse(("https", "www.ebanglalibrary.com", normalized_path, "", "", ""))
+    return urlunparse(("https", source_site_host, normalized_path, "", "", ""))
 
 
 def validate_source_url(url):

@@ -1,12 +1,235 @@
-Hello{% if invited_user and invited_user.full_name %} {{ invited_user.full_name }}{% endif %},
+<!doctype html>
+<html lang="en">
+  <body
+    style="
+      margin: 0;
+      padding: 0;
+      background: #f4f7f6;
+      color: #1e2b27;
+      font-family: Arial, &quot;Helvetica Neue&quot;, Helvetica, sans-serif;
+    "
+  >
+    <table
+      role="presentation"
+      width="100%"
+      cellspacing="0"
+      cellpadding="0"
+      style="background: #f4f7f6; padding: 24px 0"
+    >
+      <tr>
+        <td align="center">
+          <table
+            role="presentation"
+            width="640"
+            cellspacing="0"
+            cellpadding="0"
+            style="
+              width: 640px;
+              max-width: 94%;
+              background: #ffffff;
+              border: 1px solid #dbe6e2;
+              border-radius: 12px;
+              overflow: hidden;
+            "
+          >
+            <tr>
+              <td
+                style="
+                  padding: 24px 28px 12px 28px;
+                  background: #0f4b38;
+                  color: #f2faf7;
+                "
+              >
+                <div
+                  style="
+                    font-size: 13px;
+                    letter-spacing: 0.08em;
+                    text-transform: uppercase;
+                    opacity: 0.9;
+                  "
+                >
+                  RSalehin24 Library
+                </div>
+                <h1
+                  style="
+                    margin: 8px 0 0 0;
+                    font-size: 24px;
+                    line-height: 1.25;
+                    font-weight: 700;
+                    color: #ffffff;
+                  "
+                >
+                  Your account is ready
+                </h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 24px 28px 8px 28px">
+                <p
+                  style="margin: 0 0 14px 0; font-size: 15px; line-height: 1.65"
+                >
+                  Dear {% if invited_user and invited_user.full_name %}<strong
+                    >{{ invited_user.full_name }}</strong
+                  >{% else %}User{% endif %},
+                </p>
+                <p
+                  style="margin: 0 0 14px 0; font-size: 15px; line-height: 1.65"
+                >
+                  We are pleased to inform you that your
+                  <strong>RSalehin24 Library</strong> account has been
+                  successfully created.
+                </p>
+                <p
+                  style="margin: 0 0 18px 0; font-size: 15px; line-height: 1.65"
+                >
+                  To activate your account, please set your password using the
+                  secure button below.
+                </p>
 
-Your Bangla Library account has been created.
+                <table
+                  role="presentation"
+                  cellspacing="0"
+                  cellpadding="0"
+                  style="margin: 0 0 18px 0"
+                >
+                  <tr>
+                    <td style="border-radius: 8px; background: #0f4b38">
+                      <a
+                        href="{{ frontend_reset_full_url }}"
+                        style="
+                          display: inline-block;
+                          padding: 12px 18px;
+                          font-size: 14px;
+                          font-weight: 700;
+                          line-height: 1;
+                          text-decoration: none;
+                          color: #ffffff;
+                        "
+                        >Set Your Password</a
+                      >
+                    </td>
+                  </tr>
+                </table>
 
-Use the secure link below to choose your password and finish setup:
-{{ frontend_reset_url }}?uid={{ uid }}&token={{ token }}
+                <table
+                  role="presentation"
+                  width="100%"
+                  cellspacing="0"
+                  cellpadding="0"
+                  style="
+                    margin: 0 0 18px 0;
+                    background: #f6faf8;
+                    border: 1px solid #dce9e4;
+                    border-radius: 10px;
+                  "
+                >
+                  <tr>
+                    <td style="padding: 12px 14px">
+                      <p
+                        style="
+                          margin: 0 0 8px 0;
+                          font-size: 13px;
+                          line-height: 1.5;
+                          color: #425b53;
+                        "
+                      >
+                        <strong>Account details</strong>
+                      </p>
+                      <p
+                        style="
+                          margin: 0 0 6px 0;
+                          font-size: 13px;
+                          line-height: 1.5;
+                        "
+                      >
+                        <strong>Email:</strong> {{ email }}
+                      </p>
+                      <p style="margin: 0; font-size: 13px; line-height: 1.5">
+                        <strong>Reset link:</strong>
+                        <a
+                          href="{{ frontend_reset_full_url }}"
+                          style="
+                            color: #0f4b38;
+                            text-decoration: underline;
+                            word-break: break-all;
+                          "
+                          >{{ frontend_reset_full_url }}</a
+                        >
+                      </p>
+                    </td>
+                  </tr>
+                </table>
 
-{% if invited_by %}
-This invitation was sent by {{ invited_by.display_name }}.
-{% endif %}
+                {% if invited_by %}
+                <p
+                  style="
+                    margin: 0 0 12px 0;
+                    font-size: 14px;
+                    line-height: 1.6;
+                    color: #3a4f48;
+                  "
+                >
+                  This invitation was sent by
+                  <strong>{{ invited_by.display_name }}</strong>.
+                </p>
+                {% endif %}
 
-If you were not expecting this email, you can ignore it.
+                <p
+                  style="
+                    margin: 0 0 16px 0;
+                    font-size: 14px;
+                    line-height: 1.6;
+                    color: #4a625a;
+                  "
+                >
+                  If you did not expect this email, you may safely ignore it.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td
+                style="
+                  padding: 14px 28px 22px 28px;
+                  border-top: 1px solid #e4eeea;
+                  background: #fbfdfc;
+                "
+              >
+                <p
+                  style="
+                    margin: 0 0 6px 0;
+                    font-size: 12px;
+                    line-height: 1.5;
+                    color: #58716a;
+                  "
+                >
+                  Regards,
+                </p>
+                <p
+                  style="
+                    margin: 0 0 10px 0;
+                    font-size: 13px;
+                    line-height: 1.5;
+                    color: #2f4a42;
+                  "
+                >
+                  <strong>RSalehin24 Library Team</strong>
+                </p>
+                <p
+                  style="
+                    margin: 0;
+                    font-size: 11px;
+                    line-height: 1.5;
+                    color: #759089;
+                  "
+                >
+                  This is an automated message from {{ site_name }}. Please do
+                  not reply to this email.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

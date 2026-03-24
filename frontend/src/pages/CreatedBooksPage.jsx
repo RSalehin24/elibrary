@@ -15,7 +15,7 @@ const defaultFilters = {
   state: "",
   review_state: "",
   sort: "-requested_at",
-  ownership: "mine"
+  ownership: "mine",
 };
 
 const createdBookFilterFields = [
@@ -33,8 +33,8 @@ const createdBookFilterFields = [
       { value: "needs_review", label: "Needs review" },
       { value: "ready", label: "Ready" },
       { value: "published", label: "Published" },
-      { value: "archived", label: "Archived" }
-    ]
+      { value: "archived", label: "Archived" },
+    ],
   },
   {
     key: "review_state",
@@ -45,8 +45,8 @@ const createdBookFilterFields = [
       { value: "pending", label: "Pending" },
       { value: "needs_review", label: "Needs review" },
       { value: "approved", label: "Approved" },
-      { value: "rejected", label: "Rejected" }
-    ]
+      { value: "rejected", label: "Rejected" },
+    ],
   },
   {
     key: "sort",
@@ -58,14 +58,17 @@ const createdBookFilterFields = [
       { value: "-created_at", label: "Newest book first" },
       { value: "created_at", label: "Oldest book first" },
       { value: "title", label: "Title A-Z" },
-      { value: "-title", label: "Title Z-A" }
-    ]
-  }
+      { value: "-title", label: "Title Z-A" },
+    ],
+  },
 ];
 
 function cleanFilters(nextFilters) {
   return Object.fromEntries(
-    Object.entries(nextFilters).filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+    Object.entries(nextFilters).filter(
+      ([, value]) =>
+        value !== undefined && value !== null && String(value).trim(),
+    ),
   );
 }
 
@@ -85,7 +88,9 @@ function filtersFromSearchParams(searchParams) {
 export default function CreatedBooksPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
-  const [filters, setFilters] = useState(() => filtersFromSearchParams(searchParams));
+  const [filters, setFilters] = useState(() =>
+    filtersFromSearchParams(searchParams),
+  );
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -93,7 +98,9 @@ export default function CreatedBooksPage() {
   async function loadBooks(nextFilters = filters) {
     try {
       setLoading(true);
-      const payload = await apiFetch(`/catalog/books/${toQueryString(nextFilters)}`);
+      const payload = await apiFetch(
+        `/catalog/books/${toQueryString(nextFilters)}`,
+      );
       setBooks(payload);
       setError("");
     } catch (nextError) {
@@ -119,6 +126,11 @@ export default function CreatedBooksPage() {
     setSearchParams(cleanFilters(defaultFilters));
   }
 
+  function clearSearch(nextFilters) {
+    setFilters(nextFilters);
+    setSearchParams(cleanFilters(nextFilters));
+  }
+
   const resultCount = error || loading ? "" : `${books.length}`;
 
   return (
@@ -137,6 +149,7 @@ export default function CreatedBooksPage() {
           onReset={resetFilters}
           searchPlaceholder="Search your books by title or book ID..."
           resultCount={resultCount}
+          onSearchClear={clearSearch}
           inline
         />
       </header>
@@ -156,7 +169,10 @@ export default function CreatedBooksPage() {
           ))}
         </section>
       ) : (
-        <EmptyState title="No books found" body="Adjust the search or filters." />
+        <EmptyState
+          title="No books found"
+          body="Adjust the search or filters."
+        />
       )}
     </div>
   );

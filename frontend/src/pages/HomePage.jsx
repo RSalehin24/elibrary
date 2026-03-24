@@ -5,7 +5,11 @@ import BookCard from "../components/BookCard";
 import BookCardSkeleton from "../components/BookCardSkeleton";
 import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
-import { cleanQueryParams, filtersFromSearchParams, toQueryString } from "../utils/query";
+import {
+  cleanQueryParams,
+  filtersFromSearchParams,
+  toQueryString,
+} from "../utils/query";
 
 const defaultFilters = {
   q: "",
@@ -15,7 +19,7 @@ const defaultFilters = {
   state: "",
   review_state: "",
   record_type: "all",
-  sort: "-created_at"
+  sort: "-created_at",
 };
 
 const homeFilterFields = [
@@ -33,8 +37,8 @@ const homeFilterFields = [
       { value: "needs_review", label: "Needs review" },
       { value: "ready", label: "Ready" },
       { value: "published", label: "Published" },
-      { value: "archived", label: "Archived" }
-    ]
+      { value: "archived", label: "Archived" },
+    ],
   },
   {
     key: "review_state",
@@ -45,8 +49,8 @@ const homeFilterFields = [
       { value: "pending", label: "Pending" },
       { value: "needs_review", label: "Needs review" },
       { value: "approved", label: "Approved" },
-      { value: "rejected", label: "Rejected" }
-    ]
+      { value: "rejected", label: "Rejected" },
+    ],
   },
   {
     key: "record_type",
@@ -55,8 +59,8 @@ const homeFilterFields = [
     options: [
       { value: "all", label: "All books" },
       { value: "digital", label: "Digital" },
-      { value: "manual", label: "Manual" }
-    ]
+      { value: "manual", label: "Manual" },
+    ],
   },
   {
     key: "sort",
@@ -66,15 +70,17 @@ const homeFilterFields = [
       { value: "-created_at", label: "Newest first" },
       { value: "created_at", label: "Oldest first" },
       { value: "title", label: "Title A-Z" },
-      { value: "-title", label: "Title Z-A" }
-    ]
-  }
+      { value: "-title", label: "Title Z-A" },
+    ],
+  },
 ];
 
 export default function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
-  const [filters, setFilters] = useState(() => filtersFromSearchParams(defaultFilters, searchParams));
+  const [filters, setFilters] = useState(() =>
+    filtersFromSearchParams(defaultFilters, searchParams),
+  );
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -82,7 +88,9 @@ export default function HomePage() {
   async function loadBooks(nextFilters = filters) {
     try {
       setLoading(true);
-      const payload = await apiFetch(`/catalog/books/${toQueryString(nextFilters)}`);
+      const payload = await apiFetch(
+        `/catalog/books/${toQueryString(nextFilters)}`,
+      );
       setBooks(payload);
       setError("");
     } catch (nextError) {
@@ -108,6 +116,11 @@ export default function HomePage() {
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
+  function clearSearch(nextFilters) {
+    setFilters(nextFilters);
+    setSearchParams(cleanQueryParams(nextFilters));
+  }
+
   const resultCount = error || loading ? "" : `${books.length}`;
 
   return (
@@ -126,6 +139,7 @@ export default function HomePage() {
           onReset={resetFilters}
           searchPlaceholder="Search all books by title, book ID, or writer..."
           resultCount={resultCount}
+          onSearchClear={clearSearch}
           inline
         />
       </header>
@@ -145,7 +159,10 @@ export default function HomePage() {
           ))}
         </section>
       ) : (
-        <EmptyState title="No books found" body="Adjust the search or filters." />
+        <EmptyState
+          title="No books found"
+          body="Adjust the search or filters."
+        />
       )}
     </div>
   );

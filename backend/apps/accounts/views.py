@@ -89,6 +89,11 @@ class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        if request.user.is_authenticated:
+            return Response(
+                {"detail": "Please log out first before resetting a password from this link."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -218,6 +223,12 @@ class ManagedUserDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.method in {"PUT", "PATCH"}:
             return ManagedUserUpdateSerializer
         return ManagedUserSerializer
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.pk == request.user.pk:
+            return Response({"detail": "You cannot edit your own account from Users & Access."}, status=status.HTTP_400_BAD_REQUEST)
+        return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

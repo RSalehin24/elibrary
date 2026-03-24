@@ -36,7 +36,12 @@ function renderField(field, filters, setFilters) {
 
   if (field.type === "select") {
     return (
-      <select value={value} onChange={(event) => setFilters({ ...filters, [field.key]: event.target.value })}>
+      <select
+        value={value}
+        onChange={(event) =>
+          setFilters({ ...filters, [field.key]: event.target.value })
+        }
+      >
         {(field.options || []).map((option) => (
           <option key={`${field.key}-${option.value}`} value={option.value}>
             {option.label}
@@ -51,7 +56,9 @@ function renderField(field, filters, setFilters) {
       type={field.type || "text"}
       value={value}
       placeholder={field.placeholder || ""}
-      onChange={(event) => setFilters({ ...filters, [field.key]: event.target.value })}
+      onChange={(event) =>
+        setFilters({ ...filters, [field.key]: event.target.value })
+      }
     />
   );
 }
@@ -67,13 +74,15 @@ export function CatalogSearchRow({
   resultCount,
   drawerId,
   compact = false,
+  className = "",
+  onSearchClear = null,
   showResultCount = true,
   onSubmit,
   buttonsDisabled = false,
-  actionsExtra = null
+  actionsExtra = null,
 }) {
   const activeFilterCount = countActiveFilters(filters, fields, defaultFilters);
-  const rowClassName = `catalog-search-row${compact ? " catalog-search-row--compact" : ""}`;
+  const rowClassName = `catalog-search-row${compact ? " catalog-search-row--compact" : ""}${className ? ` ${className}` : ""}`;
   const RowTag = onSubmit ? "form" : "div";
   const handleSubmit = onSubmit
     ? (event) => {
@@ -85,6 +94,28 @@ export function CatalogSearchRow({
       }
     : undefined;
 
+  const handleSearch = (event) => {
+    if (typeof onSearchClear !== "function") {
+      return;
+    }
+    const nextQuery = String(event.target?.value || "").trim();
+    if (nextQuery !== "") {
+      return;
+    }
+    onSearchClear({ ...filters, q: "" });
+  };
+
+  const handleQueryChange = (event) => {
+    const nextQuery = event.target.value;
+    setFilters({ ...filters, q: nextQuery });
+    if (
+      typeof onSearchClear === "function" &&
+      String(nextQuery).trim() === ""
+    ) {
+      onSearchClear({ ...filters, q: "" });
+    }
+  };
+
   return (
     <RowTag className={rowClassName} onSubmit={handleSubmit}>
       <label className="catalog-search-field" aria-label={searchPlaceholder}>
@@ -94,7 +125,9 @@ export function CatalogSearchRow({
         <input
           type="search"
           value={filters.q || ""}
-          onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+          onChange={handleQueryChange}
+          onInput={handleSearch}
+          onSearch={handleSearch}
           placeholder={searchPlaceholder}
           autoComplete="off"
         />
@@ -110,14 +143,24 @@ export function CatalogSearchRow({
         >
           <FilterIcon />
           <span>Filters</span>
-          {activeFilterCount ? <span className="catalog-filter-count">{activeFilterCount}</span> : null}
+          {activeFilterCount ? (
+            <span className="catalog-filter-count">{activeFilterCount}</span>
+          ) : null}
         </button>
-        {showResultCount && resultCount !== "" && resultCount !== undefined && resultCount !== null ? (
-          <span className="catalog-result-count" aria-label={`${resultCount} results`}>
+        {showResultCount &&
+        resultCount !== "" &&
+        resultCount !== undefined &&
+        resultCount !== null ? (
+          <span
+            className="catalog-result-count"
+            aria-label={`${resultCount} results`}
+          >
             {resultCount}
           </span>
         ) : null}
-        {actionsExtra ? <div className="catalog-search-actions-extra">{actionsExtra}</div> : null}
+        {actionsExtra ? (
+          <div className="catalog-search-actions-extra">{actionsExtra}</div>
+        ) : null}
       </div>
     </RowTag>
   );
@@ -140,11 +183,13 @@ export default function CatalogToolbar({
   drawerId = "catalog-filter-drawer",
   showSearchRow = true,
   searchRowCompact = false,
+  searchRowClassName = "",
+  onSearchClear = null,
   showResultCount = true,
   buttonsDisabled = false,
   bare = false,
   searchActionsExtra = null,
-  secondaryBelow = false
+  secondaryBelow = false,
 }) {
   const wrapperClassName = `catalog-toolbar-wrap${filtersExpanded ? " is-expanded" : ""}${inline ? " is-inline" : ""}${
     bare ? " is-bare" : ""
@@ -167,6 +212,8 @@ export default function CatalogToolbar({
       resultCount={resultCount}
       drawerId={drawerId}
       compact={searchRowCompact}
+      className={searchRowClassName}
+      onSearchClear={onSearchClear}
       showResultCount={showResultCount}
       buttonsDisabled={buttonsDisabled}
       actionsExtra={searchActionsExtra}
@@ -182,7 +229,17 @@ export default function CatalogToolbar({
         <form className="catalog-toolbar-form" onSubmit={onSubmit}>
           {searchRow || hasInlineSecondary ? (
             <div className={toplineClassName}>
-              {searchRow ? (hasInlineSecondary ? <div className={`catalog-toolbar-primary${bare ? " is-bare" : ""}`}>{searchRow}</div> : searchRow) : null}
+              {searchRow ? (
+                hasInlineSecondary ? (
+                  <div
+                    className={`catalog-toolbar-primary${bare ? " is-bare" : ""}`}
+                  >
+                    {searchRow}
+                  </div>
+                ) : (
+                  searchRow
+                )
+              ) : null}
               {hasInlineSecondary ? (
                 <div className={secondaryShellClassName}>
                   {secondaryContent}
@@ -190,7 +247,9 @@ export default function CatalogToolbar({
               ) : null}
             </div>
           ) : null}
-          {secondaryContent && secondaryBelow ? <div className={secondaryShellClassName}>{secondaryContent}</div> : null}
+          {secondaryContent && secondaryBelow ? (
+            <div className={secondaryShellClassName}>{secondaryContent}</div>
+          ) : null}
           <div
             id={drawerId}
             className={`catalog-filter-drawer${filtersExpanded ? " is-open" : ""}`}
@@ -205,10 +264,19 @@ export default function CatalogToolbar({
               ))}
             </div>
             <div className="catalog-filter-actions">
-              <button type="submit" className="primary-button" disabled={buttonsDisabled}>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={buttonsDisabled}
+              >
                 {submitLabel}
               </button>
-              <button type="button" className="ghost-button" onClick={onReset} disabled={buttonsDisabled}>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={onReset}
+                disabled={buttonsDisabled}
+              >
                 Reset
               </button>
             </div>

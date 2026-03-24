@@ -119,6 +119,49 @@ If you prefer calling Docker Compose directly on this machine, use the classic b
 DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose up --build
 ```
 
+## EC2 Deploy Helper
+
+Use the helper from your local machine to prepare and deploy to EC2:
+
+```bash
+./scripts/deploy-ec2.sh ubuntu@54.169.28.248 reyan-ebook-library
+```
+
+What it does:
+
+- SSH into the host and clone/pull this repo into `~/library_app`
+- create `.env` from `.env.example` when missing
+- set `PUBLIC_BASE_URL=https://library.rsalehin24.me`
+- set `NGINX_SERVER_NAME=library.rsalehin24.me`
+- prompt you to edit `.env`
+- prompt you to start `docker-compose up -d --build`
+
+Prerequisites:
+
+- your local SSH agent can access GitHub (deploy key or personal SSH key)
+- DNS `library.rsalehin24.me` points to the EC2 public IP
+
+## Switch Library vs Nextcloud
+
+On the EC2 host, if only one app should own port 80 at a time:
+
+```bash
+cd ~/library_app
+./scripts/switch-app.sh library
+./scripts/switch-app.sh nextcloud
+```
+
+Behavior:
+
+- `library`: stops nextcloud containers (name prefix `nextcloud-aio`), then starts library compose stack
+- `nextcloud`: stops library compose stack, then starts nextcloud containers
+
+If your nextcloud container names differ, set a custom match pattern:
+
+```bash
+NEXTCLOUD_PATTERN='^your-nextcloud-prefix' ./scripts/switch-app.sh nextcloud
+```
+
 ## View Logs
 
 If you run `docker-compose up --build` without `-d`, Docker will stream logs in the terminal automatically.

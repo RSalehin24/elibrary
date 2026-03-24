@@ -92,7 +92,8 @@ append_unique(CORS_ALLOWED_ORIGINS, EPUB_READER_BASE_URL.rstrip("/"))
 SUPER_ADMIN_EMAIL = env("SUPER_ADMIN_EMAIL", "rsalehin24@gmail.com")
 SUPER_ADMIN_PASSWORD = env("SUPER_ADMIN_PASSWORD", "")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "noreply@banglalibrary.local")
-SOURCE_SITE_HOST = "www.ebanglalibrary.com"
+SOURCE_SITE_HOST = env("SOURCE_SITE_HOST", "www.ebanglalibrary.com").strip().lower()
+SOURCE_SITE_FALLBACK_HOSTS = env_list("SOURCE_SITE_FALLBACK_HOSTS", "ebanglalibrary.com")
 OTP_TOTP_ISSUER = env("OTP_TOTP_ISSUER", "RSalehin24 Library")
 CATALOG_EXPORT_FONT_PATH = env("CATALOG_EXPORT_FONT_PATH", "")
 

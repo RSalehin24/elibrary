@@ -9,6 +9,7 @@ export default function LoginPage() {
   const toast = useToast();
   const [phase, setPhase] = useState("credentials");
   const [form, setForm] = useState({ email: "", password: "", otp_token: "" });
+  const [showPassword, setShowPassword] = useState(false);
 
   async function handleLogin(event) {
     event.preventDefault();
@@ -49,20 +50,35 @@ export default function LoginPage() {
             <input
               type="email"
               value={form.email}
-              onChange={(event) => setForm({ ...form, email: event.target.value })}
+              onChange={(event) =>
+                setForm({ ...form, email: event.target.value })
+              }
               autoComplete="username"
               readOnly={phase === "otp"}
             />
           </label>
           <label>
             <span>Password</span>
-            <input
-              type="password"
-              value={form.password}
-              onChange={(event) => setForm({ ...form, password: event.target.value })}
-              autoComplete="current-password"
-              readOnly={phase === "otp"}
-            />
+            <div className="password-input-row">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(event) =>
+                  setForm({ ...form, password: event.target.value })
+                }
+                autoComplete="current-password"
+                readOnly={phase === "otp"}
+              />
+              <button
+                type="button"
+                className="password-visibility-button"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                disabled={phase === "otp"}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
           </label>
           {phase === "otp" ? (
             <label className="login-otp-field">
@@ -70,7 +86,9 @@ export default function LoginPage() {
               <input
                 type="text"
                 value={form.otp_token}
-                onChange={(event) => setForm({ ...form, otp_token: event.target.value })}
+                onChange={(event) =>
+                  setForm({ ...form, otp_token: event.target.value })
+                }
                 autoFocus
                 inputMode="numeric"
                 placeholder="123456"
@@ -82,7 +100,11 @@ export default function LoginPage() {
               {phase === "otp" ? "Verify" : "Continue"}
             </button>
             {phase === "otp" ? (
-              <button type="button" className="ghost-button" onClick={resetPhase}>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={resetPhase}
+              >
                 Change account
               </button>
             ) : (

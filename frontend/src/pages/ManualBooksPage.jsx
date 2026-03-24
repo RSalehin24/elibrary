@@ -4,12 +4,18 @@ import BookTable from "../components/BookTable";
 import CatalogToolbar from "../components/CatalogToolbar";
 import ExportActions from "../components/ExportActions";
 import PageLoader from "../components/PageLoader";
-import PropertyTableControls, { useClientPagination } from "../components/PropertyTableControls";
+import PropertyTableControls, {
+  useClientPagination,
+} from "../components/PropertyTableControls";
 import TagInput from "../components/TagInput";
 import { useToast } from "../hooks/useToast";
 import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
 import { getExportBlockState } from "../utils/export";
-import { clearPendingExport, readPendingExport, writePendingExport } from "../utils/exportSession";
+import {
+  clearPendingExport,
+  readPendingExport,
+  writePendingExport,
+} from "../utils/exportSession";
 import { toQueryString } from "../utils/query";
 
 const EXPORT_STORAGE_KEY = "manual-books-export";
@@ -26,7 +32,7 @@ const emptyForm = {
   is_compilation: false,
   binding: "",
   publisher: "",
-  price: ""
+  price: "",
 };
 
 const defaultListFilters = {
@@ -39,7 +45,7 @@ const defaultListFilters = {
   category: "",
   created_after: "",
   created_before: "",
-  sort: "-created_at"
+  sort: "-created_at",
 };
 
 const listFilterFields = [
@@ -61,15 +67,21 @@ const listFilterFields = [
       { value: "catalog_code", label: "Code ascending" },
       { value: "-catalog_code", label: "Code descending" },
       { value: "title", label: "Title A-Z" },
-      { value: "-title", label: "Title Z-A" }
-    ]
-  }
+      { value: "-title", label: "Title Z-A" },
+    ],
+  },
 ];
 
 function PlusIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M12 5.25v13.5M5.25 12h13.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path
+        d="M12 5.25v13.5M5.25 12h13.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -123,7 +135,9 @@ export default function ManualBooksPage() {
   const [loadingList, setLoadingList] = useState(true);
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [downloadState, setDownloadState] = useState(() => pendingExportRef.current?.mode || "");
+  const [downloadState, setDownloadState] = useState(
+    () => pendingExportRef.current?.mode || "",
+  );
   const [highlightedBookId, setHighlightedBookId] = useState("");
   const [error, setError] = useState("");
   const pagination = useClientPagination(manualBooks);
@@ -131,7 +145,9 @@ export default function ManualBooksPage() {
   async function loadManualBooks(nextFilters = filters) {
     try {
       setLoadingList(true);
-      const payload = await apiFetch(`/catalog/manual-books/${toQueryString(nextFilters)}`);
+      const payload = await apiFetch(
+        `/catalog/manual-books/${toQueryString(nextFilters)}`,
+      );
       setManualBooks(payload);
       setError("");
     } catch (nextError) {
@@ -144,16 +160,27 @@ export default function ManualBooksPage() {
   async function loadOptions() {
     try {
       setLoadingOptions(true);
-      const [categoryPayload, writerPayload, translatorPayload, compilerPayload, editorPayload] = await Promise.all([
+      const [
+        categoryPayload,
+        writerPayload,
+        translatorPayload,
+        compilerPayload,
+        editorPayload,
+      ] = await Promise.all([
         apiFetch("/catalog/categories/?record_type=all&sort=name"),
         apiFetch("/catalog/writers/?record_type=all&sort=name"),
         apiFetch("/catalog/translators/?record_type=all&sort=name"),
         apiFetch("/catalog/compilers/?record_type=all&sort=name"),
-        apiFetch("/catalog/editors/?record_type=all&sort=name")
+        apiFetch("/catalog/editors/?record_type=all&sort=name"),
       ]);
       setCategoryOptions(categoryPayload.map((entry) => entry.name));
       setContributorOptions(
-        mergeContributorSuggestions([writerPayload, translatorPayload, compilerPayload, editorPayload])
+        mergeContributorSuggestions([
+          writerPayload,
+          translatorPayload,
+          compilerPayload,
+          editorPayload,
+        ]),
       );
     } catch (nextError) {
       toast.error(nextError.message);
@@ -198,10 +225,16 @@ export default function ManualBooksPage() {
         await waitForExportUi();
 
         if (pendingExport.mode === "csv") {
-          exportBooksToCsv(pendingExport.items, pendingExport.filename || "manual-books.csv");
+          exportBooksToCsv(
+            pendingExport.items,
+            pendingExport.filename || "manual-books.csv",
+          );
           toast.success("CSV export started.");
         } else {
-          await exportBooksToPdf(pendingExport.items, pendingExport.title || "Physical Books' List Export");
+          await exportBooksToPdf(
+            pendingExport.items,
+            pendingExport.title || "Physical Books' List Export",
+          );
           toast.success("PDF export downloaded.");
         }
 
@@ -226,15 +259,20 @@ export default function ManualBooksPage() {
         method: "POST",
         body: {
           ...form,
-          price: form.price === "" ? null : form.price
-        }
+          price: form.price === "" ? null : form.price,
+        },
       });
-      setManualBooks((current) => [payload, ...current.filter((book) => book.id !== payload.id)]);
+      setManualBooks((current) => [
+        payload,
+        ...current.filter((book) => book.id !== payload.id),
+      ]);
       setHighlightedBookId(payload.id);
       setForm(emptyForm);
       setComposerOpen(true);
       titleInputRef.current?.focus();
-      toast.success(`Added ${payload.catalog_code}. Ready for the next manual book.`);
+      toast.success(
+        `Added ${payload.catalog_code}. Ready for the next manual book.`,
+      );
       loadOptions();
     } catch (nextError) {
       toast.error(nextError.message);
@@ -255,13 +293,19 @@ export default function ManualBooksPage() {
     loadManualBooks(defaultListFilters);
   }
 
+  function clearSearch(nextFilters) {
+    pagination.resetPage();
+    setFilters(nextFilters);
+    loadManualBooks(nextFilters);
+  }
+
   async function runDownload(mode) {
     const blocked = getExportBlockState({
       items: manualBooks,
       loading: loadingList,
       error,
       nounSingular: "manual book",
-      nounPlural: "manual books"
+      nounPlural: "manual books",
     });
     if (blocked) {
       toast[blocked.type](blocked.message);
@@ -273,7 +317,7 @@ export default function ManualBooksPage() {
         mode,
         items: manualBooks,
         title: "Physical Books' List Export",
-        filename: "manual-books.csv"
+        filename: "manual-books.csv",
       });
       pendingExportRef.current = exportRequest;
       setDownloadState(mode);
@@ -299,10 +343,16 @@ export default function ManualBooksPage() {
   }
 
   const resultCount = error || loadingList ? "" : `${manualBooks.length}`;
-  const sortOptions = listFilterFields.find((field) => field.key === "sort")?.options || [];
+  const sortOptions =
+    listFilterFields.find((field) => field.key === "sort")?.options || [];
   const headerActions = (
     <div className="manual-books-toolbar-actions">
-      <ExportActions loading={downloadState} onExport={runDownload} ariaLabel="Export manual books" bare />
+      <ExportActions
+        loading={downloadState}
+        onExport={runDownload}
+        ariaLabel="Export manual books"
+        bare
+      />
       <div className="toolbar-action-panel toolbar-action-panel-compact is-bare">
         <button
           type="button"
@@ -343,7 +393,7 @@ export default function ManualBooksPage() {
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--stacked">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
         <h1>Physical Books' List</h1>
 
         <CatalogToolbar
@@ -358,16 +408,21 @@ export default function ManualBooksPage() {
           searchPlaceholder="Search manual books, book IDs, writers..."
           resultCount={resultCount}
           searchActionsExtra={headerActions}
-          secondaryContent={tableControls}
-          secondaryBelow
           searchRowCompact
+          searchRowClassName="catalog-search-row--property-compact"
+          onSearchClear={clearSearch}
           inline
           bare
         />
+
+        <div className="catalog-page-controls-row">{tableControls}</div>
       </header>
 
       {composerOpen ? (
-        <section id="manual-book-composer" className="detail-card manual-books-panel manual-book-composer">
+        <section
+          id="manual-book-composer"
+          className="detail-card manual-books-panel manual-book-composer"
+        >
           <form className="stack-form manual-book-form" onSubmit={handleCreate}>
             <label>
               <span className="fact-label">Title</span>
@@ -375,7 +430,9 @@ export default function ManualBooksPage() {
                 ref={titleInputRef}
                 type="text"
                 value={form.title}
-                onChange={(event) => setForm({ ...form, title: event.target.value })}
+                onChange={(event) =>
+                  setForm({ ...form, title: event.target.value })
+                }
                 placeholder="Book title"
                 autoComplete="off"
               />
@@ -430,7 +487,12 @@ export default function ManualBooksPage() {
                 <span className="fact-label">Compilation</span>
                 <select
                   value={form.is_compilation ? "yes" : "no"}
-                  onChange={(event) => setForm({ ...form, is_compilation: event.target.value === "yes" })}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      is_compilation: event.target.value === "yes",
+                    })
+                  }
                 >
                   <option value="no">No</option>
                   <option value="yes">Yes</option>
@@ -438,7 +500,12 @@ export default function ManualBooksPage() {
               </label>
               <label>
                 <span className="fact-label">Binding</span>
-                <select value={form.binding} onChange={(event) => setForm({ ...form, binding: event.target.value })}>
+                <select
+                  value={form.binding}
+                  onChange={(event) =>
+                    setForm({ ...form, binding: event.target.value })
+                  }
+                >
                   <option value="">Select</option>
                   <option value="hard_cover">Hard Cover</option>
                   <option value="paper_back">Paper Back</option>
@@ -449,7 +516,9 @@ export default function ManualBooksPage() {
                 <input
                   type="text"
                   value={form.publisher}
-                  onChange={(event) => setForm({ ...form, publisher: event.target.value })}
+                  onChange={(event) =>
+                    setForm({ ...form, publisher: event.target.value })
+                  }
                   placeholder="Optional"
                   autoComplete="off"
                 />
@@ -464,7 +533,9 @@ export default function ManualBooksPage() {
                   min="0"
                   step="0.01"
                   value={form.price}
-                  onChange={(event) => setForm({ ...form, price: event.target.value })}
+                  onChange={(event) =>
+                    setForm({ ...form, price: event.target.value })
+                  }
                   placeholder="Optional"
                 />
               </label>
@@ -472,20 +543,36 @@ export default function ManualBooksPage() {
                 <span className="fact-label">Summary</span>
                 <textarea
                   value={form.summary}
-                  onChange={(event) => setForm({ ...form, summary: event.target.value })}
+                  onChange={(event) =>
+                    setForm({ ...form, summary: event.target.value })
+                  }
                   placeholder="Optional"
                 />
               </label>
             </div>
 
             <div className="inline-pills manual-book-form-actions">
-              <button type="submit" className="primary-button" disabled={submitting}>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={submitting}
+              >
                 {submitting ? "Adding..." : "Add & next"}
               </button>
-              <button type="button" className="ghost-button" onClick={() => setForm(emptyForm)} disabled={submitting}>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setForm(emptyForm)}
+                disabled={submitting}
+              >
                 Clear fields
               </button>
-              <button type="button" className="ghost-button" onClick={() => setComposerOpen(false)} disabled={submitting}>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setComposerOpen(false)}
+                disabled={submitting}
+              >
                 Done
               </button>
             </div>
@@ -494,7 +581,10 @@ export default function ManualBooksPage() {
       ) : null}
 
       {loadingList ? (
-        <PageLoader label="Loading manual books" detail="Fetching the physical-book catalog and recent additions." />
+        <PageLoader
+          label="Loading manual books"
+          detail="Fetching the physical-book catalog and recent additions."
+        />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : (

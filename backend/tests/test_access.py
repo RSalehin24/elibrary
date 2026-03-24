@@ -2,6 +2,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+from bs4 import BeautifulSoup
 from django.core.files.base import ContentFile
 
 from apps.access.models import PermissionGrant, PermissionScope, PreviewAccessSession
@@ -19,6 +20,7 @@ from apps.catalog.models import (
 )
 from apps.common.permissions import user_has_scope
 from apps.ingestion.models import BookSubmission, ResolutionStatus, SubmissionStatus
+from apps.access.views import normalize_preview_book_sections
 
 
 def assert_content_disposition_filename(header_value, expected_filename):
@@ -220,6 +222,7 @@ def test_html_download_inlines_stale_relative_cover_references(tmp_path, client)
         content_type="image/jpeg",
         file_size=cover_path.stat().st_size,
     )
+
     PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.DOWNLOAD_FILE)
     client.force_login(user)
 
@@ -229,6 +232,92 @@ def test_html_download_inlines_stale_relative_cover_references(tmp_path, client)
     body = response.content.decode("utf-8")
     assert "data:image/jpeg;base64," in body
     assert "book_image.hpg" not in body
+
+
+def test_normalize_preview_book_sections_cleans_redundant_dedication_heading():
+        soup = BeautifulSoup(
+                """
+                <html>
+                    <body>
+                        <div class='dedication-section'>
+                            <h2 class='dedication-title'>উৎসর্গ</h2>
+                            <div class='dedication-content'>
+                                <p>উৎসর্গ</p>
+                                <p><strong>উৎসর্গ :</strong></p>
+                                <p>পাঠক, আপনাকে…</p>
+                            </div>
+                        </div>
+                        <div class='main-content'>
+                            <p>এটাই মূল কনটেন্ট।</p>
+                        </div>
+                    </body>
+                </html>
+                """,
+                "html.parser",
+        )
+
+        updated = normalize_preview_book_sections(soup)
+
+        assert updated is True
+        dedication_content = soup.find("div", class_="dedication-content")
+        assert dedication_content is not None
+        dedication_text = dedication_content.get_text(" ", strip=True)
+        assert dedication_text == "পাঠক, আপনাকে…"
+
+
+def test_normalize_preview_book_sections_inserts_dedication_from_book_data_when_missing():
+        soup = BeautifulSoup(
+                """
+                <html>
+                    <body>
+                        <div class='main-content'>
+                            <p>এটাই মূল কনটেন্ট।</p>
+                        </div>
+                    </body>
+                </html>
+                """,
+                "html.parser",
+        )
+
+        updated = normalize_preview_book_sections(
+                soup,
+            dedication_html="<p>উৎসর্গ : পাঠক, আপনাকে…</p>",
+        )
+
+        assert updated is True
+        dedication_content = soup.find("div", class_="dedication-content")
+        assert dedication_content is not None
+        dedication_text = dedication_content.get_text(" ", strip=True)
+        assert dedication_text == "উৎসর্গ : পাঠক, আপনাকে…"
+
+
+def test_normalize_preview_book_sections_inserts_dedication_without_main_content():
+        soup = BeautifulSoup(
+                """
+                <html>
+                    <body>
+                        <div class='container'>
+                            <div class='book-header'></div>
+                            <div class='toc-section'></div>
+                        </div>
+                    </body>
+                </html>
+                """,
+                "html.parser",
+        )
+
+        updated = normalize_preview_book_sections(
+                soup,
+            dedication_html="<p>উৎসর্গ : পাঠক, আপনাকে…</p>",
+        )
+
+        assert updated is True
+        dedication_section = soup.find("div", class_="dedication-section")
+        assert dedication_section is not None
+        dedication_content = dedication_section.find("div", class_="dedication-content")
+        assert dedication_content is not None
+        dedication_text = dedication_content.get_text(" ", strip=True)
+        assert dedication_text == "উৎসর্গ : পাঠক, আপনাকে…"
 
 
 @pytest.mark.django_db
@@ -403,6 +492,44 @@ def test_only_superadmin_can_manage_grants(client):
 
     deleted = client.delete(f"/api/access/grants/{created.json()['id']}/")
     assert deleted.status_code == 204
+
+
+@pytest.mark.django_db
+def test_superadmin_cannot_create_or_delete_own_scoped_access_grants(client):
+    superadmin = User.objects.create_superuser(email="self-grant-block@example.com", password="strong-password-123")
+    other_user = User.objects.create_user(email="self-grant-other@example.com", password="strong-password-123")
+    book = Book.objects.create(title="Self Grant Scope Book", state="ready", review_state="approved")
+    client.force_login(superadmin)
+
+    create_self = client.post(
+        "/api/access/grants/",
+        data={
+            "user": str(superadmin.id),
+            "book": str(book.id),
+            "scope": PermissionScope.DOWNLOAD_FILE,
+            "notes": "Should be blocked",
+        },
+    )
+    assert create_self.status_code == 403
+
+    created_other = client.post(
+        "/api/access/grants/",
+        data={
+            "user": str(other_user.id),
+            "book": str(book.id),
+            "scope": PermissionScope.DOWNLOAD_FILE,
+            "notes": "Allowed",
+        },
+    )
+    assert created_other.status_code == 201
+
+    grant_id = created_other.json()["id"]
+    grant = PermissionGrant.objects.get(pk=grant_id)
+    grant.user = superadmin
+    grant.save(update_fields=["user", "updated_at"])
+
+    delete_self = client.delete(f"/api/access/grants/{grant_id}/")
+    assert delete_self.status_code == 403
 
 
 @pytest.mark.django_db

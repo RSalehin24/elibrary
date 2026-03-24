@@ -3,16 +3,22 @@ import { Link, NavLink, useLocation, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import CatalogToolbar from "../components/CatalogToolbar";
 import PageLoader from "../components/PageLoader";
-import PropertyTableControls, { useClientPagination } from "../components/PropertyTableControls";
+import PropertyTableControls, {
+  useClientPagination,
+} from "../components/PropertyTableControls";
 import { formatBookDate } from "../utils/bookPresentation";
-import { cleanQueryParams, filtersFromSearchParams, toQueryString } from "../utils/query";
+import {
+  cleanQueryParams,
+  filtersFromSearchParams,
+  toQueryString,
+} from "../utils/query";
 
 const defaultFilters = {
   q: "",
   record_type: "digital",
   created_after: "",
   created_before: "",
-  sort: "-book_count"
+  sort: "-book_count",
 };
 
 const filterFields = [
@@ -23,8 +29,8 @@ const filterFields = [
     options: [
       { value: "digital", label: "Digital" },
       { value: "manual", label: "Manual" },
-      { value: "all", label: "All types" }
-    ]
+      { value: "all", label: "All types" },
+    ],
   },
   { key: "created_after", label: "Created after", type: "date" },
   { key: "created_before", label: "Created before", type: "date" },
@@ -40,9 +46,9 @@ const filterFields = [
       { value: "name", label: "Name A-Z" },
       { value: "-name", label: "Name Z-A" },
       { value: "-created_at", label: "Newest first" },
-      { value: "created_at", label: "Oldest first" }
-    ]
-  }
+      { value: "created_at", label: "Oldest first" },
+    ],
+  },
 ];
 
 const contributorTabs = [
@@ -52,7 +58,7 @@ const contributorTabs = [
     path: "/writers",
     endpoint: "/catalog/writers/",
     role: "author",
-    emptyLabel: "No writers found."
+    emptyLabel: "No writers found.",
   },
   {
     id: "translators",
@@ -60,7 +66,7 @@ const contributorTabs = [
     path: "/translators",
     endpoint: "/catalog/translators/",
     role: "translator",
-    emptyLabel: "No translators found."
+    emptyLabel: "No translators found.",
   },
   {
     id: "compilers",
@@ -68,7 +74,7 @@ const contributorTabs = [
     path: "/compilers",
     endpoint: "/catalog/compilers/",
     role: "compiler",
-    emptyLabel: "No compilers found."
+    emptyLabel: "No compilers found.",
   },
   {
     id: "editors",
@@ -76,19 +82,26 @@ const contributorTabs = [
     path: "/editors",
     endpoint: "/catalog/editors/",
     role: "editor",
-    emptyLabel: "No editors found."
-  }
+    emptyLabel: "No editors found.",
+  },
 ];
 
 function activeTabForPath(pathname) {
-  return contributorTabs.find((tab) => tab.path === pathname) || contributorTabs[0];
+  return (
+    contributorTabs.find((tab) => tab.path === pathname) || contributorTabs[0]
+  );
 }
 
 export default function WriterPage() {
   const location = useLocation();
-  const activeTab = useMemo(() => activeTabForPath(location.pathname), [location.pathname]);
+  const activeTab = useMemo(
+    () => activeTabForPath(location.pathname),
+    [location.pathname],
+  );
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filters, setFilters] = useState(() => filtersFromSearchParams(defaultFilters, searchParams));
+  const [filters, setFilters] = useState(() =>
+    filtersFromSearchParams(defaultFilters, searchParams),
+  );
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [contributors, setContributors] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -102,7 +115,9 @@ export default function WriterPage() {
     async function loadContributors() {
       try {
         setLoading(true);
-        const payload = await apiFetch(`${activeTab.endpoint}${toQueryString(nextFilters)}`);
+        const payload = await apiFetch(
+          `${activeTab.endpoint}${toQueryString(nextFilters)}`,
+        );
         setContributors(payload);
         setError("");
       } catch (nextError) {
@@ -127,6 +142,12 @@ export default function WriterPage() {
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
+  function clearSearch(nextFilters) {
+    pagination.resetPage();
+    setFilters(nextFilters);
+    setSearchParams(cleanQueryParams(nextFilters));
+  }
+
   function buildBooksLink(catalogCode) {
     const params =
       activeTab.role === "author"
@@ -140,7 +161,8 @@ export default function WriterPage() {
 
   const resultCount = error || loading ? "" : `${contributors.length}`;
   const contributorLabel = activeTab.label.toLowerCase();
-  const sortOptions = filterFields.find((field) => field.key === "sort")?.options || [];
+  const sortOptions =
+    filterFields.find((field) => field.key === "sort")?.options || [];
   const tableControls = (
     <PropertyTableControls
       sortValue={filters.sort}
@@ -170,14 +192,16 @@ export default function WriterPage() {
             <NavLink
               key={tab.id}
               to={tab.path}
-              className={({ isActive }) => (isActive ? "contributor-tab is-active" : "contributor-tab")}
+              className={({ isActive }) =>
+                isActive ? "contributor-tab is-active" : "contributor-tab"
+              }
             >
               {tab.label}
             </NavLink>
           ))}
         </nav>
 
-        <div className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--stacked contributor-toolbar-row">
+        <div className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout contributor-toolbar-row">
           <h1>{activeTab.label}</h1>
 
           <CatalogToolbar
@@ -191,12 +215,14 @@ export default function WriterPage() {
             onReset={resetFilters}
             searchPlaceholder={`Search ${contributorLabel} or codes...`}
             resultCount={resultCount}
-            secondaryContent={tableControls}
-            secondaryBelow
             searchRowCompact
+            searchRowClassName="catalog-search-row--property-compact"
+            onSearchClear={clearSearch}
             inline
             bare
           />
+
+          <div className="catalog-page-controls-row">{tableControls}</div>
         </div>
       </header>
 
@@ -224,9 +250,14 @@ export default function WriterPage() {
             <tbody>
               {pagination.items.map((contributor) => (
                 <tr key={contributor.id}>
-                  <td className="table-code-cell">{contributor.catalog_code}</td>
+                  <td className="table-code-cell">
+                    {contributor.catalog_code}
+                  </td>
                   <td>
-                    <Link to={buildBooksLink(contributor.catalog_code)} className="table-title-link">
+                    <Link
+                      to={buildBooksLink(contributor.catalog_code)}
+                      className="table-title-link"
+                    >
                       {contributor.name}
                     </Link>
                   </td>
@@ -235,7 +266,10 @@ export default function WriterPage() {
                   <td>{contributor.manual_book_count}</td>
                   <td>{formatBookDate(contributor.created_at)}</td>
                   <td className="table-action-cell">
-                    <Link to={buildBooksLink(contributor.catalog_code)} className="ghost-button table-row-action">
+                    <Link
+                      to={buildBooksLink(contributor.catalog_code)}
+                      className="ghost-button table-row-action"
+                    >
                       Open
                     </Link>
                   </td>

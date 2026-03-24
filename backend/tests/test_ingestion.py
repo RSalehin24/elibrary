@@ -1146,6 +1146,17 @@ def test_clean_extracted_dedication_html_removes_repeated_dedication_heading():
     assert "উৎসর্গ" not in dedication_html
 
 
+def test_clean_extracted_dedication_html_keeps_inline_content_after_label():
+    dedication_html = clean_extracted_dedication_html(
+        """
+        <p>উৎসর্গ :<br/>পাঠক, আপনাকে…</p>
+        """
+    )
+
+    assert "পাঠক, আপনাকে…" in dedication_html
+    assert "উৎসর্গ" not in dedication_html
+
+
 def test_extract_main_content_segments_omits_dedication_heading_from_extracted_dedication():
     _, dedication_html, cleaned_main_content = extract_main_content_segments(
         """
@@ -1311,6 +1322,33 @@ def test_new_url_submission_does_not_reuse_deleted_ready_submission(monkeypatch)
     assert recreated_submission.canonical_submission_id is None
     assert recreated_submission.status == SubmissionStatus.QUEUED
     assert recreated_submission.resolved_url == "https://www.ebanglalibrary.com/books/deleted-book/"
+
+
+@pytest.mark.django_db
+def test_new_url_submission_does_not_reuse_failed_request(monkeypatch):
+    user = User.objects.create_user(email="failed-reuse@example.com", password="strong-password-123")
+    failed_submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/failed-book/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/failed-book/"),
+        resolved_url="https://www.ebanglalibrary.com/books/failed-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.FAILED,
+        error_message="Processing failed.",
+    )
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.capture_source_page_metadata", lambda url: None)
+
+    recreated_submission = create_submission_records(
+        submitter=user,
+        parsed_entries=[{"kind": "url", "value": "https://www.ebanglalibrary.com/books/failed-book/"}],
+        auto_process=False,
+    )[0]
+
+    assert recreated_submission.id != failed_submission.id
+    assert recreated_submission.canonical_submission_id is None
+    assert recreated_submission.status == SubmissionStatus.QUEUED
 
 
 @pytest.mark.django_db
@@ -1795,11 +1833,13 @@ def test_process_submission_job_persists_metadata_and_assets(tmp_path, monkeypat
         "content_items": [{"title": "অধ্যায় ১", "content": "<p>বিষয়বস্তু</p>", "type": "lesson", "parent": None}],
         "output_folder": str(tmp_path),
     }
+    generated_payload = {}
 
     def fake_scrape_book(url):
         return sample
 
     def fake_generate_exports(book_data):
+        generated_payload.update(book_data)
         output_dir = Path(book_data["output_folder"])
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "book.html").write_text("<html><body>book</body></html>", encoding="utf-8")
@@ -1823,6 +1863,10 @@ def test_process_submission_job_persists_metadata_and_assets(tmp_path, monkeypat
     assert ("অনুবাদক এক", "translator") in contributor_roles
     assert ("সম্পাদক এক", "editor") in contributor_roles
     assert book.dedication_html == ""
+    assert book.content_items == sample["content_items"]
+    assert generated_payload["book_title"] == book.title
+    assert generated_payload["dedication"] == book.dedication_html
+    assert generated_payload["content_items"] == book.content_items
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.HTML).exists()
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.EPUB).exists()
     assert book.generated_assets.filter(asset_type=GeneratedAssetType.COVER).exists()

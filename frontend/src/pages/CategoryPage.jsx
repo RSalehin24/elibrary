@@ -3,16 +3,22 @@ import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import CatalogToolbar from "../components/CatalogToolbar";
 import PageLoader from "../components/PageLoader";
-import PropertyTableControls, { useClientPagination } from "../components/PropertyTableControls";
+import PropertyTableControls, {
+  useClientPagination,
+} from "../components/PropertyTableControls";
 import { formatBookDate } from "../utils/bookPresentation";
-import { cleanQueryParams, filtersFromSearchParams, toQueryString } from "../utils/query";
+import {
+  cleanQueryParams,
+  filtersFromSearchParams,
+  toQueryString,
+} from "../utils/query";
 
 const defaultFilters = {
   q: "",
   record_type: "digital",
   created_after: "",
   created_before: "",
-  sort: "-book_count"
+  sort: "-book_count",
 };
 
 const filterFields = [
@@ -23,8 +29,8 @@ const filterFields = [
     options: [
       { value: "digital", label: "Digital" },
       { value: "manual", label: "Manual" },
-      { value: "all", label: "All types" }
-    ]
+      { value: "all", label: "All types" },
+    ],
   },
   { key: "created_after", label: "Created after", type: "date" },
   { key: "created_before", label: "Created before", type: "date" },
@@ -40,14 +46,16 @@ const filterFields = [
       { value: "name", label: "Name A-Z" },
       { value: "-name", label: "Name Z-A" },
       { value: "-created_at", label: "Newest first" },
-      { value: "created_at", label: "Oldest first" }
-    ]
-  }
+      { value: "created_at", label: "Oldest first" },
+    ],
+  },
 ];
 
 export default function CategoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filters, setFilters] = useState(() => filtersFromSearchParams(defaultFilters, searchParams));
+  const [filters, setFilters] = useState(() =>
+    filtersFromSearchParams(defaultFilters, searchParams),
+  );
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +69,9 @@ export default function CategoryPage() {
     async function loadCategories() {
       try {
         setLoading(true);
-        const payload = await apiFetch(`/catalog/categories/${toQueryString(nextFilters)}`);
+        const payload = await apiFetch(
+          `/catalog/categories/${toQueryString(nextFilters)}`,
+        );
         setCategories(payload);
         setError("");
       } catch (nextError) {
@@ -86,6 +96,12 @@ export default function CategoryPage() {
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
+  function clearSearch(nextFilters) {
+    pagination.resetPage();
+    setFilters(nextFilters);
+    setSearchParams(cleanQueryParams(nextFilters));
+  }
+
   function buildBooksLink(catalogCode) {
     const params = { category_code: catalogCode };
     if (filters.record_type && filters.record_type !== "digital") {
@@ -95,7 +111,8 @@ export default function CategoryPage() {
   }
 
   const resultCount = error || loading ? "" : `${categories.length}`;
-  const sortOptions = filterFields.find((field) => field.key === "sort")?.options || [];
+  const sortOptions =
+    filterFields.find((field) => field.key === "sort")?.options || [];
   const tableControls = (
     <PropertyTableControls
       sortValue={filters.sort}
@@ -119,7 +136,7 @@ export default function CategoryPage() {
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--stacked">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
         <h1>Categories</h1>
 
         <CatalogToolbar
@@ -133,15 +150,20 @@ export default function CategoryPage() {
           onReset={resetFilters}
           searchPlaceholder="Search categories or codes..."
           resultCount={resultCount}
-          secondaryContent={tableControls}
-          secondaryBelow
           searchRowCompact
+          searchRowClassName="catalog-search-row--property-compact"
+          onSearchClear={clearSearch}
           inline
         />
+
+        <div className="catalog-page-controls-row">{tableControls}</div>
       </header>
 
       {loading ? (
-        <PageLoader label="Loading categories" detail="Fetching category counts and related book totals." />
+        <PageLoader
+          label="Loading categories"
+          detail="Fetching category counts and related book totals."
+        />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : categories.length ? (
@@ -163,7 +185,10 @@ export default function CategoryPage() {
                 <tr key={category.id}>
                   <td className="table-code-cell">{category.catalog_code}</td>
                   <td>
-                    <Link to={buildBooksLink(category.catalog_code)} className="table-title-link">
+                    <Link
+                      to={buildBooksLink(category.catalog_code)}
+                      className="table-title-link"
+                    >
                       {category.name}
                     </Link>
                   </td>
@@ -172,7 +197,10 @@ export default function CategoryPage() {
                   <td>{category.manual_book_count}</td>
                   <td>{formatBookDate(category.created_at)}</td>
                   <td className="table-action-cell">
-                    <Link to={buildBooksLink(category.catalog_code)} className="ghost-button table-row-action">
+                    <Link
+                      to={buildBooksLink(category.catalog_code)}
+                      className="ghost-button table-row-action"
+                    >
                       Open
                     </Link>
                   </td>

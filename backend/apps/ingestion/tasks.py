@@ -17,6 +17,23 @@ def serialize_processing_job_result(result):
     }
 
 
+def serialize_source_catalog_refresh_result(result):
+    if not result:
+        return result
+
+    return {
+        "id": str(result.id),
+        "status": result.status,
+        "task_id": result.task_id,
+        "queue_name": result.queue_name,
+        "retry_count": result.retry_count,
+        "refreshed_entries": result.refreshed_entries,
+        "last_error": result.last_error,
+        "started_at": result.started_at.isoformat() if result.started_at else None,
+        "finished_at": result.finished_at.isoformat() if result.finished_at else None,
+    }
+
+
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_jitter=True, max_retries=3)
 def process_submission_task(self, job_id):
     result = process_submission_job(job_id, retry_count=self.request.retries, task_id=self.request.id)
@@ -30,7 +47,8 @@ def process_catalog_curation_run_task(self, run_id):
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_jitter=True, max_retries=3)
 def refresh_source_catalog_task(self):
-    return process_source_catalog_refresh(retry_count=self.request.retries, task_id=self.request.id)
+    result = process_source_catalog_refresh(retry_count=self.request.retries, task_id=self.request.id)
+    return serialize_source_catalog_refresh_result(result)
 
 
 @shared_task

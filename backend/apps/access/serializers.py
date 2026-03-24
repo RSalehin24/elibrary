@@ -41,6 +41,11 @@ class PermissionGrantSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        request = self.context.get("request")
+        target_user = attrs.get("user", getattr(self.instance, "user", None))
+        if request and getattr(request, "user", None) and target_user == request.user:
+            raise serializers.ValidationError({"user": "You cannot change your own scoped access rules."})
+
         book = attrs.get("book", getattr(self.instance, "book", None))
         category = attrs.get("category", getattr(self.instance, "category", None))
         contributor = attrs.get("contributor", getattr(self.instance, "contributor", None))

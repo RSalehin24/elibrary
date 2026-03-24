@@ -7,16 +7,18 @@ import { useToast } from "../hooks/useToast";
 const emptySetup = {
   provisioning_uri: "",
   secret: "",
-  qr_svg: ""
+  qr_svg: "",
 };
 
 function initialsForUser(value) {
-  return (value || "")
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() || "")
-    .join("") || "?";
+  return (
+    (value || "")
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || "")
+      .join("") || "?"
+  );
 }
 
 function roleLabelForProfile(profile) {
@@ -38,7 +40,7 @@ export default function ProfilePage() {
     enabled: false,
     pending_setup: false,
     required: false,
-    setup_required: false
+    setup_required: false,
   });
   const [fullName, setFullName] = useState("");
   const [setup, setSetup] = useState(emptySetup);
@@ -51,6 +53,9 @@ export default function ProfilePage() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -67,7 +72,7 @@ export default function ProfilePage() {
       setLoading(true);
       const [profilePayload, statusPayload] = await Promise.all([
         authApi.profile(),
-        authApi.twoFactorStatus()
+        authApi.twoFactorStatus(),
       ]);
       setProfile(profilePayload);
       if (!preserveEditor) {
@@ -101,6 +106,9 @@ export default function ProfilePage() {
     setCurrentPassword("");
     setNewPassword("");
     setConfirmNewPassword("");
+    setShowCurrentPassword(false);
+    setShowNewPassword(false);
+    setShowConfirmNewPassword(false);
     setSetupVisible(false);
     setToken("");
   }
@@ -117,7 +125,9 @@ export default function ProfilePage() {
 
   async function saveProfile(event) {
     event.preventDefault();
-    const hasPasswordChanges = Boolean(currentPassword || newPassword || confirmNewPassword);
+    const hasPasswordChanges = Boolean(
+      currentPassword || newPassword || confirmNewPassword,
+    );
 
     if (hasPasswordChanges && !currentPassword) {
       toast.error("Enter your current password to change it.");
@@ -247,22 +257,38 @@ export default function ProfilePage() {
     }
   }
 
-  const visibleProfileImage = removeProfileImage ? "" : profileImagePreview || profile?.profile_image_url || "";
-  const visibleName = fullName.trim() || profile?.full_name || profile?.email || "Profile";
+  const visibleProfileImage = removeProfileImage
+    ? ""
+    : profileImagePreview || profile?.profile_image_url || "";
+  const visibleName =
+    fullName.trim() || profile?.full_name || profile?.email || "Profile";
   const visibleInitials = initialsForUser(visibleName);
   const roleLabel = roleLabelForProfile(profile);
-  const hasPasswordChanges = Boolean(currentPassword || newPassword || confirmNewPassword);
+  const hasPasswordChanges = Boolean(
+    currentPassword || newPassword || confirmNewPassword,
+  );
   const hasProfileChanges = useMemo(
     () =>
       fullName.trim() !== (profile?.full_name || "") ||
       Boolean(profileImageFile) ||
       removeProfileImage ||
       hasPasswordChanges,
-    [fullName, profile?.full_name, profileImageFile, removeProfileImage, hasPasswordChanges]
+    [
+      fullName,
+      profile?.full_name,
+      profileImageFile,
+      removeProfileImage,
+      hasPasswordChanges,
+    ],
   );
 
   if (loading) {
-    return <PageLoader label="Loading profile" detail="Fetching your account settings and security status." />;
+    return (
+      <PageLoader
+        label="Loading profile"
+        detail="Fetching your account settings and security status."
+      />
+    );
   }
 
   return (
@@ -270,7 +296,11 @@ export default function ProfilePage() {
       <section className="detail-card profile-shell">
         <div className="panel-header profile-header-bar">
           <h1>Profile</h1>
-          <button type="button" className="ghost-button" onClick={isEditing ? stopEditing : startEditing}>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={isEditing ? stopEditing : startEditing}
+          >
             {isEditing ? "Cancel" : "Edit"}
           </button>
         </div>
@@ -285,7 +315,9 @@ export default function ProfilePage() {
                   alt={visibleName}
                 />
               ) : (
-                <div className="profile-avatar profile-avatar-large profile-summary-avatar">{visibleInitials}</div>
+                <div className="profile-avatar profile-avatar-large profile-summary-avatar">
+                  {visibleInitials}
+                </div>
               )}
               <div className="profile-summary-meta">
                 <h2>{visibleName}</h2>
@@ -321,11 +353,21 @@ export default function ProfilePage() {
                   <div className="profile-photo-stack">
                     <div className="profile-photo-frame">
                       {visibleProfileImage ? (
-                        <img className="profile-avatar profile-avatar-large" src={visibleProfileImage} alt={visibleName} />
+                        <img
+                          className="profile-avatar profile-avatar-large"
+                          src={visibleProfileImage}
+                          alt={visibleName}
+                        />
                       ) : (
-                        <div className="profile-avatar profile-avatar-large">{visibleInitials}</div>
+                        <div className="profile-avatar profile-avatar-large">
+                          {visibleInitials}
+                        </div>
                       )}
-                      <label className="profile-photo-upload" aria-label="Upload profile photo" title="Upload profile photo">
+                      <label
+                        className="profile-photo-upload"
+                        aria-label="Upload profile photo"
+                        title="Upload profile photo"
+                      >
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                           <path
                             d="M12 5a1 1 0 0 1 1 1v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H6a1 1 0 1 1 0-2h5V6a1 1 0 0 1 1-1Z"
@@ -333,11 +375,20 @@ export default function ProfilePage() {
                           />
                         </svg>
                         <span className="sr-only">Upload profile photo</span>
-                        <input className="profile-upload-input" type="file" accept="image/*" onChange={handleProfileImageChange} />
+                        <input
+                          className="profile-upload-input"
+                          type="file"
+                          accept="image/*"
+                          onChange={handleProfileImageChange}
+                        />
                       </label>
                     </div>
                     {visibleProfileImage ? (
-                      <button type="button" className="ghost-button profile-photo-remove" onClick={clearProfileImage}>
+                      <button
+                        type="button"
+                        className="ghost-button profile-photo-remove"
+                        onClick={clearProfileImage}
+                      >
                         Remove Photo
                       </button>
                     ) : null}
@@ -347,7 +398,11 @@ export default function ProfilePage() {
                 <div className="detail-facts profile-form-grid">
                   <label>
                     <span className="fact-label">Name</span>
-                    <input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your name" />
+                    <input
+                      value={fullName}
+                      onChange={(event) => setFullName(event.target.value)}
+                      placeholder="Your name"
+                    />
                   </label>
                   <label>
                     <span className="fact-label">Email</span>
@@ -364,7 +419,9 @@ export default function ProfilePage() {
                   <button
                     type="button"
                     className="ghost-button"
-                    onClick={() => setPasswordSectionOpen((current) => !current)}
+                    onClick={() =>
+                      setPasswordSectionOpen((current) => !current)
+                    }
                   >
                     {passwordSectionOpen ? "Hide" : "Expand"}
                   </button>
@@ -375,33 +432,87 @@ export default function ProfilePage() {
                     <div className="profile-password-grid">
                       <label className="field-span-full">
                         <span className="fact-label">Current Password</span>
-                        <input
-                          type="password"
-                          value={currentPassword}
-                          onChange={(event) => setCurrentPassword(event.target.value)}
-                          autoComplete="current-password"
-                          placeholder="Current password"
-                        />
+                        <div className="password-input-row">
+                          <input
+                            type={showCurrentPassword ? "text" : "password"}
+                            value={currentPassword}
+                            onChange={(event) =>
+                              setCurrentPassword(event.target.value)
+                            }
+                            autoComplete="current-password"
+                            placeholder="Current password"
+                          />
+                          <button
+                            type="button"
+                            className="password-visibility-button"
+                            onClick={() =>
+                              setShowCurrentPassword((current) => !current)
+                            }
+                            aria-label={
+                              showCurrentPassword
+                                ? "Hide current password"
+                                : "Show current password"
+                            }
+                          >
+                            {showCurrentPassword ? "Hide" : "Show"}
+                          </button>
+                        </div>
                       </label>
                       <label>
                         <span className="fact-label">New Password</span>
-                        <input
-                          type="password"
-                          value={newPassword}
-                          onChange={(event) => setNewPassword(event.target.value)}
-                          autoComplete="new-password"
-                          placeholder="New password"
-                        />
+                        <div className="password-input-row">
+                          <input
+                            type={showNewPassword ? "text" : "password"}
+                            value={newPassword}
+                            onChange={(event) =>
+                              setNewPassword(event.target.value)
+                            }
+                            autoComplete="new-password"
+                            placeholder="New password"
+                          />
+                          <button
+                            type="button"
+                            className="password-visibility-button"
+                            onClick={() =>
+                              setShowNewPassword((current) => !current)
+                            }
+                            aria-label={
+                              showNewPassword
+                                ? "Hide new password"
+                                : "Show new password"
+                            }
+                          >
+                            {showNewPassword ? "Hide" : "Show"}
+                          </button>
+                        </div>
                       </label>
                       <label>
                         <span className="fact-label">Confirm New Password</span>
-                        <input
-                          type="password"
-                          value={confirmNewPassword}
-                          onChange={(event) => setConfirmNewPassword(event.target.value)}
-                          autoComplete="new-password"
-                          placeholder="Confirm new password"
-                        />
+                        <div className="password-input-row">
+                          <input
+                            type={showConfirmNewPassword ? "text" : "password"}
+                            value={confirmNewPassword}
+                            onChange={(event) =>
+                              setConfirmNewPassword(event.target.value)
+                            }
+                            autoComplete="new-password"
+                            placeholder="Confirm new password"
+                          />
+                          <button
+                            type="button"
+                            className="password-visibility-button"
+                            onClick={() =>
+                              setShowConfirmNewPassword((current) => !current)
+                            }
+                            aria-label={
+                              showConfirmNewPassword
+                                ? "Hide confirm new password"
+                                : "Show confirm new password"
+                            }
+                          >
+                            {showConfirmNewPassword ? "Hide" : "Show"}
+                          </button>
+                        </div>
                       </label>
                     </div>
                   </div>
@@ -409,7 +520,11 @@ export default function ProfilePage() {
               </section>
 
               <div className="profile-save-bar">
-                <button type="submit" className="primary-button" disabled={savingProfile || !hasProfileChanges}>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={savingProfile || !hasProfileChanges}
+                >
                   {savingProfile ? "Saving..." : "Save Changes"}
                 </button>
               </div>
@@ -420,7 +535,9 @@ export default function ProfilePage() {
                 <div className="profile-section-heading">
                   <h2>Two-Factor Authentication</h2>
                 </div>
-                <span className={`status-pill ${twoFactor.enabled ? "status-ready" : "status-needs_review"}`}>
+                <span
+                  className={`status-pill ${twoFactor.enabled ? "status-ready" : "status-needs_review"}`}
+                >
                   {twoFactorStatusLabel()}
                 </span>
               </div>
@@ -433,11 +550,17 @@ export default function ProfilePage() {
                   </div>
                   <div className="settings-row">
                     <span>Requirement</span>
-                    <strong>{twoFactor.required ? "Required by admin" : "Optional"}</strong>
+                    <strong>
+                      {twoFactor.required ? "Required by admin" : "Optional"}
+                    </strong>
                   </div>
                   <div className="settings-row">
                     <span>Method</span>
-                    <strong>{twoFactor.enabled ? "Authenticator app" : "Not configured"}</strong>
+                    <strong>
+                      {twoFactor.enabled
+                        ? "Authenticator app"
+                        : "Not configured"}
+                    </strong>
                   </div>
                 </div>
               </div>
@@ -447,13 +570,19 @@ export default function ProfilePage() {
                   <button
                     type="button"
                     className="primary-button"
-                    onClick={setupVisible ? () => setSetupVisible(false) : openSetup}
+                    onClick={
+                      setupVisible ? () => setSetupVisible(false) : openSetup
+                    }
                   >
                     {setupVisible ? "Hide Setup" : "Setup Authenticator"}
                   </button>
                 ) : null}
                 {twoFactor.enabled && !twoFactor.required ? (
-                  <button type="button" className="ghost-button" onClick={disableTotp}>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={disableTotp}
+                  >
                     Turn Off
                   </button>
                 ) : null}
@@ -466,17 +595,29 @@ export default function ProfilePage() {
                       <h3>Authenticator Setup</h3>
                     </div>
                     <div className="inline-pills">
-                      <button type="button" className="ghost-button" onClick={copyProvisioningUrl}>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={copyProvisioningUrl}
+                      >
                         Copy URL
                       </button>
-                      <button type="button" className="ghost-button" onClick={cancelSetup}>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={cancelSetup}
+                      >
                         Cancel Setup
                       </button>
                     </div>
                   </div>
 
                   <div className="two-column-layout profile-setup-grid">
-                    <div className="totp-qr-card" aria-label="Two-factor QR code" dangerouslySetInnerHTML={{ __html: setup.qr_svg }} />
+                    <div
+                      className="totp-qr-card"
+                      aria-label="Two-factor QR code"
+                      dangerouslySetInnerHTML={{ __html: setup.qr_svg }}
+                    />
                     <div className="stack-form">
                       <div className="settings-list">
                         <span className="fact-label">Setup URL</span>

@@ -4,12 +4,19 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from django.conf import settings
 
 from apps.ingestion.models import SourceCatalogEntry
 from apps.ingestion.services.legacy_adapter import ALLOWED_HOSTS, normalize_source_url, normalize_text, texts_are_similar
 
 
-CATALOG_URL = "https://www.ebanglalibrary.com/books/"
+SOURCE_SITE_HOST = (getattr(settings, "SOURCE_SITE_HOST", "www.ebanglalibrary.com") or "www.ebanglalibrary.com").strip().lower()
+SOURCE_SITE_FALLBACK_HOSTS = tuple(
+    host.strip().lower()
+    for host in (getattr(settings, "SOURCE_SITE_FALLBACK_HOSTS", []) or [])
+    if str(host).strip()
+)
+CATALOG_URL = f"https://{SOURCE_SITE_HOST}/books/"
 ARCHIVE_MAX_PAGES = 80
 SEARCH_HEADERS = {
     "User-Agent": (
@@ -27,6 +34,53 @@ class ResolutionResult:
     resolved_url: str
     candidates: list
     raw: dict
+
+
+def source_request_hosts(host=""):
+    candidates = [
+        str(host or "").strip().lower(),
+        SOURCE_SITE_HOST,
+        *SOURCE_SITE_FALLBACK_HOSTS,
+        "www.ebanglalibrary.com",
+        "ebanglalibrary.com",
+    ]
+    ordered = []
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    return tuple(ordered)
+
+
+def replace_url_host(url, host):
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.path:
+        return url
+    return parsed._replace(netloc=host).geturl()
+
+
+def is_name_resolution_failure(exc):
+    return "name resolution" in str(exc).lower() or "gaierror" in str(exc).lower()
+
+
+def get_with_host_fallback(session, url, **kwargs):
+    parsed = urlparse(url)
+    candidate_urls = [replace_url_host(url, host) for host in source_request_hosts(parsed.netloc)]
+    fallback_errors = []
+
+    for candidate_url in candidate_urls:
+        try:
+            return session.get(candidate_url, **kwargs)
+        except requests.exceptions.ConnectionError as exc:
+            if not is_name_resolution_failure(exc):
+                raise
+            fallback_errors.append(exc)
+
+    if fallback_errors:
+        raise fallback_errors[-1]
+    return session.get(url, **kwargs)
 
 
 def metadata_entry_defaults(source_url, title, author_line="", raw_data=None):
@@ -100,7 +154,7 @@ def fetch_source_page_metadata(source_url, session=None):
     session = session or requests.Session()
     session.headers.update(SEARCH_HEADERS)
     normalized_url = normalize_source_url(source_url)
-    response = session.get(normalized_url, timeout=30)
+    response = get_with_host_fallback(session, normalized_url, timeout=30)
     response.raise_for_status()
     return parse_source_page_metadata(response.text, normalized_url)
 
@@ -123,7 +177,8 @@ class TitleResolver:
         seen = set()
         page_signatures = set()
         for page_number in range(1, max_pages + 1):
-            response = self.session.get(
+            response = get_with_host_fallback(
+                self.session,
                 CATALOG_URL,
                 params=self.archive_query_params(page_number=page_number, bucket=bucket),
                 timeout=30,

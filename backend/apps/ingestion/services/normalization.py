@@ -29,6 +29,11 @@ DEDICATION_PATTERNS = [
     "dedication",
 ]
 
+DEDICATION_INLINE_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:অনুবাদকের\s+উৎসর্গ|লেখকের\s+উৎসর্গ|উৎসর্গ|dedication)\s*[:ঃ\-–—]?\s*",
+    re.IGNORECASE,
+)
+
 BODY_SECTION_PATTERNS = [
     "ভূমিকা",
     "প্রস্তাবনা",
@@ -331,6 +336,14 @@ def should_continue_dedication_block(text, strong_text="", tag_name=""):
     return count_sentence_markers(cleaned_text) <= 3
 
 
+def strip_leading_dedication_label(text):
+    cleaned_text = clean_display_text(text)
+    if not cleaned_text:
+        return ""
+    stripped = DEDICATION_INLINE_PREFIX_PATTERN.sub("", cleaned_text, count=1)
+    return clean_display_text(stripped)
+
+
 def extract_main_content_segments(main_content_html):
     if not main_content_html:
         return "", "", main_content_html
@@ -394,6 +407,14 @@ def clean_extracted_dedication_html(dedication_html):
 
         strong_text = block_strong_text(block)
         is_heading = is_dedication_heading(text, strong_text=strong_text, tag_name=block.name)
+        if is_heading:
+            inline_dedication_text = strip_leading_dedication_label(text)
+            if inline_dedication_text and inline_dedication_text != clean_display_text(text):
+                block.clear()
+                block.append(inline_dedication_text)
+                text = block_text(block)
+                strong_text = block_strong_text(block)
+                is_heading = is_dedication_heading(text, strong_text=strong_text, tag_name=block.name)
         is_duplicate_heading = seen_heading and text_matches_patterns(text, DEDICATION_PATTERNS) and len(text) <= 40
 
         if is_separator_paragraph(text) or is_heading or is_duplicate_heading:
