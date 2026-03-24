@@ -78,6 +78,7 @@ PUBLIC_API_ORIGIN = env("PUBLIC_API_ORIGIN", PUBLIC_BASE_URL).rstrip("/")
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,backend,nginx")
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")
 CORS_ALLOWED_ORIGINS = env_list("DJANGO_CORS_ALLOWED_ORIGINS", "")
+CORS_ALLOW_CREDENTIALS = env_bool("DJANGO_CORS_ALLOW_CREDENTIALS", True)
 
 for host in {hostname_from_url(FRONTEND_BASE_URL), hostname_from_url(PUBLIC_API_ORIGIN)}:
     append_unique(ALLOWED_HOSTS, host)
@@ -87,8 +88,6 @@ for origin in {normalized_origin(FRONTEND_BASE_URL), normalized_origin(PUBLIC_AP
     append_unique(CORS_ALLOWED_ORIGINS, origin)
 
 PASSWORD_RESET_FRONTEND_PATH = env("PASSWORD_RESET_FRONTEND_PATH", "/reset-password")
-EPUB_READER_BASE_URL = env("EPUB_READER_BASE_URL", "https://ereader.rsalehin24.me")
-append_unique(CORS_ALLOWED_ORIGINS, EPUB_READER_BASE_URL.rstrip("/"))
 SUPER_ADMIN_EMAIL = env("SUPER_ADMIN_EMAIL", "rsalehin24@gmail.com")
 SUPER_ADMIN_PASSWORD = env("SUPER_ADMIN_PASSWORD", "")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "noreply@banglalibrary.local")

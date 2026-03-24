@@ -27,7 +27,6 @@ from apps.access.models import (
     PreviewAccessSession,
     ReadingSession,
     default_preview_expiry,
-    generate_access_token,
 )
 from apps.access.serializers import BookmarkSerializer, PermissionGrantSerializer, ReadingSessionSerializer
 from apps.catalog.models import Book, Contributor, ContributorRole, Category, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType
@@ -522,15 +521,13 @@ class ReaderLaunchView(APIView):
 
         if session is None:
             session = PreviewAccessSession.objects.create(user=request.user, book=book)
-        else:
-            session.token = generate_access_token()
 
         session.launch_count += 1
         session.expires_at = default_preview_expiry()
-        session.save(update_fields=["token", "launch_count", "expires_at", "updated_at"])
+        session.save(update_fields=["launch_count", "expires_at", "updated_at"])
 
         manifest_url = public_api_url("access-reader-manifest", kwargs={"token": session.token}, request=request)
-        launch_url = f"{settings.EPUB_READER_BASE_URL.rstrip('/')}/?manifest={quote(manifest_url, safe='')}"
+        launch_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/reader?manifest={quote(manifest_url, safe='')}"
 
         return Response(
             {

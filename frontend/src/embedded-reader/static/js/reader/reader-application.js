@@ -7,7 +7,7 @@ import {
   SELECTORS,
   STORAGE_KEYS,
   THEMES,
-  VIEWPORT_FALLBACK_CONTENT
+  VIEWPORT_FALLBACK_CONTENT,
 } from "./reader-settings.js";
 import {
   addClass,
@@ -19,15 +19,18 @@ import {
   removeClass,
   showElement,
   showElementFlex,
-  toggleClass
+  toggleClass,
 } from "./utils/dom-helpers.js";
 import {
   flattenToc,
   getItemHref,
   renderToc,
-  syncSelectedTocItem
+  syncSelectedTocItem,
 } from "./utils/toc-helpers.js";
-import { bindDoubleTapToggle, createSwipeBinder } from "./utils/gesture-handlers.js";
+import {
+  bindDoubleTapToggle,
+  createSwipeBinder,
+} from "./utils/gesture-handlers.js";
 import { LoadingIndicatorController } from "./controllers/loading-indicator-controller.js";
 import { ReaderThemeManager } from "./controllers/theme-manager.js";
 import { ShortcutDialogController } from "./controllers/shortcut-dialog-controller.js";
@@ -39,6 +42,12 @@ const TOC_TOGGLE_EXCLUDED_TARGETS =
   "a, button, input, textarea, select, label, summary, [data-no-reader-toggle]";
 const IFRAME_INTERACTION_READY_DELAY_MS = 200;
 const IFRAME_INTERACTION_RELOCATED_DELAY_MS = 100;
+
+function readCookie(name) {
+  const pattern = new RegExp(`(?:^|; )${name}=([^;]*)`);
+  const match = document.cookie.match(pattern);
+  return match ? decodeURIComponent(match[1]) : "";
+}
 
 export class ReaderApplication {
   constructor() {
@@ -60,7 +69,8 @@ export class ReaderApplication {
     this.pendingIframeInteractionTimer = null;
     this.fullscreenEnterVerificationTimer = null;
     this.baseViewportContent =
-      query("meta[name='viewport']")?.getAttribute("content") || VIEWPORT_FALLBACK_CONTENT;
+      query("meta[name='viewport']")?.getAttribute("content") ||
+      VIEWPORT_FALLBACK_CONTENT;
 
     this.keyboardHandler = null;
     this.hasInitialized = false;
@@ -87,7 +97,7 @@ export class ReaderApplication {
 
     this.loadingIndicatorController = new LoadingIndicatorController({
       container: this.readerWrapperContainer,
-      minimumDuration: 180
+      minimumDuration: 180,
     });
 
     this.readerThemeManager = new ReaderThemeManager({
@@ -95,32 +105,32 @@ export class ReaderApplication {
       themeList: THEMES,
       defaultThemeIndex: initialThemeIndex,
       defaultFontSize: initialFontSize,
-      fallbackThemeColor: APP_THEME_COLOR
+      fallbackThemeColor: APP_THEME_COLOR,
     });
     this.readerThemeManager.setInitialState({
       themeIndex: initialThemeIndex,
-      fontSize: initialFontSize
+      fontSize: initialFontSize,
     });
 
     this.shortcutDialogController = new ShortcutDialogController({
-      modalElement: query("#shortcut-modal")
+      modalElement: query("#shortcut-modal"),
     });
 
     this.iframeBridgeController = new IframeBridgeController({
-      iframeSelector: `${SELECTORS.viewer} iframe`
+      iframeSelector: `${SELECTORS.viewer} iframe`,
     });
 
     this.settingsPanelController = new SettingsPanelController({
       panelElement: this.settingPanel,
       triggerSelector: ".iconshezhi",
-      iframeBridgeController: this.iframeBridgeController
+      iframeBridgeController: this.iframeBridgeController,
     });
 
     this.swipeBinder = createSwipeBinder({
       onNext: () => this.changeNext(),
       onPrev: () => this.changePrev(),
       onChangeFontSize: (stepCount) => this.changeFontSizeByStep(stepCount),
-      onCycleTheme: () => this.cycleTheme()
+      onCycleTheme: () => this.cycleTheme(),
     });
   }
 
@@ -169,7 +179,7 @@ export class ReaderApplication {
 
   scheduleIframeInteractionSetup(
     delayMs = IFRAME_INTERACTION_READY_DELAY_MS,
-    sessionId = this.readerSessionId
+    sessionId = this.readerSessionId,
   ) {
     this.clearPendingIframeInteractionSetup();
 
@@ -207,13 +217,16 @@ export class ReaderApplication {
 
     this.loadingIndicatorController.show();
     fetch(manifestUrl, {
+      credentials: "include",
       headers: {
-        Accept: "application/json"
-      }
+        Accept: "application/json",
+      },
     })
       .then((response) => {
         if (!response.ok) {
-          throw new Error(`Manifest request failed with status ${response.status}`);
+          throw new Error(
+            `Manifest request failed with status ${response.status}`,
+          );
         }
         return response.json();
       })
@@ -229,7 +242,7 @@ export class ReaderApplication {
         hideElement(this.openEbookPage);
         this.initializeBook(manifest.epub_download_url, {
           initialLocation: manifest.reading_session?.last_location || "",
-          launchManifest: manifest
+          launchManifest: manifest,
         });
       })
       .catch((error) => {
@@ -241,7 +254,9 @@ export class ReaderApplication {
   init() {
     if (this.hasInitialized) return;
     if (typeof window.ePub !== "function") {
-      throw new Error("EPUB runtime is not loaded. Expected window.ePub to be available.");
+      throw new Error(
+        "EPUB runtime is not loaded. Expected window.ePub to be available.",
+      );
     }
 
     this.hasInitialized = true;
@@ -254,7 +269,10 @@ export class ReaderApplication {
     this.readerThemeManager.syncSystemThemeColor(undefined, APP_THEME_COLOR);
 
     document.addEventListener("fullscreenchange", this.onFullscreenStateChange);
-    document.addEventListener("webkitfullscreenchange", this.onFullscreenStateChange);
+    document.addEventListener(
+      "webkitfullscreenchange",
+      this.onFullscreenStateChange,
+    );
     this.loadManifestLaunchIfPresent();
   }
 
@@ -276,8 +294,14 @@ export class ReaderApplication {
       this.keyboardHandler = null;
     }
 
-    document.removeEventListener("fullscreenchange", this.onFullscreenStateChange);
-    document.removeEventListener("webkitfullscreenchange", this.onFullscreenStateChange);
+    document.removeEventListener(
+      "fullscreenchange",
+      this.onFullscreenStateChange,
+    );
+    document.removeEventListener(
+      "webkitfullscreenchange",
+      this.onFullscreenStateChange,
+    );
 
     this.closeBook();
     this.settingsPanelController.destroy();
@@ -291,79 +315,79 @@ export class ReaderApplication {
       delegateEvent(document, "click", "#open-new-book", (event) => {
         event.preventDefault();
         this.openNewBook();
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", "#open-shortcuts", (event) => {
         this.openShortcutsModal(event);
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", "#close-shortcuts", (event) => {
         this.closeShortcutsModal(event);
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", "#shortcut-modal", (event, target) => {
         this.closeShortcutsModal(event, target);
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "change", "#open-epub", (event) => {
         this.handleBookFileSelection(event);
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", ".prev-btn", () => {
         this.changePrev();
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", ".next-btn", () => {
         this.changeNext();
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", ".iconmulu", () => {
         this.toggleTocPanel();
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", TOC_LABEL_SELECTOR, (event, target) => {
         this.handleTocSelection(event, target);
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", ".iconcc-close-square", () => {
         this.closeBook();
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", ".iconshezhi", (event) => {
         this.toggleSettingsPanel(event);
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", ".size-btn", (event, target) => {
         this.handleFontSizeControl(target);
-      })
+      }),
     );
 
     this.cleanupHandlers.push(
       delegateEvent(document, "click", ".bg-btn", (_, target) => {
         this.handleThemeControl(target);
-      })
+      }),
     );
   }
 
@@ -462,12 +486,20 @@ export class ReaderApplication {
 
     let nextBook;
     try {
-      nextBook = window.ePub(source, {});
+      nextBook = window.ePub(source, {
+        requestCredentials: true,
+      });
     } catch (error) {
       try {
-        nextBook = new window.ePub(source, {});
+        nextBook = new window.ePub(source, {
+          requestCredentials: true,
+        });
       } catch (fallbackError) {
-        this.handleFatalBookError("Failed to create EPUB instance.", fallbackError, sessionId);
+        this.handleFatalBookError(
+          "Failed to create EPUB instance.",
+          fallbackError,
+          sessionId,
+        );
         return;
       }
     }
@@ -478,10 +510,14 @@ export class ReaderApplication {
       this.rendition = this.book.renderTo("viewer", {
         flow: "scrolled-doc",
         width: "100%",
-        height: "100%"
+        height: "100%",
       });
     } catch (error) {
-      this.handleFatalBookError("Failed to initialize EPUB rendition.", error, sessionId);
+      this.handleFatalBookError(
+        "Failed to initialize EPUB rendition.",
+        error,
+        sessionId,
+      );
       return;
     }
 
@@ -489,14 +525,18 @@ export class ReaderApplication {
 
     const initialDisplayTarget = options.initialLocation || "";
     const displayPromise = initialDisplayTarget
-      ? Promise.resolve(this.rendition.display(initialDisplayTarget)).catch(() => this.rendition.display())
+      ? Promise.resolve(this.rendition.display(initialDisplayTarget)).catch(
+          () => this.rendition.display(),
+        )
       : Promise.resolve(this.rendition.display());
 
     displayPromise
       .then((location) => {
         if (!this.isSessionActive(sessionId)) return;
 
-        const resolvedHref = this.normalizeHrefForComparison(location?.href || "");
+        const resolvedHref = this.normalizeHrefForComparison(
+          location?.href || "",
+        );
         if (resolvedHref) {
           this.currentHref = resolvedHref;
           this.syncSectionWithHref(resolvedHref);
@@ -504,10 +544,12 @@ export class ReaderApplication {
 
         this.readerThemeManager.attachThemesApi(this.rendition?.themes || null);
         this.readerThemeManager.registerThemes();
-        this.readerThemeManager.setFontSize(`${this.readerThemeManager.getCurrentFontSize()}px`);
+        this.readerThemeManager.setFontSize(
+          `${this.readerThemeManager.getCurrentFontSize()}px`,
+        );
         this.readerThemeManager.setTheme(
           this.readerThemeManager.getCurrentThemeIndex(),
-          this.rendition
+          this.rendition,
         );
         this.syncReaderControlStates();
         this.setupSwipeGestures();
@@ -522,10 +564,17 @@ export class ReaderApplication {
           syncSelectedTocItem(this.currentHref);
         }
         this.queueReadingStateSync(location);
-        this.scheduleIframeInteractionSetup(IFRAME_INTERACTION_READY_DELAY_MS, sessionId);
+        this.scheduleIframeInteractionSetup(
+          IFRAME_INTERACTION_READY_DELAY_MS,
+          sessionId,
+        );
       })
       .catch((error) => {
-        this.handleFatalBookError("Failed to render selected EPUB.", error, sessionId);
+        this.handleFatalBookError(
+          "Failed to render selected EPUB.",
+          error,
+          sessionId,
+        );
       });
 
     Promise.resolve(this.book.ready)
@@ -539,7 +588,11 @@ export class ReaderApplication {
         this.locations = this.book?.locations || null;
       })
       .catch((error) => {
-        this.handleRecoverableBookError("Failed to prepare book locations.", error, sessionId);
+        this.handleRecoverableBookError(
+          "Failed to prepare book locations.",
+          error,
+          sessionId,
+        );
       });
 
     Promise.resolve(this.book.loaded?.navigation)
@@ -552,7 +605,11 @@ export class ReaderApplication {
         }
       })
       .catch((error) => {
-        this.handleRecoverableBookError("Failed to load table of contents.", error, sessionId);
+        this.handleRecoverableBookError(
+          "Failed to load table of contents.",
+          error,
+          sessionId,
+        );
       });
   }
 
@@ -563,7 +620,7 @@ export class ReaderApplication {
       if (!this.isSessionActive(sessionId)) return;
       this.readerThemeManager.applyThemeToCurrentPage(
         this.readerThemeManager.getCurrentThemeIndex(),
-        this.rendition
+        this.rendition,
       );
     });
 
@@ -571,7 +628,7 @@ export class ReaderApplication {
       if (!this.isSessionActive(sessionId)) return;
 
       const relocatedHref = this.normalizeHrefForComparison(
-        location?.start?.href || location?.href || ""
+        location?.start?.href || location?.href || "",
       );
       if (relocatedHref) {
         this.currentHref = relocatedHref;
@@ -580,22 +637,31 @@ export class ReaderApplication {
       }
 
       this.queueReadingStateSync(location);
-      this.scheduleIframeInteractionSetup(IFRAME_INTERACTION_RELOCATED_DELAY_MS, sessionId);
+      this.scheduleIframeInteractionSetup(
+        IFRAME_INTERACTION_RELOCATED_DELAY_MS,
+        sessionId,
+      );
     });
   }
 
   buildReadingStatePayload(location) {
     const normalizedHref = this.normalizeHrefForComparison(
-      location?.start?.href || location?.href || this.currentHref || ""
+      location?.start?.href || location?.href || this.currentHref || "",
     );
-    const cfi = location?.start?.cfi || this.book?.rendition?.currentLocation?.()?.start?.cfi || "";
+    const cfi =
+      location?.start?.cfi ||
+      this.book?.rendition?.currentLocation?.()?.start?.cfi ||
+      "";
     let progressPercent = 0;
 
     if (this.book?.locations && cfi) {
       try {
         const percentage = this.book.locations.percentageFromCfi(cfi);
         if (Number.isFinite(percentage)) {
-          progressPercent = Math.max(0, Math.min(100, Math.round(percentage * 1000) / 10));
+          progressPercent = Math.max(
+            0,
+            Math.min(100, Math.round(percentage * 1000) / 10),
+          );
         }
       } catch {
         // Ignore percentage calculation errors for state sync.
@@ -604,7 +670,7 @@ export class ReaderApplication {
 
     return {
       last_location: normalizedHref,
-      progress_percent: progressPercent
+      progress_percent: progressPercent,
     };
   }
 
@@ -621,13 +687,16 @@ export class ReaderApplication {
 
     this.persistReadingStateTimer = setTimeout(() => {
       this.persistReadingStateTimer = null;
+      const csrfToken = readCookie("csrftoken");
       fetch(syncUrl, {
         method: "POST",
+        credentials: "include",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       }).catch((error) => {
         console.error("Failed to persist reading state.", error);
       });
@@ -704,7 +773,12 @@ export class ReaderApplication {
 
   changeNext() {
     const sectionCount = this.getSectionCount();
-    if (!this.rendition || sectionCount <= 0 || this.section >= sectionCount - 1) return;
+    if (
+      !this.rendition ||
+      sectionCount <= 0 ||
+      this.section >= sectionCount - 1
+    )
+      return;
 
     this.section += 1;
     this.displayCurrentSection();
@@ -736,7 +810,9 @@ export class ReaderApplication {
       .then((location) => {
         if (!this.isSessionActive(sessionId)) return false;
 
-        const resolvedHref = this.normalizeHrefForComparison(location?.href || href || "");
+        const resolvedHref = this.normalizeHrefForComparison(
+          location?.href || href || "",
+        );
         if (resolvedHref) {
           this.currentHref = resolvedHref;
           this.syncSectionWithHref(resolvedHref);
@@ -744,7 +820,7 @@ export class ReaderApplication {
 
         this.readerThemeManager.applyThemeToCurrentPage(
           this.readerThemeManager.getCurrentThemeIndex(),
-          this.rendition
+          this.rendition,
         );
 
         return this.iframeBridgeController.waitForContentReady();
@@ -753,7 +829,10 @@ export class ReaderApplication {
         if (!this.isSessionActive(sessionId)) return false;
 
         this.loadingIndicatorController.hide();
-        this.scheduleIframeInteractionSetup(IFRAME_INTERACTION_READY_DELAY_MS, sessionId);
+        this.scheduleIframeInteractionSetup(
+          IFRAME_INTERACTION_READY_DELAY_MS,
+          sessionId,
+        );
 
         if (typeof callback === "function") {
           callback();
@@ -809,7 +888,7 @@ export class ReaderApplication {
     }
 
     const resolvedHref = this.normalizeHrefForComparison(
-      currentLocation?.start?.href || currentLocation?.href || href || ""
+      currentLocation?.start?.href || currentLocation?.href || href || "",
     );
     if (!resolvedHref) return;
 
@@ -823,19 +902,21 @@ export class ReaderApplication {
       const keyEvent = event?.originalEvent || event;
       if (!keyEvent || keyEvent.defaultPrevented) return;
 
-      const eventTarget = keyEvent.target instanceof Element ? keyEvent.target : null;
+      const eventTarget =
+        keyEvent.target instanceof Element ? keyEvent.target : null;
       const isEditableTarget =
         !!eventTarget &&
         (eventTarget.isContentEditable ||
           !!eventTarget.closest(
-            "input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='textbox']"
+            "input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='textbox']",
           ));
 
       if (isEditableTarget) return;
 
-      const isShortcutModalOpen = !!this.shortcutDialogController?.modalElement?.classList?.contains(
-        "is-open"
-      );
+      const isShortcutModalOpen =
+        !!this.shortcutDialogController?.modalElement?.classList?.contains(
+          "is-open",
+        );
 
       if (isShortcutModalOpen && keyEvent.key !== "Escape") {
         return;
@@ -899,7 +980,7 @@ export class ReaderApplication {
       setLastGlobalTouchTime: (timestamp) => {
         this.lastIframeToggleTouch = timestamp;
       },
-      getLastGlobalTouchTime: () => this.lastIframeToggleTouch
+      getLastGlobalTouchTime: () => this.lastIframeToggleTouch,
     });
   }
 
@@ -912,7 +993,7 @@ export class ReaderApplication {
       this.normalizeHrefForComparison(
         this.book?.rendition?.currentLocation?.()?.start?.href ||
           this.book?.rendition?.currentLocation?.()?.href ||
-          ""
+          "",
       );
 
     if (!baseHref) return href;
@@ -940,11 +1021,12 @@ export class ReaderApplication {
     this.iframeBridgeController.attachSwipeGestures(this.swipeBinder);
     this.iframeBridgeController.attachReaderModeToggle({
       onToggle: () => this.toggleImmersiveMode(),
-      isInteractiveTarget: (target) => !!target?.closest?.(TOC_TOGGLE_EXCLUDED_TARGETS),
+      isInteractiveTarget: (target) =>
+        !!target?.closest?.(TOC_TOGGLE_EXCLUDED_TARGETS),
       setLastGlobalTouchTime: (timestamp) => {
         this.lastIframeToggleTouch = timestamp;
       },
-      getLastGlobalTouchTime: () => this.lastIframeToggleTouch
+      getLastGlobalTouchTime: () => this.lastIframeToggleTouch,
     });
     this.iframeBridgeController.attachKeyboardShortcuts(this.keyboardHandler);
     this.settingsPanelController.refreshIframeBinding();
@@ -1014,7 +1096,10 @@ export class ReaderApplication {
   }
 
   applyThemeByIndex(themeIndex) {
-    const isApplied = this.readerThemeManager.applyThemeByIndex(themeIndex, this.rendition);
+    const isApplied = this.readerThemeManager.applyThemeByIndex(
+      themeIndex,
+      this.rendition,
+    );
     if (isApplied) {
       this.syncThemeControlState();
     }
@@ -1044,7 +1129,9 @@ export class ReaderApplication {
 
     queryAll(".bg-btn").forEach((button) => {
       const buttonThemeIndex = Number.parseInt(button?.dataset?.type || "", 10);
-      const isActive = Number.isInteger(buttonThemeIndex) && buttonThemeIndex === currentThemeIndex;
+      const isActive =
+        Number.isInteger(buttonThemeIndex) &&
+        buttonThemeIndex === currentThemeIndex;
       button.classList.toggle("is-active", isActive);
       button.setAttribute("aria-pressed", isActive ? "true" : "false");
     });
@@ -1057,7 +1144,8 @@ export class ReaderApplication {
 
     queryAll(".size-btn").forEach((button) => {
       const tag = button?.dataset?.tag;
-      const isDisabled = (tag === "small" && isAtMinimum) || (tag === "big" && isAtMaximum);
+      const isDisabled =
+        (tag === "small" && isAtMinimum) || (tag === "big" && isAtMaximum);
       button.disabled = isDisabled;
       button.setAttribute("aria-disabled", isDisabled ? "true" : "false");
     });
@@ -1069,7 +1157,8 @@ export class ReaderApplication {
   }
 
   handleFullscreenStateChange() {
-    if (this.getFullscreenElement() || !this.isImmersiveMode || !this.rendition) return;
+    if (this.getFullscreenElement() || !this.isImmersiveMode || !this.rendition)
+      return;
 
     this.isImmersiveMode = false;
     removeClass(this.readerContainer, "immersive-reading");
@@ -1101,7 +1190,7 @@ export class ReaderApplication {
       const timerId = setTimeout(() => {
         this.resizeReaderViewport(
           resizeDelay,
-          index === delays.length - 1 ? onComplete : undefined
+          index === delays.length - 1 ? onComplete : undefined,
         );
       }, delay);
 
@@ -1253,7 +1342,8 @@ export class ReaderApplication {
       return;
     }
 
-    const readerWrapperElement = this.readerContainer.querySelector(".reader-wrapper");
+    const readerWrapperElement =
+      this.readerContainer.querySelector(".reader-wrapper");
     if (!readerWrapperElement) {
       finalizeEnter();
       return;
@@ -1338,10 +1428,12 @@ export class ReaderApplication {
           !/^initial-scale\s*=/.test(part) &&
           !/^minimum-scale\s*=/.test(part) &&
           !/^maximum-scale\s*=/.test(part) &&
-          !/^user-scalable\s*=/.test(part)
+          !/^user-scalable\s*=/.test(part),
       );
 
-    if (!normalizedViewportParts.some((part) => /^viewport-fit\s*=/.test(part))) {
+    if (
+      !normalizedViewportParts.some((part) => /^viewport-fit\s*=/.test(part))
+    ) {
       normalizedViewportParts.push("viewport-fit=cover");
     }
 
@@ -1349,7 +1441,7 @@ export class ReaderApplication {
       "initial-scale=1",
       "minimum-scale=1",
       "maximum-scale=1",
-      "user-scalable=no"
+      "user-scalable=no",
     );
 
     viewportMeta.setAttribute("content", normalizedViewportParts.join(", "));
@@ -1363,7 +1455,10 @@ export class ReaderApplication {
 
     this.viewportScaleResetTimer = setTimeout(() => {
       if (this.pendingViewportRestoreContent) {
-        viewportMeta.setAttribute("content", this.pendingViewportRestoreContent);
+        viewportMeta.setAttribute(
+          "content",
+          this.pendingViewportRestoreContent,
+        );
       }
 
       this.pendingViewportRestoreContent = null;
@@ -1408,7 +1503,8 @@ export class ReaderApplication {
     }
 
     if (restoreOriginalContent) {
-      const restoreContent = this.pendingViewportRestoreContent || this.baseViewportContent;
+      const restoreContent =
+        this.pendingViewportRestoreContent || this.baseViewportContent;
       const viewportMeta = query("meta[name='viewport']");
       if (viewportMeta && restoreContent) {
         viewportMeta.setAttribute("content", restoreContent);

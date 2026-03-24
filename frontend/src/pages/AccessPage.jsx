@@ -979,7 +979,7 @@ export default function AccessPage() {
                     type="search"
                     value={userListFilters.q}
                     onChange={(event) => updateUsersSearch(event.target.value)}
-                    onSearch={(event) => {
+                    onInput={(event) => {
                       if (!String(event.target?.value || "").trim()) {
                         clearUsersSearch();
                       }
@@ -1243,7 +1243,7 @@ export default function AccessPage() {
                   type="search"
                   value={targetSearch}
                   onChange={(event) => setTargetSearch(event.target.value)}
-                  onSearch={(event) => {
+                  onInput={(event) => {
                     if (!String(event.target?.value || "").trim()) {
                       setTargetSearch("");
                     }

@@ -79,13 +79,18 @@ export default function ReaderPage() {
 
         const manifestFromLaunch = manifestFromLaunchUrl(decodedLaunchParam);
         if (manifestFromLaunch) {
-          const nextParams = new URLSearchParams(searchParams);
-          nextParams.set("manifest", manifestFromLaunch);
-          if (!nextParams.get("appNav")) {
-            nextParams.set("appNav", "hidden");
-          }
           if (active) {
-            setSearchParams(nextParams, { replace: true });
+            setSearchParams(
+              (prevParams) => {
+                const nextParams = new URLSearchParams(prevParams);
+                nextParams.set("manifest", manifestFromLaunch);
+                if (!nextParams.get("appNav")) {
+                  nextParams.set("appNav", "hidden");
+                }
+                return nextParams;
+              },
+              { replace: true },
+            );
           }
           return;
         }
@@ -111,13 +116,18 @@ export default function ReaderPage() {
         }
 
         if (active) {
-          const nextParams = new URLSearchParams(searchParams);
-          nextParams.set("manifest", manifestUrl);
-          nextParams.delete("launch");
-          if (!nextParams.get("appNav")) {
-            nextParams.set("appNav", "hidden");
-          }
-          setSearchParams(nextParams, { replace: true });
+          setSearchParams(
+            (prevParams) => {
+              const nextParams = new URLSearchParams(prevParams);
+              nextParams.set("manifest", manifestUrl);
+              nextParams.delete("launch");
+              if (!nextParams.get("appNav")) {
+                nextParams.set("appNav", "hidden");
+              }
+              return nextParams;
+            },
+            { replace: true },
+          );
         }
       } catch (nextError) {
         if (active) {
@@ -140,7 +150,6 @@ export default function ReaderPage() {
   }, [
     decodedLaunchParam,
     decodedManifestParam,
-    searchParams,
     setSearchParams,
     slugParam,
     toast,

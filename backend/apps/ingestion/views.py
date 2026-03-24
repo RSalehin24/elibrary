@@ -517,7 +517,7 @@ class SubmissionConfirmCandidateView(APIView):
 
 
 class SubmissionActionLinksView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
         submission = get_accessible_submission(request, pk)
@@ -527,10 +527,10 @@ class SubmissionActionLinksView(APIView):
             return Response({"detail": "This book was deleted."}, status=status.HTTP_410_GONE)
 
         preview_session = ensure_preview_session(
-            request.user if request.user.is_authenticated else None,
+            request.user,
             submission.linked_book,
             submission=submission,
-            allow_guest=not request.user.is_authenticated,
+            allow_guest=False,
         )
         if preview_session is None:
             return Response({"detail": "Could not prepare access for this book."}, status=status.HTTP_400_BAD_REQUEST)
@@ -539,7 +539,7 @@ class SubmissionActionLinksView(APIView):
         has_epub = assets.filter(asset_type=GeneratedAssetType.EPUB, status=GeneratedAssetStatus.READY).exists()
         has_html = assets.filter(asset_type=GeneratedAssetType.HTML, status=GeneratedAssetStatus.READY).exists()
         manifest_url = public_api_url("access-reader-manifest", kwargs={"token": preview_session.token}, request=request)
-        launch_url = f"{settings.EPUB_READER_BASE_URL.rstrip('/')}/?manifest={quote(manifest_url, safe='')}"
+        launch_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/reader?manifest={quote(manifest_url, safe='')}"
 
         return Response(
             {

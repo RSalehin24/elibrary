@@ -127,7 +127,6 @@ export function CatalogSearchRow({
           value={filters.q || ""}
           onChange={handleQueryChange}
           onInput={handleSearch}
-          onSearch={handleSearch}
           placeholder={searchPlaceholder}
           autoComplete="off"
         />
