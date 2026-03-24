@@ -42,3 +42,5 @@ LOCAL_PASSWORDS.md
 # OS noise
 .Spotlight-V100
 .Trashes
+
+storage/
