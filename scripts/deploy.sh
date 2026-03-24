@@ -65,13 +65,16 @@ printf '\n[1/5] Syncing code on %s...\n' "$TARGET"
 ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" BACKEND_PORT="$BACKEND_PORT" 'bash -s' <<'EOF'
 set -eu
 
-set_or_append_env() {
+set_default_env() {
   key="$1"
   value="$2"
   file="$3"
 
   if grep -q "^${key}=" "$file"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+    current_value=$(grep "^${key}=" "$file" | head -n 1 | cut -d '=' -f2-)
+    if [ -z "$current_value" ]; then
+      sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+    fi
   else
     printf '\n%s=%s\n' "$key" "$value" >> "$file"
   fi
@@ -94,17 +97,17 @@ if [ ! -f .env ]; then
   cp .env.example .env
 fi
 
-set_or_append_env PUBLIC_BASE_URL "https://${DOMAIN}" .env
-set_or_append_env VITE_API_BASE_URL "/api" .env
-set_or_append_env BACKEND_PORT "$BACKEND_PORT" .env
-set_or_append_env HOST_STATIC_DIR "./storage/staticfiles" .env
-set_or_append_env HOST_MEDIA_DIR "./storage/media" .env
+set_default_env PUBLIC_BASE_URL "https://${DOMAIN}" .env
+set_default_env VITE_API_BASE_URL "/api" .env
+set_default_env BACKEND_PORT "$BACKEND_PORT" .env
+set_default_env HOST_STATIC_DIR "./storage/staticfiles" .env
+set_default_env HOST_MEDIA_DIR "./storage/media" .env
 
 mkdir -p storage/staticfiles storage/media
 
 printf '\nRemote ready at %s\n' "$APP_DIR"
 printf 'Branch: %s\n' "$BRANCH"
-printf 'PUBLIC_BASE_URL set for %s\n' "$DOMAIN"
+printf 'Remote .env defaults ensured (existing values preserved)\n'
 EOF
 
 printf '\n[2/5] Building frontend dist on %s...\n' "$TARGET"
