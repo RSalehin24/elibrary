@@ -15,7 +15,8 @@ RUN npm run build
 FROM nginx:1.27-alpine
 
 COPY deploy/nginx/entrypoint.sh /usr/local/bin/library-nginx-entrypoint.sh
-COPY deploy/nginx/library.conf.template /etc/nginx/templates/default.conf.template
+COPY deploy/nginx/library.conf.template /etc/nginx/templates/library-http.conf.template
+COPY deploy/nginx/library-ssl.conf.template /etc/nginx/templates/library-ssl.conf.template
 COPY --from=frontend-build /app/frontend/dist /usr/share/nginx/html
 
 RUN chmod +x /usr/local/bin/library-nginx-entrypoint.sh

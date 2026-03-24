@@ -113,6 +113,45 @@ docker-compose -f docker-compose.prod.yml up -d --build
 
 If you terminate TLS in front of the containerized Nginx, keep `X-Forwarded-Proto` intact. If Nginx inside the container terminates TLS directly, add your `listen 443 ssl;` and certificate directives to the Nginx template or upstream load balancer config.
 
+### Nginx + Certbot (in-stack TLS)
+
+This repo now supports containerized TLS termination with Let's Encrypt:
+
+- `nginx` serves ACME challenge files from `/var/www/certbot`
+- `certbot` shares the same challenge + cert volumes
+- if certs exist, Nginx serves HTTPS (`443`) and redirects HTTP (`80`) to HTTPS
+- if certs do not exist yet, Nginx serves HTTP so ACME validation can complete
+
+Required `.env` values for TLS:
+
+```env
+PUBLIC_BASE_URL=https://library.rsalehin24.me
+NGINX_SERVER_NAME=library.rsalehin24.me
+CERTBOT_DOMAIN=library.rsalehin24.me
+CERTBOT_EMAIL=you@example.com
+SSL_ENABLED=1
+NGINX_PORT=80
+NGINX_SSL_PORT=443
+```
+
+First-time certificate issue (run on server in repo root):
+
+```bash
+sh scripts/certbot-init.sh
+```
+
+Then keep services up normally:
+
+```bash
+docker compose up -d --build
+```
+
+`certbot` runs renewal checks in the background. After a successful renewal, restart Nginx to load updated certs:
+
+```bash
+docker compose restart nginx
+```
+
 If you prefer calling Docker Compose directly on this machine, use the classic builder flags to avoid the local `buildx` warning:
 
 ```bash

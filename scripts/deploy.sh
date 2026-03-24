@@ -16,9 +16,9 @@ What it does:
   1) SSH (agent-forwarded) to remote server
   2) Clones/pulls repo into ~/library_app
   3) Ensures .env exists from .env.example
-  4) Sets PUBLIC_BASE_URL and NGINX_SERVER_NAME for library.rsalehin24.me
-  5) Prompts you to edit .env
-  6) Prompts you to start Docker Compose (v2 or legacy)
+  4) Sets domain and certbot env on remote .env
+  5) Starts Docker Compose stack
+  6) Issues SSL certificate via certbot automatically
 EOF
 }
 
@@ -45,6 +45,11 @@ if [ -z "${DEPLOY_USER_NAME:-}" ] || [ -z "${DEPLOY_IP:-}" ]; then
   exit 1
 fi
 
+if [ -z "${DEPLOY_DOMAIN:-}" ] || [ -z "${DEPLOY_CERTBOT_EMAIL:-}" ]; then
+  printf 'DEPLOY_DOMAIN and DEPLOY_CERTBOT_EMAIL must be set in %s\n' "$ENV_FILE"
+  exit 1
+fi
+
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
 BRANCH="${DEPLOY_BRANCH_NAME:-$CURRENT_BRANCH}"
 TARGET="${DEPLOY_USER_NAME}@${DEPLOY_IP}"
@@ -52,9 +57,11 @@ REPO_SSH="${REPO_SSH:-git@github.com:RSalehin24/ebook-scrapping.git}"
 APP_DIR='~/library_app'
 DOMAIN="${DOMAIN:-library.rsalehin24.me}"
 REMOTE_APP_DIR='$HOME/library_app'
+DOMAIN="$DEPLOY_DOMAIN"
+CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL"
 
 printf '\n[1/4] Syncing code on %s...\n' "$TARGET"
-ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" 'bash -s' <<'EOF'
+ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" 'bash -s' <<'EOF'
 set -eu
 
 set_or_append_env() {
@@ -88,43 +95,31 @@ fi
 
 set_or_append_env PUBLIC_BASE_URL "https://${DOMAIN}" .env
 set_or_append_env NGINX_SERVER_NAME "$DOMAIN" .env
+set_or_append_env CERTBOT_DOMAIN "$DOMAIN" .env
+set_or_append_env CERTBOT_EMAIL "$CERTBOT_EMAIL" .env
+set_or_append_env SSL_ENABLED "1" .env
 set_or_append_env VITE_API_BASE_URL "/api" .env
 set_or_append_env NGINX_PORT "80" .env
+set_or_append_env NGINX_SSL_PORT "443" .env
 
 printf '\nRemote ready at %s\n' "$APP_DIR"
 printf 'Branch: %s\n' "$BRANCH"
 printf 'PUBLIC_BASE_URL and NGINX_SERVER_NAME set for %s\n' "$DOMAIN"
 EOF
 
-printf '\n[2/4] Open remote .env for editing now? [y/N]: '
-read -r edit_now
-case "${edit_now:-n}" in
-  y|Y|yes|YES)
-    ssh -t "$TARGET" "cd $APP_DIR && nano .env"
-    ;;
-  *)
-    printf 'Skipped editor. You can edit later with: ssh %s "cd %s && nano .env"\n' "$TARGET" "$APP_DIR"
-    ;;
-esac
+printf '\n[2/4] Starting stack on %s...\n' "$TARGET"
+ssh -t "$TARGET" "cd $APP_DIR && \
+  if docker compose version >/dev/null 2>&1; then \
+    docker compose up -d --build; \
+  elif command -v docker-compose >/dev/null 2>&1; then \
+    docker-compose up -d --build; \
+  else \
+    echo 'Docker Compose not found. Install docker compose plugin or docker-compose binary.'; \
+    exit 127; \
+  fi"
 
-printf '\n[3/4] Start Library stack on remote server now (docker-compose up -d --build)? [y/N]: '
-read -r start_now
-case "${start_now:-n}" in
-  y|Y|yes|YES)
-    ssh -t "$TARGET" "cd $APP_DIR && \
-      if docker compose version >/dev/null 2>&1; then \
-        docker compose up -d --build; \
-      elif command -v docker-compose >/dev/null 2>&1; then \
-        docker-compose up -d --build; \
-      else \
-        echo 'Docker Compose not found. Install docker compose plugin or docker-compose binary.'; \
-        exit 127; \
-      fi"
-    ;;
-  *)
-    printf 'Start later with: ssh %s "cd %s && docker compose up -d --build"\n' "$TARGET" "$APP_DIR"
-    ;;
-esac
+printf '\n[3/4] Issuing/refreshing SSL certificate on %s...\n' "$TARGET"
+ssh -t "$TARGET" "cd $APP_DIR && sh scripts/certbot-init.sh"
 
 printf '\n[4/4] Done.\n'
 printf 'DNS requirement: point %s -> %s\n' "$DOMAIN" "$TARGET"
