@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { apiFetch, authApi } from "../api/client";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import LoadingSpinner from "../components/LoadingSpinner";
@@ -77,10 +78,17 @@ function formatApiError(error, labelMap = {}) {
   return error.message;
 }
 
+function normalizeAccessTab(tab) {
+  return tab === "access" ? "access" : "users";
+}
+
 export default function AccessPage() {
   const { user } = useSession();
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState("users");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState(() =>
+    normalizeAccessTab(searchParams.get("tab")),
+  );
   const [grants, setGrants] = useState([]);
   const [references, setReferences] = useState(initialReferences);
   const [managedUsers, setManagedUsers] = useState([]);
@@ -101,6 +109,30 @@ export default function AccessPage() {
   const isSuperAdmin = Boolean(user?.is_superuser);
   const isEditingUser = Boolean(editingUserId);
   const userEditorRef = useRef(null);
+
+  function applyActiveTab(nextTab, options = {}) {
+    const { replace = false } = options;
+    const normalizedTab = normalizeAccessTab(nextTab);
+    setActiveTab(normalizedTab);
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("tab", normalizedTab);
+    setSearchParams(nextParams, { replace });
+  }
+
+  useEffect(() => {
+    const normalizedTab = normalizeAccessTab(searchParams.get("tab"));
+    if (activeTab !== normalizedTab) {
+      setActiveTab(normalizedTab);
+      return;
+    }
+
+    if (searchParams.get("tab") !== normalizedTab) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set("tab", normalizedTab);
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [activeTab, searchParams, setSearchParams]);
 
   const accountScopes = references.account_scopes || [];
   const scopedScopes = references.scoped_scopes || [];
@@ -422,7 +454,7 @@ export default function AccessPage() {
       send_invite_email: true,
       global_scopes: sortValues(entry.global_scopes || []),
     });
-    setActiveTab("users");
+    applyActiveTab("users");
     window.requestAnimationFrame(() => {
       userEditorRef.current?.scrollIntoView({
         behavior: "smooth",
@@ -652,7 +684,7 @@ export default function AccessPage() {
                 ? "admin-tab-card is-active"
                 : "admin-tab-card"
             }
-            onClick={() => setActiveTab("users")}
+            onClick={() => applyActiveTab("users")}
             aria-pressed={activeTab === "users"}
           >
             <span className="admin-tab-label">Users</span>
@@ -664,7 +696,7 @@ export default function AccessPage() {
                 ? "admin-tab-card is-active"
                 : "admin-tab-card"
             }
-            onClick={() => setActiveTab("access")}
+            onClick={() => applyActiveTab("access")}
             aria-pressed={activeTab === "access"}
           >
             <span className="admin-tab-label">Access Rules</span>

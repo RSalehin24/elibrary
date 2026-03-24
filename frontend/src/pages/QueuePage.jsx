@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
 import ConfirmationDialog from "../components/ConfirmationDialog";
@@ -17,6 +17,13 @@ const USER_TAB = "user";
 const SOURCE_TAB = "source";
 const AUTOMATION_TAB = "automation";
 const ALL_TAB = "all";
+
+function normalizeQueueTab(tab, canManageProcessing) {
+  const allowedTabs = canManageProcessing
+    ? [USER_TAB, SOURCE_TAB, AUTOMATION_TAB, ALL_TAB]
+    : [USER_TAB];
+  return allowedTabs.includes(tab) ? tab : USER_TAB;
+}
 
 const defaultSubmissionFilters = {
   q: "",
@@ -544,8 +551,11 @@ export default function QueuePage() {
   const { user } = useSession();
   const toast = useToast();
   const canManageProcessing = hasCapability(user, "processing:manage");
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState(USER_TAB);
+  const [activeTab, setActiveTab] = useState(() =>
+    normalizeQueueTab(searchParams.get("tab"), false),
+  );
   const [jobs, setJobs] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [duplicateReviews, setDuplicateReviews] = useState([]);
@@ -608,6 +618,33 @@ export default function QueuePage() {
         : [{ id: USER_TAB, label: "My Requests" }],
     [canManageProcessing],
   );
+
+  function applyActiveTab(nextTab, options = {}) {
+    const { replace = false } = options;
+    const normalizedTab = normalizeQueueTab(nextTab, canManageProcessing);
+    setActiveTab(normalizedTab);
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("tab", normalizedTab);
+    setSearchParams(nextParams, { replace });
+  }
+
+  useEffect(() => {
+    const normalizedTab = normalizeQueueTab(
+      searchParams.get("tab"),
+      canManageProcessing,
+    );
+    if (activeTab !== normalizedTab) {
+      setActiveTab(normalizedTab);
+      return;
+    }
+
+    if (searchParams.get("tab") !== normalizedTab) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set("tab", normalizedTab);
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [activeTab, canManageProcessing, searchParams, setSearchParams]);
   const catalogSyncActive = isCatalogSyncActive(catalogSyncState?.status);
   const refreshingCatalog = catalogSyncActive && !catalogSyncDismissed;
   const automationRunning = isActiveStatus(automationState?.latest_run?.status);
@@ -763,7 +800,7 @@ export default function QueuePage() {
 
   useEffect(() => {
     if (!canManageProcessing && activeTab !== USER_TAB) {
-      setActiveTab(USER_TAB);
+      applyActiveTab(USER_TAB, { replace: true });
     }
   }, [activeTab, canManageProcessing]);
 
@@ -3324,7 +3361,7 @@ export default function QueuePage() {
                     ? "admin-tab-card is-active"
                     : "admin-tab-card"
                 }
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => applyActiveTab(tab.id)}
               >
                 <span className="admin-tab-label">{tab.label}</span>
               </button>

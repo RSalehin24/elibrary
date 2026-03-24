@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+import requests
 from django.utils import timezone
 
 from apps.access.models import PreviewAccessSession
@@ -40,7 +41,7 @@ from apps.ingestion.services.normalization import (
     normalize_scraped_book,
     promote_leading_front_matter,
 )
-from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver
+from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_with_host_fallback
 from apps.ingestion.services.submissions import (
     create_submission_records,
     detect_metadata_duplicate,
@@ -54,6 +55,70 @@ from apps.catalog.services import find_existing_book_by_source_url
 
 def test_legacy_normalize_text_preserves_bengali_combining_marks():
     assert normalize_text("ম্যালিস") == "ম্যালিস"
+
+
+def test_get_with_host_fallback_uses_direct_ip_when_dns_resolution_fails(monkeypatch):
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+            self.calls = []
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            raise requests.exceptions.ConnectionError(
+                "HTTPSConnection(host='ebanglalibrary.com'): Failed to resolve host (Name resolution)"
+            )
+
+    session = FakeSession()
+    direct_calls = []
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.resolution.resolve_host_with_dns_fallback",
+        lambda host: ["104.21.81.247"] if host == "www.ebanglalibrary.com" else [],
+    )
+
+    def fake_direct_ip_request(session_obj, url, host, ip, **kwargs):
+        direct_calls.append((url, host, ip, kwargs.get("params")))
+        return FakeResponse("ok-from-direct-ip")
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.resolution.get_via_direct_ip_https",
+        fake_direct_ip_request,
+    )
+
+    response = get_with_host_fallback(
+        session,
+        "https://www.ebanglalibrary.com/books/",
+        params={"_a_z": "ম"},
+        timeout=30,
+    )
+
+    assert response.text == "ok-from-direct-ip"
+    assert len(session.calls) >= 1
+    assert direct_calls
+    assert direct_calls[0][1] == "www.ebanglalibrary.com"
+    assert direct_calls[0][2] == "104.21.81.247"
+
+
+def test_get_with_host_fallback_does_not_mask_non_dns_connection_errors(monkeypatch):
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+
+        def get(self, _url, **_kwargs):
+            raise requests.exceptions.ConnectionError("Connection reset by peer")
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.resolution.get_via_direct_ip_https",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("direct IP fallback should not run")),
+    )
+
+    with pytest.raises(requests.exceptions.ConnectionError, match="Connection reset by peer"):
+        get_with_host_fallback(FakeSession(), "https://www.ebanglalibrary.com/books/", timeout=30)
 
 
 @pytest.mark.django_db

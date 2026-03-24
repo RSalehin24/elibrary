@@ -54,6 +54,9 @@ services:
     depends_on:
       - postgres
       - redis
+    dns:
+      - ${CONTAINER_DNS:-1.1.1.1}
+      - ${CONTAINER_DNS_FALLBACK:-8.8.8.8}
     networks:
       - public
       - internal
@@ -74,7 +77,11 @@ services:
     depends_on:
       - postgres
       - redis
+    dns:
+      - ${CONTAINER_DNS:-1.1.1.1}
+      - ${CONTAINER_DNS_FALLBACK:-8.8.8.8}
     networks:
+      - public
       - internal
 
   beat:
@@ -93,6 +100,9 @@ services:
     depends_on:
       - postgres
       - redis
+    dns:
+      - ${CONTAINER_DNS:-1.1.1.1}
+      - ${CONTAINER_DNS_FALLBACK:-8.8.8.8}
     networks:
       - internal
 

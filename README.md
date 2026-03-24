@@ -1,44 +1,34 @@
 # Bangla Library Platform
 
-This repository is organized as two app codebases with one unified Docker runtime:
+Monorepo for a production-ready Bangla ebook pipeline.
 
-- `backend/`: Django API, auth, catalog, ingestion, reader access, Celery worker/beat support, and the integrated legacy scraper/export pipeline under `backend/apps/ingestion/legacy/`.
-- `frontend/`: React/Vite client that talks to the backend over `VITE_API_BASE_URL`.
+- Backend: Django + Celery (`backend/`)
+- Frontend: React + Vite (`frontend/`)
+- Runtime services: Postgres, Redis, backend, worker, beat via Docker Compose
+- Edge/proxy on server: host Nginx + Certbot (outside Docker)
 
-The browser-facing runtime is now the same locally and on the server: Nginx serves the frontend bundle and proxies Django over the internal Docker network.
+## Current Architecture
 
-## Folder Layout
+- `docker-compose.yml` runs app services only (`backend`, `worker`, `beat`, `postgres`, `redis`)
+- Backend binds to `127.0.0.1:${BACKEND_PORT}:8000`
+- Host Nginx serves `frontend/dist`, proxies `/api/` and `/admin/` to backend, and serves `/static/` + `/media/`
+- Celery worker handles ingestion/catalog jobs; beat handles scheduled automation
 
-- `backend/`
-  - `apps/`, `config/`, `manage.py`
-  - `apps/ingestion/legacy/` for the scraper, HTML builder, and EPUB builder
-  - `requirements.txt` and `requirements-dev.txt`
-  - `.env.example`
-  - `storage/` for retained backend-owned local assets
-  - `outputs/` as temporary ingestion staging
-- `frontend/`
-  - `src/`, `package.json`, `vite.config.js`
-  - `.env.example`
-- `docker-compose.yml`
-  - unified local/server stack with public Nginx and private app services
+## Reliability Notes (Latest)
 
-## Local Full Stack
+- Catalog source fetch now has in-app DNS fallback logic in ingestion resolution:
+  - host fallback (`www.ebanglalibrary.com` and `ebanglalibrary.com`)
+  - DNS resolver fallback and direct-IP HTTPS fallback path
+- Docker DNS still supports configurable resolvers with primary + fallback env values
 
-The same Docker command is used locally and on the server:
+## Quick Start
 
-```bash
-cp .env.example .env
-docker-compose up --build
-```
+Use the runbook in [RUN.md](RUN.md) for exact Local and Remote steps.
 
-Services:
+## Important Paths
 
-- App: `http://localhost`
-- Django API/admin: behind Nginx on the same origin
-- Worker/beat/postgres/redis: internal Docker network only
-
-## Notes
-
-- The old root-level `code/` dependency is now integrated into `backend/apps/ingestion/legacy/`, so the backend is self-contained.
-- Retained generated HTML, EPUB, and cover assets live under `backend/storage/media/generated/`; `backend/outputs/` is only temporary staging during ingestion.
-- The root `.env.example` is the main starting point for both local and server deployment.
+- Backend app code: `backend/apps/`
+- Ingestion resolution logic: `backend/apps/ingestion/services/resolution.py`
+- Ingestion docs: `docs/ebanglalibrary-url-metadata.md`
+- Deploy automation: `scripts/deploy.sh`
+- Host Nginx automation: `scripts/setup-host-nginx.sh`

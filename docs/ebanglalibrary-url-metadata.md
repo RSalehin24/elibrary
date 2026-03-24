@@ -11,6 +11,11 @@ This note documents the URL patterns and metadata sources currently used by the 
   - host `www.ebanglalibrary.com`
   - trailing slash
 
+Accepted source hosts during fetch fallback:
+
+- `www.ebanglalibrary.com`
+- `ebanglalibrary.com`
+
 ## Reliable metadata order
 
 When a direct book URL is available, the system now prefers metadata from the book page itself before depending on archive-list text.
@@ -22,13 +27,28 @@ Metadata lookup order:
 3. Archive listing text from `/books/`
 4. Full legacy scrape during processing
 
+## Source fetch resilience (latest)
+
+Catalog and metadata requests now include layered network fallback:
+
+1. Try normal request with preferred host.
+2. Retry with fallback hosts (`www` and non-`www`).
+3. If DNS resolution fails, resolve candidate A records via fallback resolvers.
+4. Retry HTTPS directly by resolved IP with:
+
+- SNI hostname set to source host
+- `Host` header preserved
+- certificate validation enabled
+
+This reduces local/server differences from container DNS behavior.
+
 ## Book page metadata
 
 The following fields are read directly from the book page:
 
 - Title:
   - primary source: the HTML `<title>`
-  - split on separators like ` - `, ` – `, or ` — `
+  - split on separators like `-`, `–`, or `—`
 - Author:
   - primary source: `.entry-meta.entry-meta-after-content .entry-terms-authors`
   - fallback: author text from the `<title>`

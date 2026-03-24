@@ -15,11 +15,12 @@ Example:
 What it does:
   1) Runs preflight checks (DNS/SSH/sudo/docker)
   2) Syncs code on the remote server
-  3) Builds frontend dist on the remote machine
-  4) Starts Docker Compose app stack (without nginx)
-  5) Configures host nginx + certbot automatically
-  6) Verifies nginx loaded exact config file
-  7) Verifies HTTPS endpoint
+  3) Syncs local workspace files to remote app dir
+  4) Builds frontend dist on the remote machine
+  5) Starts Docker Compose app stack (without nginx)
+  6) Configures host nginx + certbot automatically
+  7) Verifies nginx loaded exact config file
+  8) Verifies HTTPS endpoint
 EOF
 }
 
@@ -29,6 +30,7 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
 fi
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 DEFAULT_ENV_FILE="$SCRIPT_DIR/.env.example"
 
@@ -100,7 +102,7 @@ require_cmd scp
 require_cmd python3
 require_cmd git
 
-printf '\n[1/7] Running preflight checks...\n'
+printf '\n[1/8] Running preflight checks...\n'
 
 resolved_ips="$(resolve_domain_ips "$DOMAIN")"
 if [ -z "$resolved_ips" ] || ! printf '%s\n' "$resolved_ips" | grep -Fxq "$DEPLOY_IP"; then
@@ -140,7 +142,7 @@ if [ -f "$SCRIPT_DIR/switch-app.sh" ]; then
   ssh "$TARGET" "chmod +x ~/switch-app.sh"
 fi
 
-printf '\n[2/7] Syncing code on %s...\n' "$TARGET"
+printf '\n[2/8] Syncing code on %s...\n' "$TARGET"
 ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" BACKEND_PORT="$BACKEND_PORT" 'bash -s' <<'EOF'
 set -eu
 
@@ -182,6 +184,13 @@ set_default_env BACKEND_PORT "$BACKEND_PORT" .env
 set_default_env HOST_STATIC_DIR "./storage/staticfiles" .env
 set_default_env HOST_MEDIA_DIR "./storage/media" .env
 
+detected_dns="$(awk '/^nameserver / && $2 !~ /^127\./ {print $2; exit}' /run/systemd/resolve/resolv.conf 2>/dev/null || true)"
+if [ -z "$detected_dns" ]; then
+  detected_dns="169.254.169.253"
+fi
+set_default_env CONTAINER_DNS "$detected_dns" .env
+set_default_env CONTAINER_DNS_FALLBACK "8.8.8.8" .env
+
 mkdir -p storage/staticfiles storage/media
 
 printf '\nRemote ready at %s\n' "$APP_DIR"
@@ -189,11 +198,30 @@ printf 'Branch: %s\n' "$BRANCH"
 printf 'Remote .env defaults ensured (existing values preserved)\n'
 EOF
 
-printf '\n[3/7] Building frontend dist on %s...\n' "$TARGET"
+printf '\n[3/8] Syncing local workspace to %s...\n' "$TARGET"
+(cd "$REPO_ROOT" && COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata -czf - \
+  --exclude='.git' \
+  --exclude='.DS_Store' \
+  --exclude='venv' \
+  --exclude='.venv' \
+  --exclude='frontend/node_modules' \
+  --exclude='frontend/dist' \
+  --exclude='storage' \
+  --exclude='backend/storage' \
+  --exclude='backend/staticfiles' \
+  --exclude='backend/outputs' \
+  --exclude='backend/celerybeat-schedule' \
+  --exclude='backend/__pycache__' \
+  --exclude='backend/apps/*/__pycache__' \
+  --exclude='backend/tests/__pycache__' \
+  --exclude='*.pyc' \
+  .) | ssh "$TARGET" "tar --warning=no-unknown-keyword --no-same-owner --no-same-permissions -xzf - -C '$REMOTE_APP_ABS_DIR'"
+
+printf '\n[4/8] Building frontend dist on %s...\n' "$TARGET"
 ssh -t "$TARGET" "cd $APP_DIR && \
   docker run --rm -v \"\$PWD/frontend:/app\" -w /app node:22-alpine sh -lc 'npm ci && npm run build'"
 
-printf '\n[4/7] Starting app stack on %s...\n' "$TARGET"
+printf '\n[5/8] Starting app stack on %s...\n' "$TARGET"
 ssh -t "$TARGET" "cd $APP_DIR && BACKEND_PORT='$BACKEND_PORT' sh -s" <<'EOF'
 set -eu
 
@@ -209,16 +237,16 @@ fi
 $COMPOSE_CMD down --remove-orphans || true
 $COMPOSE_CMD up -d --build --force-recreate
 
-if ! $COMPOSE_CMD exec -T backend python - <<'PY'
+if ! $COMPOSE_CMD exec -T worker python - <<'PY'
 import socket
 
 socket.getaddrinfo('ebanglalibrary.com', 443)
 print('ok')
 PY
 then
-  echo "Action required: container DNS cannot resolve ebanglalibrary.com"
+  echo "Action required: worker container DNS cannot resolve ebanglalibrary.com"
   echo "Check server resolver/network egress and rerun: bash scripts/deploy.sh"
-  $COMPOSE_CMD logs --tail=60 backend worker
+  $COMPOSE_CMD logs --tail=60 worker
   exit 1
 fi
 
@@ -242,10 +270,10 @@ if [ "$published_port" != "127.0.0.1:${BACKEND_PORT}" ]; then
 fi
 EOF
 
-printf '\n[5/7] Configuring host nginx + certbot on %s...\n' "$TARGET"
+printf '\n[6/8] Configuring host nginx + certbot on %s...\n' "$TARGET"
 ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$REMOTE_APP_ABS_DIR' '$BACKEND_PORT' '$DEPLOY_NGINX_CONFIG_NAME' '$DEPLOY_NGINX_CONF_DIR' '$DEPLOY_NGINX_VERSION'"
 
-printf '\n[6/7] Verifying nginx loaded config path...\n'
+printf '\n[7/8] Verifying nginx loaded config path...\n'
 if ! ssh "$TARGET" "sudo nginx -T 2>/dev/null | grep -Fq '$REMOTE_NGINX_CONFIG_PATH'"; then
   printf 'Action required: nginx did not load expected config file %s\n' "$REMOTE_NGINX_CONFIG_PATH"
   printf 'Check include directives and conf directory, then rerun: bash scripts/deploy.sh\n'
@@ -253,7 +281,7 @@ if ! ssh "$TARGET" "sudo nginx -T 2>/dev/null | grep -Fq '$REMOTE_NGINX_CONFIG_P
 fi
 printf 'OK: nginx loaded config file %s\n' "$REMOTE_NGINX_CONFIG_PATH"
 
-printf '\n[7/7] Verifying HTTPS endpoint...\n'
+printf '\n[8/8] Verifying HTTPS endpoint...\n'
 if ! ssh "$TARGET" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://$DOMAIN >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://$DOMAIN; else exit 127; fi"; then
   printf 'Action required: HTTPS verification failed for https://%s\n' "$DOMAIN"
   printf 'If curl/wget is missing on server, install one and rerun.\n'
