@@ -21,7 +21,7 @@ Usage:
   sudo sh scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
 
 Example:
-  sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me admin@example.com /home/ubuntu/library_app 8000 library.salehin24.me /etc/nginx/conf.d 1.29.4
+  sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me admin@example.com /home/ubuntu/library_app 8000 library.salehin24.me.conf /etc/nginx/conf.d 1.29.4
 EOF
   exit 1
 fi
@@ -44,7 +44,13 @@ if [ -n "$REQUIRED_NGINX_VERSION" ] && [ "$NGINX_VERSION" != "$REQUIRED_NGINX_VE
 fi
 
 mkdir -p "$APP_DIR/storage/staticfiles" "$APP_DIR/storage/media"
+mkdir -p /var/www/certbot
 mkdir -p "$NGINX_CONF_DIR"
+
+case "$CONFIG_NAME" in
+  *.conf) ;;
+  *) CONFIG_NAME="${CONFIG_NAME}.conf" ;;
+esac
 
 CONFIG_PATH="$NGINX_CONF_DIR/$CONFIG_NAME"
 
@@ -57,6 +63,10 @@ server {
   index index.html;
 
   client_max_body_size 64m;
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
 
   location /api/ {
     proxy_pass http://127.0.0.1:$BACKEND_PORT;
@@ -100,7 +110,88 @@ nginx -t
 systemctl enable nginx
 systemctl reload nginx
 
-certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect -m "$CERTBOT_EMAIL"
+if ! nginx -T 2>/dev/null | grep -q "server_name ${DOMAIN};"; then
+  echo "Nginx config loaded but server_name ${DOMAIN} was not detected."
+  echo "Check include rules and conf path: ${CONFIG_PATH}"
+  exit 1
+fi
+
+certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive --agree-tos --no-eff-email -m "$CERTBOT_EMAIL"
+
+cat > "$CONFIG_PATH" <<EOF
+server {
+  listen 80;
+  server_name $DOMAIN;
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
+
+  location / {
+    return 301 https://\$host\$request_uri;
+  }
+}
+
+server {
+  listen 443 ssl;
+  server_name $DOMAIN;
+
+  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:SSL:10m;
+  ssl_prefer_server_ciphers off;
+
+  root $APP_DIR/frontend/dist;
+  index index.html;
+
+  client_max_body_size 64m;
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
+
+  location /api/ {
+    proxy_pass http://127.0.0.1:$BACKEND_PORT;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_read_timeout 300s;
+  }
+
+  location /admin/ {
+    proxy_pass http://127.0.0.1:$BACKEND_PORT;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_read_timeout 300s;
+  }
+
+  location /static/ {
+    alias $APP_DIR/storage/staticfiles/;
+    expires 7d;
+    add_header Cache-Control "public, max-age=604800";
+  }
+
+  location /media/ {
+    alias $APP_DIR/storage/media/;
+    expires 1h;
+    add_header Cache-Control "public, max-age=3600";
+  }
+
+  location / {
+    try_files \$uri \$uri/ /index.html;
+  }
+}
+EOF
+
+nginx -t
+systemctl reload nginx
 
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
 cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'

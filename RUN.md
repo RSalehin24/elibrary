@@ -113,16 +113,16 @@ docker-compose up -d --build
 After Docker services are up, configure Nginx on the server (outside Docker):
 
 ```bash
-sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me you@example.com /home/ubuntu/library_app 8000
+sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me you@example.com /home/ubuntu/library_app 8000 library.salehin24.me.conf /etc/nginx/conf.d 1.29.4
 ```
 
 This script:
 
-- writes `/etc/nginx/sites-available/library.conf`
+- writes `/etc/nginx/conf.d/library.salehin24.me.conf`
 - serves frontend from `~/library_app/frontend/dist`
 - proxies `/api/` and `/admin/` to `127.0.0.1:8000`
 - serves `/static/` and `/media/` from `~/library_app/storage/...`
-- runs `certbot --nginx` and enables HTTPS redirect
+- runs `certbot certonly --webroot`, then writes HTTPS + redirect Nginx config
 
 Auto-renew is configured automatically by `scripts/setup-host-nginx.sh`.
 It enables `certbot.timer` when available (or falls back to a cron job) and installs an Nginx reload hook after renewals.
