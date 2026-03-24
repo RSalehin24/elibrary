@@ -18,7 +18,7 @@ What it does:
   3) Ensures .env exists from .env.example
   4) Sets PUBLIC_BASE_URL and NGINX_SERVER_NAME for library.rsalehin24.me
   5) Prompts you to edit .env
-  6) Prompts you to start docker-compose
+  6) Prompts you to start Docker Compose (v2 or legacy)
 EOF
 }
 
@@ -107,17 +107,25 @@ case "${edit_now:-n}" in
     ;;
 esac
 
-printf '\n[3/4] Start Library stack on EC2 now (docker-compose up -d --build)? [y/N]: '
+printf '\n[3/4] Start Library stack on remote server now (docker-compose up -d --build)? [y/N]: '
 read -r start_now
 case "${start_now:-n}" in
   y|Y|yes|YES)
-    ssh -t "$TARGET" "cd $APP_DIR && docker-compose up -d --build"
+    ssh -t "$TARGET" "cd $APP_DIR && \
+      if docker compose version >/dev/null 2>&1; then \
+        docker compose up -d --build; \
+      elif command -v docker-compose >/dev/null 2>&1; then \
+        docker-compose up -d --build; \
+      else \
+        echo 'Docker Compose not found. Install docker compose plugin or docker-compose binary.'; \
+        exit 127; \
+      fi"
     ;;
   *)
-    printf 'Start later with: ssh %s "cd %s && docker-compose up -d --build"\n' "$TARGET" "$APP_DIR"
+    printf 'Start later with: ssh %s "cd %s && docker compose up -d --build"\n' "$TARGET" "$APP_DIR"
     ;;
 esac
 
 printf '\n[4/4] Done.\n'
 printf 'DNS requirement: point %s -> %s\n' "$DOMAIN" "$TARGET"
-printf 'If another app uses port 80 on this host, keep switch-app.sh at ~/switch-app.sh on EC2 to swap.\n'
+printf 'If another app uses port 80 on this host, keep switch-app.sh at ~/switch-app.sh on remote server to swap.\n'
