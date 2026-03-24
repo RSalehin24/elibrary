@@ -13,7 +13,7 @@ import {
   getContributorGroups,
   getPrimaryContributorGroup,
   getSourceLabel,
-  getStatusMeta
+  getStatusMeta,
 } from "../utils/bookPresentation";
 import { hasCapability } from "../utils/capabilities";
 import { toQueryString } from "../utils/query";
@@ -21,12 +21,18 @@ import { toQueryString } from "../utils/query";
 const assetLabels = {
   html: "Preview HTML",
   epub: "Download EPUB",
-  cover: "Download cover"
+  cover: "Download cover",
 };
 
 function TrashIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
+    <svg
+      viewBox="0 0 24 24"
+      width="28"
+      height="28"
+      aria-hidden="true"
+      focusable="false"
+    >
       <path
         d="M9 3.75h6a1 1 0 0 1 1 1V6h3a.75.75 0 0 1 0 1.5h-1.1l-.79 10.28A2.5 2.5 0 0 1 14.62 20H9.38a2.5 2.5 0 0 1-2.49-2.22L6.1 7.5H5a.75.75 0 0 1 0-1.5h3V4.75a1 1 0 0 1 1-1Zm5.5 2.25v-.75h-5V6h5Zm-6.9 1.5.78 10.17a1 1 0 0 0 1 .83h5.24a1 1 0 0 0 1-.83l.78-10.17Zm2.4 2.25c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Zm4 0c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Z"
         fill="currentColor"
@@ -69,10 +75,18 @@ function renderTocSummary(toc) {
   return (
     <div className="toc-record-list">
       {toc.map((entry, index) => (
-        <article key={`${entry.title || "section"}-${index}`} className="toc-record-card">
+        <article
+          key={`${entry.title || "section"}-${index}`}
+          className="toc-record-card"
+        >
           <strong>{entry.title || `Section ${index + 1}`}</strong>
           {entry.children?.length ? (
-            <p>{entry.children.map((child) => child.title).filter(Boolean).join(" • ")}</p>
+            <p>
+              {entry.children
+                .map((child) => child.title)
+                .filter(Boolean)
+                .join(" • ")}
+            </p>
           ) : (
             <p>{entry.type === "topic" ? "Topic" : "Section"}</p>
           )}
@@ -82,17 +96,27 @@ function renderTocSummary(toc) {
   );
 }
 
-function renderFilterLinks(values, queryKey, emptyLabel = "", extraFilters = {}) {
+function renderFilterLinks(
+  values,
+  queryKey,
+  emptyLabel = "",
+  extraFilters = {},
+) {
   if (!values?.length) {
     return emptyLabel || null;
   }
 
   return values.map((value, index) => (
     <Fragment key={`${queryKey}-${value}`}>
-      <Link to={`/library${toQueryString({ ...extraFilters, [queryKey]: value })}`} className="meta-link">
+      <Link
+        to={`/library${toQueryString({ ...extraFilters, [queryKey]: value })}`}
+        className="meta-link"
+      >
         {value}
       </Link>
-      {index < values.length - 1 ? <span className="meta-divider">, </span> : null}
+      {index < values.length - 1 ? (
+        <span className="meta-divider">, </span>
+      ) : null}
     </Fragment>
   ));
 }
@@ -115,8 +139,13 @@ function normalizeFrontMatterEntries(entries, bookIdValue) {
   return entries.reduce((normalizedEntries, entry) => {
     const normalizedLabel = normalizeIdentityLabel(entry.label);
     const normalizedKey = normalizeIdentityLabel(entry.key);
-    const isIdentityEntry = ["unique id", "book id", "catalog code", "catalog id", "id"].includes(normalizedLabel)
-      || ["unique id", "book id", "catalog code", "catalog id", "id"].includes(normalizedKey);
+    const isIdentityEntry =
+      ["unique id", "book id", "catalog code", "catalog id", "id"].includes(
+        normalizedLabel,
+      ) ||
+      ["unique id", "book id", "catalog code", "catalog id", "id"].includes(
+        normalizedKey,
+      );
 
     if (isIdentityEntry) {
       if (!replacedIdentity) {
@@ -124,7 +153,7 @@ function normalizeFrontMatterEntries(entries, bookIdValue) {
           ...entry,
           key: "book_id",
           label: "Book ID",
-          value: bookIdValue
+          value: bookIdValue,
         });
         replacedIdentity = true;
       }
@@ -151,7 +180,7 @@ export default function BookDetailPage() {
     contributors: "",
     series: "",
     categories: "",
-    notes: ""
+    notes: "",
   });
   const [metadataVersions, setMetadataVersions] = useState([]);
   const [metadataReviews, setMetadataReviews] = useState([]);
@@ -159,7 +188,7 @@ export default function BookDetailPage() {
   const [readerState, setReaderState] = useState({
     last_location: "",
     progress_percent: 0,
-    last_opened_at: ""
+    last_opened_at: "",
   });
   const [readerAccess, setReaderAccess] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
@@ -173,7 +202,8 @@ export default function BookDetailPage() {
   const [replacingEpub, setReplacingEpub] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const canEditMetadata = hasCapability(user, "metadata:edit");
-  const bookLinkFilters = book?.record_type === "manual" ? { record_type: "manual" } : {};
+  const bookLinkFilters =
+    book?.record_type === "manual" ? { record_type: "manual" } : {};
 
   function applyReaderState(sessionPayload) {
     if (sessionPayload) {
@@ -181,13 +211,17 @@ export default function BookDetailPage() {
       setReaderState({
         last_location: sessionPayload.last_location || "",
         progress_percent: sessionPayload.progress_percent || 0,
-        last_opened_at: sessionPayload.last_opened_at || ""
+        last_opened_at: sessionPayload.last_opened_at || "",
       });
       return;
     }
 
     setReaderAccess(false);
-    setReaderState({ last_location: "", progress_percent: 0, last_opened_at: "" });
+    setReaderState({
+      last_location: "",
+      progress_percent: 0,
+      last_opened_at: "",
+    });
   }
 
   async function fetchBook(targetSlug = slug) {
@@ -209,7 +243,7 @@ export default function BookDetailPage() {
 
     const [versionsPayload, reviewsPayload] = await Promise.all([
       apiFetch(`/catalog/books/${targetSlug}/metadata-versions/`),
-      apiFetch(`/catalog/books/${targetSlug}/metadata-reviews/`)
+      apiFetch(`/catalog/books/${targetSlug}/metadata-reviews/`),
     ]);
     setMetadataVersions(versionsPayload);
     setMetadataReviews(reviewsPayload);
@@ -217,18 +251,20 @@ export default function BookDetailPage() {
 
   async function fetchReaderCollections(targetSlug = slug) {
     const [sessionPayload, bookmarkPayload] = await Promise.all([
-      apiFetch(`/access/books/${targetSlug}/reading-session/`).catch((nextError) => {
-        if ([401, 403].includes(nextError.status)) {
-          return null;
-        }
-        throw nextError;
-      }),
+      apiFetch(`/access/books/${targetSlug}/reading-session/`).catch(
+        (nextError) => {
+          if ([401, 403].includes(nextError.status)) {
+            return null;
+          }
+          throw nextError;
+        },
+      ),
       apiFetch(`/access/books/${targetSlug}/bookmarks/`).catch((nextError) => {
         if ([401, 403].includes(nextError.status)) {
           return [];
         }
         throw nextError;
-      })
+      }),
     ]);
 
     return { sessionPayload, bookmarkPayload };
@@ -266,10 +302,12 @@ export default function BookDetailPage() {
     setEditor({
       title: book.title || "",
       summary: book.summary || "",
-      contributors: (book.contributors || []).map((entry) => `${entry.name}|${entry.role}`).join("\n"),
+      contributors: (book.contributors || [])
+        .map((entry) => `${entry.name}|${entry.role}`)
+        .join("\n"),
       series: (book.series || []).join(", "),
       categories: (book.categories || []).join(", "),
-      notes: ""
+      notes: "",
     });
   }, [book]);
 
@@ -291,23 +329,30 @@ export default function BookDetailPage() {
         if (canEditMetadata) {
           requests.push(
             Promise.all([
-              apiFetch(`/catalog/books/${slug}/metadata-versions/`).catch((nextError) => {
-                if ([401, 403].includes(nextError.status)) {
-                  return [];
-                }
-                throw nextError;
-              }),
-              apiFetch(`/catalog/books/${slug}/metadata-reviews/`).catch((nextError) => {
-                if ([401, 403].includes(nextError.status)) {
-                  return [];
-                }
-                throw nextError;
-              })
-            ])
+              apiFetch(`/catalog/books/${slug}/metadata-versions/`).catch(
+                (nextError) => {
+                  if ([401, 403].includes(nextError.status)) {
+                    return [];
+                  }
+                  throw nextError;
+                },
+              ),
+              apiFetch(`/catalog/books/${slug}/metadata-reviews/`).catch(
+                (nextError) => {
+                  if ([401, 403].includes(nextError.status)) {
+                    return [];
+                  }
+                  throw nextError;
+                },
+              ),
+            ]),
           );
         }
 
-        const [{ sessionPayload, bookmarkPayload }, metadataPayload = [[], []]] = await Promise.all(requests);
+        const [
+          { sessionPayload, bookmarkPayload },
+          metadataPayload = [[], []],
+        ] = await Promise.all(requests);
         if (!active) {
           return;
         }
@@ -343,7 +388,11 @@ export default function BookDetailPage() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [book?.latest_processing_job?.id, book?.latest_processing_job?.status, slug]);
+  }, [
+    book?.latest_processing_job?.id,
+    book?.latest_processing_job?.status,
+    slug,
+  ]);
 
   async function launchReader() {
     if (launchingReader) {
@@ -352,12 +401,9 @@ export default function BookDetailPage() {
 
     try {
       setLaunchingReader(true);
-      const payload = await apiFetch(`/access/books/${slug}/reader-launch/`, {
-        method: "POST",
-        body: {}
-      });
-      window.open(resolveAppUrl(payload.launch_url), "_blank", "noopener,noreferrer");
-      const { sessionPayload, bookmarkPayload } = await fetchReaderCollections(slug);
+      navigate(`/reader?slug=${encodeURIComponent(slug)}&appNav=hidden`);
+      const { sessionPayload, bookmarkPayload } =
+        await fetchReaderCollections(slug);
       applyReaderState(sessionPayload);
       setBookmarks(bookmarkPayload);
       toast.success("Reader opened.");
@@ -381,7 +427,9 @@ export default function BookDetailPage() {
         .map((line) => line.trim())
         .filter(Boolean)
         .map((line) => {
-          const [name, role = "author"] = line.split("|").map((part) => part.trim());
+          const [name, role = "author"] = line
+            .split("|")
+            .map((part) => part.trim());
           return { name, role: role || "author" };
         });
 
@@ -391,10 +439,16 @@ export default function BookDetailPage() {
           title: editor.title,
           summary: editor.summary,
           contributors,
-          series: editor.series.split(",").map((value) => value.trim()).filter(Boolean),
-          categories: editor.categories.split(",").map((value) => value.trim()).filter(Boolean),
-          notes: editor.notes
-        }
+          series: editor.series
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+          categories: editor.categories
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+          notes: editor.notes,
+        },
       });
       setBook(payload);
       if (payload.slug && payload.slug !== slug) {
@@ -417,7 +471,9 @@ export default function BookDetailPage() {
     try {
       setDeletingBookmarkId(id);
       await apiFetch(`/access/bookmarks/${id}/`, { method: "DELETE" });
-      setBookmarks((current) => current.filter((bookmark) => bookmark.id !== id));
+      setBookmarks((current) =>
+        current.filter((bookmark) => bookmark.id !== id),
+      );
       toast.success("Bookmark removed.");
     } catch (nextError) {
       toast.error(nextError.message);
@@ -434,10 +490,13 @@ export default function BookDetailPage() {
 
     try {
       setSavingReview(true);
-      const payload = await apiFetch(`/catalog/books/${slug}/metadata-reviews/`, {
-        method: "POST",
-        body: reviewForm
-      });
+      const payload = await apiFetch(
+        `/catalog/books/${slug}/metadata-reviews/`,
+        {
+          method: "POST",
+          body: reviewForm,
+        },
+      );
       setMetadataReviews((current) => [payload, ...current]);
       setReviewForm({ state: "pending", notes: "" });
       await fetchBook(slug);
@@ -458,10 +517,10 @@ export default function BookDetailPage() {
       setReviewUpdating({ id: reviewId, state });
       const payload = await apiFetch(`/catalog/metadata-reviews/${reviewId}/`, {
         method: "PATCH",
-        body: { state }
+        body: { state },
       });
       setMetadataReviews((current) =>
-        current.map((review) => (review.id === reviewId ? payload : review))
+        current.map((review) => (review.id === reviewId ? payload : review)),
       );
       await fetchBook(slug);
       toast.success("Review updated.");
@@ -514,7 +573,7 @@ export default function BookDetailPage() {
       formData.append("file", file);
       const payload = await apiFetch(`/catalog/books/${slug}/assets/epub/`, {
         method: "POST",
-        body: formData
+        body: formData,
       });
       setBook(payload);
       if (payload.slug && payload.slug !== slug) {
@@ -538,7 +597,7 @@ export default function BookDetailPage() {
       setRegenerating(true);
       const payload = await apiFetch(`/catalog/books/${slug}/regenerate/`, {
         method: "POST",
-        body: {}
+        body: {},
       });
       if (payload.book) {
         setBook(payload.book);
@@ -574,29 +633,49 @@ export default function BookDetailPage() {
     : (book.source_urls || []).map((url) => ({
         url,
         display_url: decodeURIComponent(url),
-        display_path: decodeURIComponent(url).replace(/^https?:\/\/[^/]+\//, ""),
+        display_path: decodeURIComponent(url).replace(
+          /^https?:\/\/[^/]+\//,
+          "",
+        ),
         source_title: "",
         site: "",
-        is_primary: false
+        is_primary: false,
       }));
   const contributorGroups = getContributorGroups(book);
   const primaryContributorGroup = getPrimaryContributorGroup(book);
-  const supportingContributorGroups = contributorGroups.filter((group) => group.role !== primaryContributorGroup?.role);
+  const supportingContributorGroups = contributorGroups.filter(
+    (group) => group.role !== primaryContributorGroup?.role,
+  );
   const bookIdValue = book.catalog_code || "Pending";
-  const frontMatter = normalizeFrontMatterEntries(book.front_matter || [], bookIdValue);
-  const hasFrontMatter = Boolean(frontMatter.length || book.book_info_html?.trim());
+  const frontMatter = normalizeFrontMatterEntries(
+    book.front_matter || [],
+    bookIdValue,
+  );
+  const hasFrontMatter = Boolean(
+    frontMatter.length || book.book_info_html?.trim(),
+  );
   const hasDedication = Boolean(book.dedication_html?.trim());
   const hasToc = Boolean(book.toc?.length);
-  const progressPercent = Math.max(0, Math.min(100, Math.round(Number(readerState.progress_percent) || 0)));
+  const progressPercent = Math.max(
+    0,
+    Math.min(100, Math.round(Number(readerState.progress_percent) || 0)),
+  );
   const latestProcessingJob = book.latest_processing_job || null;
   const hasActiveProcessing = Boolean(
-    latestProcessingJob && ["queued", "processing"].includes(latestProcessingJob.status)
+    latestProcessingJob &&
+    ["queued", "processing"].includes(latestProcessingJob.status),
   );
   const hasFailedProcessing = latestProcessingJob?.status === "failed";
-  const epubAsset = (book.assets || []).find((asset) => asset.asset_type === "epub");
-  const downloadableAssets = (book.assets || []).filter((asset) => asset.download_url);
+  const epubAsset = (book.assets || []).find(
+    (asset) => asset.asset_type === "epub",
+  );
+  const downloadableAssets = (book.assets || []).filter(
+    (asset) => asset.download_url,
+  );
   const processingHeading =
-    latestProcessingJob?.job_type === "reprocess" ? "Regenerating book" : "Processing book";
+    latestProcessingJob?.job_type === "reprocess"
+      ? "Regenerating book"
+      : "Processing book";
   const processingBody = hasFailedProcessing
     ? latestProcessingJob?.last_error || "The latest processing job failed."
     : hasActiveProcessing
@@ -612,8 +691,16 @@ export default function BookDetailPage() {
               type="button"
               className="book-refresh-control"
               onClick={regenerateBook}
-              aria-label={hasActiveProcessing ? "Book regeneration in progress" : "Regenerate book"}
-              title={hasActiveProcessing ? "Book regeneration in progress" : "Regenerate book"}
+              aria-label={
+                hasActiveProcessing
+                  ? "Book regeneration in progress"
+                  : "Regenerate book"
+              }
+              title={
+                hasActiveProcessing
+                  ? "Book regeneration in progress"
+                  : "Regenerate book"
+              }
               disabled={regenerating || hasActiveProcessing}
             >
               <RefreshIcon spinning={regenerating || hasActiveProcessing} />
@@ -632,7 +719,11 @@ export default function BookDetailPage() {
         ) : null}
 
         <div className="book-hero-cover">
-          <BookCoverArt book={book} className="book-cover-large book-hero-placeholder" ariaHidden />
+          <BookCoverArt
+            book={book}
+            className="book-cover-large book-hero-placeholder"
+            ariaHidden
+          />
         </div>
 
         <div className="book-hero-copy">
@@ -641,13 +732,25 @@ export default function BookDetailPage() {
           {primaryContributorGroup ? (
             primaryContributorGroup.role === "author" ? (
               <p className="detail-lead">
-                {renderFilterLinks(primaryContributorGroup.names, "author", "Contributor unavailable", bookLinkFilters)}
+                {renderFilterLinks(
+                  primaryContributorGroup.names,
+                  "author",
+                  "Contributor unavailable",
+                  bookLinkFilters,
+                )}
               </p>
             ) : (
               <p className="detail-meta-row detail-lead-row">
-                <span className="fact-label">{primaryContributorGroup.label}</span>
+                <span className="fact-label">
+                  {primaryContributorGroup.label}
+                </span>
                 <span className="detail-meta-values">
-                  {renderFilterLinks(primaryContributorGroup.names, "contributor", "Contributor unavailable", bookLinkFilters)}
+                  {renderFilterLinks(
+                    primaryContributorGroup.names,
+                    "contributor",
+                    "Contributor unavailable",
+                    bookLinkFilters,
+                  )}
                 </span>
               </p>
             )
@@ -660,7 +763,9 @@ export default function BookDetailPage() {
             <StatusPill value={book.review_state} />
           </div>
 
-          {supportingContributorGroups.length || book.series?.length || book.categories?.length ? (
+          {supportingContributorGroups.length ||
+          book.series?.length ||
+          book.categories?.length ? (
             <div className="book-meta-stack">
               {supportingContributorGroups.map((group) => (
                 <p key={group.role} className="detail-meta-row">
@@ -670,7 +775,7 @@ export default function BookDetailPage() {
                       group.names,
                       group.role === "author" ? "author" : "contributor",
                       "",
-                      bookLinkFilters
+                      bookLinkFilters,
                     )}
                   </span>
                 </p>
@@ -678,20 +783,39 @@ export default function BookDetailPage() {
               {book.series?.length ? (
                 <p className="detail-meta-row">
                   <span className="fact-label">Series</span>
-                  <span className="detail-meta-values">{renderFilterLinks(book.series, "series", "", bookLinkFilters)}</span>
+                  <span className="detail-meta-values">
+                    {renderFilterLinks(
+                      book.series,
+                      "series",
+                      "",
+                      bookLinkFilters,
+                    )}
+                  </span>
                 </p>
               ) : null}
               {book.categories?.length ? (
                 <p className="detail-meta-row">
                   <span className="fact-label">Categories</span>
-                  <span className="detail-meta-values">{renderFilterLinks(book.categories, "category", "", bookLinkFilters)}</span>
+                  <span className="detail-meta-values">
+                    {renderFilterLinks(
+                      book.categories,
+                      "category",
+                      "",
+                      bookLinkFilters,
+                    )}
+                  </span>
                 </p>
               ) : null}
             </div>
           ) : null}
 
           <div className="book-hero-actions">
-            <button type="button" className="primary-button" onClick={launchReader} disabled={launchingReader}>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={launchReader}
+              disabled={launchingReader}
+            >
               <span className="button-label">
                 {launchingReader ? <LoadingSpinner size={16} /> : null}
                 {launchingReader ? "Opening..." : "Open reader"}
@@ -705,7 +829,8 @@ export default function BookDetailPage() {
                 target="_blank"
                 rel="noreferrer"
               >
-                {assetLabels[asset.asset_type] || `Download ${asset.asset_type.toUpperCase()}`}
+                {assetLabels[asset.asset_type] ||
+                  `Download ${asset.asset_type.toUpperCase()}`}
               </a>
             ))}
             {canEditMetadata ? (
@@ -721,18 +846,25 @@ export default function BookDetailPage() {
                   type="button"
                   className="ghost-button"
                   onClick={openEpubPicker}
-                  disabled={replacingEpub || regenerating || hasActiveProcessing}
+                  disabled={
+                    replacingEpub || regenerating || hasActiveProcessing
+                  }
                 >
                   <span className="button-label">
                     {replacingEpub ? <LoadingSpinner size={16} /> : null}
-                    {replacingEpub ? "Uploading..." : epubAsset ? "Replace EPUB" : "Upload EPUB"}
+                    {replacingEpub
+                      ? "Uploading..."
+                      : epubAsset
+                        ? "Replace EPUB"
+                        : "Upload EPUB"}
                   </span>
                 </button>
               </>
             ) : null}
           </div>
 
-          {latestProcessingJob && (hasActiveProcessing || hasFailedProcessing) ? (
+          {latestProcessingJob &&
+          (hasActiveProcessing || hasFailedProcessing) ? (
             <div
               className={`book-status-note${hasActiveProcessing ? " book-status-note-processing" : ""}${
                 hasFailedProcessing ? " book-status-note-error" : ""
@@ -759,15 +891,30 @@ export default function BookDetailPage() {
           </div>
           <div className="source-record-list">
             {sourceRecords.map((source, index) => (
-              <article key={`${source.url}-${index}`} className="source-record-card">
+              <article
+                key={`${source.url}-${index}`}
+                className="source-record-card"
+              >
                 <div className="source-record-copy">
-                  <span className="fact-label">{source.is_primary ? "Primary" : "Linked"}</span>
+                  <span className="fact-label">
+                    {source.is_primary ? "Primary" : "Linked"}
+                  </span>
                   <strong>{getSourceLabel(source) || "Source page"}</strong>
-                  <a className="source-link" href={source.url} target="_blank" rel="noreferrer">
+                  <a
+                    className="source-link"
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     {source.display_url || source.url}
                   </a>
                 </div>
-                <a className="ghost-button" href={source.url} target="_blank" rel="noreferrer">
+                <a
+                  className="ghost-button"
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   Open
                 </a>
               </article>
@@ -785,14 +932,20 @@ export default function BookDetailPage() {
           {frontMatter.length ? (
             <div className="metadata-list">
               {frontMatter.map((entry) => (
-                <div key={`${entry.key}-${entry.value}`} className="metadata-row">
+                <div
+                  key={`${entry.key}-${entry.value}`}
+                  className="metadata-row"
+                >
                   <span className="fact-label">{entry.label}</span>
                   <strong className="metadata-value">{entry.value}</strong>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="rich-content-block" dangerouslySetInnerHTML={{ __html: book.book_info_html }} />
+            <div
+              className="rich-content-block"
+              dangerouslySetInnerHTML={{ __html: book.book_info_html }}
+            />
           )}
         </section>
       ) : null}
@@ -803,7 +956,10 @@ export default function BookDetailPage() {
             <p className="eyebrow">Extracted</p>
             <h2>Dedication</h2>
           </div>
-          <div className="rich-content-block" dangerouslySetInnerHTML={{ __html: book.dedication_html }} />
+          <div
+            className="rich-content-block"
+            dangerouslySetInnerHTML={{ __html: book.dedication_html }}
+          />
         </section>
       ) : null}
 
@@ -831,11 +987,17 @@ export default function BookDetailPage() {
               </article>
               <article className="book-detail-chip">
                 <span className="fact-label">Last location</span>
-                <strong className="metadata-value">{readerState.last_location || "Not synced"}</strong>
+                <strong className="metadata-value">
+                  {readerState.last_location || "Not synced"}
+                </strong>
               </article>
               <article className="book-detail-chip">
                 <span className="fact-label">Last opened</span>
-                <strong>{readerState.last_opened_at ? formatBookDateTime(readerState.last_opened_at) : "Not synced"}</strong>
+                <strong>
+                  {readerState.last_opened_at
+                    ? formatBookDateTime(readerState.last_opened_at)
+                    : "Not synced"}
+                </strong>
               </article>
             </div>
           ) : (
@@ -859,10 +1021,18 @@ export default function BookDetailPage() {
                     ) : null}
                     {bookmark.note ? <p>{bookmark.note}</p> : null}
                     <div className="inline-pills">
-                      <button type="button" className="ghost-button" onClick={() => deleteBookmark(bookmark.id)}>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => deleteBookmark(bookmark.id)}
+                      >
                         <span className="button-label">
-                          {deletingBookmarkId === bookmark.id ? <LoadingSpinner size={14} /> : null}
-                          {deletingBookmarkId === bookmark.id ? "Removing..." : "Remove"}
+                          {deletingBookmarkId === bookmark.id ? (
+                            <LoadingSpinner size={14} />
+                          ) : null}
+                          {deletingBookmarkId === bookmark.id
+                            ? "Removing..."
+                            : "Remove"}
                         </span>
                       </button>
                     </div>
@@ -890,14 +1060,21 @@ export default function BookDetailPage() {
               <div className="metadata-form-grid">
                 <label className="field-span-full">
                   <span>Title</span>
-                  <input value={editor.title} onChange={(event) => setEditor({ ...editor, title: event.target.value })} />
+                  <input
+                    value={editor.title}
+                    onChange={(event) =>
+                      setEditor({ ...editor, title: event.target.value })
+                    }
+                  />
                 </label>
                 <label className="field-span-full">
                   <span>Summary</span>
                   <textarea
                     rows="4"
                     value={editor.summary}
-                    onChange={(event) => setEditor({ ...editor, summary: event.target.value })}
+                    onChange={(event) =>
+                      setEditor({ ...editor, summary: event.target.value })
+                    }
                   />
                 </label>
                 <label className="field-span-full">
@@ -905,27 +1082,45 @@ export default function BookDetailPage() {
                   <textarea
                     rows="5"
                     value={editor.contributors}
-                    onChange={(event) => setEditor({ ...editor, contributors: event.target.value })}
+                    onChange={(event) =>
+                      setEditor({ ...editor, contributors: event.target.value })
+                    }
                     placeholder="Name|author"
                   />
                 </label>
                 <label>
                   <span>Series</span>
-                  <input value={editor.series} onChange={(event) => setEditor({ ...editor, series: event.target.value })} />
+                  <input
+                    value={editor.series}
+                    onChange={(event) =>
+                      setEditor({ ...editor, series: event.target.value })
+                    }
+                  />
                 </label>
                 <label>
                   <span>Categories</span>
                   <input
                     value={editor.categories}
-                    onChange={(event) => setEditor({ ...editor, categories: event.target.value })}
+                    onChange={(event) =>
+                      setEditor({ ...editor, categories: event.target.value })
+                    }
                   />
                 </label>
                 <label className="field-span-full">
                   <span>Edit note</span>
-                  <input value={editor.notes} onChange={(event) => setEditor({ ...editor, notes: event.target.value })} />
+                  <input
+                    value={editor.notes}
+                    onChange={(event) =>
+                      setEditor({ ...editor, notes: event.target.value })
+                    }
+                  />
                 </label>
               </div>
-              <button type="submit" className="primary-button" disabled={savingMetadata}>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={savingMetadata}
+              >
                 <span className="button-label">
                   {savingMetadata ? <LoadingSpinner size={16} /> : null}
                   {savingMetadata ? "Saving..." : "Save metadata"}
@@ -940,7 +1135,15 @@ export default function BookDetailPage() {
                 </div>
                 <label>
                   <span>Review state</span>
-                  <select value={reviewForm.state} onChange={(event) => setReviewForm({ ...reviewForm, state: event.target.value })}>
+                  <select
+                    value={reviewForm.state}
+                    onChange={(event) =>
+                      setReviewForm({
+                        ...reviewForm,
+                        state: event.target.value,
+                      })
+                    }
+                  >
                     <option value="pending">Awaiting review</option>
                     <option value="needs_review">Needs review</option>
                     <option value="approved">Reviewed</option>
@@ -949,9 +1152,21 @@ export default function BookDetailPage() {
                 </label>
                 <label>
                   <span>Notes</span>
-                  <input value={reviewForm.notes} onChange={(event) => setReviewForm({ ...reviewForm, notes: event.target.value })} />
+                  <input
+                    value={reviewForm.notes}
+                    onChange={(event) =>
+                      setReviewForm({
+                        ...reviewForm,
+                        notes: event.target.value,
+                      })
+                    }
+                  />
                 </label>
-                <button type="submit" className="ghost-button" disabled={savingReview}>
+                <button
+                  type="submit"
+                  className="ghost-button"
+                  disabled={savingReview}
+                >
                   <span className="button-label">
                     {savingReview ? <LoadingSpinner size={16} /> : null}
                     {savingReview ? "Saving..." : "Save review"}
@@ -991,33 +1206,47 @@ export default function BookDetailPage() {
                       <p>{review.notes || "No notes"}</p>
                       <p>
                         {review.requested_by_email || "Unknown"}
-                        {review.updated_at ? ` · ${formatBookDateTime(review.updated_at)}` : ""}
+                        {review.updated_at
+                          ? ` · ${formatBookDateTime(review.updated_at)}`
+                          : ""}
                       </p>
                       <div className="inline-pills">
                         <button
                           type="button"
                           className="primary-button"
-                          onClick={() => updateMetadataReview(review.id, "approved")}
+                          onClick={() =>
+                            updateMetadataReview(review.id, "approved")
+                          }
                           disabled={Boolean(reviewUpdating.id)}
                         >
                           <span className="button-label">
-                            {reviewUpdating.id === review.id && reviewUpdating.state === "approved" ? (
+                            {reviewUpdating.id === review.id &&
+                            reviewUpdating.state === "approved" ? (
                               <LoadingSpinner size={14} />
                             ) : null}
-                            {reviewUpdating.id === review.id && reviewUpdating.state === "approved" ? "Approving..." : "Approve"}
+                            {reviewUpdating.id === review.id &&
+                            reviewUpdating.state === "approved"
+                              ? "Approving..."
+                              : "Approve"}
                           </span>
                         </button>
                         <button
                           type="button"
                           className="ghost-button"
-                          onClick={() => updateMetadataReview(review.id, "rejected")}
+                          onClick={() =>
+                            updateMetadataReview(review.id, "rejected")
+                          }
                           disabled={Boolean(reviewUpdating.id)}
                         >
                           <span className="button-label">
-                            {reviewUpdating.id === review.id && reviewUpdating.state === "rejected" ? (
+                            {reviewUpdating.id === review.id &&
+                            reviewUpdating.state === "rejected" ? (
                               <LoadingSpinner size={14} />
                             ) : null}
-                            {reviewUpdating.id === review.id && reviewUpdating.state === "rejected" ? "Rejecting..." : "Reject"}
+                            {reviewUpdating.id === review.id &&
+                            reviewUpdating.state === "rejected"
+                              ? "Rejecting..."
+                              : "Reject"}
                           </span>
                         </button>
                       </div>
@@ -1038,14 +1267,20 @@ export default function BookDetailPage() {
             <p className="eyebrow">Staff</p>
             <h2>Raw Provenance</h2>
           </div>
-          <pre className="json-block raw-provenance-block">{JSON.stringify(book.raw_provenance, null, 2)}</pre>
+          <pre className="json-block raw-provenance-block">
+            {JSON.stringify(book.raw_provenance, null, 2)}
+          </pre>
         </section>
       ) : null}
 
       <ConfirmationDialog
         open={deleteDialogOpen}
         title="Delete Book?"
-        body={book ? `Delete "${book.title}"? This will hide it from the catalog.` : ""}
+        body={
+          book
+            ? `Delete "${book.title}"? This will hide it from the catalog.`
+            : ""
+        }
         confirmLabel="Delete Book"
         loading={deleting}
         onCancel={() => {

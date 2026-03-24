@@ -25,6 +25,7 @@ urlpatterns = [
     path("books/<path:slug>/download/<slug:asset_type>/", BookAssetDownloadView.as_view(), name="access-book-asset-download"),
     path("books/<path:slug>/reader-launch/", ReaderLaunchView.as_view(), name="access-reader-launch"),
     path("reader/<str:token>/manifest/", ReaderManifestView.as_view(), name="access-reader-manifest"),
+    path("reader/<str:token>/epub/<path:asset_path>", ReaderEpubDownloadView.as_view(), name="access-reader-epub-asset"),
     path("reader/<str:token>/epub/", ReaderEpubDownloadView.as_view(), name="access-reader-epub"),
     path("reader/<str:token>/html/", ReaderHtmlPreviewView.as_view(), name="access-reader-html"),
     path("reader/<str:token>/session/", ReaderSessionTokenView.as_view(), name="access-reader-session"),

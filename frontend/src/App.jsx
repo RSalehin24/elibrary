@@ -12,6 +12,7 @@ import ManualBooksPage from "./pages/ManualBooksPage";
 import PasswordResetPage from "./pages/PasswordResetPage";
 import ProfilePage from "./pages/ProfilePage";
 import QueuePage from "./pages/QueuePage";
+import ReaderPage from "./pages/ReaderPage";
 import SeriesPage from "./pages/SeriesPage";
 import WriterPage from "./pages/WriterPage";
 import PageLoader from "./components/PageLoader";
@@ -22,7 +23,12 @@ function ProtectedRoute({ children }) {
   const location = useLocation();
 
   if (loading) {
-    return <PageLoader label="Loading your session" detail="Checking sign-in and workspace access." />;
+    return (
+      <PageLoader
+        label="Loading your session"
+        detail="Checking sign-in and workspace access."
+      />
+    );
   }
 
   if (!authenticated) {
@@ -30,7 +36,9 @@ function ProtectedRoute({ children }) {
   }
 
   if (user?.totp_setup_required && location.pathname !== "/profile") {
-    return <Navigate to="/profile" replace state={{ from: location.pathname }} />;
+    return (
+      <Navigate to="/profile" replace state={{ from: location.pathname }} />
+    );
   }
 
   return children;
@@ -168,6 +176,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <ProfilePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/reader"
+          element={
+            <ProtectedRoute>
+              <ReaderPage />
             </ProtectedRoute>
           }
         />

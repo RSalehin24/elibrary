@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { apiFetch, resolveAppUrl } from "../api/client";
 import PageLoader from "../components/PageLoader";
 import StatusPill from "../components/StatusPill";
@@ -32,6 +32,7 @@ function displayUrl(value) {
 export default function CreateBooksPage() {
   const { authenticated } = useSession();
   const toast = useToast();
+  const navigate = useNavigate();
   const [entries, setEntries] = useState([emptyEntry()]);
   const [results, setResults] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -169,11 +170,24 @@ export default function CreateBooksPage() {
   }
 
   async function readBook(submission) {
-    const payload = await getActionLinks(submission.id);
-    if (!payload.launch_url) {
-      throw new Error("Reader is not available yet.");
+    try {
+      const payload = await getActionLinks(submission.id);
+      if (!payload.launch_url) {
+        throw new Error("Reader is not available yet.");
+      }
+
+      if (submission.linked_book_slug) {
+        navigate(
+          `/reader?slug=${encodeURIComponent(submission.linked_book_slug)}&appNav=hidden`,
+        );
+        return;
+      }
+
+      const launchUrl = resolveAppUrl(payload.launch_url);
+      navigate(`/reader?launch=${encodeURIComponent(launchUrl)}&appNav=hidden`);
+    } catch (error) {
+      throw error;
     }
-    openUrl(payload.launch_url);
   }
 
   async function downloadBook(submission) {

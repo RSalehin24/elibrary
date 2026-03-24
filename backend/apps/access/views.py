@@ -2,6 +2,8 @@ import logging
 import base64
 import mimetypes
 import re
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -24,6 +26,8 @@ from apps.access.models import (
     PermissionScope,
     PreviewAccessSession,
     ReadingSession,
+    default_preview_expiry,
+    generate_access_token,
 )
 from apps.access.serializers import BookmarkSerializer, PermissionGrantSerializer, ReadingSessionSerializer
 from apps.catalog.models import Book, Contributor, ContributorRole, Category, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType
@@ -33,6 +37,13 @@ from apps.common.url_utils import public_api_url
 from apps.ingestion.services.normalization import clean_extracted_dedication_html, promote_leading_front_matter
 
 logger = logging.getLogger(__name__)
+
+
+def apply_no_store_headers(response):
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
+    return response
 
 
 def get_active_preview_session(user, book):
@@ -51,6 +62,16 @@ def get_token_preview_session(token):
     session = PreviewAccessSession.objects.select_related("book", "user").filter(token=token).first()
     if session is None or not session.is_active:
         raise Http404("Reader session is unavailable.")
+    return session
+
+
+def get_authenticated_token_preview_session(request, token):
+    session = get_token_preview_session(token)
+    user = getattr(request, "user", None)
+    if not getattr(user, "is_authenticated", False):
+        raise PermissionDenied("Sign in is required to access the reader.")
+    if session.user_id != user.id:
+        raise PermissionDenied("This reader session does not belong to your account.")
     return session
 
 
@@ -501,9 +522,12 @@ class ReaderLaunchView(APIView):
 
         if session is None:
             session = PreviewAccessSession.objects.create(user=request.user, book=book)
+        else:
+            session.token = generate_access_token()
 
         session.launch_count += 1
-        session.save(update_fields=["launch_count", "updated_at"])
+        session.expires_at = default_preview_expiry()
+        session.save(update_fields=["token", "launch_count", "expires_at", "updated_at"])
 
         manifest_url = public_api_url("access-reader-manifest", kwargs={"token": session.token}, request=request)
         launch_url = f"{settings.EPUB_READER_BASE_URL.rstrip('/')}/?manifest={quote(manifest_url, safe='')}"
@@ -518,11 +542,10 @@ class ReaderLaunchView(APIView):
 
 
 class ReaderManifestView(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, token):
-        session = get_token_preview_session(token)
+        session = get_authenticated_token_preview_session(request, token)
 
         epub_asset = session.book.generated_assets.filter(asset_type=GeneratedAssetType.EPUB).first()
         html_asset = session.book.generated_assets.filter(asset_type=GeneratedAssetType.HTML).first()
@@ -545,7 +568,7 @@ class ReaderManifestView(APIView):
             reading_session_url = public_api_url("access-reader-session", kwargs={"token": session.token}, request=request)
             bookmarks_url = public_api_url("access-reader-bookmark-list", kwargs={"token": session.token}, request=request)
 
-        return Response(
+        response = Response(
             {
                 "book": {
                     "title": session.book.title,
@@ -561,42 +584,73 @@ class ReaderManifestView(APIView):
                 "bookmarks": BookmarkSerializer(bookmarks, many=True).data if bookmarks else [],
             }
         )
+        return apply_no_store_headers(response)
 
 
 class ReaderEpubDownloadView(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
-    def get(self, request, token):
-        session = get_token_preview_session(token)
+    def get(self, request, token, asset_path=""):
+        session = get_authenticated_token_preview_session(request, token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.EPUB)
         if not asset_is_available(asset):
             return missing_asset_response(session.book, asset, actor=session.user)
+
+        if asset_path:
+            normalized_path = self.normalize_epub_asset_path(asset_path)
+            return self.epub_entry_response(asset, normalized_path)
+
         file_handle = open_asset_stream(asset)
         filename = asset_download_filename(session.book, asset)
-        return FileResponse(file_handle, as_attachment=False, filename=filename)
+        response = FileResponse(file_handle, as_attachment=False, filename=filename)
+        return apply_no_store_headers(response)
+
+    def normalize_epub_asset_path(self, raw_path):
+        decoded = unquote(raw_path or "")
+        sanitized = decoded.replace("\\", "/").lstrip("/")
+        if not sanitized or ".." in sanitized.split("/"):
+            raise Http404("Invalid EPUB resource path.")
+        return sanitized
+
+    def epub_entry_response(self, asset, entry_path):
+        payload, _name, local_path = read_asset_bytes(asset)
+
+        try:
+            if local_path:
+                with zipfile.ZipFile(local_path, "r") as archive:
+                    data = archive.read(entry_path)
+            else:
+                with zipfile.ZipFile(BytesIO(payload), "r") as archive:
+                    data = archive.read(entry_path)
+        except KeyError:
+            raise Http404("EPUB resource not found.")
+        except zipfile.BadZipFile:
+            raise Http404("EPUB file is invalid.")
+
+        content_type = mimetypes.guess_type(entry_path)[0] or "application/octet-stream"
+        response = HttpResponse(data, content_type=content_type)
+        return apply_no_store_headers(response)
 
 
 class ReaderHtmlPreviewView(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, token):
-        session = get_token_preview_session(token)
+        session = get_authenticated_token_preview_session(request, token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.HTML)
         if not asset_is_available(asset):
             return missing_asset_response(session.book, asset, actor=session.user)
-        return html_asset_response(session.book, asset)
+        response = html_asset_response(session.book, asset)
+        return apply_no_store_headers(response)
 
 
 class ReaderSessionTokenView(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, token):
-        session = get_token_preview_session(token)
+        session = get_authenticated_token_preview_session(request, token)
         if session.user_id is None:
             raise PermissionDenied("Reader progress is unavailable for guest sessions.")
         reading_session, _ = ReadingSession.objects.get_or_create(
@@ -604,10 +658,11 @@ class ReaderSessionTokenView(APIView):
             book=session.book,
             defaults={"preview_session": session},
         )
-        return Response(ReadingSessionSerializer(reading_session).data)
+        response = Response(ReadingSessionSerializer(reading_session).data)
+        return apply_no_store_headers(response)
 
     def post(self, request, token):
-        session = get_token_preview_session(token)
+        session = get_authenticated_token_preview_session(request, token)
         if session.user_id is None:
             raise PermissionDenied("Reader progress is unavailable for guest sessions.")
         reading_session, _ = ReadingSession.objects.get_or_create(
@@ -618,43 +673,45 @@ class ReaderSessionTokenView(APIView):
         serializer = ReadingSessionSerializer(reading_session, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save(user=session.user, book=session.book, preview_session=session)
-        return Response(serializer.data)
+        response = Response(serializer.data)
+        return apply_no_store_headers(response)
 
 
 class ReaderBookmarkTokenListCreateView(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, token):
-        session = get_token_preview_session(token)
+        session = get_authenticated_token_preview_session(request, token)
         if session.user_id is None:
             raise PermissionDenied("Bookmarks are unavailable for guest sessions.")
         queryset = Bookmark.objects.filter(user=session.user, book=session.book)
-        return Response(BookmarkSerializer(queryset, many=True).data)
+        response = Response(BookmarkSerializer(queryset, many=True).data)
+        return apply_no_store_headers(response)
 
     def post(self, request, token):
-        session = get_token_preview_session(token)
+        session = get_authenticated_token_preview_session(request, token)
         if session.user_id is None:
             raise PermissionDenied("Bookmarks are unavailable for guest sessions.")
         serializer = BookmarkSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save(user=session.user, book=session.book)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        response = Response(serializer.data, status=status.HTTP_201_CREATED)
+        return apply_no_store_headers(response)
 
 
 class ReaderBookmarkTokenDeleteView(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
     def delete(self, request, token, pk):
-        session = get_token_preview_session(token)
+        session = get_authenticated_token_preview_session(request, token)
         if session.user_id is None:
             raise PermissionDenied("Bookmarks are unavailable for guest sessions.")
         bookmark = Bookmark.objects.filter(pk=pk, user=session.user, book=session.book).first()
         if bookmark is None:
             raise Http404("Bookmark not found.")
         bookmark.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        response = Response(status=status.HTTP_204_NO_CONTENT)
+        return apply_no_store_headers(response)
 
 
 class ReadingSessionView(APIView):

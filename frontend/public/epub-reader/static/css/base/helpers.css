@@ -1,0 +1,46 @@
+.show {
+  display: flex !important;
+}
+
+.hide {
+  display: none !important;
+}
+
+.pulse.button {
+  animation: greenPulse 2s infinite;
+  -webkit-animation: greenPulse 2s infinite;
+}
+
+@keyframes greenPulse {
+  from {
+    background-color: #1fa4f1;
+    box-shadow: 0 0 0 #1fa4f1;
+  }
+
+  50% {
+    background-color: #0091e6;
+    box-shadow: 0 0 18px #0091e6;
+  }
+
+  to {
+    background-color: #1fa4f1;
+    box-shadow: 0 0 0 #1fa4f1;
+  }
+}
+
+@-webkit-keyframes greenPulse {
+  from {
+    background-color: #1fa4f1;
+    -webkit-box-shadow: 0 0 0 #1fa4f1;
+  }
+
+  50% {
+    background-color: #0091e6;
+    -webkit-box-shadow: 0 0 18px #0091e6;
+  }
+
+  to {
+    background-color: #1fa4f1;
+    -webkit-box-shadow: 0 0 0 #1fa4f1;
+  }
+}

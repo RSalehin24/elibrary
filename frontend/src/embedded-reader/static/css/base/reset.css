@@ -1,0 +1,104 @@
+html,
+body,
+div,
+p,
+h2,
+h3,
+a,
+button,
+input,
+select,
+textarea,
+ul,
+li,
+img {
+  margin: 0;
+  padding: 0;
+  -webkit-touch-callout: none;
+}
+
+ul {
+  list-style: none;
+}
+
+a {
+  text-decoration: none;
+}
+
+html.epub-reader-html,
+html.epub-reader-html > body {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: clip;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background-color: #0b3d2e;
+  touch-action: manipulation;
+  font-family: "Avenir Next", "Segoe UI Variable", "Trebuchet MS", "Gill Sans", sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html.epub-reader-html > body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: clip;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  background: none;
+}
+
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 5000;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(8, 44, 34, 0.36);
+  background: #d9f6d9;
+  color: #0b3d2e;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  transform: translateY(-160%);
+  transition: transform 0.18s ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid rgba(12, 59, 45, 0.48);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,149 @@
+.epub-container {
+  --page-background: #fff;
+  --reader-background: #fff;
+  --toc-background: #e8e7e7;
+  --toc-border: #f1f1f1;
+  --toc-text: #494949;
+  --toc-hover-text: #494949;
+  --toc-hover-bg: rgba(17, 70, 54, 0.08);
+  --toc-selected-text: #346cb9;
+
+  --nav-background: #f7f7f7;
+  --nav-text: #2e2e2e;
+  --nav-border: #e2e2e2;
+  --icon-color: #2e2e2e;
+  --nav-icon-bg-top: rgba(255, 255, 255, 0.9);
+  --nav-icon-bg-bottom: rgba(241, 247, 243, 0.92);
+  --nav-icon-bg-top-hover: rgba(255, 255, 255, 0.96);
+  --nav-icon-bg-bottom-hover: rgba(229, 241, 236, 0.96);
+  --nav-icon-border: rgba(17, 70, 54, 0.22);
+  --nav-icon-border-hover: rgba(17, 70, 54, 0.38);
+  --nav-icon-shadow: rgba(12, 47, 36, 0.16);
+  --nav-icon-shadow-hover: rgba(12, 47, 36, 0.24);
+  --nav-icon-color: #245042;
+  --nav-icon-color-hover: #0d4030;
+
+  --settings-background: #fafafa;
+  --settings-text: #676767;
+  --settings-hover-text: #000;
+  --settings-caret-inner: #fafafa;
+
+  --iframe-background: #fff;
+
+  --reader-page-surface:
+    radial-gradient(circle at 10% 8%, rgba(120, 209, 120, 0.12), transparent 34%),
+    radial-gradient(circle at 92% 95%, rgba(18, 83, 64, 0.22), transparent 38%),
+    linear-gradient(160deg, #eff6f2 0%, #e3eee8 100%);
+  --reader-shell-border: rgba(17, 70, 54, 0.14);
+  --reader-shell-shadow: rgba(14, 52, 39, 0.1);
+  --reader-surface-border: rgba(17, 70, 54, 0.12);
+  --reader-surface-bg: rgba(255, 255, 255, 0.45);
+  --reader-icon-hover-bg: rgba(17, 64, 50, 0.1);
+  --reader-arrow-bg: rgba(13, 57, 43, 0.08);
+  --reader-arrow-hover-bg: rgba(13, 57, 43, 0.14);
+  --reader-arrow-color: rgba(47, 60, 54, 0.78);
+
+  --scrollbar-track: #e8e7e7;
+  --scrollbar-thumb: #888;
+  --scrollbar-thumb-hover: #666;
+}
+
+.epub-container.theme-type-1 {
+  --page-background: #f4eacd;
+  --reader-background: #f4eacd;
+  --toc-background: #efe3c2;
+  --toc-border: #dcc89a;
+  --toc-text: #704214;
+  --toc-hover-text: #663403;
+  --toc-hover-bg: rgba(112, 66, 20, 0.1);
+  --toc-selected-text: #346cb9;
+
+  --nav-background: #f4eacd;
+  --nav-text: #2e2e2e;
+  --nav-border: #dcc89a;
+  --icon-color: #2e2e2e;
+  --nav-icon-bg-top: rgba(255, 247, 229, 0.92);
+  --nav-icon-bg-bottom: rgba(244, 229, 191, 0.92);
+  --nav-icon-bg-top-hover: rgba(255, 247, 229, 0.98);
+  --nav-icon-bg-bottom-hover: rgba(238, 220, 177, 0.98);
+  --nav-icon-border: rgba(112, 66, 20, 0.25);
+  --nav-icon-border-hover: rgba(112, 66, 20, 0.42);
+  --nav-icon-shadow: rgba(79, 49, 14, 0.18);
+  --nav-icon-shadow-hover: rgba(79, 49, 14, 0.26);
+  --nav-icon-color: #704214;
+  --nav-icon-color-hover: #5c3105;
+
+  --settings-background: #f4eacd;
+  --settings-text: #676767;
+  --settings-hover-text: #000;
+  --settings-caret-inner: #f4eacd;
+
+  --iframe-background: #f4eacd;
+
+  --reader-page-surface:
+    radial-gradient(circle at 10% 8%, rgba(150, 118, 54, 0.12), transparent 34%),
+    radial-gradient(circle at 90% 90%, rgba(181, 145, 74, 0.18), transparent 38%),
+    linear-gradient(160deg, #f6eed8 0%, #ecdeba 100%);
+  --reader-shell-border: rgba(112, 66, 20, 0.2);
+  --reader-shell-shadow: rgba(86, 58, 14, 0.12);
+  --reader-surface-border: rgba(112, 66, 20, 0.16);
+  --reader-surface-bg: rgba(255, 246, 226, 0.5);
+  --reader-icon-hover-bg: rgba(112, 66, 20, 0.12);
+  --reader-arrow-bg: rgba(112, 66, 20, 0.09);
+  --reader-arrow-hover-bg: rgba(112, 66, 20, 0.16);
+  --reader-arrow-color: rgba(112, 66, 20, 0.84);
+
+  --scrollbar-track: #efe3c2;
+  --scrollbar-thumb: #663403;
+  --scrollbar-thumb-hover: #582e04;
+}
+
+.epub-container.theme-type-2 {
+  --page-background: #1b1f2a;
+  --reader-background: #1b1f2a;
+  --toc-background: #242938;
+  --toc-border: #1b1f2a;
+  --toc-text: #a8adc0;
+  --toc-hover-text: #d0d4e0;
+  --toc-hover-bg: #2d3348;
+  --toc-selected-text: #6ba3f7;
+
+  --nav-background: #1b1f2a;
+  --nav-text: #bebceb;
+  --nav-border: #2d3348;
+  --icon-color: #bebceb;
+  --nav-icon-bg-top: rgba(50, 60, 82, 0.94);
+  --nav-icon-bg-bottom: rgba(31, 39, 56, 0.94);
+  --nav-icon-bg-top-hover: rgba(60, 72, 98, 0.96);
+  --nav-icon-bg-bottom-hover: rgba(38, 47, 68, 0.96);
+  --nav-icon-border: rgba(126, 149, 210, 0.34);
+  --nav-icon-border-hover: rgba(126, 149, 210, 0.52);
+  --nav-icon-shadow: rgba(2, 5, 12, 0.38);
+  --nav-icon-shadow-hover: rgba(2, 5, 12, 0.52);
+  --nav-icon-color: #d0defa;
+  --nav-icon-color-hover: #ebf2ff;
+
+  --settings-background: #2d3f73;
+  --settings-text: #c3c2c2;
+  --settings-hover-text: #fff;
+  --settings-caret-inner: #2d3f73;
+
+  --iframe-background: #1b1f2a;
+
+  --reader-page-surface:
+    radial-gradient(circle at 10% 10%, rgba(107, 163, 247, 0.11), transparent 34%),
+    radial-gradient(circle at 88% 92%, rgba(45, 63, 115, 0.28), transparent 42%),
+    linear-gradient(160deg, #191e29 0%, #121622 100%);
+  --reader-shell-border: rgba(126, 149, 210, 0.2);
+  --reader-shell-shadow: rgba(2, 5, 12, 0.42);
+  --reader-surface-border: rgba(126, 149, 210, 0.18);
+  --reader-surface-bg: rgba(22, 29, 43, 0.58);
+  --reader-icon-hover-bg: rgba(126, 149, 210, 0.14);
+  --reader-arrow-bg: rgba(126, 149, 210, 0.12);
+  --reader-arrow-hover-bg: rgba(126, 149, 210, 0.2);
+  --reader-arrow-color: rgba(201, 215, 245, 0.9);
+
+  --scrollbar-track: #242938;
+  --scrollbar-thumb: #5a5f73;
+  --scrollbar-thumb-hover: #6e7489;
+}
