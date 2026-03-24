@@ -26,14 +26,13 @@ docker-compose up --build
 
 This Docker flow now matches the deployed runtime shape:
 
-- the browser talks only to `nginx`
-- `nginx` serves the built frontend
-- `nginx` proxies `/api/` and `/admin/` to Django on the internal Docker network
-- `backend`, `worker`, `beat`, `postgres`, and `redis` stay private on the internal network
+- host Nginx (outside Docker) serves the built frontend
+- host Nginx proxies `/api/` and `/admin/` to backend at `127.0.0.1:${BACKEND_PORT}`
+- `backend`, `worker`, `beat`, `postgres`, and `redis` run in Docker
 
 This starts the full local stack:
 
-- app at `http://localhost`
+- backend API at `http://127.0.0.1:8000`
 - `worker` for background book processing
 - `beat` for daily scheduled source automation
 
@@ -72,14 +71,12 @@ Keep `PUBLIC_BASE_URL` pointed at the user-facing site so password reset links o
 Local and server now use the same Docker layout and the same startup command. The normal env difference between local and server is:
 
 - email delivery settings
-- `PUBLIC_BASE_URL`, which also drives frontend routing, Django public URLs, cookie security defaults, and the Nginx server name
+- `PUBLIC_BASE_URL`, which drives frontend routing and Django public URLs
 
 Relevant files:
 
 - [`docker-compose.yml`](./docker-compose.yml)
-- [`deploy/nginx/library.conf.example`](./deploy/nginx/library.conf.example)
-- [`deploy/nginx/library.conf.template`](./deploy/nginx/library.conf.template)
-- [`deploy/nginx/Dockerfile`](./deploy/nginx/Dockerfile)
+- [`scripts/setup-host-nginx.sh`](./scripts/setup-host-nginx.sh)
 
 Typical local `.env`:
 
@@ -88,6 +85,9 @@ APP_ENV=production
 DJANGO_DEBUG=0
 PUBLIC_BASE_URL=http://localhost
 VITE_API_BASE_URL=/api
+BACKEND_PORT=8000
+HOST_STATIC_DIR=./storage/staticfiles
+HOST_MEDIA_DIR=./storage/media
 ```
 
 Typical server `.env`:
@@ -97,6 +97,9 @@ APP_ENV=production
 DJANGO_DEBUG=0
 PUBLIC_BASE_URL=https://library.example.com
 VITE_API_BASE_URL=/api
+BACKEND_PORT=8000
+HOST_STATIC_DIR=./storage/staticfiles
+HOST_MEDIA_DIR=./storage/media
 ```
 
 Bring up the stack locally or on the server with the same command:
@@ -105,52 +108,24 @@ Bring up the stack locally or on the server with the same command:
 docker-compose up -d --build
 ```
 
-If you still want the legacy alternate file, it matches the same runtime shape:
+### Host Nginx + Certbot (Nginx 1.29.4)
+
+After Docker services are up, configure Nginx on the server (outside Docker):
 
 ```bash
-docker-compose -f docker-compose.prod.yml up -d --build
+sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me you@example.com /home/ubuntu/library_app 8000
 ```
 
-If you terminate TLS in front of the containerized Nginx, keep `X-Forwarded-Proto` intact. If Nginx inside the container terminates TLS directly, add your `listen 443 ssl;` and certificate directives to the Nginx template or upstream load balancer config.
+This script:
 
-### Nginx + Certbot (in-stack TLS)
+- writes `/etc/nginx/sites-available/library.conf`
+- serves frontend from `~/library_app/frontend/dist`
+- proxies `/api/` and `/admin/` to `127.0.0.1:8000`
+- serves `/static/` and `/media/` from `~/library_app/storage/...`
+- runs `certbot --nginx` and enables HTTPS redirect
 
-This repo now supports containerized TLS termination with Let's Encrypt:
-
-- `nginx` serves ACME challenge files from `/var/www/certbot`
-- `certbot` shares the same challenge + cert volumes
-- if certs exist, Nginx serves HTTPS (`443`) and redirects HTTP (`80`) to HTTPS
-- if certs do not exist yet, Nginx serves HTTP so ACME validation can complete
-
-Required `.env` values for TLS:
-
-```env
-PUBLIC_BASE_URL=https://library.rsalehin24.me
-NGINX_SERVER_NAME=library.rsalehin24.me
-CERTBOT_DOMAIN=library.rsalehin24.me
-CERTBOT_EMAIL=you@example.com
-SSL_ENABLED=1
-NGINX_PORT=80
-NGINX_SSL_PORT=443
-```
-
-First-time certificate issue (run on server in repo root):
-
-```bash
-sh scripts/certbot-init.sh
-```
-
-Then keep services up normally:
-
-```bash
-docker compose up -d --build
-```
-
-`certbot` runs renewal checks in the background. After a successful renewal, restart Nginx to load updated certs:
-
-```bash
-docker compose restart nginx
-```
+Auto-renew is configured automatically by `scripts/setup-host-nginx.sh`.
+It enables `certbot.timer` when available (or falls back to a cron job) and installs an Nginx reload hook after renewals.
 
 If you prefer calling Docker Compose directly on this machine, use the classic builder flags to avoid the local `buildx` warning:
 
@@ -163,7 +138,7 @@ DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose up --build
 Use the helper from your local machine to prepare and deploy to EC2:
 
 ```bash
-./scripts/deploy-ec2.sh ubuntu@54.169.28.248 reyan-ebook-library
+./scripts/deploy.sh
 ```
 
 What it does:
@@ -171,9 +146,9 @@ What it does:
 - SSH into the host and clone/pull this repo into `~/library_app`
 - create `.env` from `.env.example` when missing
 - set `PUBLIC_BASE_URL=https://library.rsalehin24.me`
-- set `NGINX_SERVER_NAME=library.rsalehin24.me`
-- prompt you to edit `.env`
-- prompt you to start `docker-compose up -d --build`
+- build frontend dist in `frontend/dist`
+- start docker services (`backend`, `worker`, `beat`, `postgres`, `redis`)
+- configure host Nginx + Certbot automatically
 
 Prerequisites:
 
@@ -214,9 +189,7 @@ docker-compose logs -f
 Useful log commands:
 
 ```bash
-docker-compose logs -f backend frontend
 docker-compose logs -f backend
-docker-compose logs -f frontend
 docker-compose logs -f worker
 docker-compose logs -f beat
 docker-compose logs --tail=100 backend

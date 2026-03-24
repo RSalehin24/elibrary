@@ -16,9 +16,9 @@ What it does:
   1) SSH (agent-forwarded) to remote server
   2) Clones/pulls repo into ~/library_app
   3) Ensures .env exists from .env.example
-  4) Sets domain and certbot env on remote .env
-  5) Starts Docker Compose stack
-  6) Issues SSL certificate via certbot automatically
+  4) Builds frontend dist on remote machine
+  5) Starts Docker Compose app stack (without nginx)
+  6) Configures host nginx + certbot automatically
 EOF
 }
 
@@ -29,26 +29,26 @@ fi
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
+DEFAULT_ENV_FILE="$SCRIPT_DIR/.env.example"
 
 if [ ! -f "$ENV_FILE" ]; then
-  printf 'Missing %s\n' "$ENV_FILE"
-  printf 'Create it from scripts/.env.example and retry.\n'
-  exit 1
+  if [ -f "$DEFAULT_ENV_FILE" ]; then
+    cp "$DEFAULT_ENV_FILE" "$ENV_FILE"
+    printf 'Created %s from %s\n' "$ENV_FILE" "$DEFAULT_ENV_FILE"
+  else
+    printf 'Missing %s\n' "$ENV_FILE"
+    exit 1
+  fi
 fi
 
 set -a
 . "$ENV_FILE"
 set +a
 
-if [ -z "${DEPLOY_USER_NAME:-}" ] || [ -z "${DEPLOY_IP:-}" ]; then
-  printf 'DEPLOY_USER_NAME and DEPLOY_IP must be set in %s\n' "$ENV_FILE"
-  exit 1
-fi
-
-if [ -z "${DEPLOY_DOMAIN:-}" ] || [ -z "${DEPLOY_CERTBOT_EMAIL:-}" ]; then
-  printf 'DEPLOY_DOMAIN and DEPLOY_CERTBOT_EMAIL must be set in %s\n' "$ENV_FILE"
-  exit 1
-fi
+DEPLOY_USER_NAME="${DEPLOY_USER_NAME:-ubuntu}"
+DEPLOY_IP="${DEPLOY_IP:-54.169.28.248}"
+DEPLOY_DOMAIN="${DEPLOY_DOMAIN:-library.rsalehin24.me}"
+DEPLOY_CERTBOT_EMAIL="${DEPLOY_CERTBOT_EMAIL:-rsalehin24@gmail.com}"
 
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
 BRANCH="${DEPLOY_BRANCH_NAME:-$CURRENT_BRANCH}"
@@ -59,9 +59,10 @@ DOMAIN="${DOMAIN:-library.rsalehin24.me}"
 REMOTE_APP_DIR='$HOME/library_app'
 DOMAIN="$DEPLOY_DOMAIN"
 CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL"
+BACKEND_PORT="${BACKEND_PORT:-8000}"
 
-printf '\n[1/4] Syncing code on %s...\n' "$TARGET"
-ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" 'bash -s' <<'EOF'
+printf '\n[1/5] Syncing code on %s...\n' "$TARGET"
+ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" BACKEND_PORT="$BACKEND_PORT" 'bash -s' <<'EOF'
 set -eu
 
 set_or_append_env() {
@@ -94,20 +95,23 @@ if [ ! -f .env ]; then
 fi
 
 set_or_append_env PUBLIC_BASE_URL "https://${DOMAIN}" .env
-set_or_append_env NGINX_SERVER_NAME "$DOMAIN" .env
-set_or_append_env CERTBOT_DOMAIN "$DOMAIN" .env
-set_or_append_env CERTBOT_EMAIL "$CERTBOT_EMAIL" .env
-set_or_append_env SSL_ENABLED "1" .env
 set_or_append_env VITE_API_BASE_URL "/api" .env
-set_or_append_env NGINX_PORT "80" .env
-set_or_append_env NGINX_SSL_PORT "443" .env
+set_or_append_env BACKEND_PORT "$BACKEND_PORT" .env
+set_or_append_env HOST_STATIC_DIR "./storage/staticfiles" .env
+set_or_append_env HOST_MEDIA_DIR "./storage/media" .env
+
+mkdir -p storage/staticfiles storage/media
 
 printf '\nRemote ready at %s\n' "$APP_DIR"
 printf 'Branch: %s\n' "$BRANCH"
-printf 'PUBLIC_BASE_URL and NGINX_SERVER_NAME set for %s\n' "$DOMAIN"
+printf 'PUBLIC_BASE_URL set for %s\n' "$DOMAIN"
 EOF
 
-printf '\n[2/4] Starting stack on %s...\n' "$TARGET"
+printf '\n[2/5] Building frontend dist on %s...\n' "$TARGET"
+ssh -t "$TARGET" "cd $APP_DIR && \
+  docker run --rm -v \"\$PWD/frontend:/app\" -w /app node:22-alpine sh -lc 'npm ci && npm run build'"
+
+printf '\n[3/5] Starting app stack on %s...\n' "$TARGET"
 ssh -t "$TARGET" "cd $APP_DIR && \
   if docker compose version >/dev/null 2>&1; then \
     docker compose up -d --build; \
@@ -118,9 +122,9 @@ ssh -t "$TARGET" "cd $APP_DIR && \
     exit 127; \
   fi"
 
-printf '\n[3/4] Issuing/refreshing SSL certificate on %s...\n' "$TARGET"
-ssh -t "$TARGET" "cd $APP_DIR && sh scripts/certbot-init.sh"
+printf '\n[4/5] Configuring host nginx + certbot on %s...\n' "$TARGET"
+ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$HOME/library_app' '$BACKEND_PORT'"
 
-printf '\n[4/4] Done.\n'
+printf '\n[5/5] Done.\n'
 printf 'DNS requirement: point %s -> %s\n' "$DOMAIN" "$TARGET"
 printf 'If another app uses port 80 on this host, keep switch-app.sh at ~/switch-app.sh on remote server to swap.\n'
