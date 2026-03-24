@@ -11,14 +11,17 @@ DOMAIN="${1:-}"
 CERTBOT_EMAIL="${2:-}"
 APP_DIR="${3:-$HOME/library_app}"
 BACKEND_PORT="${4:-8000}"
+CONFIG_NAME="${5:-$DOMAIN}"
+NGINX_CONF_DIR="${6:-/etc/nginx/conf.d}"
+REQUIRED_NGINX_VERSION="${7:-1.29.4}"
 
 if [ -z "$DOMAIN" ] || [ -z "$CERTBOT_EMAIL" ]; then
   cat <<'EOF'
 Usage:
-  sudo sh scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port]
+  sudo sh scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
 
 Example:
-  sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me admin@example.com /home/ubuntu/library_app 8000
+  sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me admin@example.com /home/ubuntu/library_app 8000 library.salehin24.me /etc/nginx/conf.d 1.29.4
 EOF
   exit 1
 fi
@@ -33,9 +36,19 @@ if ! command -v certbot >/dev/null 2>&1; then
   apt-get install -y certbot python3-certbot-nginx
 fi
 
-mkdir -p "$APP_DIR/storage/staticfiles" "$APP_DIR/storage/media"
+NGINX_VERSION="$(nginx -v 2>&1 | sed -E 's#^nginx version: nginx/##')"
+if [ -n "$REQUIRED_NGINX_VERSION" ] && [ "$NGINX_VERSION" != "$REQUIRED_NGINX_VERSION" ]; then
+  echo "Expected nginx/$REQUIRED_NGINX_VERSION but found nginx/$NGINX_VERSION"
+  echo "Set required_nginx_version argument to your installed version if this is intentional."
+  exit 1
+fi
 
-cat > /etc/nginx/sites-available/library.conf <<EOF
+mkdir -p "$APP_DIR/storage/staticfiles" "$APP_DIR/storage/media"
+mkdir -p "$NGINX_CONF_DIR"
+
+CONFIG_PATH="$NGINX_CONF_DIR/$CONFIG_NAME"
+
+cat > "$CONFIG_PATH" <<EOF
 server {
   listen 80;
   server_name $DOMAIN;
@@ -82,9 +95,6 @@ server {
   }
 }
 EOF
-
-rm -f /etc/nginx/sites-enabled/default
-ln -sf /etc/nginx/sites-available/library.conf /etc/nginx/sites-enabled/library.conf
 
 nginx -t
 systemctl enable nginx

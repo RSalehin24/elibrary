@@ -49,6 +49,9 @@ DEPLOY_USER_NAME="${DEPLOY_USER_NAME:-ubuntu}"
 DEPLOY_IP="${DEPLOY_IP:-54.169.28.248}"
 DEPLOY_DOMAIN="${DEPLOY_DOMAIN:-library.rsalehin24.me}"
 DEPLOY_CERTBOT_EMAIL="${DEPLOY_CERTBOT_EMAIL:-rsalehin24@gmail.com}"
+DEPLOY_NGINX_CONF_DIR="${DEPLOY_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
+DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME:-library.salehin24.me}"
+DEPLOY_NGINX_VERSION="${DEPLOY_NGINX_VERSION:-1.29.4}"
 
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
 BRANCH="${DEPLOY_BRANCH_NAME:-$CURRENT_BRANCH}"
@@ -126,7 +129,7 @@ ssh -t "$TARGET" "cd $APP_DIR && \
   fi"
 
 printf '\n[4/5] Configuring host nginx + certbot on %s...\n' "$TARGET"
-ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$HOME/library_app' '$BACKEND_PORT'"
+ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$HOME/library_app' '$BACKEND_PORT' '$DEPLOY_NGINX_CONFIG_NAME' '$DEPLOY_NGINX_CONF_DIR' '$DEPLOY_NGINX_VERSION'"
 
 printf '\n[5/5] Done.\n'
 printf 'DNS requirement: point %s -> %s\n' "$DOMAIN" "$TARGET"
