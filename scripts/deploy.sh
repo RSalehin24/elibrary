@@ -13,12 +13,13 @@ Example:
   scripts/deploy.sh
 
 What it does:
-  1) SSH (agent-forwarded) to remote server
-  2) Clones/pulls repo into ~/library_app
-  3) Ensures .env exists from .env.example
-  4) Builds frontend dist on remote machine
-  5) Starts Docker Compose app stack (without nginx)
-  6) Configures host nginx + certbot automatically
+  1) Runs preflight checks (DNS/SSH/sudo/docker)
+  2) Syncs code on the remote server
+  3) Builds frontend dist on the remote machine
+  4) Starts Docker Compose app stack (without nginx)
+  5) Configures host nginx + certbot automatically
+  6) Verifies nginx loaded exact config file
+  7) Verifies HTTPS endpoint
 EOF
 }
 
@@ -53,6 +54,11 @@ DEPLOY_NGINX_CONF_DIR="${DEPLOY_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
 DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME:-library.salehin24.me.conf}"
 DEPLOY_NGINX_VERSION="${DEPLOY_NGINX_VERSION:-1.29.4}"
 
+case "$DEPLOY_NGINX_CONFIG_NAME" in
+  *.conf) ;;
+  *) DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME}.conf" ;;
+esac
+
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
 BRANCH="${DEPLOY_BRANCH_NAME:-$CURRENT_BRANCH}"
 TARGET="${DEPLOY_USER_NAME}@${DEPLOY_IP}"
@@ -63,8 +69,78 @@ REMOTE_APP_DIR='$HOME/library_app'
 DOMAIN="$DEPLOY_DOMAIN"
 CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
+REMOTE_APP_ABS_DIR="/home/${DEPLOY_USER_NAME}/library_app"
+REMOTE_NGINX_CONFIG_PATH="${DEPLOY_NGINX_CONF_DIR}/${DEPLOY_NGINX_CONFIG_NAME}"
 
-printf '\n[1/5] Syncing code on %s...\n' "$TARGET"
+require_cmd() {
+  cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    printf 'Action required: install `%s` on local machine and rerun.\n' "$cmd"
+    exit 1
+  fi
+}
+
+resolve_domain_ips() {
+  python3 - "$1" <<'PY'
+import socket
+import sys
+
+domain = sys.argv[1]
+try:
+    _name, _aliases, ips = socket.gethostbyname_ex(domain)
+except Exception:
+    ips = []
+
+print("\n".join(sorted(set(ips))))
+PY
+}
+
+require_cmd ssh
+require_cmd scp
+require_cmd python3
+require_cmd git
+
+printf '\n[1/7] Running preflight checks...\n'
+
+resolved_ips="$(resolve_domain_ips "$DOMAIN")"
+if [ -z "$resolved_ips" ] || ! printf '%s\n' "$resolved_ips" | grep -Fxq "$DEPLOY_IP"; then
+  printf 'Action required: DNS A record mismatch for %s.\n' "$DOMAIN"
+  printf 'Expected IP: %s\n' "$DEPLOY_IP"
+  printf 'Resolved IPs:\n%s\n' "${resolved_ips:-<none>}"
+  printf 'Update DNS and rerun: bash scripts/deploy.sh\n'
+  exit 1
+fi
+
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "echo connected" >/dev/null 2>&1; then
+  printf 'Action required: SSH key access to %s is not working.\n' "$TARGET"
+  printf 'Fix SSH auth (or host reachability) and rerun: bash scripts/deploy.sh\n'
+  exit 1
+fi
+
+if ! ssh -o BatchMode=yes "$TARGET" "sudo -n true" >/dev/null 2>&1; then
+  printf 'Action required: passwordless sudo is required for fully automated deploy on %s.\n' "$TARGET"
+  printf 'Grant NOPASSWD sudo for this user, then rerun: bash scripts/deploy.sh\n'
+  exit 1
+fi
+
+if ! ssh "$TARGET" "command -v docker >/dev/null 2>&1"; then
+  printf 'Action required: Docker is not installed on %s.\n' "$TARGET"
+  printf 'Install Docker, then rerun: bash scripts/deploy.sh\n'
+  exit 1
+fi
+
+if ! ssh "$TARGET" "docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1"; then
+  printf 'Action required: Docker Compose is not available on %s.\n' "$TARGET"
+  printf 'Install docker compose plugin or docker-compose binary, then rerun: bash scripts/deploy.sh\n'
+  exit 1
+fi
+
+if [ -f "$SCRIPT_DIR/switch-app.sh" ]; then
+  scp "$SCRIPT_DIR/switch-app.sh" "$TARGET:~/switch-app.sh" >/dev/null
+  ssh "$TARGET" "chmod +x ~/switch-app.sh"
+fi
+
+printf '\n[2/7] Syncing code on %s...\n' "$TARGET"
 ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" BACKEND_PORT="$BACKEND_PORT" 'bash -s' <<'EOF'
 set -eu
 
@@ -113,11 +189,11 @@ printf 'Branch: %s\n' "$BRANCH"
 printf 'Remote .env defaults ensured (existing values preserved)\n'
 EOF
 
-printf '\n[2/5] Building frontend dist on %s...\n' "$TARGET"
+printf '\n[3/7] Building frontend dist on %s...\n' "$TARGET"
 ssh -t "$TARGET" "cd $APP_DIR && \
   docker run --rm -v \"\$PWD/frontend:/app\" -w /app node:22-alpine sh -lc 'npm ci && npm run build'"
 
-printf '\n[3/5] Starting app stack on %s...\n' "$TARGET"
+printf '\n[4/7] Starting app stack on %s...\n' "$TARGET"
 ssh -t "$TARGET" "cd $APP_DIR && \
   if docker compose version >/dev/null 2>&1; then \
     docker compose up -d --build; \
@@ -128,9 +204,20 @@ ssh -t "$TARGET" "cd $APP_DIR && \
     exit 127; \
   fi"
 
-printf '\n[4/5] Configuring host nginx + certbot on %s...\n' "$TARGET"
-ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$HOME/library_app' '$BACKEND_PORT' '$DEPLOY_NGINX_CONFIG_NAME' '$DEPLOY_NGINX_CONF_DIR' '$DEPLOY_NGINX_VERSION'"
+printf '\n[5/7] Configuring host nginx + certbot on %s...\n' "$TARGET"
+ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$REMOTE_APP_ABS_DIR' '$BACKEND_PORT' '$DEPLOY_NGINX_CONFIG_NAME' '$DEPLOY_NGINX_CONF_DIR' '$DEPLOY_NGINX_VERSION'"
 
-printf '\n[5/5] Done.\n'
-printf 'DNS requirement: point %s -> %s\n' "$DOMAIN" "$TARGET"
-printf 'If another app uses port 80 on this host, keep switch-app.sh at ~/switch-app.sh on remote server to swap.\n'
+printf '\n[6/7] Verifying nginx loaded config path...\n'
+if ! ssh "$TARGET" "sudo nginx -T 2>/dev/null | grep -Fq '$REMOTE_NGINX_CONFIG_PATH'"; then
+  printf 'Action required: nginx did not load expected config file %s\n' "$REMOTE_NGINX_CONFIG_PATH"
+  printf 'Check include directives and conf directory, then rerun: bash scripts/deploy.sh\n'
+  exit 1
+fi
+
+printf '\n[7/7] Verifying HTTPS endpoint...\n'
+if ! ssh "$TARGET" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://$DOMAIN >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://$DOMAIN; else exit 127; fi"; then
+  printf 'Action required: HTTPS verification failed for https://%s\n' "$DOMAIN"
+  printf 'If curl/wget is missing on server, install one and rerun.\n'
+  printf 'Check remote logs: sudo nginx -t && sudo systemctl status nginx --no-pager && sudo journalctl -u nginx -n 100 --no-pager\n'
+  exit 1
+fi

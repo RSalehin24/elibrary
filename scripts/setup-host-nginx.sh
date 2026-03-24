@@ -47,6 +47,19 @@ mkdir -p "$APP_DIR/storage/staticfiles" "$APP_DIR/storage/media"
 mkdir -p /var/www/certbot
 mkdir -p "$NGINX_CONF_DIR"
 
+APP_OWNER_HOME="$(dirname "$APP_DIR")"
+APP_OWNER_PARENT="$(dirname "$APP_OWNER_HOME")"
+
+chmod o+x "$APP_OWNER_PARENT"
+chmod o+x "$APP_OWNER_HOME"
+chmod o+rx "$APP_DIR"
+
+if [ -d "$APP_DIR/frontend/dist" ]; then
+  chmod -R o+rX "$APP_DIR/frontend/dist"
+fi
+
+chmod -R o+rX "$APP_DIR/storage/staticfiles" "$APP_DIR/storage/media"
+
 case "$CONFIG_NAME" in
   *.conf) ;;
   *) CONFIG_NAME="${CONFIG_NAME}.conf" ;;
