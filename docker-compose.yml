@@ -58,6 +58,7 @@ services:
       - 1.1.1.1
       - 8.8.8.8
     networks:
+      - public
       - internal
 
   worker:
@@ -109,5 +110,6 @@ volumes:
   redis_data:
 
 networks:
+  public:
   internal:
     internal: true

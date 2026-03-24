@@ -209,9 +209,21 @@ fi
 $COMPOSE_CMD down --remove-orphans || true
 $COMPOSE_CMD up -d --build --force-recreate
 
-published_port="$($COMPOSE_CMD port backend 8000 2>/dev/null || true)"
+published_port=''
+attempt=0
+while [ "$attempt" -lt 15 ]; do
+  published_port="$($COMPOSE_CMD port backend 8000 2>/dev/null || true)"
+  if [ "$published_port" = "127.0.0.1:${BACKEND_PORT}" ]; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 2
+done
+
 if [ "$published_port" != "127.0.0.1:${BACKEND_PORT}" ]; then
   echo "Action required: backend port binding mismatch. Expected 127.0.0.1:${BACKEND_PORT}, got '${published_port:-<none>}'"
+  echo "Compose resolved backend ports:"
+  $COMPOSE_CMD config | sed -n '/backend:/,/^[^[:space:]]/p' | sed -n '/ports:/,/^[^[:space:]]/p' || true
   $COMPOSE_CMD ps
   exit 1
 fi
