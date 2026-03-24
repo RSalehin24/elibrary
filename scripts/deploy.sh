@@ -164,14 +164,18 @@ set_default_env() {
 mkdir -p "$APP_DIR"
 if [ -d "$APP_DIR/.git" ]; then
   cd "$APP_DIR"
-  git fetch origin
-  git checkout "$BRANCH"
-  git pull --ff-only origin "$BRANCH"
+  git fetch origin "$BRANCH"
+  if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git checkout "$BRANCH"
+  else
+    git checkout -B "$BRANCH" "origin/$BRANCH"
+  fi
+  git reset --hard "origin/$BRANCH"
 else
   rm -rf "$APP_DIR"
   git clone "$REPO_SSH" "$APP_DIR"
   cd "$APP_DIR"
-  git checkout "$BRANCH"
+  git checkout -B "$BRANCH" "origin/$BRANCH"
 fi
 
 if [ ! -f .env ]; then
