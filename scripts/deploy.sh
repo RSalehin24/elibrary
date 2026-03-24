@@ -12,6 +12,11 @@ Example:
   nano scripts/.env
   scripts/deploy.sh
 
+Optional env sync control:
+  DEPLOY_ENV_SYNC_MODE=preserve   # default behavior (do not overwrite remote .env)
+  DEPLOY_ENV_SYNC_MODE=push       # overwrite remote .env with local .env
+  DEPLOY_ENV_SYNC_MODE=prompt     # ask during deploy when running interactively
+
 What it does:
   1) Runs preflight checks (DNS/SSH/sudo/docker)
   2) Syncs code on the remote server
@@ -73,6 +78,7 @@ CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 REMOTE_APP_ABS_DIR="/home/${DEPLOY_USER_NAME}/library_app"
 REMOTE_NGINX_CONFIG_PATH="${DEPLOY_NGINX_CONF_DIR}/${DEPLOY_NGINX_CONFIG_NAME}"
+DEPLOY_ENV_SYNC_MODE="${DEPLOY_ENV_SYNC_MODE:-prompt}"
 
 require_cmd() {
   cmd="$1"
@@ -203,8 +209,42 @@ printf 'Remote .env defaults ensured (existing values preserved)\n'
 EOF
 
 printf '\n[3/8] Syncing local workspace to %s...\n' "$TARGET"
+sync_remote_env='preserve'
+case "$DEPLOY_ENV_SYNC_MODE" in
+  push|preserve)
+    sync_remote_env="$DEPLOY_ENV_SYNC_MODE"
+    ;;
+  prompt)
+    if [ -t 0 ]; then
+      printf 'Remote .env sync mode [P]reserve/[U]push local (default P): '
+      read -r env_sync_choice || true
+      case "${env_sync_choice:-}" in
+        U|u|push|PUSH) sync_remote_env='push' ;;
+        *) sync_remote_env='preserve' ;;
+      esac
+    fi
+    ;;
+  *)
+    printf 'Action required: invalid DEPLOY_ENV_SYNC_MODE=%s (allowed: preserve|push|prompt)\n' "$DEPLOY_ENV_SYNC_MODE"
+    exit 1
+    ;;
+esac
+
+if [ "$sync_remote_env" = 'push' ]; then
+  if [ ! -f "$REPO_ROOT/.env" ]; then
+    printf 'Action required: local %s/.env not found, cannot push env to remote.\n' "$REPO_ROOT"
+    exit 1
+  fi
+  printf 'Applying local .env to remote .env\n'
+  scp "$REPO_ROOT/.env" "$TARGET:$REMOTE_APP_ABS_DIR/.env" >/dev/null
+else
+  printf 'Preserving remote .env (no overwrite)\n'
+fi
+
 (cd "$REPO_ROOT" && COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata -czf - \
   --exclude='.git' \
+  --exclude='.env' \
+  --exclude='scripts/.env' \
   --exclude='.DS_Store' \
   --exclude='venv' \
   --exclude='.venv' \
