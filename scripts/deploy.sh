@@ -194,15 +194,28 @@ ssh -t "$TARGET" "cd $APP_DIR && \
   docker run --rm -v \"\$PWD/frontend:/app\" -w /app node:22-alpine sh -lc 'npm ci && npm run build'"
 
 printf '\n[4/7] Starting app stack on %s...\n' "$TARGET"
-ssh -t "$TARGET" "cd $APP_DIR && \
-  if docker compose version >/dev/null 2>&1; then \
-    docker compose up -d --build; \
-  elif command -v docker-compose >/dev/null 2>&1; then \
-    docker-compose up -d --build; \
-  else \
-    echo 'Docker Compose not found. Install docker compose plugin or docker-compose binary.'; \
-    exit 127; \
-  fi"
+ssh -t "$TARGET" "cd $APP_DIR && BACKEND_PORT='$BACKEND_PORT' sh -s" <<'EOF'
+set -eu
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE_CMD='docker compose'
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_CMD='docker-compose'
+else
+  echo 'Docker Compose not found. Install docker compose plugin or docker-compose binary.'
+  exit 127
+fi
+
+$COMPOSE_CMD down --remove-orphans || true
+$COMPOSE_CMD up -d --build --force-recreate
+
+published_port="$($COMPOSE_CMD port backend 8000 2>/dev/null || true)"
+if [ "$published_port" != "127.0.0.1:${BACKEND_PORT}" ]; then
+  echo "Action required: backend port binding mismatch. Expected 127.0.0.1:${BACKEND_PORT}, got '${published_port:-<none>}'"
+  $COMPOSE_CMD ps
+  exit 1
+fi
+EOF
 
 printf '\n[5/7] Configuring host nginx + certbot on %s...\n' "$TARGET"
 ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$REMOTE_APP_ABS_DIR' '$BACKEND_PORT' '$DEPLOY_NGINX_CONFIG_NAME' '$DEPLOY_NGINX_CONF_DIR' '$DEPLOY_NGINX_VERSION'"
@@ -213,6 +226,7 @@ if ! ssh "$TARGET" "sudo nginx -T 2>/dev/null | grep -Fq '$REMOTE_NGINX_CONFIG_P
   printf 'Check include directives and conf directory, then rerun: bash scripts/deploy.sh\n'
   exit 1
 fi
+printf 'OK: nginx loaded config file %s\n' "$REMOTE_NGINX_CONFIG_PATH"
 
 printf '\n[7/7] Verifying HTTPS endpoint...\n'
 if ! ssh "$TARGET" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://$DOMAIN >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://$DOMAIN; else exit 127; fi"; then
@@ -221,3 +235,4 @@ if ! ssh "$TARGET" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-t
   printf 'Check remote logs: sudo nginx -t && sudo systemctl status nginx --no-pager && sudo journalctl -u nginx -n 100 --no-pager\n'
   exit 1
 fi
+printf 'OK: HTTPS endpoint reachable at https://%s\n' "$DOMAIN"
