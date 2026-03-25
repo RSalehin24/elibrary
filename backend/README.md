@@ -7,7 +7,7 @@ It includes:
 - Django API and admin/auth flows
 - catalog, access, and ingestion apps
 - Celery worker and beat scheduler support
-- legacy scraper/export pipeline in `apps/ingestion/legacy/`
+- scraper/export pipeline in `apps/ingestion/pipeline/`
 - backend-owned local media under `storage/`
 - temporary ingestion staging under `outputs/`
 
@@ -85,12 +85,12 @@ Or with the local virtualenv:
 
 For the unified stack used both locally and on the server, run Docker from the repo root with [`docker-compose.yml`](../docker-compose.yml).
 
-## Legacy Scraper
+## Scraper Pipeline
 
-The old scraper/export code is now integrated into:
+The scraper/export code is now integrated into:
 
 ```bash
-backend/apps/ingestion/legacy/
+backend/apps/ingestion/pipeline/
 ```
 
 Run batch ingestion through Django instead of a separate standalone script:

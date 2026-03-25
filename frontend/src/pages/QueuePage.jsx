@@ -5,7 +5,6 @@ import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import EmptyState from "../components/EmptyState";
 import LoadingSpinner from "../components/LoadingSpinner";
-import PageLoader from "../components/PageLoader";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -471,22 +470,17 @@ function CatalogStopIcon() {
   );
 }
 
-function buildProcessingLoaderCopy(label) {
-  return {
-    label,
-    detail: "Fetching the latest data for this section.",
-  };
-}
-
 function renderProcessingCardLoader(label) {
-  const copy = buildProcessingLoaderCopy(label);
+  const screenReaderLabel = label || "Loading";
   return (
-    <div className="processing-card-loader-shell">
-      <PageLoader
-        label={copy.label}
-        detail={copy.detail}
-        className="processing-card-loader"
-      />
+    <div
+      className="processing-inline-loader"
+      role="status"
+      aria-live="polite"
+      aria-label={screenReaderLabel}
+    >
+      <LoadingSpinner size={16} />
+      <span>Loading...</span>
     </div>
   );
 }
@@ -1579,6 +1573,7 @@ export default function QueuePage() {
             inline
             drawerId={`${activeTab}-submission-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
+            buttonsLoading={loading}
           />
         }
         actions={
@@ -1978,6 +1973,7 @@ export default function QueuePage() {
             inline
             drawerId={`${activeTab}-job-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
+            buttonsLoading={loading}
           />
         }
         actions={
@@ -2344,6 +2340,7 @@ export default function QueuePage() {
             inline
             drawerId={`${activeTab}-review-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
+            buttonsLoading={loading}
           />
         }
       >
@@ -2642,6 +2639,7 @@ export default function QueuePage() {
             inline
             drawerId={`${activeTab}-catalog-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
+            buttonsLoading={loading}
           />
         }
         actions={
@@ -2931,6 +2929,7 @@ export default function QueuePage() {
             inline
             drawerId={`${activeTab}-run-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
+            buttonsLoading={loading}
           />
         }
         actions={
@@ -3233,90 +3232,95 @@ export default function QueuePage() {
               ) : null}
             </div>
           </div>
-          {loading ? (
-            renderProcessingCardLoader("Loading automation settings")
-          ) : (
-            <form className="stack-form" onSubmit={saveAutomation}>
-              <div className="detail-facts processing-automation-grid">
-                <label>
-                  <span className="fact-label">Time</span>
-                  <input
-                    type="time"
-                    value={automationForm.daily_run_time}
-                    onChange={(event) =>
-                      setAutomationForm({
-                        ...automationForm,
-                        daily_run_time: event.target.value,
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  <span className="fact-label">Frequency</span>
-                  <select
-                    value={automationForm.frequency}
-                    onChange={(event) =>
-                      setAutomationForm({
-                        ...automationForm,
-                        frequency: event.target.value,
-                      })
-                    }
+          <div className="processing-automation-body">
+            {loading ? (
+              renderProcessingCardLoader("Loading automation settings")
+            ) : (
+              <form
+                className="stack-form processing-automation-form"
+                onSubmit={saveAutomation}
+              >
+                <div className="detail-facts processing-automation-grid">
+                  <label>
+                    <span className="fact-label">Time</span>
+                    <input
+                      type="time"
+                      value={automationForm.daily_run_time}
+                      onChange={(event) =>
+                        setAutomationForm({
+                          ...automationForm,
+                          daily_run_time: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span className="fact-label">Frequency</span>
+                    <select
+                      value={automationForm.frequency}
+                      onChange={(event) =>
+                        setAutomationForm({
+                          ...automationForm,
+                          frequency: event.target.value,
+                        })
+                      }
+                    >
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="biweekly">Bi-weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="bimonthly">Bi-monthly</option>
+                      <option value="quarterly">Every 3 months</option>
+                      <option value="four_monthly">Every 4 months</option>
+                      <option value="half_yearly">Half-yearly</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span className="fact-label">Mode</span>
+                    <select
+                      value={automationForm.mode}
+                      onChange={(event) =>
+                        setAutomationForm({
+                          ...automationForm,
+                          mode: event.target.value,
+                        })
+                      }
+                    >
+                      <option value="pending">New + unfinished</option>
+                      <option value="all">All tracked</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span className="fact-label">Pages</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="80"
+                      value={automationForm.refresh_max_pages}
+                      onChange={(event) =>
+                        setAutomationForm({
+                          ...automationForm,
+                          refresh_max_pages: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="processing-card-actions processing-automation-save-actions">
+                  <button
+                    type="submit"
+                    className="primary-button"
+                    disabled={savingAutomation}
                   >
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="biweekly">Bi-weekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="bimonthly">Bi-monthly</option>
-                    <option value="quarterly">Every 3 months</option>
-                    <option value="four_monthly">Every 4 months</option>
-                    <option value="half_yearly">Half-yearly</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="fact-label">Mode</span>
-                  <select
-                    value={automationForm.mode}
-                    onChange={(event) =>
-                      setAutomationForm({
-                        ...automationForm,
-                        mode: event.target.value,
-                      })
-                    }
-                  >
-                    <option value="pending">New + unfinished</option>
-                    <option value="all">All tracked</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="fact-label">Pages</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="80"
-                    value={automationForm.refresh_max_pages}
-                    onChange={(event) =>
-                      setAutomationForm({
-                        ...automationForm,
-                        refresh_max_pages: event.target.value,
-                      })
-                    }
-                  />
-                </label>
-              </div>
-              <div className="processing-card-actions">
-                <button
-                  type="submit"
-                  className="primary-button"
-                  disabled={savingAutomation}
-                >
-                  <span className="button-label">
-                    {savingAutomation ? <LoadingSpinner size={14} /> : null}
-                    {savingAutomation ? "Saving..." : "Save"}
-                  </span>
-                </button>
-              </div>
-            </form>
-          )}
+                    <span className="button-label">
+                      {savingAutomation ? <LoadingSpinner size={14} /> : null}
+                      Save automation
+                    </span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
         </section>
         {renderSubmissionsCard("Automation Requests")}
         {renderJobsCard("Book Creation")}

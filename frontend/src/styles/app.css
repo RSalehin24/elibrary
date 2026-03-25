@@ -351,6 +351,39 @@ textarea {
   gap: 8px;
 }
 
+.processing-card-head-meta {
+  min-height: 42px;
+}
+
+.detail-facts.processing-automation-grid {
+  min-height: 97.5px;
+}
+
+.detail-card.processing-card.processing-summary-card {
+  min-height: 248px;
+}
+
+.button-label--stable {
+  gap: 6px;
+}
+
+.button-label-spinner-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.button-label-spinner-slot .loading-spinner {
+  visibility: hidden;
+}
+
+.button-label-spinner-slot.is-visible .loading-spinner {
+  visibility: visible;
+}
+
 .loading-spinner {
   width: var(--spinner-size, 16px);
   height: var(--spinner-size, 16px);
@@ -2108,7 +2141,8 @@ textarea {
 .processing-summary-card {
   grid-column: 1 / -1;
   min-height: 0;
-  grid-template-rows: auto auto auto;
+  gap: 14px;
+  grid-template-rows: auto auto;
 }
 
 .processing-card-head,
@@ -2292,6 +2326,12 @@ textarea {
 
 .processing-automation-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 0;
+  border: 1px solid rgba(17, 70, 54, 0.12);
+  border-radius: 16px;
+  background: rgba(241, 247, 243, 0.56);
 }
 
 .processing-automation-grid input,
@@ -2341,6 +2381,33 @@ textarea {
   margin: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.processing-automation-body {
+  display: grid;
+  min-height: 146px;
+}
+
+.processing-automation-body > .processing-inline-loader {
+  align-self: center;
+}
+
+.processing-automation-form {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-height: 100%;
+}
+
+.processing-automation-save-actions {
+  justify-content: flex-start;
+  margin: 0;
+}
+
+.processing-automation-save-actions > .primary-button {
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 0.82rem;
 }
 
 .processing-switch:hover {
@@ -2450,16 +2517,21 @@ textarea {
   padding: 24px;
 }
 
-.processing-card-loader-shell {
-  display: grid;
-  min-height: 180px;
+.processing-inline-loader {
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.2;
 }
 
-.processing-card-loader {
-  width: min(100%, 460px);
-  margin: 0 auto;
-  box-shadow: none;
+.processing-summary-card > .processing-inline-loader,
+.processing-summary-card > .processing-summary-bar,
+.processing-summary-card > .stack-form {
+  min-height: 69px;
 }
 
 .processing-table {

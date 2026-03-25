@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
+import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -14,6 +15,8 @@ export default function PasswordResetPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const resetPayload = useMemo(
     () => ({
@@ -26,16 +29,25 @@ export default function PasswordResetPage() {
   const hasResetLink = Boolean(resetPayload.uid && resetPayload.token);
 
   async function handleLogout() {
+    if (loggingOut) {
+      return;
+    }
     try {
+      setLoggingOut(true);
       await logout();
       toast.info("Signed out. You can now reset the password.");
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setLoggingOut(false);
     }
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submitting) {
+      return;
+    }
 
     if (!hasResetLink) {
       toast.error("Invalid reset link.");
@@ -48,6 +60,7 @@ export default function PasswordResetPage() {
     }
 
     try {
+      setSubmitting(true);
       await apiFetch("/auth/password-reset/confirm/", {
         method: "POST",
         body: {
@@ -59,6 +72,8 @@ export default function PasswordResetPage() {
       navigate("/login", { replace: true });
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -83,8 +98,12 @@ export default function PasswordResetPage() {
               type="button"
               className="primary-button"
               onClick={handleLogout}
+              disabled={loggingOut}
             >
-              Log out
+              <span className="button-label">
+                {loggingOut ? <LoadingSpinner size={16} /> : null}
+                {loggingOut ? "Logging out..." : "Log out"}
+              </span>
             </button>
             <Link to="/home" className="ghost-button">
               Back
@@ -152,9 +171,12 @@ export default function PasswordResetPage() {
             <button
               type="submit"
               className="primary-button"
-              disabled={!hasResetLink}
+              disabled={!hasResetLink || submitting}
             >
-              Reset password
+              <span className="button-label">
+                {submitting ? <LoadingSpinner size={16} /> : null}
+                {submitting ? "Resetting..." : "Reset password"}
+              </span>
             </button>
             <Link to="/login" className="ghost-button">
               Back

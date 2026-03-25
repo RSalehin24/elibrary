@@ -79,6 +79,23 @@ class EpubBuilder:
         self.book.add_item(c)
         self.chapters.append(c)
 
+    def add_front_section_pages(self, sections):
+        for idx, section in enumerate(sections, start=1):
+            title = section.get("title") or f"প্রারম্ভ {idx}"
+            content = section.get("html") or ""
+            html_content = self.render_template(
+                "lesson.html",
+                lesson_title=title,
+                lesson_content=content,
+            )
+            page = epub.EpubHtml(
+                title=title,
+                file_name=f"front_section_{idx}.xhtml",
+                content=html_content,
+            )
+            self.book.add_item(page)
+            self.chapters.append(page)
+
     def add_toc_page(self, lessons):
         """
         Add table of contents page.

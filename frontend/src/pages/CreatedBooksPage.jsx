@@ -151,6 +151,7 @@ export default function CreatedBooksPage() {
           resultCount={resultCount}
           onSearchClear={clearSearch}
           inline
+          buttonsLoading={loading}
         />
       </header>
 

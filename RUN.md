@@ -75,4 +75,5 @@ docker-compose ps
 docker-compose logs -f backend
 docker-compose logs -f worker
 docker-compose down
+docker-compose down -v
 ```

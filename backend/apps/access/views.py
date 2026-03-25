@@ -33,7 +33,12 @@ from apps.catalog.models import Book, Contributor, ContributorRole, Category, Ge
 from apps.common.permissions import IsSuperAdmin, user_can_download_book_assets, user_can_launch_reader, user_can_view_book_cover, user_has_scope
 from apps.common.models import LifecycleState, ReviewState
 from apps.common.url_utils import public_api_url
-from apps.ingestion.services.normalization import clean_extracted_dedication_html, promote_leading_front_matter
+from apps.ingestion.services.normalization import (
+    clean_extracted_dedication_html,
+    extract_dedication_title_and_content,
+    promote_leading_front_matter,
+    split_leading_front_sections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -348,10 +353,14 @@ def build_book_info_section(html_fragment):
 
 
 def build_dedication_section(html_fragment):
+    return build_dedication_section_with_title(html_fragment, "উৎসর্গ")
+
+
+def build_dedication_section_with_title(html_fragment, title):
     fragment = BeautifulSoup(
         f"""
         <div class="dedication-section">
-          <h2 class="dedication-title">উৎসর্গ</h2>
+          <h2 class="dedication-title">{title}</h2>
           <div class="dedication-content">{html_fragment}</div>
         </div>
         """,
@@ -360,10 +369,24 @@ def build_dedication_section(html_fragment):
     return fragment.find("div", class_="dedication-section")
 
 
+def build_front_section(title, html_fragment):
+    fragment = BeautifulSoup(
+        f"""
+        <div class="front-section">
+          <h2 class="front-section-title">{title}</h2>
+          <div class="front-section-content">{html_fragment}</div>
+        </div>
+        """,
+        "html.parser",
+    )
+    return fragment.find("div", class_="front-section")
+
+
 def normalize_preview_book_sections(soup, dedication_html=""):
     main_content = soup.find("div", class_="main-content")
     container = soup.find("div", class_="container")
     insertion_anchor = main_content or soup.find("div", class_="toc-section")
+    front_section_anchor = main_content or insertion_anchor
 
     updated = False
     if main_content is not None:
@@ -379,6 +402,20 @@ def normalize_preview_book_sections(soup, dedication_html=""):
             replace_tag_contents(main_content, cleaned_main_content_html)
             updated = True
 
+        front_sections, compact_main_content_html = split_leading_front_sections(
+            main_content.decode_contents()
+        )
+        if compact_main_content_html != main_content.decode_contents():
+            replace_tag_contents(main_content, compact_main_content_html)
+            updated = True
+
+        if front_sections and front_section_anchor is not None:
+            for section in front_sections:
+                front_section_anchor.insert_before(
+                    build_front_section(section["title"], section["html"])
+                )
+            updated = True
+
         if promoted_book_info_html and promoted_book_info_html != current_book_info_html:
             if book_info_content is None:
                 main_content.insert_before(build_book_info_section(promoted_book_info_html))
@@ -390,16 +427,31 @@ def normalize_preview_book_sections(soup, dedication_html=""):
     dedication_content = soup.find("div", class_="dedication-content")
     if dedication_content is not None:
         current_dedication_html = dedication_content.decode_contents()
+        dedication_title_tag = soup.find("h2", class_="dedication-title")
         cleaned_dedication_html = clean_extracted_dedication_html(current_dedication_html)
+        dedication_title, normalized_dedication_html = extract_dedication_title_and_content(
+            cleaned_dedication_html or raw_book_dedication_html
+        )
+
+        if dedication_title_tag is not None and dedication_title_tag.get_text(strip=True) != dedication_title:
+            dedication_title_tag.string = dedication_title
+            updated = True
+
         if cleaned_dedication_html:
-            if cleaned_dedication_html != current_dedication_html:
-                replace_tag_contents(dedication_content, cleaned_dedication_html)
+            if normalized_dedication_html != current_dedication_html:
+                replace_tag_contents(dedication_content, normalized_dedication_html)
                 updated = True
         elif raw_book_dedication_html:
             replace_tag_contents(dedication_content, raw_book_dedication_html)
             updated = True
     elif raw_book_dedication_html:
-        dedication_section = build_dedication_section(raw_book_dedication_html)
+        dedication_title, normalized_dedication_html = extract_dedication_title_and_content(
+            raw_book_dedication_html
+        )
+        dedication_section = build_dedication_section_with_title(
+            normalized_dedication_html,
+            dedication_title,
+        )
         if insertion_anchor is not None:
             insertion_anchor.insert_before(dedication_section)
             updated = True

@@ -63,16 +63,6 @@ if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
     printf 'Missing %s\n' "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE"
     exit 1
   fi
-elif [ -t 0 ]; then
-  printf 'Local %s exists. Edit now? [y/N]: ' "$LOCAL_PRODUCTION_ENV_FILE"
-  read -r local_edit_choice || true
-  case "${local_edit_choice:-}" in
-    Y|y|yes|YES)
-      LOCAL_EDITOR="${EDITOR:-nano}"
-      "$LOCAL_EDITOR" "$LOCAL_PRODUCTION_ENV_FILE"
-      ;;
-    *) ;;
-  esac
 fi
 
 if [ -f "$ENV_FILE" ]; then
@@ -134,10 +124,74 @@ print("\n".join(sorted(set(ips))))
 PY
 }
 
+extract_database_url_host() {
+  python3 - "$1" <<'PY'
+from urllib.parse import urlparse
+import sys
+
+value = (sys.argv[1] or "").strip()
+if not value:
+    print("")
+    raise SystemExit(0)
+
+parsed = urlparse(value)
+print(parsed.hostname or "")
+PY
+}
+
+extract_database_url_user() {
+  python3 - "$1" <<'PY'
+from urllib.parse import urlparse
+import sys
+
+value = (sys.argv[1] or "").strip()
+if not value:
+    print("")
+    raise SystemExit(0)
+
+parsed = urlparse(value)
+print(parsed.username or "")
+PY
+}
+
+validate_local_database_env() {
+  local_env_file="$1"
+
+  if [ ! -f "$local_env_file" ]; then
+    printf 'Action required: missing env file %s\n' "$local_env_file"
+    exit 1
+  fi
+
+  database_url="$(grep '^DATABASE_URL=' "$local_env_file" | tail -n 1 | cut -d '=' -f2- || true)"
+  if [ -z "$database_url" ]; then
+    printf 'Action required: DATABASE_URL is missing in %s\n' "$local_env_file"
+    exit 1
+  fi
+
+  database_host="$(extract_database_url_host "$database_url")"
+  if [ "$database_host" != 'postgres' ]; then
+    printf 'Action required: DATABASE_URL host must be `postgres` for docker-compose internal networking.\n'
+    printf 'Found host: %s\n' "${database_host:-<empty>}"
+    printf 'DATABASE_URL: %s\n' "$database_url"
+    exit 1
+  fi
+
+  database_user="$(extract_database_url_user "$database_url")"
+  postgres_user="$(grep '^POSTGRES_USER=' "$local_env_file" | tail -n 1 | cut -d '=' -f2- || true)"
+  if [ -n "$postgres_user" ] && [ -n "$database_user" ] && [ "$database_user" != "$postgres_user" ]; then
+    printf 'Action required: DATABASE_URL username and POSTGRES_USER do not match in %s\n' "$local_env_file"
+    printf 'DATABASE_URL username: %s\n' "$database_user"
+    printf 'POSTGRES_USER: %s\n' "$postgres_user"
+    exit 1
+  fi
+}
+
 require_cmd ssh
 require_cmd scp
 require_cmd python3
 require_cmd git
+
+validate_local_database_env "$LOCAL_PRODUCTION_ENV_FILE"
 
 printf '\n[1/8] Running preflight checks...\n'
 

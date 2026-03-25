@@ -4,6 +4,7 @@ import { apiFetch } from "../api/client";
 import BookTable from "../components/BookTable";
 import CatalogToolbar from "../components/CatalogToolbar";
 import ExportActions from "../components/ExportActions";
+import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import PropertyTableControls, {
   useClientPagination,
@@ -181,6 +182,7 @@ export default function LibraryPage() {
   const [savedFilters, setSavedFilters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [savedFilterAction, setSavedFilterAction] = useState("");
   const [downloadState, setDownloadState] = useState(
     () => pendingExportRef.current?.mode || "",
   );
@@ -285,20 +287,31 @@ export default function LibraryPage() {
   }
 
   function applySavedFilter(savedFilter) {
+    if (savedFilterAction) {
+      return;
+    }
+    setSavedFilterAction(`apply:${savedFilter.id}`);
     const nextFilters = { ...defaultFilters, ...(savedFilter.params || {}) };
     pagination.resetPage();
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
     toast.success(`Applied "${savedFilter.name}".`);
+    window.setTimeout(() => setSavedFilterAction(""), 300);
   }
 
   async function deleteSavedFilter(id) {
+    if (savedFilterAction) {
+      return;
+    }
     try {
+      setSavedFilterAction(`delete:${id}`);
       await apiFetch(`/saved-filters/${id}/`, { method: "DELETE" });
       toast.success("Filter removed.");
       await loadSavedFilters();
     } catch (nextError) {
       toast.error(nextError.message);
+    } finally {
+      setSavedFilterAction("");
     }
   }
 
@@ -399,6 +412,7 @@ export default function LibraryPage() {
           onSearchClear={clearSearch}
           inline
           bare
+          buttonsLoading={loading}
         />
 
         <div className="catalog-page-controls-row">{tableControls}</div>
@@ -412,16 +426,24 @@ export default function LibraryPage() {
                 type="button"
                 className="saved-filter-apply"
                 onClick={() => applySavedFilter(filter)}
+                disabled={Boolean(savedFilterAction)}
               >
-                {filter.name}
+                {savedFilterAction === `apply:${filter.id}` ? (
+                  <span className="button-label">
+                    <LoadingSpinner size={12} /> Applying...
+                  </span>
+                ) : (
+                  filter.name
+                )}
               </button>
               <button
                 type="button"
                 className="saved-filter-delete"
                 onClick={() => deleteSavedFilter(filter.id)}
                 aria-label={`Delete ${filter.name}`}
+                disabled={Boolean(savedFilterAction)}
               >
-                ×
+                {savedFilterAction === `delete:${filter.id}` ? "…" : "×"}
               </button>
             </div>
           ))}

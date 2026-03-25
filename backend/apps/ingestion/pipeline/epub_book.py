@@ -1,6 +1,7 @@
 import os
 
 from .epub_properties.epub_builder import EpubBuilder
+from apps.ingestion.services.normalization import split_leading_front_sections
 
 
 def display_value(value):
@@ -58,9 +59,15 @@ def create_epub(book_data):
     dedication_text = book_data.get("dedication", "")
     builder.add_dedication_page(dedication_text=dedication_text)
     
+    main_content = book_data.get("main_content", "")
+    front_sections, compact_main_content = split_leading_front_sections(main_content)
+
+    if front_sections:
+        builder.add_front_section_pages(front_sections)
+
     # Add main content if available
-    if book_data["main_content"]:
-        builder.add_main_content_page(main_content=book_data["main_content"])
+    if compact_main_content:
+        builder.add_main_content_page(main_content=compact_main_content)
 
     # Convert content_items to (title, content) tuples for lesson pages
     lessons = []

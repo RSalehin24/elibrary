@@ -1,4 +1,5 @@
 import re
+from html import escape
 
 from bs4 import BeautifulSoup
 
@@ -49,6 +50,21 @@ BODY_SECTION_PATTERNS = [
     "introduction",
 ]
 
+FRONT_SECTION_HEADING_PATTERNS = [
+    "ভূমিকা",
+    "প্রস্তাবনা",
+    "লেখকের কথা",
+    "অনুবাদকের কথা",
+    "প্রকাশকের কথা",
+    "সহস্রাব্দ সংস্করণের কথা",
+    "প্রারম্ভ কথন",
+    "প্রারম্ভকথন",
+    "কথন",
+    "foreword",
+    "introduction",
+    "preface",
+]
+
 SEPARATOR_PARAGRAPH_VALUES = {".", "।", "..", "..."}
 BLOCK_TAG_NAMES = ("h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "blockquote")
 HEADING_TAG_NAMES = {"h1", "h2", "h3", "h4", "h5", "h6"}
@@ -56,6 +72,18 @@ MAX_METADATA_TEXT_LENGTH = 320
 MAX_METADATA_VALUE_LENGTH = 180
 MAX_TITLE_PREFIX_LENGTH = 140
 MAX_DEDICATION_BLOCK_LENGTH = 220
+DATE_LINE_PATTERN = re.compile(
+    r"^(?:[০-৯]{1,2}|[0-9]{1,2})\s+(?:জানুয়ারি|ফেব্রুয়ারি|মার্চ|এপ্রিল|মে|জুন|জুলাই|আগস্ট|সেপ্টেম্বর|অক্টোবর|নভেম্বর|ডিসেম্বর|january|february|march|april|may|june|july|august|september|october|november|december)\s*,?\s*(?:[০-৯]{4}|[0-9]{4})$",
+    re.IGNORECASE,
+)
+LETTER_SALUTATION_PATTERN = re.compile(r"^(?:প্রিয়|শ্রদ্ধেয়|dear)\b", re.IGNORECASE)
+LETTER_EXCERPT_PATTERNS = [
+    "চিঠি",
+    "চিঠির",
+    "চিঠিতে",
+    "পাঠানো চিঠি",
+    "letter",
+]
 MAX_CONTRIBUTOR_NAME_WORDS = 8
 MAX_CONTRIBUTOR_NAME_LENGTH = 80
 CONTRIBUTOR_CONNECTOR_PATTERN = re.compile(r"\s+(?:ও|and|&)\s+", re.IGNORECASE)
@@ -240,6 +268,13 @@ def search_front_matter_label_value(text, strong_text="", has_break=False):
             re.IGNORECASE,
         )
         for match in pattern.finditer(cleaned_text):
+            start_index = match.start()
+            end_index = start_index + len(alias)
+            if start_index > 0 and re.match(r"[A-Za-z0-9_\u0980-\u09FF]", cleaned_text[start_index - 1]):
+                continue
+            if end_index < len(cleaned_text) and re.match(r"[A-Za-z0-9_\u0980-\u09FF]", cleaned_text[end_index]):
+                continue
+
             prefix = cleaned_text[: match.start()]
             cleaned_prefix = clean_display_text(prefix.strip(" -–—|/"))
             value = clean_display_text(match.group("value").strip(" -:ঃ"))
@@ -327,13 +362,118 @@ def should_continue_dedication_block(text, strong_text="", tag_name=""):
         return True
     if is_body_section_marker(cleaned_text, tag_name=tag_name):
         return False
+    if tag_name in HEADING_TAG_NAMES and not is_dedication_heading(
+        cleaned_text,
+        strong_text=strong_text,
+        tag_name=tag_name,
+    ):
+        return False
     if search_front_matter_label_value(cleaned_text, strong_text=strong_text, has_break=False):
         return False
     if is_dedication_heading(cleaned_text, strong_text=strong_text, tag_name=tag_name):
         return False
+    if looks_like_letter_excerpt_marker(cleaned_text):
+        return False
     if len(cleaned_text) > MAX_DEDICATION_BLOCK_LENGTH:
         return False
     return count_sentence_markers(cleaned_text) <= 3
+
+
+def looks_like_letter_excerpt_marker(text):
+    cleaned_text = clean_display_text(text)
+    if not cleaned_text:
+        return False
+    normalized = normalize_catalog_text(cleaned_text)
+
+    if DATE_LINE_PATTERN.fullmatch(cleaned_text):
+        return True
+    if LETTER_SALUTATION_PATTERN.match(cleaned_text):
+        return True
+    for pattern in LETTER_EXCERPT_PATTERNS:
+        if normalize_catalog_text(pattern) in normalized:
+            return True
+    return False
+
+
+def is_front_section_heading(text, tag_name=""):
+    cleaned_text = clean_display_text(text)
+    if not cleaned_text or len(cleaned_text) > 140:
+        return False
+    if not text_matches_patterns(cleaned_text, FRONT_SECTION_HEADING_PATTERNS):
+        return False
+    normalized = normalize_catalog_text(cleaned_text)
+    if re.search(r"(অধ্যা|পর্ব|chapter)", normalized):
+        return False
+    return tag_name in HEADING_TAG_NAMES or len(cleaned_text.split()) <= 8
+
+
+def split_leading_front_sections(main_content_html):
+    if not main_content_html:
+        return [], main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    sections = []
+    current_section = None
+    extraction_started = False
+
+    for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+        if block.parent is None:
+            continue
+
+        text = block_text(block)
+        if not text:
+            continue
+
+        strong_text = block_strong_text(block)
+        has_break = block_has_break(block)
+
+        if is_front_section_heading(text, tag_name=block.name):
+            extraction_started = True
+            if current_section and plain_text_from_html("\n".join(current_section["html_parts"])):
+                sections.append(
+                    {
+                        "title": current_section["title"],
+                        "html": "\n".join(current_section["html_parts"]),
+                    }
+                )
+            current_section = {"title": clean_display_text(text), "html_parts": []}
+            block.decompose()
+            continue
+
+        if not extraction_started:
+            continue
+
+        if is_separator_paragraph(text):
+            block.decompose()
+            continue
+
+        if is_dedication_heading(text, strong_text=strong_text, tag_name=block.name):
+            break
+        if search_front_matter_label_value(text, strong_text=strong_text, has_break=has_break):
+            break
+        if block.name in HEADING_TAG_NAMES and not is_front_section_heading(text, tag_name=block.name):
+            break
+        if is_body_section_marker(text, tag_name=block.name) and re.search(
+            r"(অধ্যা|পর্ব|chapter)",
+            normalize_catalog_text(text),
+        ):
+            break
+
+        if current_section is None:
+            break
+
+        current_section["html_parts"].append(str(block))
+        block.decompose()
+
+    if current_section and plain_text_from_html("\n".join(current_section["html_parts"])):
+        sections.append(
+            {
+                "title": current_section["title"],
+                "html": "\n".join(current_section["html_parts"]),
+            }
+        )
+
+    return sections, str(soup)
 
 
 def strip_leading_dedication_label(text):
@@ -342,6 +482,49 @@ def strip_leading_dedication_label(text):
         return ""
     stripped = DEDICATION_INLINE_PREFIX_PATTERN.sub("", cleaned_text, count=1)
     return clean_display_text(stripped)
+
+
+def lines_to_paragraphs_html(lines):
+    cleaned_lines = [clean_display_text(line) for line in lines if clean_display_text(line)]
+    if not cleaned_lines:
+        return ""
+    return "".join(f"<p>{escape(line)}</p>" for line in cleaned_lines)
+
+
+def split_block_on_inline_dedication(block):
+    if block.name not in {"p", "li", "blockquote"}:
+        return None
+
+    raw_text = block.get_text("\n", strip=True)
+    if not raw_text:
+        return None
+
+    lines = [clean_display_text(line) for line in raw_text.splitlines() if clean_display_text(line)]
+    if not lines:
+        return None
+
+    dedication_index = -1
+    for index, line in enumerate(lines):
+        if DEDICATION_INLINE_PREFIX_PATTERN.match(line):
+            dedication_index = index
+            break
+
+    if dedication_index < 0:
+        return None
+
+    before_lines = lines[:dedication_index]
+    dedication_lines = []
+
+    first_dedication_line = strip_leading_dedication_label(lines[dedication_index])
+    if first_dedication_line:
+        dedication_lines.append(first_dedication_line)
+
+    dedication_lines.extend(lines[dedication_index + 1 :])
+
+    return {
+        "before_html": lines_to_paragraphs_html(before_lines),
+        "dedication_html": lines_to_paragraphs_html(dedication_lines),
+    }
 
 
 def extract_main_content_segments(main_content_html):
@@ -365,12 +548,34 @@ def extract_main_content_segments(main_content_html):
         has_break = block_has_break(block)
 
         if in_dedication:
+            if is_separator_paragraph(text):
+                in_dedication = False
+                block.decompose()
+                continue
             if should_continue_dedication_block(text, strong_text=strong_text, tag_name=block.name):
-                if not is_separator_paragraph(text):
-                    dedication_parts.append(str(block))
+                dedication_parts.append(str(block))
                 block.decompose()
                 continue
             in_dedication = False
+
+        inline_dedication_split = split_block_on_inline_dedication(block)
+        if inline_dedication_split is not None:
+            before_html = inline_dedication_split["before_html"]
+            dedication_html = inline_dedication_split["dedication_html"]
+
+            if before_html:
+                replacement_soup = BeautifulSoup(before_html, "html.parser")
+                block.clear()
+                for child in list(replacement_soup.contents):
+                    block.append(child)
+            else:
+                block.decompose()
+
+            if dedication_html:
+                dedication_parts.append(dedication_html)
+
+            in_dedication = True
+            continue
 
         metadata_candidate = search_front_matter_label_value(text, strong_text=strong_text, has_break=has_break)
         if metadata_candidate:
@@ -426,6 +631,45 @@ def clean_extracted_dedication_html(dedication_html):
 
     cleaned_html = str(soup).strip()
     return cleaned_html if plain_text_from_html(cleaned_html) else ""
+
+
+def extract_dedication_title_and_content(dedication_html, default_title="উৎসর্গ"):
+    cleaned_html = clean_extracted_dedication_html(dedication_html)
+    if not cleaned_html:
+        return default_title, ""
+
+    soup = BeautifulSoup(cleaned_html, "html.parser")
+    blocks = [
+        block
+        for block in soup.find_all(BLOCK_TAG_NAMES)
+        if block.parent is not None and block_text(block)
+    ]
+
+    title = default_title
+    if blocks:
+        first_block = blocks[0]
+        first_text = block_text(first_block)
+        first_strong = block_strong_text(first_block)
+        likely_title = (
+            len(first_text) <= 90
+            and count_sentence_markers(first_text) <= 1
+            and not text_matches_patterns(first_text, BODY_SECTION_PATTERNS)
+            and not search_front_matter_label_value(
+                first_text,
+                strong_text=first_strong,
+                has_break=block_has_break(first_block),
+            )
+        )
+        if likely_title:
+            title = first_text
+            if len(blocks) > 1:
+                first_block.decompose()
+
+    content_html = str(soup).strip()
+    if not plain_text_from_html(content_html):
+        content_html = cleaned_html
+
+    return title, content_html
 
 
 def extract_leading_front_matter_html(html):

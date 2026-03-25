@@ -104,6 +104,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "anymail",
     "corsheaders",
     "rest_framework",
     "django_filters",
@@ -216,7 +217,11 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
 CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", APP_ENV != "production")
 CELERY_TASK_EAGER_PROPAGATES = True
 
-EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+BREVO_API_KEY = env("BREVO_API_KEY", "")
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND",
+    "anymail.backends.brevo.EmailBackend" if BREVO_API_KEY else "django.core.mail.backends.console.EmailBackend",
+)
 EMAIL_HOST = env("EMAIL_HOST", "")
 EMAIL_PORT = int(env("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
@@ -224,9 +229,16 @@ EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
 EMAIL_TIMEOUT = int(env("EMAIL_TIMEOUT", "20"))
-BREVO_API_KEY = env("BREVO_API_KEY", "")
+BREVO_SENDER_EMAIL = env("BREVO_SENDER_EMAIL", "")
+ACCOUNT_INVITE_FROM_EMAIL = env(
+    "ACCOUNT_INVITE_FROM_EMAIL",
+    BREVO_SENDER_EMAIL or DEFAULT_FROM_EMAIL,
+)
 ANYMAIL = {
     "BREVO_API_KEY": BREVO_API_KEY,
+    "SEND_DEFAULTS": {
+        "from_email": ACCOUNT_INVITE_FROM_EMAIL,
+    },
 }
 
 LOGGING = {

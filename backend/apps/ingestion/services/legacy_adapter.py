@@ -3,8 +3,8 @@ from urllib.parse import urlparse, urlunparse
 
 from django.conf import settings
 
-from apps.ingestion.legacy import config as legacy_config
-from apps.ingestion.legacy import epub_book, html_book, scraper
+from apps.ingestion.pipeline import config as legacy_config
+from apps.ingestion.pipeline import epub_book, html_book, scraper
 
 ALLOWED_HOSTS = {"ebanglalibrary.com", "www.ebanglalibrary.com"}
 

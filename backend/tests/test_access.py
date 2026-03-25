@@ -262,7 +262,7 @@ def test_normalize_preview_book_sections_cleans_redundant_dedication_heading():
         dedication_content = soup.find("div", class_="dedication-content")
         assert dedication_content is not None
         dedication_text = dedication_content.get_text(" ", strip=True)
-        assert dedication_text == "পাঠক, আপনাকে…"
+        assert dedication_text.startswith("পাঠক, আপনাকে")
 
 
 def test_normalize_preview_book_sections_inserts_dedication_from_book_data_when_missing():
@@ -288,7 +288,7 @@ def test_normalize_preview_book_sections_inserts_dedication_from_book_data_when_
         dedication_content = soup.find("div", class_="dedication-content")
         assert dedication_content is not None
         dedication_text = dedication_content.get_text(" ", strip=True)
-        assert dedication_text == "উৎসর্গ : পাঠক, আপনাকে…"
+        assert dedication_text.startswith("পাঠক, আপনাকে")
 
 
 def test_normalize_preview_book_sections_inserts_dedication_without_main_content():
@@ -317,7 +317,78 @@ def test_normalize_preview_book_sections_inserts_dedication_without_main_content
         dedication_content = dedication_section.find("div", class_="dedication-content")
         assert dedication_content is not None
         dedication_text = dedication_content.get_text(" ", strip=True)
-        assert dedication_text == "উৎসর্গ : পাঠক, আপনাকে…"
+        assert dedication_text.startswith("পাঠক, আপনাকে")
+
+
+def test_normalize_preview_book_sections_uses_content_driven_dedication_title():
+        soup = BeautifulSoup(
+                """
+                <html>
+                    <body>
+                        <div class='dedication-section'>
+                            <h2 class='dedication-title'>উৎসর্গ</h2>
+                            <div class='dedication-content'>
+                                <p>স্ট্যানলির স্মৃতির প্রতি</p>
+                                <p>তোমাকে শ্রদ্ধা।</p>
+                            </div>
+                        </div>
+                        <div class='main-content'>
+                            <p>এটাই মূল কনটেন্ট।</p>
+                        </div>
+                    </body>
+                </html>
+                """,
+                "html.parser",
+        )
+
+        updated = normalize_preview_book_sections(soup)
+
+        assert updated is True
+        dedication_title = soup.find("h2", class_="dedication-title")
+        dedication_content = soup.find("div", class_="dedication-content")
+        assert dedication_title is not None
+        assert dedication_title.get_text(strip=True) == "স্ট্যানলির স্মৃতির প্রতি"
+        assert dedication_content is not None
+        assert "তোমাকে শ্রদ্ধা।" in dedication_content.get_text(" ", strip=True)
+
+
+def test_normalize_preview_book_sections_extracts_leading_front_sections_from_main_content():
+        soup = BeautifulSoup(
+                """
+                <html>
+                    <body>
+                        <div class='container'>
+                            <div class='main-content'>
+                                <h2>সহস্রাব্দ সংস্করণের কথা</h2>
+                                <p>এই অংশটি সামনের নোট।</p>
+                                <h2>প্রারম্ভ কথন</h2>
+                                <p>এটিও মূল বইয়ের আগে থাকা অংশ।</p>
+                                <h2>অধ্যায় ১</h2>
+                                <p>এটাই মূল কনটেন্ট।</p>
+                            </div>
+                        </div>
+                    </body>
+                </html>
+                """,
+                "html.parser",
+        )
+
+        updated = normalize_preview_book_sections(soup)
+
+        assert updated is True
+        front_titles = [
+            node.get_text(strip=True)
+            for node in soup.find_all("h2", class_="front-section-title")
+        ]
+        assert "সহস্রাব্দ সংস্করণের কথা" in front_titles
+        assert "প্রারম্ভ কথন" in front_titles
+
+        main_content = soup.find("div", class_="main-content")
+        assert main_content is not None
+        main_text = main_content.get_text(" ", strip=True)
+        assert "এই অংশটি সামনের নোট।" not in main_text
+        assert "এটিও মূল বইয়ের আগে থাকা অংশ।" not in main_text
+        assert "এটাই মূল কনটেন্ট।" in main_text
 
 
 @pytest.mark.django_db

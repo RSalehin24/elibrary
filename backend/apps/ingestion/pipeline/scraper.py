@@ -11,6 +11,8 @@ import unicodedata
 from pathlib import Path
 from bs4 import BeautifulSoup
 
+from apps.ingestion.services.normalization import extract_main_content_segments
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -461,6 +463,11 @@ DEDICATION_PATTERNS = [
     "dedication",
 ]
 
+DEDICATION_INLINE_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:অনুবাদকের\s+উৎসর্গ|লেখকের\s+উৎসর্গ|উৎসর্গ|dedication)\s*[:ঃ\-–—]?\s*",
+    re.IGNORECASE,
+)
+
 BODY_SECTION_PATTERNS = [
     "ভূমিকা",
     "প্রস্তাবনা",
@@ -634,6 +641,12 @@ def should_continue_dedication_block(text, strong_text="", tag_name=""):
         return True
     if is_body_section_marker(cleaned_text, tag_name=tag_name):
         return False
+    if tag_name in HEADING_TAG_NAMES and not is_dedication_heading(
+        cleaned_text,
+        strong_text=strong_text,
+        tag_name=tag_name,
+    ):
+        return False
     if search_front_matter_label_value(cleaned_text, strong_text=strong_text, has_break=False):
         return False
     if is_dedication_heading(cleaned_text, strong_text=strong_text, tag_name=tag_name):
@@ -681,7 +694,9 @@ def extract_content_sections(html_content):
             continue
 
         if is_dedication_heading(text, strong_text=strong_text, tag_name=block.name):
-            dedication_parts.append(str(block))
+            inline_text = clean_front_matter_label(DEDICATION_INLINE_PREFIX_PATTERN.sub("", text, count=1))
+            if inline_text and inline_text != clean_front_matter_label(text):
+                dedication_parts.append(f"<p>{inline_text}</p>")
             block.decompose()
             in_dedication = True
             continue
@@ -696,7 +711,7 @@ def extract_dedication(html_content):
     Extract labeled book metadata blocks and explicit dedication sections
     from the main content without depending on a fixed order.
     """
-    return extract_content_sections(html_content)
+    return extract_main_content_segments(html_content)
 
 def sanitize_folder_name(name):
     name = name.strip()

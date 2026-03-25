@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import LoadingSpinner from "../components/LoadingSpinner";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
@@ -10,10 +11,15 @@ export default function LoginPage() {
   const [phase, setPhase] = useState("credentials");
   const [form, setForm] = useState({ email: "", password: "", otp_token: "" });
   const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   async function handleLogin(event) {
     event.preventDefault();
+    if (submitting) {
+      return;
+    }
     try {
+      setSubmitting(true);
       await login(form);
       toast.success("Signed in.");
       navigate("/home", { replace: true });
@@ -30,6 +36,8 @@ export default function LoginPage() {
       }
 
       toast.error(error.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -97,13 +105,23 @@ export default function LoginPage() {
           ) : null}
           <div className="inline-pills login-actions">
             <button type="submit" className="primary-button">
-              {phase === "otp" ? "Verify" : "Continue"}
+              <span className="button-label">
+                {submitting ? <LoadingSpinner size={16} /> : null}
+                {submitting
+                  ? phase === "otp"
+                    ? "Verifying..."
+                    : "Signing in..."
+                  : phase === "otp"
+                    ? "Verify"
+                    : "Continue"}
+              </span>
             </button>
             {phase === "otp" ? (
               <button
                 type="button"
                 className="ghost-button"
                 onClick={resetPhase}
+                disabled={submitting}
               >
                 Change account
               </button>

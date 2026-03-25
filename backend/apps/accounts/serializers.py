@@ -132,7 +132,7 @@ def send_password_reset_email(
     message = EmailMultiAlternatives(
         subject=subject,
         body=text_body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
+        from_email=getattr(settings, "ACCOUNT_INVITE_FROM_EMAIL", settings.DEFAULT_FROM_EMAIL),
         to=[invited_user.email],
     )
     message.attach_alternative(html_body, "text/html")
@@ -255,7 +255,11 @@ class ManagedUserCreateSerializer(serializers.ModelSerializer):
                 except Exception as exc:
                     raise serializers.ValidationError(
                         {
-                            "send_invite_email": "Invite email could not be delivered. Verify SMTP host, port, username, password, and sender domain."
+                            "send_invite_email": (
+                                "Invite email could not be delivered. For Brevo, verify "
+                                "BREVO_API_KEY and that ACCOUNT_INVITE_FROM_EMAIL/DEFAULT_FROM_EMAIL "
+                                "is a verified sender."
+                            )
                         }
                     ) from exc
         return user

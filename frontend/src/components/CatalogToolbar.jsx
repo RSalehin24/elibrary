@@ -1,3 +1,5 @@
+import LoadingSpinner from "./LoadingSpinner";
+
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -189,6 +191,7 @@ export default function CatalogToolbar({
   bare = false,
   searchActionsExtra = null,
   secondaryBelow = false,
+  buttonsLoading = false,
 }) {
   const wrapperClassName = `catalog-toolbar-wrap${filtersExpanded ? " is-expanded" : ""}${inline ? " is-inline" : ""}${
     bare ? " is-bare" : ""
@@ -266,9 +269,17 @@ export default function CatalogToolbar({
               <button
                 type="submit"
                 className="primary-button"
-                disabled={buttonsDisabled}
+                disabled={buttonsDisabled || buttonsLoading}
               >
-                {submitLabel}
+                <span className="button-label button-label--stable">
+                  <span
+                    className={`button-label-spinner-slot${buttonsLoading ? " is-visible" : ""}`}
+                    aria-hidden="true"
+                  >
+                    <LoadingSpinner size={14} />
+                  </span>
+                  {submitLabel}
+                </span>
               </button>
               <button
                 type="button"

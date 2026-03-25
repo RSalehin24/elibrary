@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiFetch, resolveAppUrl } from "../api/client";
+import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
@@ -105,7 +106,12 @@ export default function CreateBooksPage() {
   }
 
   async function confirmCandidate(submissionId, candidateId) {
+    const key = `${submissionId}:candidate:${candidateId}`;
+    if (actionLoading) {
+      return;
+    }
     try {
+      setActionLoading(key);
       const payload = await apiFetch(
         `/ingestion/submissions/${submissionId}/confirm-candidate/`,
         {
@@ -119,6 +125,8 @@ export default function CreateBooksPage() {
       toast.success("Match confirmed.");
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setActionLoading("");
     }
   }
 
@@ -343,7 +351,10 @@ export default function CreateBooksPage() {
                 className="primary-button"
                 disabled={submitting}
               >
-                {submitting ? "Creating..." : "Create"}
+                <span className="button-label">
+                  {submitting ? <LoadingSpinner size={16} /> : null}
+                  {submitting ? "Creating..." : "Create"}
+                </span>
               </button>
             </div>
           </form>
@@ -506,8 +517,18 @@ export default function CreateBooksPage() {
                       onClick={() =>
                         confirmCandidate(dialogSubmission.id, candidate.id)
                       }
+                      disabled={Boolean(actionLoading)}
                     >
-                      <span>{candidate.candidate_title}</span>
+                      <span>
+                        {actionLoading ===
+                        `${dialogSubmission.id}:candidate:${candidate.id}` ? (
+                          <span className="button-label">
+                            <LoadingSpinner size={14} /> Confirming...
+                          </span>
+                        ) : (
+                          candidate.candidate_title
+                        )}
+                      </span>
                       <small>
                         {candidate.candidate_author ||
                           `${Math.round(candidate.confidence * 100)}% confidence`}
@@ -535,19 +556,31 @@ export default function CreateBooksPage() {
                     type="button"
                     className="primary-button"
                     onClick={() => runBookAction(dialogSubmission, "read")}
-                    disabled={actionLoading === `${dialogSubmission.id}:read`}
+                    disabled={Boolean(actionLoading)}
                   >
-                    Read
+                    <span className="button-label">
+                      {actionLoading === `${dialogSubmission.id}:read` ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {actionLoading === `${dialogSubmission.id}:read`
+                        ? "Opening..."
+                        : "Read"}
+                    </span>
                   </button>
                   <button
                     type="button"
                     className="ghost-button"
                     onClick={() => runBookAction(dialogSubmission, "download")}
-                    disabled={
-                      actionLoading === `${dialogSubmission.id}:download`
-                    }
+                    disabled={Boolean(actionLoading)}
                   >
-                    Download
+                    <span className="button-label">
+                      {actionLoading === `${dialogSubmission.id}:download` ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {actionLoading === `${dialogSubmission.id}:download`
+                        ? "Preparing..."
+                        : "Download"}
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -555,11 +588,17 @@ export default function CreateBooksPage() {
                     onClick={() =>
                       runBookAction(dialogSubmission, "read-download")
                     }
-                    disabled={
-                      actionLoading === `${dialogSubmission.id}:read-download`
-                    }
+                    disabled={Boolean(actionLoading)}
                   >
-                    Both
+                    <span className="button-label">
+                      {actionLoading ===
+                      `${dialogSubmission.id}:read-download` ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {actionLoading === `${dialogSubmission.id}:read-download`
+                        ? "Starting..."
+                        : "Both"}
+                    </span>
                   </button>
                 </div>
                 <div className="dialog-footer">

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authApi } from "../api/client";
+import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -58,6 +59,7 @@ export default function ProfilePage() {
   const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [totpAction, setTotpAction] = useState("");
 
   function twoFactorStatusLabel() {
     if (twoFactor.enabled) {
@@ -187,7 +189,11 @@ export default function ProfilePage() {
   }
 
   async function startSetup() {
+    if (totpAction) {
+      return;
+    }
     try {
+      setTotpAction("setup");
       const payload = await authApi.twoFactorSetup();
       setSetup(payload);
       setSetupVisible(true);
@@ -195,6 +201,8 @@ export default function ProfilePage() {
       toast.success("Two-factor setup is ready.");
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setTotpAction("");
     }
   }
 
@@ -208,7 +216,11 @@ export default function ProfilePage() {
 
   async function confirmSetup(event) {
     event.preventDefault();
+    if (totpAction) {
+      return;
+    }
     try {
+      setTotpAction("verify");
       await authApi.twoFactorConfirm({ token });
       setToken("");
       setSetup(emptySetup);
@@ -218,11 +230,17 @@ export default function ProfilePage() {
       toast.success("Two-factor enabled.");
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setTotpAction("");
     }
   }
 
   async function disableTotp() {
+    if (totpAction) {
+      return;
+    }
     try {
+      setTotpAction("disable");
       await authApi.twoFactorDisable();
       setToken("");
       setSetup(emptySetup);
@@ -232,11 +250,17 @@ export default function ProfilePage() {
       toast.success("Two-factor disabled.");
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setTotpAction("");
     }
   }
 
   async function cancelSetup() {
+    if (totpAction) {
+      return;
+    }
     try {
+      setTotpAction("cancel");
       await authApi.twoFactorCancel();
       setToken("");
       setSetup(emptySetup);
@@ -245,6 +269,8 @@ export default function ProfilePage() {
       toast.success("Setup canceled.");
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setTotpAction("");
     }
   }
 
@@ -573,8 +599,18 @@ export default function ProfilePage() {
                     onClick={
                       setupVisible ? () => setSetupVisible(false) : openSetup
                     }
+                    disabled={Boolean(totpAction)}
                   >
-                    {setupVisible ? "Hide Setup" : "Setup Authenticator"}
+                    <span className="button-label">
+                      {totpAction === "setup" ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {totpAction === "setup"
+                        ? "Preparing..."
+                        : setupVisible
+                          ? "Hide Setup"
+                          : "Setup Authenticator"}
+                    </span>
                   </button>
                 ) : null}
                 {twoFactor.enabled && !twoFactor.required ? (
@@ -582,8 +618,14 @@ export default function ProfilePage() {
                     type="button"
                     className="ghost-button"
                     onClick={disableTotp}
+                    disabled={Boolean(totpAction)}
                   >
-                    Turn Off
+                    <span className="button-label">
+                      {totpAction === "disable" ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {totpAction === "disable" ? "Turning off..." : "Turn Off"}
+                    </span>
                   </button>
                 ) : null}
               </div>
@@ -599,6 +641,7 @@ export default function ProfilePage() {
                         type="button"
                         className="ghost-button"
                         onClick={copyProvisioningUrl}
+                        disabled={Boolean(totpAction)}
                       >
                         Copy URL
                       </button>
@@ -606,8 +649,16 @@ export default function ProfilePage() {
                         type="button"
                         className="ghost-button"
                         onClick={cancelSetup}
+                        disabled={Boolean(totpAction)}
                       >
-                        Cancel Setup
+                        <span className="button-label">
+                          {totpAction === "cancel" ? (
+                            <LoadingSpinner size={14} />
+                          ) : null}
+                          {totpAction === "cancel"
+                            ? "Canceling..."
+                            : "Cancel Setup"}
+                        </span>
                       </button>
                     </div>
                   </div>
@@ -637,8 +688,19 @@ export default function ProfilePage() {
                           />
                         </label>
                         <div className="inline-pills">
-                          <button type="submit" className="primary-button">
-                            Verify and Enable
+                          <button
+                            type="submit"
+                            className="primary-button"
+                            disabled={Boolean(totpAction)}
+                          >
+                            <span className="button-label">
+                              {totpAction === "verify" ? (
+                                <LoadingSpinner size={14} />
+                              ) : null}
+                              {totpAction === "verify"
+                                ? "Verifying..."
+                                : "Verify and Enable"}
+                            </span>
                           </button>
                         </div>
                       </form>

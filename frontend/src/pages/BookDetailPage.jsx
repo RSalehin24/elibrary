@@ -16,6 +16,7 @@ import {
   getStatusMeta,
 } from "../utils/bookPresentation";
 import { hasCapability } from "../utils/capabilities";
+import { getPreviewLockKey, isPreviewLocked } from "../utils/previewLock";
 import { toQueryString } from "../utils/query";
 
 const assetLabels = {
@@ -23,6 +24,8 @@ const assetLabels = {
   epub: "Download EPUB",
   cover: "Download cover",
 };
+
+const previewWindows = new Map();
 
 function TrashIcon() {
   return (
@@ -165,6 +168,23 @@ function normalizeFrontMatterEntries(entries, bookIdValue) {
   }, []);
 }
 
+function waitForUiFrame() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(resolve);
+    });
+  });
+}
+
+function waitForMinimumLoader(startedAt, minimumMs = 320) {
+  const elapsed = Date.now() - startedAt;
+  const remaining = minimumMs - elapsed;
+  if (remaining <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => window.setTimeout(resolve, remaining));
+}
+
 export default function BookDetailPage() {
   const navigate = useNavigate();
   const { user } = useSession();
@@ -199,6 +219,11 @@ export default function BookDetailPage() {
   const [savingReview, setSavingReview] = useState(false);
   const [reviewUpdating, setReviewUpdating] = useState({ id: "", state: "" });
   const [deletingBookmarkId, setDeletingBookmarkId] = useState("");
+  const [assetLoadingCounts, setAssetLoadingCounts] = useState({});
+  const [htmlPreviewLockedByAssetId, setHtmlPreviewLockedByAssetId] = useState(
+    {},
+  );
+  const [pickingEpub, setPickingEpub] = useState(false);
   const [replacingEpub, setReplacingEpub] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const canEditMetadata = hasCapability(user, "metadata:edit");
@@ -394,6 +419,48 @@ export default function BookDetailPage() {
     slug,
   ]);
 
+  useEffect(() => {
+    const htmlAssets = (book?.assets || []).filter(
+      (asset) => asset.asset_type === "html" && asset.download_url,
+    );
+    if (!htmlAssets.length) {
+      setHtmlPreviewLockedByAssetId({});
+      return undefined;
+    }
+
+    function syncPreviewLocks() {
+      setHtmlPreviewLockedByAssetId(
+        htmlAssets.reduce((nextState, asset) => {
+          const previewUrl = resolveAppUrl(asset.download_url);
+          const lockKey = getPreviewLockKey(previewUrl);
+          nextState[asset.id] = lockKey ? isPreviewLocked(lockKey) : false;
+          return nextState;
+        }, {}),
+      );
+    }
+
+    syncPreviewLocks();
+    const intervalId = window.setInterval(syncPreviewLocks, 1500);
+
+    const onStorage = (event) => {
+      if (!event.key || !event.key.startsWith("ebook_preview_lock:")) {
+        return;
+      }
+      syncPreviewLocks();
+    };
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", syncPreviewLocks);
+    document.addEventListener("visibilitychange", syncPreviewLocks);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", syncPreviewLocks);
+      document.removeEventListener("visibilitychange", syncPreviewLocks);
+    };
+  }, [book?.id, book?.assets]);
+
   async function launchReader() {
     if (launchingReader) {
       return;
@@ -401,11 +468,14 @@ export default function BookDetailPage() {
 
     try {
       setLaunchingReader(true);
-      navigate(`/reader?slug=${encodeURIComponent(slug)}&appNav=hidden`);
+      const startedAt = Date.now();
+      await waitForUiFrame();
       const { sessionPayload, bookmarkPayload } =
         await fetchReaderCollections(slug);
+      await waitForMinimumLoader(startedAt);
       applyReaderState(sessionPayload);
       setBookmarks(bookmarkPayload);
+      navigate(`/reader?slug=${encodeURIComponent(slug)}&appNav=hidden`);
       toast.success("Reader opened.");
     } catch (nextError) {
       toast.error(nextError.message);
@@ -555,19 +625,27 @@ export default function BookDetailPage() {
   }
 
   function openEpubPicker() {
-    if (replacingEpub || regenerating || hasActiveProcessing) {
+    if (pickingEpub || replacingEpub || regenerating || hasActiveProcessing) {
       return;
     }
+    setPickingEpub(true);
+    const handleFocusBack = () => {
+      setPickingEpub(false);
+      window.removeEventListener("focus", handleFocusBack);
+    };
+    window.addEventListener("focus", handleFocusBack);
     epubInputRef.current?.click();
   }
 
   async function replaceEpub(event) {
     const file = event.target.files?.[0];
     if (!file) {
+      setPickingEpub(false);
       return;
     }
 
     try {
+      setPickingEpub(false);
       setReplacingEpub(true);
       const formData = new FormData();
       formData.append("file", file);
@@ -585,6 +663,7 @@ export default function BookDetailPage() {
     } finally {
       event.target.value = "";
       setReplacingEpub(false);
+      setPickingEpub(false);
     }
   }
 
@@ -618,6 +697,88 @@ export default function BookDetailPage() {
     } finally {
       setRegenerating(false);
     }
+  }
+
+  async function downloadAsset(asset) {
+    if (!asset?.download_url) {
+      return;
+    }
+    if (asset.asset_type === "html" && htmlPreviewLockedByAssetId[asset.id]) {
+      const previewKey = `${user?.id || "anon"}:${book?.id || slug}`;
+      const existingWindow = previewWindows.get(previewKey);
+      if (existingWindow && !existingWindow.closed) {
+        existingWindow.focus();
+      }
+      toast.info("Preview is already open for this book.");
+      return;
+    }
+
+    const startedAt = Date.now();
+    setAssetLoadingCounts((current) => ({
+      ...current,
+      [asset.id]: (current[asset.id] || 0) + 1,
+    }));
+    await waitForUiFrame();
+    const previewUrl = resolveAppUrl(asset.download_url);
+    if (asset.asset_type === "html") {
+      const lockKey = getPreviewLockKey(previewUrl);
+      if (lockKey && isPreviewLocked(lockKey)) {
+        toast.info("Preview is already open for this book.");
+        setAssetLoadingCounts((current) => {
+          const nextCount = (current[asset.id] || 1) - 1;
+          if (nextCount > 0) {
+            return {
+              ...current,
+              [asset.id]: nextCount,
+            };
+          }
+          const { [asset.id]: _removed, ...rest } = current;
+          return rest;
+        });
+        return;
+      }
+
+      const previewKey = `${user?.id || "anon"}:${book?.id || slug}`;
+      const existingWindow = previewWindows.get(previewKey);
+
+      if (existingWindow && !existingWindow.closed) {
+        existingWindow.focus();
+        toast.info("Preview is already open for this book.");
+      } else {
+        const target = `html_preview_${user?.id || "anon"}_${book?.id || slug}`;
+        const openedWindow = window.open(
+          previewUrl,
+          target,
+          "noopener,noreferrer",
+        );
+        if (openedWindow) {
+          previewWindows.set(previewKey, openedWindow);
+          openedWindow.focus();
+          setHtmlPreviewLockedByAssetId((current) => ({
+            ...current,
+            [asset.id]: true,
+          }));
+        } else {
+          toast.error(
+            "Preview window could not be opened. Please allow popups.",
+          );
+        }
+      }
+    } else {
+      window.open(previewUrl, "_blank", "noopener,noreferrer");
+    }
+    await waitForMinimumLoader(startedAt, 420);
+    setAssetLoadingCounts((current) => {
+      const nextCount = (current[asset.id] || 1) - 1;
+      if (nextCount > 0) {
+        return {
+          ...current,
+          [asset.id]: nextCount,
+        };
+      }
+      const { [asset.id]: _removed, ...rest } = current;
+      return rest;
+    });
   }
 
   if (loading) {
@@ -821,18 +982,31 @@ export default function BookDetailPage() {
                 {launchingReader ? "Opening..." : "Open reader"}
               </span>
             </button>
-            {downloadableAssets.map((asset) => (
-              <a
-                key={asset.id}
-                className="ghost-button asset-link"
-                href={resolveAppUrl(asset.download_url)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {assetLabels[asset.asset_type] ||
-                  `Download ${asset.asset_type.toUpperCase()}`}
-              </a>
-            ))}
+            {downloadableAssets.map((asset) => {
+              const isDownloading = Boolean(assetLoadingCounts[asset.id]);
+              const isHtmlPreviewLocked =
+                asset.asset_type === "html" &&
+                Boolean(htmlPreviewLockedByAssetId[asset.id]);
+              return (
+                <button
+                  key={asset.id}
+                  type="button"
+                  className="ghost-button asset-link"
+                  onClick={() => downloadAsset(asset)}
+                  disabled={isDownloading || isHtmlPreviewLocked}
+                >
+                  <span className="button-label">
+                    {isDownloading ? <LoadingSpinner size={16} /> : null}
+                    {isDownloading
+                      ? "Preparing..."
+                      : isHtmlPreviewLocked
+                        ? "Preview Open"
+                        : assetLabels[asset.asset_type] ||
+                          `Download ${asset.asset_type.toUpperCase()}`}
+                  </span>
+                </button>
+              );
+            })}
             {canEditMetadata ? (
               <>
                 <input
@@ -847,16 +1021,23 @@ export default function BookDetailPage() {
                   className="ghost-button"
                   onClick={openEpubPicker}
                   disabled={
-                    replacingEpub || regenerating || hasActiveProcessing
+                    pickingEpub ||
+                    replacingEpub ||
+                    regenerating ||
+                    hasActiveProcessing
                   }
                 >
                   <span className="button-label">
-                    {replacingEpub ? <LoadingSpinner size={16} /> : null}
-                    {replacingEpub
-                      ? "Uploading..."
-                      : epubAsset
-                        ? "Replace EPUB"
-                        : "Upload EPUB"}
+                    {pickingEpub || replacingEpub ? (
+                      <LoadingSpinner size={16} />
+                    ) : null}
+                    {pickingEpub
+                      ? "Selecting..."
+                      : replacingEpub
+                        ? "Uploading..."
+                        : epubAsset
+                          ? "Replace EPUB"
+                          : "Upload EPUB"}
                   </span>
                 </button>
               </>

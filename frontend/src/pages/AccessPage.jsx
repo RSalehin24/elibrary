@@ -98,6 +98,8 @@ export default function AccessPage() {
   const [pendingDeleteUser, setPendingDeleteUser] = useState(null);
   const [deletingUserId, setDeletingUserId] = useState(null);
   const [submittingUser, setSubmittingUser] = useState(false);
+  const [submittingGrant, setSubmittingGrant] = useState(false);
+  const [deletingGrantId, setDeletingGrantId] = useState(null);
   const [showCreateUserPassword, setShowCreateUserPassword] = useState(false);
   const [grantForm, setGrantForm] = useState(initialGrantForm);
   const [targetSearch, setTargetSearch] = useState("");
@@ -567,6 +569,9 @@ export default function AccessPage() {
 
   async function submitGrant(event) {
     event.preventDefault();
+    if (submittingGrant) {
+      return;
+    }
 
     if (!grantForm.user) {
       toast.error("Select a user first.");
@@ -618,6 +623,7 @@ export default function AccessPage() {
     }
 
     try {
+      setSubmittingGrant(true);
       await Promise.all(requests);
       resetGrantForm();
       toast.success(
@@ -628,10 +634,15 @@ export default function AccessPage() {
       await loadAdminData();
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setSubmittingGrant(false);
     }
   }
 
   async function deleteGrant(grant) {
+    if (deletingGrantId) {
+      return;
+    }
     if (
       !window.confirm(
         `Remove ${scopeLabelMap.get(grant.scope) || grant.scope} from ${grant.user_email}?`,
@@ -641,11 +652,14 @@ export default function AccessPage() {
     }
 
     try {
+      setDeletingGrantId(grant.id);
       await apiFetch(`/access/grants/${grant.id}/`, { method: "DELETE" });
       toast.success("Access removed.");
       await loadAdminData();
     } catch (error) {
       toast.error(error.message);
+    } finally {
+      setDeletingGrantId(null);
     }
   }
 
@@ -1159,120 +1173,128 @@ export default function AccessPage() {
           <section className="detail-card">
             <h2>Access Control</h2>
             <form className="stack-form" onSubmit={submitGrant}>
-              <div className="detail-facts">
-                <label>
-                  <span className="fact-label">User</span>
-                  <select
-                    value={grantForm.user}
-                    onChange={(event) =>
-                      setGrantForm({ ...grantForm, user: event.target.value })
-                    }
-                  >
-                    <option value="">Select user</option>
-                    {managedUsers
-                      .filter((entry) => `${entry.id}` !== `${user?.id}`)
-                      .map((entry) => (
-                        <option key={entry.id} value={entry.id}>
-                          {entry.full_name || entry.email}
-                        </option>
+              <fieldset
+                className="form-fieldset-reset"
+                disabled={submittingGrant}
+              >
+                <div className="detail-facts">
+                  <label>
+                    <span className="fact-label">User</span>
+                    <select
+                      value={grantForm.user}
+                      onChange={(event) =>
+                        setGrantForm({ ...grantForm, user: event.target.value })
+                      }
+                    >
+                      <option value="">Select user</option>
+                      {managedUsers
+                        .filter((entry) => `${entry.id}` !== `${user?.id}`)
+                        .map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {entry.full_name || entry.email}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="settings-list">
+                  <span className="fact-label">Permission</span>
+                  {scopedScopes.length ? (
+                    <div className="scope-grid">
+                      {scopedScopes.map((scope) => (
+                        <label key={scope.value} className="scope-card">
+                          <input
+                            type="checkbox"
+                            checked={grantForm.scopes.includes(scope.value)}
+                            onChange={() => toggleGrantScope(scope.value)}
+                          />
+                          <span>{scope.label}</span>
+                        </label>
                       ))}
-                  </select>
-                </label>
-              </div>
+                    </div>
+                  ) : (
+                    <p className="muted-copy">
+                      No scoped permissions are available.
+                    </p>
+                  )}
+                </div>
 
-              <div className="settings-list">
-                <span className="fact-label">Permission</span>
-                {scopedScopes.length ? (
-                  <div className="scope-grid">
-                    {scopedScopes.map((scope) => (
-                      <label key={scope.value} className="scope-card">
-                        <input
-                          type="checkbox"
-                          checked={grantForm.scopes.includes(scope.value)}
-                          onChange={() => toggleGrantScope(scope.value)}
-                        />
-                        <span>{scope.label}</span>
-                      </label>
-                    ))}
+                <div className="settings-list">
+                  <span className="fact-label">Applies To</span>
+                  <div className="inline-pills">
+                    <button
+                      type="button"
+                      className={
+                        grantForm.targetType === "book"
+                          ? "primary-button"
+                          : "ghost-button"
+                      }
+                      onClick={() => switchTargetType("book")}
+                    >
+                      Books
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        grantForm.targetType === "category"
+                          ? "primary-button"
+                          : "ghost-button"
+                      }
+                      onClick={() => switchTargetType("category")}
+                    >
+                      Categories
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        grantForm.targetType === "writer"
+                          ? "primary-button"
+                          : "ghost-button"
+                      }
+                      onClick={() => switchTargetType("writer")}
+                    >
+                      Writers
+                    </button>
                   </div>
-                ) : (
-                  <p className="muted-copy">
-                    No scoped permissions are available.
-                  </p>
-                )}
-              </div>
+                  <input
+                    type="search"
+                    value={targetSearch}
+                    onChange={(event) => setTargetSearch(event.target.value)}
+                    onInput={(event) => {
+                      if (!String(event.target?.value || "").trim()) {
+                        setTargetSearch("");
+                      }
+                    }}
+                    placeholder={`Search ${grantForm.targetType}s`}
+                  />
+                  {filteredTargetOptions.length ? (
+                    <div className="selection-list">
+                      {filteredTargetOptions.map((entry) => (
+                        <label key={entry.id} className="scope-card">
+                          <input
+                            type="checkbox"
+                            checked={grantForm.targetIds.includes(entry.id)}
+                            onChange={() => toggleGrantTarget(entry.id)}
+                          />
+                          <span>{entry.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-copy">No matches found.</p>
+                  )}
+                </div>
 
-              <div className="settings-list">
-                <span className="fact-label">Applies To</span>
                 <div className="inline-pills">
-                  <button
-                    type="button"
-                    className={
-                      grantForm.targetType === "book"
-                        ? "primary-button"
-                        : "ghost-button"
-                    }
-                    onClick={() => switchTargetType("book")}
-                  >
-                    Books
-                  </button>
-                  <button
-                    type="button"
-                    className={
-                      grantForm.targetType === "category"
-                        ? "primary-button"
-                        : "ghost-button"
-                    }
-                    onClick={() => switchTargetType("category")}
-                  >
-                    Categories
-                  </button>
-                  <button
-                    type="button"
-                    className={
-                      grantForm.targetType === "writer"
-                        ? "primary-button"
-                        : "ghost-button"
-                    }
-                    onClick={() => switchTargetType("writer")}
-                  >
-                    Writers
+                  <button type="submit" className="primary-button">
+                    <span className="button-label">
+                      {submittingGrant ? <LoadingSpinner size={14} /> : null}
+                      {submittingGrant ? "Saving..." : "Save Access"}
+                    </span>
                   </button>
                 </div>
-                <input
-                  type="search"
-                  value={targetSearch}
-                  onChange={(event) => setTargetSearch(event.target.value)}
-                  onInput={(event) => {
-                    if (!String(event.target?.value || "").trim()) {
-                      setTargetSearch("");
-                    }
-                  }}
-                  placeholder={`Search ${grantForm.targetType}s`}
-                />
-                {filteredTargetOptions.length ? (
-                  <div className="selection-list">
-                    {filteredTargetOptions.map((entry) => (
-                      <label key={entry.id} className="scope-card">
-                        <input
-                          type="checkbox"
-                          checked={grantForm.targetIds.includes(entry.id)}
-                          onChange={() => toggleGrantTarget(entry.id)}
-                        />
-                        <span>{entry.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="muted-copy">No matches found.</p>
-                )}
-              </div>
-
-              <div className="inline-pills">
-                <button type="submit" className="primary-button">
-                  Save Access
-                </button>
-              </div>
+              </fieldset>
             </form>
           </section>
 
@@ -1304,8 +1326,11 @@ export default function AccessPage() {
                                 type="button"
                                 className="ghost-button"
                                 onClick={() => deleteGrant(grant)}
+                                disabled={Boolean(deletingGrantId)}
                               >
-                                Delete
+                                {deletingGrantId === grant.id
+                                  ? "Deleting..."
+                                  : "Delete"}
                               </button>
                             )}
                           </div>

@@ -3,6 +3,7 @@ import { apiFetch } from "../api/client";
 import BookTable from "../components/BookTable";
 import CatalogToolbar from "../components/CatalogToolbar";
 import ExportActions from "../components/ExportActions";
+import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import PropertyTableControls, {
   useClientPagination,
@@ -413,6 +414,7 @@ export default function ManualBooksPage() {
           onSearchClear={clearSearch}
           inline
           bare
+          buttonsLoading={loadingList}
         />
 
         <div className="catalog-page-controls-row">{tableControls}</div>
@@ -557,7 +559,10 @@ export default function ManualBooksPage() {
                 className="primary-button"
                 disabled={submitting}
               >
-                {submitting ? "Adding..." : "Add & next"}
+                <span className="button-label">
+                  {submitting ? <LoadingSpinner size={14} /> : null}
+                  {submitting ? "Adding..." : "Add & next"}
+                </span>
               </button>
               <button
                 type="button"
