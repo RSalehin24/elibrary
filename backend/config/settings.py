@@ -224,6 +224,10 @@ EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
 EMAIL_TIMEOUT = int(env("EMAIL_TIMEOUT", "20"))
+BREVO_API_KEY = env("BREVO_API_KEY", "")
+ANYMAIL = {
+    "BREVO_API_KEY": BREVO_API_KEY,
+}
 
 LOGGING = {
     "version": 1,

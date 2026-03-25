@@ -14,7 +14,7 @@ Example:
 
 Optional env sync control:
   DEPLOY_ENV_SYNC_MODE=preserve   # default behavior (do not overwrite remote .env)
-  DEPLOY_ENV_SYNC_MODE=push       # overwrite remote .env with local .env
+  DEPLOY_ENV_SYNC_MODE=push       # overwrite remote .env with local .env.production
   DEPLOY_ENV_SYNC_MODE=prompt     # ask during deploy when running interactively
 
 What it does:
@@ -38,6 +38,8 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 DEFAULT_ENV_FILE="$SCRIPT_DIR/.env.example"
+LOCAL_PRODUCTION_ENV_FILE="$REPO_ROOT/.env.production"
+LOCAL_DEFAULT_PRODUCTION_ENV_FILE="$REPO_ROOT/.env.example"
 
 if [ ! -f "$ENV_FILE" ]; then
   if [ -f "$DEFAULT_ENV_FILE" ]; then
@@ -45,6 +47,30 @@ if [ ! -f "$ENV_FILE" ]; then
     printf 'Created %s from %s\n' "$ENV_FILE" "$DEFAULT_ENV_FILE"
   else
     printf 'Missing %s\n' "$ENV_FILE"
+    exit 1
+  fi
+fi
+
+if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
+  if [ -f "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE" ]; then
+    cp "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE" "$LOCAL_PRODUCTION_ENV_FILE"
+    printf 'Created %s from %s\n' "$LOCAL_PRODUCTION_ENV_FILE" "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE"
+    if [ -t 0 ]; then
+      printf 'Open %s now to edit values? [Y/n]: ' "$LOCAL_PRODUCTION_ENV_FILE"
+      read -r local_edit_choice || true
+      case "${local_edit_choice:-}" in
+        N|n|no|NO) ;;
+        *)
+          LOCAL_EDITOR="${EDITOR:-nano}"
+          "$LOCAL_EDITOR" "$LOCAL_PRODUCTION_ENV_FILE"
+          ;;
+      esac
+    else
+      printf 'Action required: update %s before deploying (non-interactive session).\n' "$LOCAL_PRODUCTION_ENV_FILE"
+      exit 1
+    fi
+  else
+    printf 'Missing %s\n' "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE"
     exit 1
   fi
 fi
@@ -263,12 +289,12 @@ case "$DEPLOY_ENV_SYNC_MODE" in
 esac
 
 if [ "$sync_remote_env" = 'push' ]; then
-  if [ ! -f "$REPO_ROOT/.env" ]; then
-    printf 'Action required: local %s/.env not found, cannot push env to remote.\n' "$REPO_ROOT"
+  if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
+    printf 'Action required: local %s not found, cannot push env to remote.\n' "$LOCAL_PRODUCTION_ENV_FILE"
     exit 1
   fi
-  printf 'Applying local .env to remote .env\n'
-  scp "$REPO_ROOT/.env" "$TARGET:$REMOTE_APP_ABS_DIR/.env" >/dev/null
+  printf 'Applying local %s to remote .env\n' "$LOCAL_PRODUCTION_ENV_FILE"
+  scp "$LOCAL_PRODUCTION_ENV_FILE" "$TARGET:$REMOTE_APP_ABS_DIR/.env" >/dev/null
 else
   printf 'Preserving remote .env (no overwrite)\n'
 fi
@@ -276,6 +302,7 @@ fi
 (cd "$REPO_ROOT" && COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata -czf - \
   --exclude='.git' \
   --exclude='.env' \
+  --exclude='.env.production' \
   --exclude='scripts/.env' \
   --exclude='.DS_Store' \
   --exclude='venv' \
