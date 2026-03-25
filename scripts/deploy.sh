@@ -8,13 +8,13 @@ Usage:
   scripts/deploy.sh
 
 Example:
-  cp scripts/.env.example scripts/.env
-  nano scripts/.env
+  cp .env.example .env.production
+  nano .env.production
   scripts/deploy.sh
 
 Optional env sync control:
-  DEPLOY_ENV_SYNC_MODE=preserve   # default behavior (do not overwrite remote .env)
-  DEPLOY_ENV_SYNC_MODE=push       # overwrite remote .env with local .env.production
+  DEPLOY_ENV_SYNC_MODE=push       # default behavior (overwrite remote .env with local .env.production)
+  DEPLOY_ENV_SYNC_MODE=preserve   # do not overwrite remote .env
   DEPLOY_ENV_SYNC_MODE=prompt     # ask during deploy when running interactively
 
 What it does:
@@ -63,6 +63,16 @@ if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
     printf 'Missing %s\n' "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE"
     exit 1
   fi
+elif [ -t 0 ]; then
+  printf 'Local %s exists. Edit now? [y/N]: ' "$LOCAL_PRODUCTION_ENV_FILE"
+  read -r local_edit_choice || true
+  case "${local_edit_choice:-}" in
+    Y|y|yes|YES)
+      LOCAL_EDITOR="${EDITOR:-nano}"
+      "$LOCAL_EDITOR" "$LOCAL_PRODUCTION_ENV_FILE"
+      ;;
+    *) ;;
+  esac
 fi
 
 if [ -f "$ENV_FILE" ]; then
@@ -98,7 +108,7 @@ CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 REMOTE_APP_ABS_DIR="/home/${DEPLOY_USER_NAME}/library_app"
 REMOTE_NGINX_CONFIG_PATH="${DEPLOY_NGINX_CONF_DIR}/${DEPLOY_NGINX_CONFIG_NAME}"
-DEPLOY_ENV_SYNC_MODE="${DEPLOY_ENV_SYNC_MODE:-prompt}"
+DEPLOY_ENV_SYNC_MODE="${DEPLOY_ENV_SYNC_MODE:-push}"
 REMOTE_EDITOR="${DEPLOY_REMOTE_EDITOR:-${EDITOR:-nano}}"
 
 require_cmd() {
@@ -234,32 +244,6 @@ printf 'Branch: %s\n' "$BRANCH"
 printf 'Remote .env defaults ensured (existing values preserved)\n'
 EOF
 
-if [ -t 0 ]; then
-  edit_remote_env='no'
-  if [ "$remote_has_env_before" = 'yes' ]; then
-    printf 'Remote .env already exists. Edit remote .env now? [y/N]: '
-    read -r edit_env_choice || true
-    case "${edit_env_choice:-}" in
-      Y|y|yes|YES) edit_remote_env='yes' ;;
-      *) edit_remote_env='no' ;;
-    esac
-  else
-    printf 'Remote .env was created from .env.example. Input values now by editing remote .env? [Y/n]: '
-    read -r edit_env_choice || true
-    case "${edit_env_choice:-}" in
-      N|n|no|NO) edit_remote_env='no' ;;
-      *) edit_remote_env='yes' ;;
-    esac
-  fi
-
-  if [ "$edit_remote_env" = 'yes' ]; then
-    printf 'Opening remote .env using %s\n' "$REMOTE_EDITOR"
-    ssh -t "$TARGET" "cd '$REMOTE_APP_ABS_DIR' && $REMOTE_EDITOR .env"
-  fi
-else
-  printf 'Non-interactive session: skipped remote .env edit prompt.\n'
-fi
-
 printf '\n[3/8] Syncing local workspace to %s...\n' "$TARGET"
 sync_remote_env='preserve'
 case "$DEPLOY_ENV_SYNC_MODE" in
@@ -291,6 +275,44 @@ if [ "$sync_remote_env" = 'push' ]; then
   scp "$LOCAL_PRODUCTION_ENV_FILE" "$TARGET:$REMOTE_APP_ABS_DIR/.env" >/dev/null
 else
   printf 'Preserving remote .env (no overwrite)\n'
+fi
+
+if ! ssh "$TARGET" "test -f '$REMOTE_APP_ABS_DIR/.env'" >/dev/null 2>&1; then
+  printf 'Action required: remote .env is missing at %s/.env\n' "$REMOTE_APP_ABS_DIR"
+  exit 1
+fi
+
+if [ -t 0 ]; then
+  edit_remote_env='no'
+  if [ "$sync_remote_env" = 'push' ]; then
+    printf 'Remote .env was updated from local .env.production. Edit remote .env now? [y/N]: '
+    read -r edit_env_choice || true
+    case "${edit_env_choice:-}" in
+      Y|y|yes|YES) edit_remote_env='yes' ;;
+      *) edit_remote_env='no' ;;
+    esac
+  elif [ "$remote_has_env_before" = 'yes' ]; then
+    printf 'Remote .env already exists. Edit remote .env now? [y/N]: '
+    read -r edit_env_choice || true
+    case "${edit_env_choice:-}" in
+      Y|y|yes|YES) edit_remote_env='yes' ;;
+      *) edit_remote_env='no' ;;
+    esac
+  else
+    printf 'Remote .env was created from .env.example. Input values now by editing remote .env? [Y/n]: '
+    read -r edit_env_choice || true
+    case "${edit_env_choice:-}" in
+      N|n|no|NO) edit_remote_env='no' ;;
+      *) edit_remote_env='yes' ;;
+    esac
+  fi
+
+  if [ "$edit_remote_env" = 'yes' ]; then
+    printf 'Opening remote .env using %s\n' "$REMOTE_EDITOR"
+    ssh -t "$TARGET" "cd '$REMOTE_APP_ABS_DIR' && $REMOTE_EDITOR .env"
+  fi
+else
+  printf 'Non-interactive session: skipped remote .env edit prompt.\n'
 fi
 
 (cd "$REPO_ROOT" && COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata -czf - \
