@@ -41,16 +41,6 @@ DEFAULT_ENV_FILE="$SCRIPT_DIR/.env.example"
 LOCAL_PRODUCTION_ENV_FILE="$REPO_ROOT/.env.production"
 LOCAL_DEFAULT_PRODUCTION_ENV_FILE="$REPO_ROOT/.env.example"
 
-if [ ! -f "$ENV_FILE" ]; then
-  if [ -f "$DEFAULT_ENV_FILE" ]; then
-    cp "$DEFAULT_ENV_FILE" "$ENV_FILE"
-    printf 'Created %s from %s\n' "$ENV_FILE" "$DEFAULT_ENV_FILE"
-  else
-    printf 'Missing %s\n' "$ENV_FILE"
-    exit 1
-  fi
-fi
-
 if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
   if [ -f "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE" ]; then
     cp "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE" "$LOCAL_PRODUCTION_ENV_FILE"
@@ -75,9 +65,13 @@ if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
   fi
 fi
 
-set -a
-. "$ENV_FILE"
-set +a
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  . "$ENV_FILE"
+  set +a
+else
+  printf 'Optional config not found: %s (using defaults or current shell env)\n' "$ENV_FILE"
+fi
 
 DEPLOY_USER_NAME="${DEPLOY_USER_NAME:-ubuntu}"
 DEPLOY_IP="${DEPLOY_IP:-54.169.28.248}"
