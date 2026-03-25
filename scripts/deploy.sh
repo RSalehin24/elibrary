@@ -79,6 +79,7 @@ BACKEND_PORT="${BACKEND_PORT:-8000}"
 REMOTE_APP_ABS_DIR="/home/${DEPLOY_USER_NAME}/library_app"
 REMOTE_NGINX_CONFIG_PATH="${DEPLOY_NGINX_CONF_DIR}/${DEPLOY_NGINX_CONFIG_NAME}"
 DEPLOY_ENV_SYNC_MODE="${DEPLOY_ENV_SYNC_MODE:-prompt}"
+REMOTE_EDITOR="${DEPLOY_REMOTE_EDITOR:-${EDITOR:-nano}}"
 
 require_cmd() {
   cmd="$1"
@@ -148,6 +149,11 @@ if [ -f "$SCRIPT_DIR/switch-app.sh" ]; then
   ssh "$TARGET" "chmod +x ~/switch-app.sh"
 fi
 
+remote_has_env_before='no'
+if ssh "$TARGET" "test -f '$REMOTE_APP_ABS_DIR/.env'" >/dev/null 2>&1; then
+  remote_has_env_before='yes'
+fi
+
 printf '\n[2/8] Syncing code on %s...\n' "$TARGET"
 ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" BACKEND_PORT="$BACKEND_PORT" 'bash -s' <<'EOF'
 set -eu
@@ -207,6 +213,32 @@ printf '\nRemote ready at %s\n' "$APP_DIR"
 printf 'Branch: %s\n' "$BRANCH"
 printf 'Remote .env defaults ensured (existing values preserved)\n'
 EOF
+
+if [ -t 0 ]; then
+  edit_remote_env='no'
+  if [ "$remote_has_env_before" = 'yes' ]; then
+    printf 'Remote .env already exists. Edit remote .env now? [y/N]: '
+    read -r edit_env_choice || true
+    case "${edit_env_choice:-}" in
+      Y|y|yes|YES) edit_remote_env='yes' ;;
+      *) edit_remote_env='no' ;;
+    esac
+  else
+    printf 'Remote .env was created from .env.example. Input values now by editing remote .env? [Y/n]: '
+    read -r edit_env_choice || true
+    case "${edit_env_choice:-}" in
+      N|n|no|NO) edit_remote_env='no' ;;
+      *) edit_remote_env='yes' ;;
+    esac
+  fi
+
+  if [ "$edit_remote_env" = 'yes' ]; then
+    printf 'Opening remote .env using %s\n' "$REMOTE_EDITOR"
+    ssh -t "$TARGET" "cd '$REMOTE_APP_ABS_DIR' && $REMOTE_EDITOR .env"
+  fi
+else
+  printf 'Non-interactive session: skipped remote .env edit prompt.\n'
+fi
 
 printf '\n[3/8] Syncing local workspace to %s...\n' "$TARGET"
 sync_remote_env='preserve'
