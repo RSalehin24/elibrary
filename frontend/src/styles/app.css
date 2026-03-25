@@ -359,7 +359,7 @@ textarea {
   min-height: 97.5px;
 }
 
-.detail-card.processing-card.processing-summary-card {
+.detail-card.processing-card.processing-summary-card.card-automation {
   min-height: 248px;
 }
 

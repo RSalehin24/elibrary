@@ -3191,7 +3191,7 @@ export default function QueuePage() {
 
     return (
       <div className="processing-section-grid">
-        <section className="detail-card processing-card processing-summary-card">
+        <section className="detail-card processing-card processing-summary-card card-automation">
           <div className="processing-card-head">
             <div className="section-title-block">
               <h2>Automation</h2>
