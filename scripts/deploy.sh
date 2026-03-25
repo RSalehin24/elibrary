@@ -154,6 +154,35 @@ print(parsed.username or "")
 PY
 }
 
+write_compose_safe_env_copy() {
+  src_file="$1"
+  dst_file="$2"
+
+  python3 - "$src_file" "$dst_file" <<'PY'
+import pathlib
+import re
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+
+lines = src.read_text(encoding="utf-8").splitlines(keepends=True)
+out = []
+
+for line in lines:
+    stripped = line.lstrip()
+    if "=" not in line or stripped.startswith("#"):
+        out.append(line)
+        continue
+
+    key, value = line.split("=", 1)
+    value = re.sub(r"(?<!\$)\$(?!\$)", "$$", value)
+    out.append(f"{key}={value}")
+
+dst.write_text("".join(out), encoding="utf-8")
+PY
+}
+
 validate_local_database_env() {
   local_env_file="$1"
 
@@ -326,7 +355,12 @@ if [ "$sync_remote_env" = 'push' ]; then
     exit 1
   fi
   printf 'Applying local %s to remote .env\n' "$LOCAL_PRODUCTION_ENV_FILE"
-  scp "$LOCAL_PRODUCTION_ENV_FILE" "$TARGET:$REMOTE_APP_ABS_DIR/.env" >/dev/null
+  compose_safe_env_tmp="$(mktemp)"
+  trap 'rm -f "$compose_safe_env_tmp"' EXIT INT TERM
+  write_compose_safe_env_copy "$LOCAL_PRODUCTION_ENV_FILE" "$compose_safe_env_tmp"
+  scp "$compose_safe_env_tmp" "$TARGET:$REMOTE_APP_ABS_DIR/.env" >/dev/null
+  rm -f "$compose_safe_env_tmp"
+  trap - EXIT INT TERM
 else
   printf 'Preserving remote .env (no overwrite)\n'
 fi
