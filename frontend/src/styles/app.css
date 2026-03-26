@@ -5224,6 +5224,25 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.toc-record-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  height: 100%;
+}
+
+.toc-record-card strong {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.toc-record-card p {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+}
+
 .book-detail-grid,
 .book-admin-grid {
   display: grid;

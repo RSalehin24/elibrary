@@ -287,6 +287,13 @@ def sort_source_catalog_snapshots(snapshots, sort_key):
     )
 
 
+def deleted_source_catalog_entries_queryset(queryset):
+    deleted_book_sources = BookSource.objects.filter(
+        book__deleted_at__isnull=False,
+    ).values("normalized_source_url")
+    return queryset.filter(source_url__in=deleted_book_sources)
+
+
 def submissions_ordered_queryset(queryset):
     return queryset.order_by(
         status_order_expression(
@@ -988,13 +995,19 @@ class SourceCatalogEntryListView(APIView):
         if query:
             queryset = queryset.filter(Q(title__icontains=query) | Q(author_line__icontains=query))
 
-        snapshots, _ = source_catalog_entry_snapshots(queryset)
         status_filter = request.query_params.get("status", "").strip()
-        if status_filter:
+        normalized_status_filter = normalize_status_filter(status_filter)
+
+        snapshot_queryset = queryset
+        if normalized_status_filter == "deleted":
+            snapshot_queryset = deleted_source_catalog_entries_queryset(queryset)
+
+        snapshots, _ = source_catalog_entry_snapshots(snapshot_queryset)
+        if normalized_status_filter and normalized_status_filter != "deleted":
             snapshots = [
                 snapshot
                 for snapshot in snapshots
-                if normalize_status_filter(snapshot["curation_status"]) == normalize_status_filter(status_filter)
+                if normalize_status_filter(snapshot["curation_status"]) == normalized_status_filter
             ]
         summary = summarize_source_catalog_snapshots(snapshots)
         sort_source_catalog_snapshots(snapshots, request.query_params.get("sort", "").strip())

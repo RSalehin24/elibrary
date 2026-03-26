@@ -473,6 +473,47 @@ def test_source_catalog_entries_apply_status_filter_before_pagination_and_return
 
 
 @pytest.mark.django_db
+def test_source_catalog_entries_can_filter_deleted_books(client):
+    admin = User.objects.create_superuser(email="catalog-deleted-filter@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    deleted_book = Book.objects.create(title="Deleted Book", state=LifecycleState.SOFT_DELETED)
+    Book.objects.filter(pk=deleted_book.pk).update(deleted_at=timezone.now())
+    deleted_book.refresh_from_db()
+    BookSource.objects.create(
+        book=deleted_book,
+        source_url="https://www.ebanglalibrary.com/books/deleted-book/",
+        normalized_source_url="https://www.ebanglalibrary.com/books/deleted-book/",
+    )
+    SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/deleted-book/",
+        title="Deleted Book",
+        author_line="Writer",
+        normalized_title="deleted book",
+        normalized_display="deleted book writer",
+    )
+    SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/new-book/",
+        title="New Book",
+        author_line="Writer",
+        normalized_title="new book",
+        normalized_display="new book writer",
+    )
+
+    response = client.get("/api/ingestion/catalog/entries/?limit=1&status=deleted")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["total"] == 1
+    assert payload["summary"]["deleted"] == 1
+    assert payload["pagination"]["total_count"] == 1
+    assert payload["pagination"]["page_count"] == 1
+    assert len(payload["entries"]) == 1
+    assert payload["entries"][0]["title"] == "Deleted Book"
+    assert payload["entries"][0]["curation_status"] == "deleted"
+
+
+@pytest.mark.django_db
 def test_source_catalog_entries_summary_reports_queued_and_processing_separately(client):
     admin = User.objects.create_superuser(email="catalog-summary@example.com", password="strong-password-123")
     client.force_login(admin)

@@ -618,6 +618,19 @@ function getCatalogPageLabel(pagination) {
   return `Page ${currentPage} / ${pageCount}`;
 }
 
+function isDefaultCatalogBrowseRequest(filters) {
+  return (
+    String(filters?.q || "") === defaultCatalogFilters.q &&
+    String(filters?.status || "") === defaultCatalogFilters.status &&
+    String(filters?.sort || defaultCatalogFilters.sort) ===
+      defaultCatalogFilters.sort &&
+    Number(filters?.page || defaultCatalogFilters.page) ===
+      defaultCatalogFilters.page &&
+    Number(filters?.limit || defaultCatalogFilters.limit) ===
+      defaultCatalogFilters.limit
+  );
+}
+
 function canCreateCatalogEntry(entry) {
   return [
     "new",
@@ -1008,6 +1021,10 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
 
     try {
       const requests = [];
+      const shouldReuseCatalogOverview =
+        scopes.has(LOAD_SCOPE_CATALOG_BROWSE) &&
+        scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW) &&
+        isDefaultCatalogBrowseRequest(nextCatalogFilters);
       const queueScopeRequest = (scope, url) => {
         requests.push(
           apiFetch(url).then((payload) => ({
@@ -1064,14 +1081,16 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       }
 
       if (scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW)) {
-        queueScopeRequest(
-          LOAD_SCOPE_CATALOG_OVERVIEW,
-          `/ingestion/catalog/entries/${toQueryString({
-            ...defaultCatalogFilters,
-            page: 1,
-            limit: defaultCatalogFilters.limit,
-          })}`,
-        );
+        if (!shouldReuseCatalogOverview) {
+          queueScopeRequest(
+            LOAD_SCOPE_CATALOG_OVERVIEW,
+            `/ingestion/catalog/entries/${toQueryString({
+              ...defaultCatalogFilters,
+              page: 1,
+              limit: defaultCatalogFilters.limit,
+            })}`,
+          );
+        }
       }
 
       if (scopes.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
@@ -1138,9 +1157,14 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         );
       }
 
-      if (payloadByScope.has(LOAD_SCOPE_CATALOG_OVERVIEW)) {
+      if (
+        payloadByScope.has(LOAD_SCOPE_CATALOG_OVERVIEW) ||
+        shouldReuseCatalogOverview
+      ) {
         const catalogPayload =
-          payloadByScope.get(LOAD_SCOPE_CATALOG_OVERVIEW) || null;
+          (shouldReuseCatalogOverview
+            ? payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE)
+            : payloadByScope.get(LOAD_SCOPE_CATALOG_OVERVIEW)) || null;
         setCatalogOverviewEntries(catalogPayload?.entries || []);
         setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
         setCatalogSyncState(catalogPayload?.sync_state || null);

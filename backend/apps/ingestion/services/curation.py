@@ -35,6 +35,7 @@ REQUIRED_READY_ASSETS = (GeneratedAssetType.HTML, GeneratedAssetType.EPUB)
 RUN_CANCEL_MESSAGE = "Stopped by user."
 SOURCE_REFRESH_STOP_MESSAGE = "Stopped by user."
 FAILED_AUTOMATION_RETRY_COOLDOWN = timedelta(hours=6)
+SOURCE_LOOKUP_CHUNK_SIZE = 500
 
 
 def normalize_refresh_max_pages(value):
@@ -246,36 +247,52 @@ def next_catalog_automation_run_at(settings_obj, now=None, latest_run=None):
     return next_catalog_automation_due_at(settings_obj, now=now, latest_run=latest_run)
 
 
+def iter_source_url_chunks(source_urls, chunk_size=SOURCE_LOOKUP_CHUNK_SIZE):
+    unique_urls = [url for url in dict.fromkeys(source_urls or ()) if url]
+    for index in range(0, len(unique_urls), chunk_size):
+        yield unique_urls[index : index + chunk_size]
+
+
 def source_catalog_book_source_map(source_urls):
-    book_sources = (
-        BookSource.objects.filter(normalized_source_url__in=source_urls)
-        .select_related("book")
-        .prefetch_related("book__generated_assets", "book__processing_jobs", "book__book_categories__category")
-    )
-    return {book_source.normalized_source_url: book_source for book_source in book_sources}
+    book_source_map = {}
+
+    for source_url_chunk in iter_source_url_chunks(source_urls):
+        book_sources = (
+            BookSource.objects.filter(normalized_source_url__in=source_url_chunk)
+            .select_related("book")
+            .prefetch_related("book__generated_assets", "book__processing_jobs", "book__book_categories__category")
+        )
+        book_source_map.update(
+            {
+                book_source.normalized_source_url: book_source
+                for book_source in book_sources
+            }
+        )
+
+    return book_source_map
 
 
 def source_catalog_submission_map(source_urls):
-    if not source_urls:
-        return {}
-
-    queryset = (
-        BookSubmission.objects.filter(resolved_url__in=source_urls)
-        .select_related(
-            "linked_book",
-            "canonical_submission",
-            "canonical_submission__linked_book",
-        )
-        .prefetch_related(
-            "processing_jobs",
-            "canonical_submission__processing_jobs",
-        )
-        .order_by("-updated_at", "-created_at")
-    )
-
     submission_map = {}
-    for submission in queryset:
-        submission_map.setdefault(submission.resolved_url, submission)
+
+    for source_url_chunk in iter_source_url_chunks(source_urls):
+        queryset = (
+            BookSubmission.objects.filter(resolved_url__in=source_url_chunk)
+            .select_related(
+                "linked_book",
+                "canonical_submission",
+                "canonical_submission__linked_book",
+            )
+            .prefetch_related(
+                "processing_jobs",
+                "canonical_submission__processing_jobs",
+            )
+            .order_by("-updated_at", "-created_at")
+        )
+
+        for submission in queryset:
+            submission_map.setdefault(submission.resolved_url, submission)
+
     return submission_map
 
 
