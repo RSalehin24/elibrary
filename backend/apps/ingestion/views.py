@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.access.models import PermissionScope
-from apps.catalog.models import Book, BookSource, GeneratedAssetStatus, GeneratedAssetType
+from apps.catalog.models import Book, BookSource, ContributorRole, GeneratedAssetStatus, GeneratedAssetType
 from apps.common.models import ReviewState
 from apps.common.permissions import CanManageProcessing, user_has_scope
 from apps.common.url_utils import public_api_url
@@ -93,6 +93,40 @@ def apply_submission_origin_filter(queryset, origin, *, field_name="origin"):
 
 def normalize_status_filter(value):
     return "cancelled" if value == "stopped" else value
+
+
+def search_query_variants(query):
+    compact = " ".join((query or "").split())
+    if not compact:
+        return []
+
+    variants = [compact]
+    slug_variant = "-".join(compact.split())
+    if slug_variant != compact:
+        variants.append(slug_variant)
+
+    for value in list(variants):
+        encoded_value = quote(value, safe="")
+        if encoded_value and encoded_value != value:
+            variants.append(encoded_value)
+
+    return list(dict.fromkeys(variants))
+
+
+def apply_text_search(queryset, query, *field_names):
+    variants = search_query_variants(query)
+    if not variants or not field_names:
+        return queryset
+
+    combined_query = None
+    for value in variants:
+        value_query = None
+        for field_name in field_names:
+            clause = Q(**{f"{field_name}__icontains": value})
+            value_query = clause if value_query is None else value_query | clause
+        combined_query = value_query if combined_query is None else combined_query | value_query
+
+    return queryset.filter(combined_query)
 
 
 INCOMPLETE_CATEGORY_KEYWORDS = ("unfinished", "অসম্পূর্ণ বই", "অসম্পূর্ণ")
@@ -401,10 +435,7 @@ class SubmissionListCreateView(APIView):
             queryset = queryset.filter(input_type=input_type)
         query = request.query_params.get("q", "").strip()
         if query:
-            queryset = queryset.filter(
-                Q(original_input__icontains=query)
-                | Q(resolved_url__icontains=query)
-            )
+            queryset = apply_text_search(queryset, query, "original_input", "resolved_url")
         linked_book_slug = request.query_params.get("linked_book_slug", "").strip()
         if linked_book_slug:
             queryset = queryset.filter(linked_book__slug=linked_book_slug)
@@ -607,11 +638,7 @@ class ProcessingJobListView(generics.ListAPIView):
             queryset = queryset.filter(job_type=job_type)
         query = self.request.query_params.get("q", "").strip()
         if query:
-            queryset = queryset.filter(
-                Q(submission__original_input__icontains=query)
-                | Q(last_error__icontains=query)
-                | Q(book__title__icontains=query)
-            )
+            queryset = apply_text_search(queryset, query, "submission__original_input", "last_error", "book__title")
         queryset = apply_created_at_filters(queryset, self.request)
         queryset = jobs_ordered_queryset(queryset)
         return apply_limit(queryset, self.request)
@@ -872,10 +899,12 @@ class DuplicateReviewListView(generics.ListAPIView):
             queryset = queryset.filter(status=status_filter)
         query = self.request.query_params.get("q", "").strip()
         if query:
-            queryset = queryset.filter(
-                Q(submission__original_input__icontains=query)
-                | Q(existing_book__title__icontains=query)
-                | Q(notes__icontains=query)
+            queryset = apply_text_search(
+                queryset,
+                query,
+                "submission__original_input",
+                "existing_book__title",
+                "notes",
             )
         queryset = duplicate_reviews_ordered_queryset(queryset)
         return apply_limit(queryset, self.request, default_limit=40)
@@ -1098,7 +1127,12 @@ class IncompleteCatalogCheckListView(APIView):
     def get(self, request):
         books = list(
             Book.objects.filter(deleted_at__isnull=True)
-            .prefetch_related("book_categories__category", "source_urls", "processing_jobs")
+            .prefetch_related(
+                "book_categories__category",
+                "source_urls",
+                "processing_jobs",
+                "book_contributors__contributor",
+            )
             .order_by("title")
         )
 
@@ -1163,12 +1197,21 @@ class IncompleteCatalogCheckListView(APIView):
             if requeued:
                 summary["requeued"] += 1
 
+            author_names = [
+                relation.contributor.name
+                for relation in book.book_contributors.all()
+                if relation.role == ContributorRole.AUTHOR
+                and relation.contributor_id
+                and relation.contributor
+                and relation.contributor.name
+            ]
+
             rows.append(
                 {
                     "book_id": str(book.id),
                     "book_title": book.title,
                     "book_slug": book.slug,
-                    "author_line": ", ".join(book.authors or []),
+                    "author_line": ", ".join(author_names),
                     "local_categories": local_categories,
                     "source_url": source_url,
                     "source_categories": source_categories,

@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { Link } from "react-router-dom";
+import BookRouteLink from "./BookRouteLink";
 import BookCoverArt from "./BookCoverArt";
 import {
   formatBookDate,
@@ -71,9 +72,12 @@ export default function BookCard({ book }) {
             <p className="book-timestamp">{book.record_type === "manual" ? "Manual entry" : "Library record"}</p>
             {book.latest_submission_at ? <p className="book-timestamp">Added on {formatBookDate(book.latest_submission_at)}</p> : null}
           </div>
-          <Link to={`/books/${book.slug}`} className="primary-button book-card-action">
+          <BookRouteLink
+            slug={book.slug}
+            className="primary-button book-card-action"
+          >
             Open record
-          </Link>
+          </BookRouteLink>
         </div>
       </div>
     </article>

@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 import requests
@@ -33,6 +34,7 @@ from apps.ingestion.services.curation import (
     run_due_catalog_automation,
     source_catalog_entry_snapshots,
 )
+from apps.ingestion.pipeline import scraper as legacy_scraper
 from apps.ingestion.services.legacy_adapter import normalize_text
 from apps.ingestion.services.normalization import (
     clean_extracted_dedication_html,
@@ -40,6 +42,7 @@ from apps.ingestion.services.normalization import (
     extract_front_matter_entries,
     normalize_scraped_book,
     promote_leading_front_matter,
+    split_leading_front_sections,
 )
 from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_with_host_fallback
 from apps.ingestion.services.submissions import (
@@ -467,6 +470,128 @@ def test_source_catalog_entries_apply_status_filter_before_pagination_and_return
     assert payload["pagination"]["page_count"] == 1
     assert len(payload["entries"]) == 1
     assert payload["entries"][0]["title"] == "Z New Book"
+
+
+@pytest.mark.django_db
+def test_source_catalog_entries_summary_reports_queued_and_processing_separately(client):
+    admin = User.objects.create_superuser(email="catalog-summary@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    queued_book = Book.objects.create(title="Queued Book")
+    queued_source_url = "https://www.ebanglalibrary.com/books/queued-book/"
+    BookSource.objects.create(
+        book=queued_book,
+        source_url=queued_source_url,
+        normalized_source_url=queued_source_url,
+    )
+    queued_submission = BookSubmission.objects.create(
+        submitter=admin,
+        input_type="url",
+        original_input=queued_source_url,
+        normalized_input="queued book",
+        resolved_url=queued_source_url,
+        origin=SubmissionOrigin.CURATION,
+        status=SubmissionStatus.QUEUED,
+    )
+    ProcessingJob.objects.create(
+        submission=queued_submission,
+        book=queued_book,
+        status=JobStatus.QUEUED,
+    )
+
+    processing_book = Book.objects.create(title="Processing Book")
+    processing_source_url = "https://www.ebanglalibrary.com/books/processing-book/"
+    BookSource.objects.create(
+        book=processing_book,
+        source_url=processing_source_url,
+        normalized_source_url=processing_source_url,
+    )
+    processing_submission = BookSubmission.objects.create(
+        submitter=admin,
+        input_type="url",
+        original_input=processing_source_url,
+        normalized_input="processing book",
+        resolved_url=processing_source_url,
+        origin=SubmissionOrigin.CURATION,
+        status=SubmissionStatus.PROCESSING,
+    )
+    ProcessingJob.objects.create(
+        submission=processing_submission,
+        book=processing_book,
+        status=JobStatus.PROCESSING,
+    )
+
+    SourceCatalogEntry.objects.create(
+        source_url=queued_source_url,
+        title="Queued Book",
+        author_line="Writer",
+        normalized_title=normalize_text("Queued Book"),
+        normalized_display=normalize_text("Queued Book Writer"),
+    )
+    SourceCatalogEntry.objects.create(
+        source_url=processing_source_url,
+        title="Processing Book",
+        author_line="Writer",
+        normalized_title=normalize_text("Processing Book"),
+        normalized_display=normalize_text("Processing Book Writer"),
+    )
+
+    response = client.get("/api/ingestion/catalog/entries/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["queued"] == 1
+    assert payload["summary"]["processing"] == 1
+
+
+@pytest.mark.django_db
+def test_incomplete_catalog_check_uses_book_contributors_for_author_line(client):
+    admin = User.objects.create_superuser(email="incomplete-check@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    category = Category.objects.create(name="অসম্পূর্ণ বই")
+    contributor = Contributor.objects.create(name="Writer One")
+    book = Book.objects.create(title="Incomplete Book")
+    book.categories.add(category)
+    BookContributor.objects.create(book=book, contributor=contributor, role="author", sort_order=0)
+
+    source_url = "https://www.ebanglalibrary.com/books/incomplete-book/"
+    BookSource.objects.create(
+        book=book,
+        source_url=source_url,
+        normalized_source_url=source_url,
+    )
+    SourceCatalogEntry.objects.create(
+        source_url=source_url,
+        title="Incomplete Book",
+        author_line="Writer One",
+        normalized_title=normalize_text("Incomplete Book"),
+        normalized_display=normalize_text("Incomplete Book Writer One"),
+        raw_data={"category": "অসম্পূর্ণ বই"},
+    )
+
+    submission = BookSubmission.objects.create(
+        submitter=admin,
+        input_type="url",
+        original_input=source_url,
+        normalized_input="incomplete book",
+        resolved_url=source_url,
+        origin=SubmissionOrigin.CURATION,
+        status=SubmissionStatus.QUEUED,
+    )
+    ProcessingJob.objects.create(
+        submission=submission,
+        book=book,
+        status=JobStatus.QUEUED,
+    )
+
+    response = client.get("/api/ingestion/catalog/incomplete-check/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["queued"] == 1
+    assert payload["entries"][0]["book_title"] == "Incomplete Book"
+    assert payload["entries"][0]["author_line"] == "Writer One"
 
 
 @pytest.mark.django_db
@@ -925,6 +1050,43 @@ def test_processing_lists_filter_by_origin_and_recover_stale_jobs(client, monkey
 
 
 @pytest.mark.django_db
+def test_processing_search_matches_percent_encoded_source_titles(client):
+    admin = User.objects.create_superuser(email="search-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+
+    encoded_slug = quote("খেয়া-রবীন্দ্রনাথ-ঠাকুর", safe="")
+    source_url = f"https://www.ebanglalibrary.com/books/{encoded_slug}/"
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        origin=SubmissionOrigin.USER,
+        original_input=source_url,
+        normalized_input=normalize_text(source_url),
+        resolved_url=source_url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.CANCELLED,
+    )
+    job = ProcessingJob.objects.create(submission=submission, status=JobStatus.CANCELLED, job_type="create")
+    existing_book = Book.objects.create(title="খেয়া", state="ready", review_state="approved")
+    review = DuplicateReview.objects.create(
+        submission=submission,
+        existing_book=existing_book,
+        status=DuplicateReviewStatus.PENDING,
+    )
+
+    for query in ("খেয়া", "খেয়া রবীন্দ্রনাথ ঠাকুর"):
+        submissions_response = client.get(f"/api/ingestion/submissions/?q={query}")
+        jobs_response = client.get(f"/api/ingestion/jobs/?q={query}")
+        reviews_response = client.get(f"/api/ingestion/duplicate-reviews/?q={query}")
+
+        assert submissions_response.status_code == 200
+        assert [entry["id"] for entry in submissions_response.json()] == [str(submission.id)]
+        assert jobs_response.status_code == 200
+        assert [entry["id"] for entry in jobs_response.json()] == [str(job.id)]
+        assert reviews_response.status_code == 200
+        assert [entry["id"] for entry in reviews_response.json()] == [str(review.id)]
+
+
+@pytest.mark.django_db
 def test_processing_manager_can_stop_queued_job(client, monkeypatch):
     admin = User.objects.create_superuser(email="stop-job-admin@example.com", password="strong-password-123")
     client.force_login(admin)
@@ -1240,6 +1402,188 @@ def test_extract_main_content_segments_omits_dedication_heading_from_extracted_d
     assert "আহমেদ নাফিস শাহরিয়ারকে" in dedication_html
     assert "উৎসর্গ" not in dedication_html
     assert "এটাই মূল কনটেন্ট।" in cleaned_main_content
+
+
+def test_extract_main_content_segments_stops_dedication_before_strong_only_title():
+    _, dedication_html, cleaned_main_content = extract_main_content_segments(
+        """
+        <div>
+          <p>উৎসর্গ</p>
+          <p>শ্রীযুক্ত সত্যেন্দ্রনাথ ঠাকুর</p>
+          <p>দাদা মহাশয়</p>
+          <p><strong>কবির মন্তব্য</strong></p>
+          <p>এই অংশ আর উৎসর্গ নয়।</p>
+        </div>
+        """
+    )
+
+    assert "শ্রীযুক্ত সত্যেন্দ্রনাথ ঠাকুর" in dedication_html
+    assert "দাদা মহাশয়" in dedication_html
+    assert "কবির মন্তব্য" not in dedication_html
+    assert "কবির মন্তব্য" in cleaned_main_content
+    assert "এই অংশ আর উৎসর্গ নয়।" in cleaned_main_content
+
+
+def test_split_leading_front_sections_uses_multiline_strong_title_as_single_section_heading():
+    sections, cleaned_main_content = split_leading_front_sections(
+        """
+        <div>
+          <p><strong>২০০১ : আ স্পেস ওডিসি – আর্থার সি ক্লার্ক<br/>ভাষান্তর : মাকসুদুজ্জামান খান</strong><strong> </strong><strong></strong></p>
+          <p>প্রারম্ভিক মন্তব্য।</p>
+          <p><strong>সূচীপত্র</strong></p>
+          <ul><li>অধ্যায় ১</li></ul>
+        </div>
+        """
+    )
+
+    assert sections == [
+        {
+            "title": "২০০১ : আ স্পেস ওডিসি – আর্থার সি ক্লার্ক\nভাষান্তর : মাকসুদুজ্জামান খান",
+            "html": "<p>প্রারম্ভিক মন্তব্য।</p>",
+        }
+    ]
+    assert "সূচীপত্র" not in cleaned_main_content
+    assert "অধ্যায় ১" not in cleaned_main_content
+    assert "প্রারম্ভিক মন্তব্য।" not in cleaned_main_content
+
+
+def test_inline_toc_extraction_builds_toc_and_content_from_main_content():
+    toc, content_items, cleaned_main_content = legacy_scraper.extract_inline_toc_and_content(
+        """
+        <div class="ld-tab-content ld-visible entry-content">
+          <h2>উপন্যাস সমগ্র – রবীন্দ্রনাথ ঠাকুর</h2>
+          <p><strong>সূচীপত্র</strong></p>
+          <ul>
+            <li><a href="#section-one">প্রথম অংশ</a></li>
+            <li><a href="#section-two">দ্বিতীয় অংশ</a></li>
+          </ul>
+          <h3 id="section-one">প্রথম অংশ</h3>
+          <p>প্রথম অংশের লেখা</p>
+          <h3 id="section-two">দ্বিতীয় অংশ</h3>
+          <p>দ্বিতীয় অংশের লেখা</p>
+        </div>
+        """
+    )
+
+    assert [entry["title"] for entry in toc] == ["প্রথম অংশ", "দ্বিতীয় অংশ"]
+    assert [item["title"] for item in content_items] == ["প্রথম অংশ", "দ্বিতীয় অংশ"]
+    assert "প্রথম অংশের লেখা" in content_items[0]["content"]
+    assert "দ্বিতীয় অংশের লেখা" in content_items[1]["content"]
+    assert "সূচীপত্র" not in cleaned_main_content
+    assert "উপন্যাস সমগ্র – রবীন্দ্রনাথ ঠাকুর" in cleaned_main_content
+    assert "প্রথম অংশের লেখা" not in cleaned_main_content
+
+
+def test_inline_toc_extraction_removes_embedded_toc_even_without_section_bodies():
+    toc, content_items, cleaned_main_content = legacy_scraper.extract_inline_toc_and_content(
+        """
+        <div class="ld-tab-content ld-visible entry-content">
+          <h2>উপন্যাস সমগ্র – রবীন্দ্রনাথ ঠাকুর</h2>
+          <p>উপন্যাস সমগ্র – রবীন্দ্রনাথ ঠাকুর</p>
+          <p><strong>সূচীপত্র</strong></p>
+          <ul>
+            <li><a href="https://www.ebanglalibrary.com/books/dui-bon/">দুই বোন – রবীন্দ্রনাথ ঠাকুর</a></li>
+            <li><a href="https://www.ebanglalibrary.com/books/chokher-bali/">চোখের বালি – রবীন্দ্রনাথ ঠাকুর</a></li>
+          </ul>
+        </div>
+        """
+    )
+
+    assert [entry["title"] for entry in toc] == [
+        "দুই বোন – রবীন্দ্রনাথ ঠাকুর",
+        "চোখের বালি – রবীন্দ্রনাথ ঠাকুর",
+    ]
+    assert content_items == []
+    assert "সূচীপত্র" not in cleaned_main_content
+    assert "দুই বোন – রবীন্দ্রনাথ ঠাকুর" not in cleaned_main_content
+    assert "উপন্যাস সমগ্র – রবীন্দ্রনাথ ঠাকুর" in cleaned_main_content
+
+
+def test_scrape_book_data_recurses_through_nested_toc_links(monkeypatch, tmp_path):
+    root_url = "https://www.ebanglalibrary.com/books/root-book/"
+    child_url = "https://www.ebanglalibrary.com/books/child-book/"
+    lesson_url = "https://www.ebanglalibrary.com/books/child-book/chapter-1/"
+
+    html_map = {
+        root_url: """
+        <html>
+          <head><title>মূল বই – লেখক</title></head>
+          <body>
+            <div class="ld-tab-content ld-visible entry-content">
+              <p>মূল বইয়ের ভূমিকা</p>
+              <p><strong>সূচীপত্র</strong></p>
+              <ul>
+                <li><a href="https://www.ebanglalibrary.com/books/child-book/">সংগ্রহ খণ্ড</a></li>
+              </ul>
+            </div>
+          </body>
+        </html>
+        """,
+        child_url: """
+        <html>
+          <head><title>সংগ্রহ খণ্ড – লেখক</title></head>
+          <body>
+            <div class="ld-tab-content ld-visible entry-content">
+              <p>খণ্ড পরিচিতি</p>
+            </div>
+          </body>
+        </html>
+        """,
+        lesson_url: """
+        <html>
+          <head><title>অধ্যায় ১ – লেখক</title></head>
+          <body>
+            <div class="ld-tab-content ld-visible entry-content">
+              <h2>অধ্যায় ১</h2>
+              <p>পাতার ভেতরের লেখা</p>
+            </div>
+          </body>
+        </html>
+        """,
+    }
+
+    monkeypatch.setattr(
+        legacy_scraper,
+        "get_soup",
+        lambda url, max_retries=3: legacy_scraper.BeautifulSoup(
+            html_map[url], "html.parser"
+        ),
+    )
+    monkeypatch.setattr(
+        legacy_scraper,
+        "create_output_folder",
+        lambda _title: str(tmp_path / "output"),
+    )
+    monkeypatch.setattr(legacy_scraper, "download_cover_image", lambda *_args: None)
+
+    def fake_scrape_all_lessons(url):
+        if url == child_url:
+            return [
+                {
+                    "title": "অধ্যায় ১",
+                    "url": lesson_url,
+                    "topics": [],
+                    "has_topics": False,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(legacy_scraper, "scrape_all_lessons", fake_scrape_all_lessons)
+
+    scraped = legacy_scraper.scrape_book_data(root_url)
+
+    assert "মূল বইয়ের ভূমিকা" in scraped["main_content"]
+    assert "সূচীপত্র" not in scraped["main_content"]
+    assert [entry["title"] for entry in scraped["toc"]] == ["সংগ্রহ খণ্ড"]
+    assert [child["title"] for child in scraped["toc"][0]["children"]] == ["অধ্যায় ১"]
+    assert [item["title"] for item in scraped["content_items"]] == [
+        "সংগ্রহ খণ্ড",
+        "অধ্যায় ১",
+    ]
+    assert scraped["content_items"][0]["path"] == ["সংগ্রহ খণ্ড"]
+    assert scraped["content_items"][1]["path"] == ["সংগ্রহ খণ্ড", "অধ্যায় ১"]
+    assert "খণ্ড পরিচিতি" in scraped["content_items"][0]["content"]
+    assert "পাতার ভেতরের লেখা" in scraped["content_items"][1]["content"]
 
 
 def test_normalize_scraped_book_drops_author_role_when_same_person_is_translator_or_editor():

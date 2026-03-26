@@ -2,6 +2,20 @@ import os
 from ebooklib import epub
 from jinja2 import Environment, FileSystemLoader
 
+
+def content_path_tuple(path_value):
+    if isinstance(path_value, (list, tuple)):
+        return tuple(part for part in path_value if part)
+    return ()
+
+
+def resolve_entry_path(entry, parent_path=()):
+    explicit_path = content_path_tuple(entry.get("path"))
+    if explicit_path:
+        return explicit_path
+    return tuple(parent_path) + (entry.get("title", ""),)
+
+
 class EpubBuilder:
     def __init__(self, book_title, author, series="", book_type="", output_folder=""):
         self.book_title = book_title
@@ -120,38 +134,39 @@ class EpubBuilder:
             toc_structure: Hierarchical TOC from scraper
             content_items: List of content item dictionaries
         """
-        # Build hierarchical lessons structure for template
-        hierarchical_lessons = []
         item_counter = 1
-        
-        # Create a mapping of titles to file names
-        title_to_file = {}
+        path_to_file = {}
+        fallback_title_to_file = {}
+
         for item in content_items:
-            title_to_file[item["title"]] = f"lesson_{item_counter}.xhtml"
+            file_name = f"lesson_{item_counter}.xhtml"
             item_counter += 1
-        
-        for entry in toc_structure:
-            if entry.get("children"):
-                # Lesson with topics
-                lesson_entry = {
-                    "title": entry["title"],
-                    "has_children": True,
-                    "children": []
-                }
-                for child in entry["children"]:
-                    lesson_entry["children"].append({
-                        "title": child["title"],
-                        "file_name": title_to_file.get(child["title"], "#")
-                    })
-                hierarchical_lessons.append(lesson_entry)
-            else:
-                # Standalone lesson
-                hierarchical_lessons.append({
-                    "title": entry["title"],
-                    "file_name": title_to_file.get(entry["title"], "#"),
-                    "has_children": False
-                })
-        
+            item_path = content_path_tuple(item.get("path"))
+            if item_path:
+                path_to_file[item_path] = file_name
+            fallback_title_to_file.setdefault(item.get("title"), file_name)
+
+        def build_hierarchical_entries(entries, parent_path=()):
+            built_entries = []
+
+            for entry in entries:
+                path = resolve_entry_path(entry, parent_path)
+                children = build_hierarchical_entries(entry.get("children", []), path)
+                file_name = path_to_file.get(path) or fallback_title_to_file.get(
+                    entry.get("title")
+                )
+                built_entries.append(
+                    {
+                        "title": entry.get("title", ""),
+                        "file_name": file_name,
+                        "has_children": bool(children),
+                        "children": children,
+                    }
+                )
+
+            return built_entries
+
+        hierarchical_lessons = build_hierarchical_entries(toc_structure)
         html_content = self.render_template("toc_hierarchical.html", lessons=hierarchical_lessons)
         c = epub.EpubHtml(title="সূচিপত্র", file_name="toc.xhtml", content=html_content)
         self.book.add_item(c)

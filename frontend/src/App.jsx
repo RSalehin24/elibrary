@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Navigate,
   Route,
@@ -55,15 +55,22 @@ function SessionRestartHandler() {
 
 function BackendStatusModal() {
   const [status, setStatus] = useState(null);
+  const shouldRefreshOnRecoveryRef = useRef(false);
 
   useEffect(() => {
     function handleBackendStatus(event) {
       const detail = event.detail || {};
       if (detail.state === "up") {
+        if (shouldRefreshOnRecoveryRef.current) {
+          shouldRefreshOnRecoveryRef.current = false;
+          window.location.reload();
+          return;
+        }
         setStatus(null);
         return;
       }
       if (detail.state === "down") {
+        shouldRefreshOnRecoveryRef.current = true;
         setStatus({ mode: detail.mode || "outage" });
       }
     }
@@ -83,6 +90,7 @@ function BackendStatusModal() {
         return;
       }
       if (!healthy) {
+        shouldRefreshOnRecoveryRef.current = true;
         setStatus((current) => current || { mode: "outage" });
       } else {
         setStatus(null);
@@ -107,6 +115,11 @@ function BackendStatusModal() {
     const timer = window.setInterval(async () => {
       const healthy = await probeBackendHealth();
       if (healthy && !cancelled) {
+        if (shouldRefreshOnRecoveryRef.current) {
+          shouldRefreshOnRecoveryRef.current = false;
+          window.location.reload();
+          return;
+        }
         setStatus(null);
       }
     }, 5000);
@@ -279,7 +292,10 @@ export default function App() {
           path="/processing-my-requests"
           element={
             <ProtectedRoute>
-              <QueuePage sectionKey="my-requests" />
+              <QueuePage
+                key="processing-my-requests"
+                sectionKey="my-requests"
+              />
             </ProtectedRoute>
           }
         />
@@ -287,7 +303,10 @@ export default function App() {
           path="/processing-catalog-books"
           element={
             <ProtectedRoute>
-              <QueuePage sectionKey="catalog-books" />
+              <QueuePage
+                key="processing-catalog-books"
+                sectionKey="catalog-books"
+              />
             </ProtectedRoute>
           }
         />
@@ -295,7 +314,7 @@ export default function App() {
           path="/processing-automation"
           element={
             <ProtectedRoute>
-              <QueuePage sectionKey="automation" />
+              <QueuePage key="processing-automation" sectionKey="automation" />
             </ProtectedRoute>
           }
         />
@@ -303,7 +322,10 @@ export default function App() {
           path="/processing-all-activity"
           element={
             <ProtectedRoute>
-              <QueuePage sectionKey="all-activity" />
+              <QueuePage
+                key="processing-all-activity"
+                sectionKey="all-activity"
+              />
             </ProtectedRoute>
           }
         />
@@ -311,7 +333,10 @@ export default function App() {
           path="/processing-incomplete-check"
           element={
             <ProtectedRoute>
-              <QueuePage sectionKey="incomplete-monitor" />
+              <QueuePage
+                key="processing-incomplete-check"
+                sectionKey="incomplete-monitor"
+              />
             </ProtectedRoute>
           }
         />

@@ -1,7 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiFetch, resolveAppUrl } from "../api/client";
 import BookCoverArt from "../components/BookCoverArt";
+import {
+  getBookReturnTarget,
+  getCurrentRoutePath,
+} from "../components/BookRouteLink";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import BookDetailSkeleton from "../components/BookDetailSkeleton";
 import LoadingSpinner from "../components/LoadingSpinner";
@@ -26,6 +30,23 @@ const assetLabels = {
 };
 
 const previewWindows = new Map();
+
+function openManagedPreviewWindow(previewUrl, target) {
+  const openedWindow = window.open("", target);
+  if (!openedWindow) {
+    return null;
+  }
+
+  try {
+    if (openedWindow.location.href !== previewUrl) {
+      openedWindow.location.replace(previewUrl);
+    }
+  } catch {
+    openedWindow.location = previewUrl;
+  }
+
+  return openedWindow;
+}
 
 function TrashIcon() {
   return (
@@ -186,6 +207,7 @@ function waitForMinimumLoader(startedAt, minimumMs = 320) {
 }
 
 export default function BookDetailPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const { user } = useSession();
   const toast = useToast();
@@ -229,6 +251,15 @@ export default function BookDetailPage() {
   const canEditMetadata = hasCapability(user, "metadata:edit");
   const bookLinkFilters =
     book?.record_type === "manual" ? { record_type: "manual" } : {};
+  const currentDetailPath = getCurrentRoutePath(location);
+  const returnTarget = getBookReturnTarget(location);
+
+  function replaceBookRoute(nextSlug) {
+    navigate(`/books/${nextSlug}`, {
+      replace: true,
+      state: location.state,
+    });
+  }
 
   function applyReaderState(sessionPayload) {
     if (sessionPayload) {
@@ -254,7 +285,7 @@ export default function BookDetailPage() {
     setBook(payload);
     setError("");
     if (payload.slug && payload.slug !== targetSlug) {
-      navigate(`/books/${payload.slug}`, { replace: true });
+      replaceBookRoute(payload.slug);
     }
     return payload;
   }
@@ -522,7 +553,7 @@ export default function BookDetailPage() {
       });
       setBook(payload);
       if (payload.slug && payload.slug !== slug) {
-        navigate(`/books/${payload.slug}`, { replace: true });
+        replaceBookRoute(payload.slug);
       }
       await refreshMetadataCollections(payload.slug || slug);
       toast.success("Metadata updated.");
@@ -617,7 +648,12 @@ export default function BookDetailPage() {
       setDeleting(true);
       await apiFetch(`/catalog/books/${slug}/`, { method: "DELETE" });
       toast.success("Book deleted.");
-      navigate("/library", { replace: true });
+      navigate(
+        returnTarget && returnTarget !== currentDetailPath
+          ? returnTarget
+          : "/library",
+        { replace: true },
+      );
     } catch (nextError) {
       toast.error(nextError.message);
       setDeleting(false);
@@ -655,7 +691,7 @@ export default function BookDetailPage() {
       });
       setBook(payload);
       if (payload.slug && payload.slug !== slug) {
-        navigate(`/books/${payload.slug}`, { replace: true });
+        replaceBookRoute(payload.slug);
       }
       toast.success("EPUB updated.");
     } catch (nextError) {
@@ -681,7 +717,7 @@ export default function BookDetailPage() {
       if (payload.book) {
         setBook(payload.book);
         if (payload.book.slug && payload.book.slug !== slug) {
-          navigate(`/books/${payload.book.slug}`, { replace: true });
+          replaceBookRoute(payload.book.slug);
         }
       }
 
@@ -746,11 +782,7 @@ export default function BookDetailPage() {
         toast.info("Preview is already open for this book.");
       } else {
         const target = `html_preview_${user?.id || "anon"}_${book?.id || slug}`;
-        const openedWindow = window.open(
-          previewUrl,
-          target,
-          "noopener,noreferrer",
-        );
+        const openedWindow = openManagedPreviewWindow(previewUrl, target);
         if (openedWindow) {
           previewWindows.set(previewKey, openedWindow);
           openedWindow.focus();

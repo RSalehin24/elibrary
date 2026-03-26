@@ -2347,7 +2347,16 @@ textarea {
 }
 
 .processing-summary-bar--catalog {
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.processing-summary-bar--catalog .processing-summary-stat {
+  flex: 1 1 0;
+  min-width: 112px;
 }
 
 .processing-summary-bar--incomplete {
@@ -2736,6 +2745,47 @@ textarea {
   width: 56px;
 }
 
+.processing-catalog-table .processing-incomplete-col-select {
+  width: 24px;
+}
+
+.processing-incomplete-table {
+  min-width: 880px;
+  table-layout: fixed;
+}
+
+.processing-incomplete-table th,
+.processing-incomplete-table td {
+  padding: 10px 12px;
+}
+
+.processing-incomplete-table thead th.processing-incomplete-col-select,
+.processing-incomplete-table tbody td.processing-incomplete-col-select {
+  width: 24px;
+  min-width: 24px;
+  max-width: 24px;
+  padding-left: 4px;
+  padding-right: 4px;
+  text-align: center;
+}
+
+.processing-incomplete-table thead th.processing-incomplete-col-book,
+.processing-incomplete-table tbody td.processing-incomplete-col-book {
+  width: 32%;
+}
+
+.processing-incomplete-table .processing-col-category {
+  width: 18%;
+}
+
+.processing-incomplete-table .processing-col-status {
+  width: 14%;
+}
+
+.processing-incomplete-table .processing-col-action {
+  width: 14%;
+}
+
 .processing-checkbox {
   width: 18px;
   height: 18px;
@@ -2780,6 +2830,18 @@ textarea {
 
 .processing-catalog-table .processing-col-action {
   width: 16%;
+}
+
+.processing-catalog-table .processing-incomplete-col-book {
+  width: 24%;
+}
+
+.processing-incomplete-source-url {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .table-request-cell,

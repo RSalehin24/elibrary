@@ -221,6 +221,95 @@ def block_has_break(block):
     return block.find("br") is not None
 
 
+def block_text_lines(block):
+    return [
+        clean_display_text(line)
+        for line in block.get_text("\n", strip=True).splitlines()
+        if clean_display_text(line)
+    ]
+
+
+def block_strong_text_lines(block):
+    lines = []
+    for strong in block.find_all("strong"):
+        lines.extend(
+            clean_display_text(line)
+            for line in strong.get_text("\n", strip=True).splitlines()
+            if clean_display_text(line)
+        )
+    return lines
+
+
+def join_heading_lines(lines):
+    cleaned_lines = [clean_display_text(line) for line in lines if clean_display_text(line)]
+    if not cleaned_lines:
+        return ""
+    if len(cleaned_lines) == 1:
+        return cleaned_lines[0]
+    return "\n".join(cleaned_lines)
+
+
+def heading_plain_text(text):
+    if not text:
+        return ""
+    return clean_display_text(str(text).replace("\n", " "))
+
+
+def block_strong_heading_text(block):
+    strong_lines = block_strong_text_lines(block)
+    if not strong_lines:
+        return ""
+
+    text_lines = block_text_lines(block)
+    if not text_lines:
+        return ""
+
+    if normalize_catalog_text(" ".join(strong_lines)) != normalize_catalog_text(" ".join(text_lines)):
+        return ""
+
+    return join_heading_lines(strong_lines)
+
+
+def is_likely_section_title_text(text):
+    plain_text = heading_plain_text(text)
+    if not plain_text or len(plain_text) > 180:
+        return False
+    if text_matches_patterns(plain_text, DEDICATION_PATTERNS + BODY_SECTION_PATTERNS):
+        return False
+    if search_front_matter_label_value(plain_text, strong_text=plain_text, has_break="\n" in str(text)):
+        return False
+    if looks_like_letter_excerpt_marker(plain_text):
+        return False
+    if len(plain_text.split()) > 18:
+        return False
+    return count_sentence_markers(plain_text) <= 1
+
+
+def is_non_dedication_strong_heading(text, strong_text="", tag_name=""):
+    if tag_name in HEADING_TAG_NAMES:
+        return False
+
+    cleaned_text = clean_display_text(text)
+    cleaned_strong = clean_display_text(strong_text)
+    if not cleaned_text or not cleaned_strong or cleaned_text != cleaned_strong:
+        return False
+    if is_dedication_heading(cleaned_text, strong_text=strong_text, tag_name=tag_name):
+        return False
+    return is_likely_section_title_text(cleaned_strong)
+
+
+def resolve_front_section_title(block):
+    text = block_text(block)
+    if is_front_section_heading(text, tag_name=block.name):
+        return text
+
+    strong_heading = block_strong_heading_text(block)
+    if strong_heading and is_likely_section_title_text(strong_heading):
+        return strong_heading
+
+    return ""
+
+
 def looks_like_title_prefix(prefix):
     cleaned_prefix = clean_display_text(prefix.strip(" -–—|/"))
     if not cleaned_prefix or len(cleaned_prefix) > MAX_TITLE_PREFIX_LENGTH:
@@ -362,6 +451,8 @@ def should_continue_dedication_block(text, strong_text="", tag_name=""):
         return True
     if is_body_section_marker(cleaned_text, tag_name=tag_name):
         return False
+    if is_non_dedication_strong_heading(cleaned_text, strong_text=strong_text, tag_name=tag_name):
+        return False
     if tag_name in HEADING_TAG_NAMES and not is_dedication_heading(
         cleaned_text,
         strong_text=strong_text,
@@ -427,7 +518,8 @@ def split_leading_front_sections(main_content_html):
         strong_text = block_strong_text(block)
         has_break = block_has_break(block)
 
-        if is_front_section_heading(text, tag_name=block.name):
+        section_title = resolve_front_section_title(block)
+        if section_title:
             extraction_started = True
             if current_section and plain_text_from_html("\n".join(current_section["html_parts"])):
                 sections.append(
@@ -436,7 +528,7 @@ def split_leading_front_sections(main_content_html):
                         "html": "\n".join(current_section["html_parts"]),
                     }
                 )
-            current_section = {"title": clean_display_text(text), "html_parts": []}
+            current_section = {"title": section_title, "html_parts": []}
             block.decompose()
             continue
 
@@ -451,12 +543,9 @@ def split_leading_front_sections(main_content_html):
             break
         if search_front_matter_label_value(text, strong_text=strong_text, has_break=has_break):
             break
-        if block.name in HEADING_TAG_NAMES and not is_front_section_heading(text, tag_name=block.name):
+        if is_body_section_marker(text, tag_name=block.name):
             break
-        if is_body_section_marker(text, tag_name=block.name) and re.search(
-            r"(অধ্যা|পর্ব|chapter)",
-            normalize_catalog_text(text),
-        ):
+        if block.name in HEADING_TAG_NAMES and not is_front_section_heading(text, tag_name=block.name):
             break
 
         if current_section is None:

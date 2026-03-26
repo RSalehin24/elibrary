@@ -211,110 +211,128 @@ def html_cover_source(cover, output_folder):
         encoded_image = base64.b64encode(handle.read()).decode("ascii")
     return f"data:{mime_type};base64,{encoded_image}"
 
-def build_hierarchical_toc_html(toc, existing_ids):
-    """
-    Build HTML for hierarchical table of contents.
-    Returns tuple of (html_string, list_of_ids)
-    """
-    html = ""
-    all_ids = []
-    
-    for entry in toc:
-        if entry.get("children"):
-            # Lesson with topics
-            lesson_title = entry["title"]
-            html += f"\n      <li class='toc-lesson'>"
-            html += f"\n        <strong>{escape(lesson_title)}</strong>"
-            html += "\n        <ul class='toc-topics'>"
-            
-            for child in entry["children"]:
-                child_id = make_unique_id(child["title"], existing_ids)
-                all_ids.append(child_id)
-                html += f"\n          <li class='toc-topic'><a href='#{child_id}'>{escape(child['title'])}</a></li>"
-            
-            html += "\n        </ul>"
-            html += "\n      </li>"
-        else:
-            # Standalone lesson (no topics)
-            lesson_id = make_unique_id(entry["title"], existing_ids)
-            all_ids.append(lesson_id)
-            html += f"\n      <li class='toc-standalone'><a href='#{lesson_id}'>{escape(entry['title'])}</a></li>"
-    
-    return html, all_ids
+def content_path_tuple(path_value):
+    if isinstance(path_value, (list, tuple)):
+        return tuple(part for part in path_value if part)
+    return ()
 
-def generate_content_html(content_items, toc, existing_ids):
+
+def resolve_entry_path(entry, parent_path=()):
+    explicit_path = content_path_tuple(entry.get("path"))
+    if explicit_path:
+        return explicit_path
+    return tuple(parent_path) + (entry.get("title", ""),)
+
+
+def build_toc_id_map(toc, existing_ids, parent_path=()):
+    id_map = {}
+
+    for entry in toc:
+        path = resolve_entry_path(entry, parent_path)
+        seed = "__".join(path) or entry.get("title", "section")
+        id_map[path] = make_unique_id(seed, existing_ids)
+        if entry.get("children"):
+            id_map.update(build_toc_id_map(entry["children"], existing_ids, path))
+
+    return id_map
+
+
+def build_hierarchical_toc_html(toc, id_map, parent_path=(), level=0):
+    html = ""
+
+    for entry in toc:
+        path = resolve_entry_path(entry, parent_path)
+        anchor_id = id_map.get(path, "")
+        title = escape(entry.get("title", ""))
+        has_children = bool(entry.get("children"))
+        has_content = entry.get("has_content", False)
+        title_markup = (
+            f"<a href='#{anchor_id}'>{title}</a>"
+            if anchor_id and (has_content or not has_children)
+            else f"<strong>{title}</strong>"
+        )
+        item_class = "toc-lesson" if level == 0 else "toc-topic"
+
+        html += f"\n          <li class='{item_class}'>"
+        html += f"\n            {title_markup}"
+        if has_children:
+            html += "\n            <ul class='toc-topics'>"
+            html += build_hierarchical_toc_html(entry["children"], id_map, path, level + 1)
+            html += "\n            </ul>"
+        html += "\n          </li>"
+
+    return html
+
+
+def find_content_item(entry, parent_path, content_items):
+    expected_path = resolve_entry_path(entry, parent_path)
+
+    for item in content_items:
+        if content_path_tuple(item.get("path")) == expected_path:
+            return item
+
+    parent_title = parent_path[-1] if parent_path else None
+    for item in content_items:
+        if item.get("title") != entry.get("title"):
+            continue
+        if item.get("parent") == parent_title:
+            return item
+        if parent_title is None and not item.get("parent"):
+            return item
+
+    return None
+
+
+def heading_tag_for_level(level):
+    return f"h{min(6, level + 2)}"
+
+
+def render_content_entry(entry, content_items, id_map, parent_path=(), level=0):
+    path = resolve_entry_path(entry, parent_path)
+    entry_id = id_map.get(path, "")
+    content_item = find_content_item(entry, parent_path, content_items)
+    children = entry.get("children", [])
+
+    if not content_item and not children:
+        return ""
+
+    heading_tag = heading_tag_for_level(level)
+    container_class = "lesson-section" if level == 0 else "topic-section"
+    header_class = "lesson-header" if level == 0 else "topic-header"
+    content_class = "lesson-content" if level == 0 else "topic-content"
+    id_attr = f" id='{entry_id}'" if entry_id else ""
+    html = f"\n    <div class='{container_class}'>"
+    if level == 0:
+        html += "\n      <hr class='lesson-divider'>"
+    html += (
+        f"\n      <{heading_tag} class='{header_class}'"
+        f"{id_attr}>"
+        f"{escape(entry.get('title', ''))}</{heading_tag}>"
+    )
+
+    if content_item and content_item.get("content"):
+        html += f"\n      <div class='{content_class}'>"
+        indented = "\n".join(
+            f"        {line}" for line in content_item["content"].splitlines()
+        )
+        html += f"\n{indented}"
+        html += "\n      </div>"
+
+    for child in children:
+        html += render_content_entry(child, content_items, id_map, path, level + 1)
+
+    html += "\n    </div>"
+    return html
+
+
+def generate_content_html(content_items, toc, id_map):
     """
     Generate HTML content sections based on content_items and TOC structure.
     Returns HTML string.
     """
-    html = ""
-    
-    # Create a mapping of titles to their IDs
-    title_to_id = {}
-    
-    # First pass: assign IDs based on TOC structure
-    for entry in toc:
-        if entry.get("children"):
-            # Lesson with topics - assign IDs to children
-            for child in entry["children"]:
-                child_id = make_unique_id(child["title"], existing_ids)
-                title_to_id[child["title"]] = child_id
-        else:
-            # Standalone lesson
-            lesson_id = make_unique_id(entry["title"], existing_ids)
-            title_to_id[entry["title"]] = lesson_id
-    
-    # Group content items by parent for nested structure
-    parent_groups = {}
-    standalone_items = []
-    
-    for item in content_items:
-        if item["parent"]:
-            if item["parent"] not in parent_groups:
-                parent_groups[item["parent"]] = []
-            parent_groups[item["parent"]].append(item)
-        else:
-            standalone_items.append(item)
-    
-    # Generate HTML based on TOC structure
-    for entry in toc:
-        if entry.get("children"):
-            # Lesson with topics
-            html += f"\n    <div class='lesson-section'>"
-            html += f"\n      <hr class='lesson-divider'>"
-            html += f"\n      <h2 class='lesson-header'>{escape(entry['title'])}</h2>"
-            
-            # Add topics for this lesson
-            if entry["title"] in parent_groups:
-                for item in parent_groups[entry["title"]]:
-                    item_id = title_to_id.get(item["title"], make_unique_id(item["title"], existing_ids))
-                    html += f"\n      <div class='topic-section'>"
-                    html += f"\n        <h3 class='topic-header' id='{item_id}'>{escape(item['title'])}</h3>"
-                    html += f"\n        <div class='topic-content'>"
-                    if item["content"]:
-                        # Indent content properly
-                        indented = "\n".join(f"          {line}" for line in item["content"].splitlines())
-                        html += f"\n{indented}"
-                    html += f"\n        </div>"
-                    html += f"\n      </div>"
-            html += f"\n    </div>"
-        else:
-            # Standalone lesson
-            item = next((x for x in standalone_items if x["title"] == entry["title"]), None)
-            if item:
-                item_id = title_to_id.get(item["title"], make_unique_id(item["title"], existing_ids))
-                html += f"\n    <div class='standalone-lesson'>"
-                html += f"\n      <hr class='lesson-divider'>"
-                html += f"\n      <h2 class='lesson-header' id='{item_id}'>{escape(item['title'])}</h2>"
-                html += f"\n      <div class='lesson-content'>"
-                if item["content"]:
-                    # Indent content properly
-                    indented = "\n".join(f"        {line}" for line in item["content"].splitlines())
-                    html += f"\n{indented}"
-                html += f"\n      </div>"
-                html += f"\n    </div>"
-    
-    return html
+    return "".join(
+        render_content_entry(entry, content_items, id_map) for entry in toc
+    )
 
 def generate_css():
     """Generate comprehensive CSS for the HTML book"""
@@ -788,14 +806,15 @@ def save_html(book_title, author, series, book_type, cover, main_content, book_i
     html += "\n      <div class='toc-section'>"
     html += "\n        <h2 class='toc-title'>সূচিপত্র</h2>"
     html += "\n        <ul class='toc-list'>"
-    toc_html, _ = build_hierarchical_toc_html(toc, existing_ids)
+    toc_id_map = build_toc_id_map(toc, existing_ids)
+    toc_html = build_hierarchical_toc_html(toc, toc_id_map)
     html += toc_html
     html += "\n        </ul>"
     html += "\n      </div>"
 
     # Content Sections
     html += "\n      <!-- Content Sections -->"
-    content_html = generate_content_html(content_items, toc, existing_ids)
+    content_html = generate_content_html(content_items, toc, toc_id_map)
     html += content_html
 
     # Close HTML

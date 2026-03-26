@@ -91,6 +91,7 @@ export default function AppShell({ children }) {
     location.pathname.startsWith("/books/");
   const isProcessingPropertiesActive =
     location.pathname.startsWith("/processing");
+  const isLoginRoute = location.pathname === "/login";
 
   useEffect(() => {
     setMenuOpen(false);
@@ -381,11 +382,11 @@ export default function AppShell({ children }) {
                   ) : null}
                 </div>
               </>
-            ) : (
+            ) : !isLoginRoute ? (
               <NavLink to="/login" className="ghost-button">
                 Sign in
               </NavLink>
-            )}
+            ) : null}
           </div>
         </header>
       ) : null}

@@ -82,6 +82,7 @@ export function CatalogSearchRow({
   onSubmit,
   buttonsDisabled = false,
   actionsExtra = null,
+  showFilterToggle = true,
 }) {
   const activeFilterCount = countActiveFilters(filters, fields, defaultFilters);
   const rowClassName = `catalog-search-row${compact ? " catalog-search-row--compact" : ""}${className ? ` ${className}` : ""}`;
@@ -92,7 +93,13 @@ export function CatalogSearchRow({
           event.preventDefault();
           return;
         }
-        onSubmit(event);
+        const form = event.currentTarget;
+        const queryInput = form?.querySelector('input[type="search"]');
+        const nextFilters = {
+          ...filters,
+          q: queryInput ? queryInput.value : filters.q,
+        };
+        onSubmit(event, nextFilters);
       }
     : undefined;
 
@@ -134,20 +141,22 @@ export function CatalogSearchRow({
         />
       </label>
       <div className="catalog-search-actions">
-        <button
-          type="button"
-          className={`catalog-filter-toggle${filtersExpanded ? " is-active" : ""}`}
-          onClick={() => setFiltersExpanded((current) => !current)}
-          aria-expanded={filtersExpanded}
-          aria-controls={drawerId}
-          disabled={buttonsDisabled}
-        >
-          <FilterIcon />
-          <span>Filters</span>
-          {activeFilterCount ? (
-            <span className="catalog-filter-count">{activeFilterCount}</span>
-          ) : null}
-        </button>
+        {showFilterToggle ? (
+          <button
+            type="button"
+            className={`catalog-filter-toggle${filtersExpanded ? " is-active" : ""}`}
+            onClick={() => setFiltersExpanded((current) => !current)}
+            aria-expanded={filtersExpanded}
+            aria-controls={drawerId}
+            disabled={buttonsDisabled}
+          >
+            <FilterIcon />
+            <span>Filters</span>
+            {activeFilterCount ? (
+              <span className="catalog-filter-count">{activeFilterCount}</span>
+            ) : null}
+          </button>
+        ) : null}
         {showResultCount &&
         resultCount !== "" &&
         resultCount !== undefined &&

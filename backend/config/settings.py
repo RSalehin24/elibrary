@@ -87,6 +87,13 @@ for origin in {normalized_origin(FRONTEND_BASE_URL), normalized_origin(PUBLIC_AP
     append_unique(CSRF_TRUSTED_ORIGINS, origin)
     append_unique(CORS_ALLOWED_ORIGINS, origin)
 
+if DEBUG:
+    for host in ("localhost", "127.0.0.1"):
+        for port in range(5173, 5181):
+            origin = f"http://{host}:{port}"
+            append_unique(CSRF_TRUSTED_ORIGINS, origin)
+            append_unique(CORS_ALLOWED_ORIGINS, origin)
+
 PASSWORD_RESET_FRONTEND_PATH = env("PASSWORD_RESET_FRONTEND_PATH", "/reset-password")
 SUPER_ADMIN_EMAIL = env("SUPER_ADMIN_EMAIL", "rsalehin24@gmail.com")
 SUPER_ADMIN_PASSWORD = env("SUPER_ADMIN_PASSWORD", "")

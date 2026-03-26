@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiFetch, resolveAppUrl } from "../api/client";
+import BookRouteLink from "../components/BookRouteLink";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import StatusPill from "../components/StatusPill";
@@ -457,12 +458,12 @@ export default function CreateBooksPage() {
                       Choose action
                     </button>
                     {authenticated ? (
-                      <Link
-                        to={`/books/${submission.linked_book_slug}`}
+                      <BookRouteLink
+                        slug={submission.linked_book_slug}
                         className="primary-button"
                       >
                         Open record
-                      </Link>
+                      </BookRouteLink>
                     ) : (
                       <p className="muted-copy">
                         Sign in to keep this book after the session ends.

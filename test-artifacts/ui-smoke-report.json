@@ -1,0 +1,110 @@
+[
+  {
+    "path": "/login",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": false,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/home",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/library",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/categories",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/series",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/writers",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/manual-books",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/processing-my-requests",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/processing-catalog-books",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/processing-incomplete-check",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/processing-all-activity",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  },
+  {
+    "path": "/access",
+    "status": 200,
+    "consoleErrorCount": 0,
+    "pageErrorCount": 0,
+    "loginHeaderSignInVisible": null,
+    "sampleConsoleError": "",
+    "samplePageError": ""
+  }
+]

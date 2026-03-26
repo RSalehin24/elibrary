@@ -388,10 +388,26 @@ def serialize_source_catalog_entry_inspection(inspection):
 
 def summarize_source_catalog_snapshots(snapshots):
     summary = Counter(snapshot["curation_status"] for snapshot in snapshots)
+    queued_count = 0
+    processing_count = 0
+
+    for snapshot in snapshots:
+        if snapshot.get("curation_status") != "processing":
+            continue
+
+        latest_job_status = (snapshot.get("latest_job_status") or "").strip()
+        latest_submission_status = (snapshot.get("latest_submission_status") or "").strip()
+
+        if latest_job_status == JobStatus.QUEUED or latest_submission_status == "queued":
+            queued_count += 1
+        else:
+            processing_count += 1
+
     return {
         "total": len(snapshots),
         "new": summary.get("new", 0),
-        "processing": summary.get("processing", 0),
+        "queued": queued_count,
+        "processing": processing_count,
         "requeued": summary.get("requeued", 0),
         "stopped": summary.get("stopped", 0),
         "unfinished": summary.get("unfinished", 0),

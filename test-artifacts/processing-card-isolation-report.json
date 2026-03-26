@@ -1,0 +1,191 @@
+{
+  "generated_at": "2026-03-26T18:57:54.397Z",
+  "frontend_base_url": "http://127.0.0.1:5173",
+  "backend_base_url": "http://127.0.0.1:8000",
+  "summary": {
+    "total": 12,
+    "passed": 9,
+    "failed": 3
+  },
+  "results": [
+    {
+      "name": "my-requests-search-requests",
+      "path": "/processing-my-requests",
+      "expectedPaths": [
+        "/api/ingestion/submissions/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/submissions/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "my-requests-filter-book-creation",
+      "path": "/processing-my-requests",
+      "expectedPaths": [
+        "/api/ingestion/jobs/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/jobs/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "catalog-books-search-main-card",
+      "path": "/processing-catalog-books",
+      "expectedPaths": [
+        "/api/ingestion/catalog/entries/"
+      ],
+      "observedPaths": [],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": null,
+      "unexpectedRequests": [],
+      "missingRequests": [
+        "/api/ingestion/catalog/entries/"
+      ],
+      "passed": false,
+      "error": "TimeoutError: locator.fill: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('section.processing-card, section.detail-card').filter({ has: getByRole('heading', { name: 'Catalog Books', exact: true }) }).first().locator('input[type=\"search\"]').first()\u001b[22m\n"
+    },
+    {
+      "name": "catalog-books-filter-main-card",
+      "path": "/processing-catalog-books",
+      "expectedPaths": [
+        "/api/ingestion/catalog/entries/"
+      ],
+      "observedPaths": [],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": null,
+      "unexpectedRequests": [],
+      "missingRequests": [
+        "/api/ingestion/catalog/entries/"
+      ],
+      "passed": false,
+      "error": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('section.processing-card, section.detail-card').filter({ has: getByRole('heading', { name: 'Catalog Books', exact: true }) }).first().locator('button.catalog-filter-toggle').first()\u001b[22m\n"
+    },
+    {
+      "name": "catalog-books-pagination-main-card",
+      "path": "/processing-catalog-books",
+      "expectedPaths": [
+        "/api/ingestion/catalog/entries/"
+      ],
+      "observedPaths": [],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": null,
+      "unexpectedRequests": [],
+      "missingRequests": [
+        "/api/ingestion/catalog/entries/"
+      ],
+      "passed": false,
+      "error": "Error: Catalog pagination next button is not available."
+    },
+    {
+      "name": "automation-search-requests",
+      "path": "/processing-automation",
+      "expectedPaths": [
+        "/api/ingestion/submissions/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/submissions/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "automation-search-book-creation",
+      "path": "/processing-automation",
+      "expectedPaths": [
+        "/api/ingestion/jobs/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/jobs/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "automation-search-run-history",
+      "path": "/processing-automation",
+      "expectedPaths": [
+        "/api/ingestion/catalog/curation-runs/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/catalog/curation-runs/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "automation-filter-duplicate-checks",
+      "path": "/processing-automation",
+      "expectedPaths": [
+        "/api/ingestion/duplicate-reviews/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/duplicate-reviews/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "incomplete-search-main-card",
+      "path": "/processing-incomplete-check",
+      "expectedPaths": [
+        "/api/ingestion/catalog/incomplete-check/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/catalog/incomplete-check/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "incomplete-filter-removed-card",
+      "path": "/processing-incomplete-check",
+      "expectedPaths": [],
+      "observedPaths": [],
+      "expectedLoaderCount": 0,
+      "observedLoaderCount": 0,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    },
+    {
+      "name": "incomplete-search-run-history",
+      "path": "/processing-incomplete-check",
+      "expectedPaths": [
+        "/api/ingestion/catalog/curation-runs/"
+      ],
+      "observedPaths": [
+        "/api/ingestion/catalog/curation-runs/"
+      ],
+      "expectedLoaderCount": 1,
+      "observedLoaderCount": 1,
+      "unexpectedRequests": [],
+      "missingRequests": [],
+      "passed": true
+    }
+  ]
+}

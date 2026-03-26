@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { Link } from "react-router-dom";
+import BookRouteLink from "./BookRouteLink";
 import { formatBookDate, getWriterColumnGroups } from "../utils/bookPresentation";
 import { toQueryString } from "../utils/query";
 
@@ -70,14 +71,14 @@ export default function BookTable({ books, emptyLabel = "No books found.", linkF
             return (
               <tr key={book.id} className={highlightedBookId === book.id ? "is-highlighted" : ""}>
                 <td className="table-code-cell">
-                  <Link to={`/books/${book.slug}`} className="table-code-link">
+                  <BookRouteLink slug={book.slug} className="table-code-link">
                     {book.catalog_code || "Pending"}
-                  </Link>
+                  </BookRouteLink>
                 </td>
                 <td className="table-title-cell">
-                  <Link to={`/books/${book.slug}`} className="table-title-link">
+                  <BookRouteLink slug={book.slug} className="table-title-link">
                     {book.title}
-                  </Link>
+                  </BookRouteLink>
                   <span className="table-secondary-line">
                     {book.primary_source?.display_path || (book.record_type === "manual" ? "Manual entry" : "Library record")}
                   </span>
@@ -94,9 +95,12 @@ export default function BookTable({ books, emptyLabel = "No books found.", linkF
                 </td>
                 <td>{formatBookDate(book.created_at)}</td>
                 <td className="table-action-cell">
-                  <Link to={`/books/${book.slug}`} className="ghost-button table-row-action">
+                  <BookRouteLink
+                    slug={book.slug}
+                    className="ghost-button table-row-action"
+                  >
                     Open
-                  </Link>
+                  </BookRouteLink>
                 </td>
               </tr>
             );

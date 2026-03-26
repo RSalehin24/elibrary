@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiFetch } from "../api/client";
+import BookRouteLink from "../components/BookRouteLink";
 import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import EmptyState from "../components/EmptyState";
@@ -17,6 +18,30 @@ const SOURCE_TAB = "source";
 const AUTOMATION_TAB = "automation";
 const ALL_TAB = "all";
 const INCOMPLETE_TAB = "incomplete";
+
+const LOAD_SCOPE_SUBMISSIONS = "submissions";
+const LOAD_SCOPE_JOBS = "jobs";
+const LOAD_SCOPE_JOB_REVIEWS = "jobReviews";
+const LOAD_SCOPE_REVIEWS = "reviews";
+const LOAD_SCOPE_CATALOG_BROWSE = "catalogBrowse";
+const LOAD_SCOPE_CATALOG_OVERVIEW = "catalogOverview";
+const LOAD_SCOPE_RUNS = "runs";
+const LOAD_SCOPE_AUTOMATION = "automation";
+const LOAD_SCOPE_INCOMPLETE_BROWSE = "incompleteBrowse";
+const LOAD_SCOPE_INCOMPLETE_OVERVIEW = "incompleteOverview";
+
+const ALL_LOAD_SCOPES = [
+  LOAD_SCOPE_SUBMISSIONS,
+  LOAD_SCOPE_JOBS,
+  LOAD_SCOPE_JOB_REVIEWS,
+  LOAD_SCOPE_REVIEWS,
+  LOAD_SCOPE_CATALOG_BROWSE,
+  LOAD_SCOPE_CATALOG_OVERVIEW,
+  LOAD_SCOPE_RUNS,
+  LOAD_SCOPE_AUTOMATION,
+  LOAD_SCOPE_INCOMPLETE_BROWSE,
+  LOAD_SCOPE_INCOMPLETE_OVERVIEW,
+];
 
 const TAB_TO_ROUTE = {
   [USER_TAB]: "/processing-my-requests",
@@ -96,6 +121,7 @@ const defaultRemovedFilters = {
 const defaultCatalogSummary = {
   total: 0,
   new: 0,
+  queued: 0,
   processing: 0,
   stopped: 0,
   requeued: 0,
@@ -295,6 +321,16 @@ function normalizeTimeInput(value) {
   return (value || "02:00:00").slice(0, 5);
 }
 
+function automationFormFromSettings(settings) {
+  return {
+    enabled: Boolean(settings?.enabled),
+    daily_run_time: normalizeTimeInput(settings?.daily_run_time),
+    frequency: settings?.frequency || "daily",
+    mode: settings?.mode || "pending",
+    refresh_max_pages: String(settings?.refresh_max_pages || 80),
+  };
+}
+
 function getOriginForTab(tab) {
   if (tab === SOURCE_TAB) {
     return "curation";
@@ -354,6 +390,65 @@ function isResumableJob(job) {
 
 function isCatalogSyncActive(value) {
   return ["queued", "processing"].includes(value);
+}
+
+function buildJobsParams(filters, tab) {
+  const params = {
+    q: filters.q,
+    job_type: filters.job_type,
+    limit: 60,
+  };
+  if (filters.status) {
+    const normalizedStatus = normalizeStatusForApi(filters.status);
+    if (
+      ["succeeded", "queued", "processing", "failed", "cancelled"].includes(
+        normalizedStatus,
+      )
+    ) {
+      params.status = normalizedStatus;
+    } else if (
+      ["needs_review", "ready", "duplicate"].includes(normalizedStatus)
+    ) {
+      params.submission_status = normalizedStatus;
+    }
+  }
+  const origin = getOriginForTab(tab);
+  if (origin) {
+    params.origin = origin;
+  }
+  return params;
+}
+
+function buildSubmissionParams(filters, tab) {
+  const params = { ...filters, limit: 60 };
+  if (params.status) {
+    params.status = normalizeStatusForApi(params.status);
+  }
+  const origin = getOriginForTab(tab);
+  if (origin) {
+    params.origin = origin;
+  }
+  return params;
+}
+
+function buildReviewParams(filters, tab) {
+  const params = { ...filters, limit: 40 };
+  const origin = getOriginForTab(tab);
+  if (origin) {
+    params.origin = origin;
+  }
+  return params;
+}
+
+function buildRunParams(filters, tab) {
+  const params = { ...filters, limit: 20 };
+  if (params.status) {
+    params.status = normalizeStatusForApi(params.status);
+  }
+  if (tab === AUTOMATION_TAB) {
+    params.trigger = "scheduled";
+  }
+  return params;
 }
 
 function safeDecode(value) {
@@ -561,9 +656,9 @@ function BookLinkCell({ submission }) {
   }
 
   return (
-    <Link to={`/books/${submission.linked_book_slug}`} className="meta-link">
+    <BookRouteLink slug={submission.linked_book_slug} className="meta-link">
       {submission.linked_book?.title || submission.linked_book_slug}
-    </Link>
+    </BookRouteLink>
   );
 }
 
@@ -683,9 +778,11 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   const canManageProcessing = hasCapability(user, "processing:manage");
   const [activeTab, setActiveTab] = useState(USER_TAB);
   const [jobs, setJobs] = useState([]);
+  const [jobReviewRows, setJobReviewRows] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [duplicateReviews, setDuplicateReviews] = useState([]);
   const [catalogEntries, setCatalogEntries] = useState([]);
+  const [catalogOverviewEntries, setCatalogOverviewEntries] = useState([]);
   const [curationRuns, setCurationRuns] = useState([]);
   const [catalogSyncState, setCatalogSyncState] = useState(null);
   const [catalogPagination, setCatalogPagination] = useState(
@@ -730,6 +827,9 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   );
   const [automationState, setAutomationState] = useState(null);
   const [incompleteEntries, setIncompleteEntries] = useState([]);
+  const [incompleteOverviewEntries, setIncompleteOverviewEntries] = useState(
+    [],
+  );
   const [incompleteSummary, setIncompleteSummary] = useState(
     defaultIncompleteSummary,
   );
@@ -741,6 +841,17 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     refresh_max_pages: "80",
   });
   const [loading, setLoading] = useState(true);
+  const [submissionsLoading, setSubmissionsLoading] = useState(true);
+  const [jobsLoading, setJobsLoading] = useState(true);
+  const [jobReviewsLoading, setJobReviewsLoading] = useState(true);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [catalogBrowseLoading, setCatalogBrowseLoading] = useState(true);
+  const [catalogOverviewLoading, setCatalogOverviewLoading] = useState(true);
+  const [runsLoading, setRunsLoading] = useState(true);
+  const [automationLoading, setAutomationLoading] = useState(true);
+  const [incompleteBrowseLoading, setIncompleteBrowseLoading] = useState(true);
+  const [incompleteOverviewLoading, setIncompleteOverviewLoading] =
+    useState(true);
   const [error, setError] = useState("");
   const [reviewSubmission, setReviewSubmission] = useState(null);
   const [creatingCatalog, setCreatingCatalog] = useState(false);
@@ -803,6 +914,75 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       ? "Disabled while catalog sync is running."
       : "";
 
+  function getScopesForTab(tab) {
+    const scopes = [LOAD_SCOPE_JOB_REVIEWS];
+
+    if (
+      [USER_TAB, SOURCE_TAB, AUTOMATION_TAB, ALL_TAB].includes(tab)
+    ) {
+      scopes.push(LOAD_SCOPE_SUBMISSIONS, LOAD_SCOPE_JOBS);
+    }
+
+    if (
+      canManageProcessing &&
+      [USER_TAB, SOURCE_TAB, AUTOMATION_TAB, ALL_TAB].includes(tab)
+    ) {
+      scopes.push(LOAD_SCOPE_REVIEWS);
+    }
+
+    if (tab === SOURCE_TAB) {
+      scopes.push(LOAD_SCOPE_CATALOG_BROWSE, LOAD_SCOPE_CATALOG_OVERVIEW);
+    }
+
+    if (
+      canManageProcessing &&
+      [AUTOMATION_TAB, ALL_TAB, INCOMPLETE_TAB].includes(tab)
+    ) {
+      scopes.push(LOAD_SCOPE_RUNS, LOAD_SCOPE_AUTOMATION);
+    } else if (canManageProcessing) {
+      scopes.push(LOAD_SCOPE_AUTOMATION);
+    }
+
+    if (tab === INCOMPLETE_TAB) {
+      scopes.push(LOAD_SCOPE_INCOMPLETE_BROWSE, LOAD_SCOPE_INCOMPLETE_OVERVIEW);
+    }
+
+    return scopes;
+  }
+
+  function setScopeLoading(scopes, isLoading) {
+    if (scopes.has(LOAD_SCOPE_SUBMISSIONS)) {
+      setSubmissionsLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_JOBS)) {
+      setJobsLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_JOB_REVIEWS)) {
+      setJobReviewsLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_REVIEWS)) {
+      setReviewsLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_CATALOG_BROWSE)) {
+      setCatalogBrowseLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW)) {
+      setCatalogOverviewLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_RUNS)) {
+      setRunsLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_AUTOMATION)) {
+      setAutomationLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
+      setIncompleteBrowseLoading(isLoading);
+    }
+    if (scopes.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
+      setIncompleteOverviewLoading(isLoading);
+    }
+  }
+
   async function load(options = {}) {
     const {
       nextTab = activeTab,
@@ -814,178 +994,230 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       nextIncompleteFilters = incompleteFilters,
       preserveAutomationForm = false,
       silent = false,
+      scopes: requestedScopes = null,
     } = options;
+    const scopes = new Set(requestedScopes || getScopesForTab(nextTab));
+    const isFullTabLoad = !requestedScopes;
 
     if (!silent) {
-      setLoading(true);
+      if (isFullTabLoad) {
+        setLoading(true);
+      }
+      setScopeLoading(scopes, true);
     }
 
     try {
-      const origin = getOriginForTab(nextTab);
-      const nextJobsParams = {
-        q: nextJobFilters.q,
-        job_type: nextJobFilters.job_type,
-        limit: 60,
-      };
-      if (nextJobFilters.status) {
-        const normalizedStatus = normalizeStatusForApi(nextJobFilters.status);
-        if (["succeeded"].includes(normalizedStatus)) {
-          nextJobsParams.status = normalizedStatus;
-        } else if (
-          ["needs_review", "ready", "duplicate"].includes(normalizedStatus)
-        ) {
-          nextJobsParams.submission_status = normalizedStatus;
-        } else {
-          nextJobsParams.status = normalizedStatus;
-          nextJobsParams.submission_status = normalizedStatus;
-        }
-      }
-      const nextSubmissionParams = { ...nextSubmissionFilters, limit: 60 };
-      if (nextSubmissionParams.status) {
-        nextSubmissionParams.status = normalizeStatusForApi(
-          nextSubmissionParams.status,
-        );
-      }
-      const nextReviewParams = { ...nextReviewFilters, limit: 40 };
-      const nextRunParams = { ...nextRunFilters, limit: 20 };
-      if (nextRunParams.status) {
-        nextRunParams.status = normalizeStatusForApi(nextRunParams.status);
-      }
-
-      if (origin) {
-        nextJobsParams.origin = origin;
-        nextSubmissionParams.origin = origin;
-        nextReviewParams.origin = origin;
-      }
-
-      if (nextTab === AUTOMATION_TAB) {
-        nextRunParams.trigger = "scheduled";
-      }
-
-      const requests = [
-        apiFetch(`/ingestion/jobs/${toQueryString(nextJobsParams)}`),
-        apiFetch(
-          `/ingestion/submissions/${toQueryString(nextSubmissionParams)}`,
-        ),
-      ];
-
-      if (canManageProcessing) {
+      const requests = [];
+      const queueScopeRequest = (scope, url) => {
         requests.push(
-          apiFetch(
-            `/ingestion/duplicate-reviews/${toQueryString(nextReviewParams)}`,
-          ),
+          apiFetch(url).then((payload) => ({
+            scope,
+            payload,
+          })),
         );
+      };
 
-        if (nextTab === SOURCE_TAB) {
-          const monitorCatalogFilters = { ...nextCatalogFilters, limit: 180 };
-          requests.push(
-            apiFetch(
-              `/ingestion/catalog/entries/${toQueryString(monitorCatalogFilters)}`,
-            ),
-          );
-        }
+      if (scopes.has(LOAD_SCOPE_JOBS)) {
+        queueScopeRequest(
+          LOAD_SCOPE_JOBS,
+          `/ingestion/jobs/${toQueryString(
+            buildJobsParams(nextJobFilters, nextTab),
+          )}`,
+        );
+      }
 
-        if (nextTab === INCOMPLETE_TAB) {
-          requests.push(
-            apiFetch(
-              `/ingestion/catalog/incomplete-check/${toQueryString(nextIncompleteFilters)}`,
-            ),
-          );
-        }
+      if (scopes.has(LOAD_SCOPE_JOB_REVIEWS)) {
+        queueScopeRequest(
+          LOAD_SCOPE_JOB_REVIEWS,
+          `/ingestion/jobs/${toQueryString(
+            buildJobsParams(defaultJobFilters, nextTab),
+          )}`,
+        );
+      }
 
-        if (nextTab === AUTOMATION_TAB || nextTab === ALL_TAB) {
-          requests.push(
-            apiFetch(
-              `/ingestion/catalog/curation-runs/${toQueryString(nextRunParams)}`,
-            ),
-          );
-        }
+      if (scopes.has(LOAD_SCOPE_SUBMISSIONS)) {
+        queueScopeRequest(
+          LOAD_SCOPE_SUBMISSIONS,
+          `/ingestion/submissions/${toQueryString(
+            buildSubmissionParams(nextSubmissionFilters, nextTab),
+          )}`,
+        );
+      }
 
-        requests.push(apiFetch("/ingestion/catalog/automation/"));
+      if (scopes.has(LOAD_SCOPE_REVIEWS)) {
+        queueScopeRequest(
+          LOAD_SCOPE_REVIEWS,
+          `/ingestion/duplicate-reviews/${toQueryString(
+            buildReviewParams(nextReviewFilters, nextTab),
+          )}`,
+        );
+      }
+
+      if (scopes.has(LOAD_SCOPE_CATALOG_BROWSE)) {
+        queueScopeRequest(
+          LOAD_SCOPE_CATALOG_BROWSE,
+          `/ingestion/catalog/entries/${toQueryString({
+            ...nextCatalogFilters,
+            limit: Number(nextCatalogFilters.limit) || 180,
+          })}`,
+        );
+      }
+
+      if (scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW)) {
+        queueScopeRequest(
+          LOAD_SCOPE_CATALOG_OVERVIEW,
+          `/ingestion/catalog/entries/${toQueryString({
+            ...defaultCatalogFilters,
+            page: 1,
+            limit: defaultCatalogFilters.limit,
+          })}`,
+        );
+      }
+
+      if (scopes.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
+        queueScopeRequest(
+          LOAD_SCOPE_INCOMPLETE_BROWSE,
+          `/ingestion/catalog/incomplete-check/${toQueryString(
+            nextIncompleteFilters,
+          )}`,
+        );
+      }
+
+      if (scopes.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
+        queueScopeRequest(
+          LOAD_SCOPE_INCOMPLETE_OVERVIEW,
+          `/ingestion/catalog/incomplete-check/${toQueryString(
+            defaultIncompleteFilters,
+          )}`,
+        );
+      }
+
+      if (scopes.has(LOAD_SCOPE_RUNS)) {
+        queueScopeRequest(
+          LOAD_SCOPE_RUNS,
+          `/ingestion/catalog/curation-runs/${toQueryString(
+            buildRunParams(nextRunFilters, nextTab),
+          )}`,
+        );
+      }
+
+      if (scopes.has(LOAD_SCOPE_AUTOMATION)) {
+        queueScopeRequest(
+          LOAD_SCOPE_AUTOMATION,
+          "/ingestion/catalog/automation/",
+        );
       }
 
       const payloads = await Promise.all(requests);
-      setJobs(payloads[0] || []);
-      setSubmissions(payloads[1] || []);
+      const payloadByScope = new Map(
+        payloads.map(({ scope, payload }) => [scope, payload]),
+      );
 
-      let offset = 2;
-      if (canManageProcessing) {
-        setDuplicateReviews(payloads[offset] || []);
-        offset += 1;
-        const automationPayload = payloads[payloads.length - 1] || null;
+      if (payloadByScope.has(LOAD_SCOPE_JOBS)) {
+        setJobs(payloadByScope.get(LOAD_SCOPE_JOBS) || []);
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS)) {
+        setJobReviewRows(payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS) || []);
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_SUBMISSIONS)) {
+        setSubmissions(payloadByScope.get(LOAD_SCOPE_SUBMISSIONS) || []);
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_REVIEWS)) {
+        setDuplicateReviews(payloadByScope.get(LOAD_SCOPE_REVIEWS) || []);
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_CATALOG_BROWSE)) {
+        const catalogPayload =
+          payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE) || null;
+        setCatalogEntries(catalogPayload?.entries || []);
+        setCatalogPagination(
+          catalogPayload?.pagination || defaultCatalogPagination,
+        );
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_CATALOG_OVERVIEW)) {
+        const catalogPayload =
+          payloadByScope.get(LOAD_SCOPE_CATALOG_OVERVIEW) || null;
+        setCatalogOverviewEntries(catalogPayload?.entries || []);
+        setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
+        setCatalogSyncState(catalogPayload?.sync_state || null);
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_RUNS)) {
+        setCurationRuns(payloadByScope.get(LOAD_SCOPE_RUNS) || []);
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
+        const incompletePayload =
+          payloadByScope.get(LOAD_SCOPE_INCOMPLETE_BROWSE) || null;
+        setIncompleteEntries(incompletePayload?.entries || []);
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
+        const incompletePayload =
+          payloadByScope.get(LOAD_SCOPE_INCOMPLETE_OVERVIEW) || null;
+        setIncompleteOverviewEntries(incompletePayload?.entries || []);
+        setIncompleteSummary(
+          incompletePayload?.summary || defaultIncompleteSummary,
+        );
+      }
+
+      if (payloadByScope.has(LOAD_SCOPE_AUTOMATION)) {
+        const automationPayload =
+          payloadByScope.get(LOAD_SCOPE_AUTOMATION) || null;
         setAutomationState(automationPayload);
+        if (
+          !preserveAutomationForm &&
+          automationPayload?.settings &&
+          [AUTOMATION_TAB, INCOMPLETE_TAB].includes(nextTab)
+        ) {
+          setAutomationForm(automationFormFromSettings(automationPayload.settings));
+        }
+      }
 
-        if (nextTab === SOURCE_TAB) {
-          const catalogPayload = payloads[offset] || null;
-          setCatalogEntries(catalogPayload?.entries || []);
-          setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
-          setCatalogPagination(
-            catalogPayload?.pagination || defaultCatalogPagination,
-          );
-          setCatalogSyncState(catalogPayload?.sync_state || null);
-          setIncompleteEntries([]);
-          setIncompleteSummary(defaultIncompleteSummary);
-          setCurationRuns([]);
-        } else if (nextTab === INCOMPLETE_TAB) {
-          const incompletePayload = payloads[offset] || null;
-          setIncompleteEntries(incompletePayload?.entries || []);
-          setIncompleteSummary(
-            incompletePayload?.summary || defaultIncompleteSummary,
-          );
+      if (isFullTabLoad) {
+        const defaultScopes = new Set(getScopesForTab(nextTab));
+        const hiddenScopes = new Set(
+          ALL_LOAD_SCOPES.filter((scope) => !defaultScopes.has(scope)),
+        );
+        setScopeLoading(hiddenScopes, false);
+        if (!defaultScopes.has(LOAD_SCOPE_SUBMISSIONS)) {
+          setSubmissions([]);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_JOBS)) {
+          setJobs([]);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_JOB_REVIEWS)) {
+          setJobReviewRows([]);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_REVIEWS)) {
+          setDuplicateReviews([]);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_CATALOG_BROWSE)) {
           setCatalogEntries([]);
           setCatalogPagination(defaultCatalogPagination);
-          setCatalogSyncState(null);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_CATALOG_OVERVIEW)) {
+          setCatalogOverviewEntries([]);
           setCatalogSummary(defaultCatalogSummary);
-          setCurationRuns([]);
-        } else if (nextTab === AUTOMATION_TAB) {
-          const runPayload = payloads[offset] || [];
-          setCurationRuns(runPayload);
-          setCatalogEntries([]);
-          setCatalogPagination(defaultCatalogPagination);
           setCatalogSyncState(null);
-          setCatalogSummary(defaultCatalogSummary);
-          setIncompleteEntries([]);
-          setIncompleteSummary(defaultIncompleteSummary);
-          if (!preserveAutomationForm && automationPayload?.settings) {
-            setAutomationForm({
-              enabled: Boolean(automationPayload.settings.enabled),
-              daily_run_time: normalizeTimeInput(
-                automationPayload.settings.daily_run_time,
-              ),
-              frequency: automationPayload.settings.frequency || "daily",
-              mode: automationPayload.settings.mode || "pending",
-              refresh_max_pages: String(
-                automationPayload.settings.refresh_max_pages || 80,
-              ),
-            });
-          }
-        } else if (nextTab === ALL_TAB) {
-          setCurationRuns(payloads[offset] || []);
-          setCatalogEntries([]);
-          setCatalogPagination(defaultCatalogPagination);
-          setCatalogSyncState(null);
-          setCatalogSummary(defaultCatalogSummary);
-          setIncompleteEntries([]);
-          setIncompleteSummary(defaultIncompleteSummary);
-        } else {
-          setCatalogEntries([]);
-          setCatalogPagination(defaultCatalogPagination);
-          setCatalogSyncState(null);
-          setCatalogSummary(defaultCatalogSummary);
-          setIncompleteEntries([]);
-          setIncompleteSummary(defaultIncompleteSummary);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_RUNS)) {
           setCurationRuns([]);
         }
-      } else {
-        setDuplicateReviews([]);
-        setCatalogEntries([]);
-        setCatalogPagination(defaultCatalogPagination);
-        setCatalogSyncState(null);
-        setCatalogSummary(defaultCatalogSummary);
-        setIncompleteEntries([]);
-        setIncompleteSummary(defaultIncompleteSummary);
-        setCurationRuns([]);
-        setAutomationState(null);
+        if (!defaultScopes.has(LOAD_SCOPE_AUTOMATION)) {
+          setAutomationState(null);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
+          setIncompleteEntries([]);
+        }
+        if (!defaultScopes.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
+          setIncompleteOverviewEntries([]);
+          setIncompleteSummary(defaultIncompleteSummary);
+        }
       }
 
       setError("");
@@ -994,7 +1226,10 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       toast.error(nextError.message);
     } finally {
       if (!silent) {
-        setLoading(false);
+        setScopeLoading(scopes, false);
+        if (isFullTabLoad) {
+          setLoading(false);
+        }
       }
     }
   }
@@ -1010,7 +1245,9 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   }, [user?.id, canManageProcessing, activeTab]);
 
   useEffect(() => {
-    const hasActiveJobs = jobs.some((job) => isActiveStatus(job.status));
+    const hasActiveJobs = [...jobs, ...jobReviewRows].some((job) =>
+      isActiveStatus(job.status),
+    );
     const hasActiveRuns = curationRuns.some((run) =>
       isActiveStatus(run.status),
     );
@@ -1037,6 +1274,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     };
   }, [
     jobs,
+    jobReviewRows,
     curationRuns,
     catalogSyncState,
     automationState,
@@ -1055,6 +1293,9 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     setSelectedCatalogEntryIds([]);
     setSelectedRunIds([]);
     setSelectedIncompleteBookIds([]);
+    setSelectedRequeueJobIds([]);
+    setSelectedFailedJobIds([]);
+    setSelectedDuplicateReviewIds([]);
     setCatalogSyncDismissed(false);
   }, [activeTab]);
 
@@ -1092,9 +1333,13 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     );
   }, [incompleteEntries]);
 
-  function resetWithLoad(nextValue, setter, key) {
+  function resetWithLoad(nextValue, setter, key, scopes) {
     setter(nextValue);
-    load({ [key]: nextValue, preserveAutomationForm: true }).catch(() => {});
+    load({
+      [key]: nextValue,
+      preserveAutomationForm: true,
+      scopes,
+    }).catch(() => {});
   }
 
   function applyCatalogFilters(nextFilters) {
@@ -1102,6 +1347,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     load({
       nextCatalogFilters: nextFilters,
       preserveAutomationForm: true,
+      scopes: [LOAD_SCOPE_CATALOG_BROWSE],
     }).catch(() => {});
   }
 
@@ -1113,6 +1359,10 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       page: resetPage ? 1 : (nextPatch.page ?? catalogFilters.page),
     };
     applyCatalogFilters(nextFilters);
+  }
+
+  async function reloadScoped(scopes, options = {}) {
+    await load({ preserveAutomationForm: true, scopes, ...options });
   }
 
   async function reloadCurrent(options = {}) {
@@ -1755,12 +2005,15 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     .filter((run) => isActiveStatus(run.status))
     .map((run) => run.id);
   const failedJobs = useMemo(
-    () => jobs.filter((job) => job.status === "failed"),
-    [jobs],
+    () => jobReviewRows.filter((job) => job.status === "failed"),
+    [jobReviewRows],
   );
   const requeuedJobs = useMemo(
-    () => jobs.filter((job) => job.is_requeued || job.job_type === "reprocess"),
-    [jobs],
+    () =>
+      jobReviewRows.filter(
+        (job) => job.is_requeued || job.job_type === "reprocess",
+      ),
+    [jobReviewRows],
   );
   const filteredRequeuedJobs = useMemo(
     () => filterJobsByControls(requeuedJobs, requeueFilters),
@@ -1860,7 +2113,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     const query = String(removedFilters.q || "")
       .trim()
       .toLowerCase();
-    return incompleteEntries.filter((entry) => {
+    return incompleteOverviewEntries.filter((entry) => {
       if (!entry.removed_from_unfinished) {
         return false;
       }
@@ -1878,7 +2131,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         .toLowerCase()
         .includes(query);
     });
-  }, [incompleteEntries, removedFilters]);
+  }, [incompleteOverviewEntries, removedFilters]);
   const selectedSubmissionResumeIds = submissions
     .filter((submission) => selectedSubmissionIdSet.has(submission.id))
     .map((submission) => submission.latest_job)
@@ -1898,6 +2151,24 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   const selectedRunStopIds = curationRuns
     .filter((run) => selectedRunIdSet.has(run.id) && isActiveStatus(run.status))
     .map((run) => run.id);
+
+  useEffect(() => {
+    setSelectedRequeueJobIds((current) =>
+      current.filter((id) => requeuedJobs.some((job) => job.id === id)),
+    );
+  }, [requeuedJobs]);
+
+  useEffect(() => {
+    setSelectedFailedJobIds((current) =>
+      current.filter((id) => failedJobs.some((job) => job.id === id)),
+    );
+  }, [failedJobs]);
+
+  useEffect(() => {
+    setSelectedDuplicateReviewIds((current) =>
+      current.filter((id) => duplicateReviews.some((review) => review.id === id)),
+    );
+  }, [duplicateReviews]);
 
   useEffect(() => {
     setSelectedCatalogEntryIds((current) =>
@@ -2028,7 +2299,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         title={title}
         emptyTitle="No requests"
         cardClassName={cardClassName}
-        loading={loading}
+        loading={submissionsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: submissionFilters,
@@ -2040,16 +2311,18 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           searchPlaceholder: "Search requests",
           resultCount: submissions.length,
           drawerId: `${activeTab}-submission-filters`,
-          onSubmit: (event) => {
+          onSubmit: (event, nextFilters) => {
             event.preventDefault();
-            reloadCurrent({ nextSubmissionFilters: submissionFilters }).catch(
-              () => {},
-            );
+            setSubmissionFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+              nextSubmissionFilters: nextFilters,
+            }).catch(() => {});
           },
           onSearchClear: (nextFilters) => {
-            reloadCurrent({ nextSubmissionFilters: nextFilters }).catch(
-              () => {},
-            );
+            setSubmissionFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+              nextSubmissionFilters: nextFilters,
+            }).catch(() => {});
           },
           buttonsDisabled: sourceTabButtonsDisabled,
         })}
@@ -2063,15 +2336,16 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             setFiltersExpanded={setSubmissionFiltersExpanded}
             onSubmit={(event) => {
               event.preventDefault();
-              reloadCurrent({ nextSubmissionFilters: submissionFilters }).catch(
-                () => {},
-              );
+              reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+                nextSubmissionFilters: submissionFilters,
+              }).catch(() => {});
             }}
             onReset={() =>
               resetWithLoad(
                 defaultSubmissionFilters,
                 setSubmissionFilters,
                 "nextSubmissionFilters",
+                [LOAD_SCOPE_SUBMISSIONS],
               )
             }
             searchPlaceholder="Search requests"
@@ -2080,7 +2354,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             inline
             drawerId={`${activeTab}-submission-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={loading}
+            buttonsLoading={submissionsLoading}
           />
         }
         actions={
@@ -2341,12 +2615,12 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                     <td>
                       <div className="table-actions">
                         {submission.linked_book_slug ? (
-                          <Link
-                            to={`/books/${submission.linked_book_slug}`}
+                          <BookRouteLink
+                            slug={submission.linked_book_slug}
                             className="ghost-button"
                           >
                             Open
-                          </Link>
+                          </BookRouteLink>
                         ) : submission.linked_book_deleted ? (
                           <button
                             type="button"
@@ -2438,7 +2712,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         title={title}
         emptyTitle="No book creation"
         cardClassName={cardClassName}
-        loading={loading}
+        loading={jobsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: jobFilters,
@@ -2450,12 +2724,18 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           searchPlaceholder: "Search book creation",
           resultCount: jobs.length,
           drawerId: `${activeTab}-job-filters`,
-          onSubmit: (event) => {
+          onSubmit: (event, nextFilters) => {
             event.preventDefault();
-            reloadCurrent({ nextJobFilters: jobFilters }).catch(() => {});
+            setJobFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_JOBS], {
+              nextJobFilters: nextFilters,
+            }).catch(() => {});
           },
           onSearchClear: (nextFilters) => {
-            reloadCurrent({ nextJobFilters: nextFilters }).catch(() => {});
+            setJobFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_JOBS], {
+              nextJobFilters: nextFilters,
+            }).catch(() => {});
           },
           buttonsDisabled: sourceTabButtonsDisabled,
         })}
@@ -2469,10 +2749,17 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             setFiltersExpanded={setJobFiltersExpanded}
             onSubmit={(event) => {
               event.preventDefault();
-              reloadCurrent({ nextJobFilters: jobFilters }).catch(() => {});
+              reloadScoped([LOAD_SCOPE_JOBS], {
+                nextJobFilters: jobFilters,
+              }).catch(() => {});
             }}
             onReset={() =>
-              resetWithLoad(defaultJobFilters, setJobFilters, "nextJobFilters")
+              resetWithLoad(
+                defaultJobFilters,
+                setJobFilters,
+                "nextJobFilters",
+                [LOAD_SCOPE_JOBS],
+              )
             }
             searchPlaceholder="Search book creation"
             resultCount={jobs.length}
@@ -2480,7 +2767,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             inline
             drawerId={`${activeTab}-job-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={loading}
+            buttonsLoading={jobsLoading}
           />
         }
         actions={
@@ -2726,12 +3013,12 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                     <td>
                       <div className="table-actions">
                         {job.target_book_slug ? (
-                          <Link
-                            to={`/books/${job.target_book_slug}`}
+                          <BookRouteLink
+                            slug={job.target_book_slug}
                             className="ghost-button"
                           >
                             Open
-                          </Link>
+                          </BookRouteLink>
                         ) : job.target_book_deleted ? (
                           <button
                             type="button"
@@ -2808,7 +3095,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       <QueueTableCard
         title={title}
         emptyTitle="No duplicates"
-        loading={loading}
+        loading={reviewsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: reviewFilters,
@@ -2820,12 +3107,18 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           searchPlaceholder: "Search duplicate checks",
           resultCount: duplicateReviews.length,
           drawerId: `${activeTab}-review-filters`,
-          onSubmit: (event) => {
+          onSubmit: (event, nextFilters) => {
             event.preventDefault();
-            reloadCurrent({ nextReviewFilters: reviewFilters }).catch(() => {});
+            setReviewFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_REVIEWS], {
+              nextReviewFilters: nextFilters,
+            }).catch(() => {});
           },
           onSearchClear: (nextFilters) => {
-            reloadCurrent({ nextReviewFilters: nextFilters }).catch(() => {});
+            setReviewFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_REVIEWS], {
+              nextReviewFilters: nextFilters,
+            }).catch(() => {});
           },
           buttonsDisabled: sourceTabButtonsDisabled,
         })}
@@ -2839,15 +3132,16 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             setFiltersExpanded={setReviewFiltersExpanded}
             onSubmit={(event) => {
               event.preventDefault();
-              reloadCurrent({ nextReviewFilters: reviewFilters }).catch(
-                () => {},
-              );
+              reloadScoped([LOAD_SCOPE_REVIEWS], {
+                nextReviewFilters: reviewFilters,
+              }).catch(() => {});
             }}
             onReset={() =>
               resetWithLoad(
                 defaultReviewFilters,
                 setReviewFilters,
                 "nextReviewFilters",
+                [LOAD_SCOPE_REVIEWS],
               )
             }
             searchPlaceholder="Search duplicate checks"
@@ -2856,7 +3150,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             inline
             drawerId={`${activeTab}-review-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={loading}
+            buttonsLoading={reviewsLoading}
           />
         }
         actions={
@@ -3069,6 +3363,8 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         title="Requeued Jobs Review"
         emptyTitle="No requeued jobs"
         cardClassName="processing-requeue-card"
+        loading={jobReviewsLoading}
+        loadingLabel="Loading requeued jobs"
         headerAside={renderCardHeaderSearch({
           filters: requeueFilters,
           setFilters: setRequeueFilters,
@@ -3079,8 +3375,9 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           searchPlaceholder: "Search requeued jobs",
           resultCount: filteredRequeuedJobs.length,
           drawerId: `${activeTab}-requeue-filters`,
-          onSubmit: (event) => {
+          onSubmit: (event, nextFilters) => {
             event.preventDefault();
+            setRequeueFilters(nextFilters);
           },
           onSearchClear: (nextFilters) => setRequeueFilters(nextFilters),
           buttonsDisabled: sourceTabButtonsDisabled,
@@ -3106,7 +3403,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             inline
             drawerId={`${activeTab}-requeue-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={loading}
+            buttonsLoading={jobReviewsLoading}
           />
         }
         actions={
@@ -3272,7 +3569,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
               <table className="simple-table processing-table">
                 <thead>
                   <tr>
-                    <th className="processing-col-select">
+                    <th className="processing-col-select processing-incomplete-col-select">
                       <input
                         type="checkbox"
                         className="processing-checkbox"
@@ -3311,7 +3608,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                         key={job.id}
                         className={isActive ? "is-active-row" : ""}
                       >
-                        <td className="processing-col-select">
+                        <td className="processing-col-select processing-incomplete-col-select">
                           <input
                             type="checkbox"
                             className="processing-checkbox"
@@ -3324,7 +3621,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                             aria-label={`Select requeued job ${job.id}`}
                           />
                         </td>
-                        <td className="processing-col-request">
+                        <td className="processing-col-request processing-incomplete-col-book">
                           <button
                             type="button"
                             className="ghost-button processing-requeue-select"
@@ -3429,6 +3726,8 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         title="Failed Jobs Review"
         emptyTitle="No failed jobs"
         cardClassName="processing-failed-card"
+        loading={jobReviewsLoading}
+        loadingLabel="Loading failed jobs"
         headerAside={renderCardHeaderSearch({
           filters: failedFilters,
           setFilters: setFailedFilters,
@@ -3439,8 +3738,9 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           searchPlaceholder: "Search failed jobs",
           resultCount: filteredFailedJobs.length,
           drawerId: `${activeTab}-failed-filters`,
-          onSubmit: (event) => {
+          onSubmit: (event, nextFilters) => {
             event.preventDefault();
+            setFailedFilters(nextFilters);
           },
           onSearchClear: (nextFilters) => setFailedFilters(nextFilters),
           buttonsDisabled: sourceTabButtonsDisabled,
@@ -3466,7 +3766,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             inline
             drawerId={`${activeTab}-failed-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={loading}
+            buttonsLoading={jobReviewsLoading}
           />
         }
         actions={
@@ -3562,7 +3862,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
               <table className="simple-table processing-table">
                 <thead>
                   <tr>
-                    <th className="processing-col-select">
+                    <th className="processing-col-select processing-incomplete-col-select">
                       <input
                         type="checkbox"
                         className="processing-checkbox"
@@ -3599,7 +3899,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                         key={job.id}
                         className={isActive ? "is-active-row" : ""}
                       >
-                        <td className="processing-col-select">
+                        <td className="processing-col-select processing-incomplete-col-select">
                           <input
                             type="checkbox"
                             className="processing-checkbox"
@@ -3612,7 +3912,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                             aria-label={`Select failed job ${job.id}`}
                           />
                         </td>
-                        <td className="processing-col-request">
+                        <td className="processing-col-request processing-incomplete-col-book">
                           <button
                             type="button"
                             className="ghost-button processing-requeue-select"
@@ -3701,7 +4001,11 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   function renderCatalogSummaryCard() {
     const countPill = (
       <span className="processing-card-count">
-        {loading ? <LoadingSpinner size={14} /> : catalogSummary.total}
+        {catalogOverviewLoading ? (
+          <LoadingSpinner size={14} />
+        ) : (
+          catalogSummary.total
+        )}
       </span>
     );
 
@@ -3713,12 +4017,13 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           </div>
           {countPill}
         </div>
-        {loading ? (
+        {catalogOverviewLoading ? (
           renderProcessingCardLoader("Loading catalog overview")
         ) : (
           <div className="processing-summary-bar processing-summary-bar--catalog">
             {[
               ["New", catalogSummary.new],
+              ["Queued", catalogSummary.queued],
               ["Processing", catalogSummary.processing],
               ["Stopped", catalogSummary.stopped],
               ["Requeued", catalogSummary.requeued],
@@ -3756,7 +4061,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         title="Catalog Books"
         emptyTitle="No catalog rows"
         cardClassName="processing-catalog-card"
-        loading={loading}
+        loading={catalogBrowseLoading}
         loadingLabel="Loading catalog books"
         headerAside={
           <CatalogSearchRow
@@ -3771,9 +4076,10 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             drawerId={`${activeTab}-catalog-filters`}
             compact
             buttonsDisabled={sourceTabButtonsDisabled}
-            onSubmit={(event) => {
+            onSubmit={(event, nextFilters) => {
               event.preventDefault();
-              applyCatalogFilters({ ...catalogFilters, page: 1 });
+              setCatalogFilters(nextFilters);
+              applyCatalogFilters({ ...nextFilters, page: 1 });
             }}
             onSearchClear={(nextFilters) => {
               applyCatalogFilters({ ...nextFilters, page: 1 });
@@ -3797,6 +4103,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                 defaultCatalogFilters,
                 setCatalogFilters,
                 "nextCatalogFilters",
+                [LOAD_SCOPE_CATALOG_BROWSE],
               )
             }
             searchPlaceholder="Search catalog books"
@@ -3934,7 +4241,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             inline
             drawerId={`${activeTab}-catalog-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={loading}
+            buttonsLoading={catalogBrowseLoading}
           />
         }
         actions={
@@ -4108,12 +4415,12 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                     </td>
                     <td>
                       {entry.local_book_slug ? (
-                        <Link
-                          to={`/books/${entry.local_book_slug}`}
+                        <BookRouteLink
+                          slug={entry.local_book_slug}
                           className="meta-link"
                         >
                           {entry.local_book_title}
-                        </Link>
+                        </BookRouteLink>
                       ) : (
                         <span className="table-note">-</span>
                       )}
@@ -4125,12 +4432,12 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                       <div className="table-actions">
                         {entry.local_book_slug &&
                         entry.curation_status === "ready" ? (
-                          <Link
-                            to={`/books/${entry.local_book_slug}`}
+                          <BookRouteLink
+                            slug={entry.local_book_slug}
                             className="ghost-button"
                           >
                             Open
-                          </Link>
+                          </BookRouteLink>
                         ) : canCreateCatalogEntry(entry) ? (
                           <button
                             type="button"
@@ -4179,7 +4486,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   }
 
   function renderCatalogStatusCard(title, statusValue, emptyTitle) {
-    const matchingEntries = catalogEntries.filter(
+    const matchingEntries = catalogOverviewEntries.filter(
       (entry) => entry.curation_status === statusValue,
     );
     if (!matchingEntries.length) {
@@ -4190,7 +4497,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       <QueueTableCard
         title={title}
         emptyTitle={emptyTitle}
-        loading={loading}
+        loading={catalogOverviewLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
       >
         <table className="simple-table processing-table processing-catalog-table">
@@ -4224,12 +4531,12 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                   </td>
                   <td>
                     {entry.local_book_slug ? (
-                      <Link
-                        to={`/books/${entry.local_book_slug}`}
+                      <BookRouteLink
+                        slug={entry.local_book_slug}
                         className="meta-link"
                       >
                         {entry.local_book_title}
-                      </Link>
+                      </BookRouteLink>
                     ) : (
                       <span className="table-note">-</span>
                     )}
@@ -4271,7 +4578,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         title={title}
         emptyTitle="No runs"
         cardClassName={cardClassName}
-        loading={loading}
+        loading={runsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
         headerAside={renderCardHeaderSearch({
           filters: runFilters,
@@ -4283,12 +4590,18 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           searchPlaceholder: "Search runs",
           resultCount: curationRuns.length,
           drawerId: `${activeTab}-run-filters`,
-          onSubmit: (event) => {
+          onSubmit: (event, nextFilters) => {
             event.preventDefault();
-            reloadCurrent({ nextRunFilters: runFilters }).catch(() => {});
+            setRunFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_RUNS], {
+              nextRunFilters: nextFilters,
+            }).catch(() => {});
           },
           onSearchClear: (nextFilters) => {
-            reloadCurrent({ nextRunFilters: nextFilters }).catch(() => {});
+            setRunFilters(nextFilters);
+            reloadScoped([LOAD_SCOPE_RUNS], {
+              nextRunFilters: nextFilters,
+            }).catch(() => {});
           },
           buttonsDisabled: sourceTabButtonsDisabled,
         })}
@@ -4302,10 +4615,17 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             setFiltersExpanded={setRunFiltersExpanded}
             onSubmit={(event) => {
               event.preventDefault();
-              reloadCurrent({ nextRunFilters: runFilters }).catch(() => {});
+              reloadScoped([LOAD_SCOPE_RUNS], {
+                nextRunFilters: runFilters,
+              }).catch(() => {});
             }}
             onReset={() =>
-              resetWithLoad(defaultRunFilters, setRunFilters, "nextRunFilters")
+              resetWithLoad(
+                defaultRunFilters,
+                setRunFilters,
+                "nextRunFilters",
+                [LOAD_SCOPE_RUNS],
+              )
             }
             searchPlaceholder="Search runs"
             resultCount={curationRuns.length}
@@ -4313,7 +4633,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             inline
             drawerId={`${activeTab}-run-filters`}
             buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={loading}
+            buttonsLoading={runsLoading}
           />
         }
         actions={
@@ -4577,7 +4897,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   }
 
   function renderAutomationTab() {
-    const nextRunContent = loading ? (
+    const nextRunContent = automationLoading ? (
       <span className="processing-card-count">
         <LoadingSpinner size={14} />
       </span>
@@ -4596,7 +4916,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             </div>
             <div className="processing-card-head-meta">
               {nextRunContent}
-              {!loading ? (
+              {!automationLoading ? (
                 <label
                   className="processing-switch"
                   title={
@@ -4631,7 +4951,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             </div>
           </div>
           <div className="processing-automation-body">
-            {loading ? (
+            {automationLoading ? (
               renderProcessingCardLoader("Loading automation settings")
             ) : (
               <form
@@ -4751,92 +5071,98 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             <h2>Automation Setup</h2>
           </div>
           <div className="processing-card-head-meta">
-            <label
-              className="processing-switch"
-              title={
-                automationForm.enabled
-                  ? "Automation enabled"
-                  : "Automation disabled"
-              }
-            >
-              <input
-                type="checkbox"
-                aria-label={
+            {!automationLoading ? (
+              <label
+                className="processing-switch"
+                title={
                   automationForm.enabled
-                    ? "Disable automation"
-                    : "Enable automation"
+                    ? "Automation enabled"
+                    : "Automation disabled"
                 }
-                checked={automationForm.enabled}
-                onChange={(event) =>
-                  setAutomationForm({
-                    ...automationForm,
-                    enabled: event.target.checked,
-                  })
-                }
-              />
-              <span className="processing-switch-track" aria-hidden="true">
-                <span className="processing-switch-state">
-                  {automationForm.enabled ? "On" : "Off"}
-                </span>
-                <span className="processing-switch-thumb" />
-              </span>
-            </label>
-          </div>
-        </div>
-        <div className="processing-automation-body">
-          <form
-            className="stack-form processing-automation-form"
-            onSubmit={saveAutomation}
-          >
-            <div className="detail-facts processing-incomplete-automation-grid">
-              <label>
-                <span className="fact-label">Time</span>
+              >
                 <input
-                  type="time"
-                  value={automationForm.daily_run_time}
+                  type="checkbox"
+                  aria-label={
+                    automationForm.enabled
+                      ? "Disable automation"
+                      : "Enable automation"
+                  }
+                  checked={automationForm.enabled}
                   onChange={(event) =>
                     setAutomationForm({
                       ...automationForm,
-                      daily_run_time: event.target.value,
+                      enabled: event.target.checked,
                     })
                   }
                 />
-              </label>
-              <label>
-                <span className="fact-label">Frequency</span>
-                <select
-                  value={automationForm.frequency}
-                  onChange={(event) =>
-                    setAutomationForm({
-                      ...automationForm,
-                      frequency: event.target.value,
-                    })
-                  }
-                >
-                  <option value="weekly">Weekly</option>
-                  <option value="daily">Daily</option>
-                  <option value="biweekly">Bi-weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="bimonthly">Bi-monthly</option>
-                  <option value="quarterly">Every 3 months</option>
-                  <option value="four_monthly">Every 4 months</option>
-                  <option value="half_yearly">Half-yearly</option>
-                </select>
-              </label>
-            </div>
-            <div className="processing-card-actions processing-automation-save-actions">
-              <button
-                type="submit"
-                className="primary-button"
-                disabled={savingAutomation}
-              >
-                <span className="button-label">
-                  {savingAutomation ? <LoadingSpinner size={14} /> : null}
-                  Save automation
+                <span className="processing-switch-track" aria-hidden="true">
+                  <span className="processing-switch-state">
+                    {automationForm.enabled ? "On" : "Off"}
+                  </span>
+                  <span className="processing-switch-thumb" />
                 </span>
-              </button>
-            </div>
-          </form>
+              </label>
+            ) : null}
+          </div>
+        </div>
+        <div className="processing-automation-body">
+          {automationLoading ? (
+            renderProcessingCardLoader("Loading automation settings")
+          ) : (
+            <form
+              className="stack-form processing-automation-form"
+              onSubmit={saveAutomation}
+            >
+              <div className="detail-facts processing-incomplete-automation-grid">
+                <label>
+                  <span className="fact-label">Time</span>
+                  <input
+                    type="time"
+                    value={automationForm.daily_run_time}
+                    onChange={(event) =>
+                      setAutomationForm({
+                        ...automationForm,
+                        daily_run_time: event.target.value,
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  <span className="fact-label">Frequency</span>
+                  <select
+                    value={automationForm.frequency}
+                    onChange={(event) =>
+                      setAutomationForm({
+                        ...automationForm,
+                        frequency: event.target.value,
+                      })
+                    }
+                  >
+                    <option value="weekly">Weekly</option>
+                    <option value="daily">Daily</option>
+                    <option value="biweekly">Bi-weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="bimonthly">Bi-monthly</option>
+                    <option value="quarterly">Every 3 months</option>
+                    <option value="four_monthly">Every 4 months</option>
+                    <option value="half_yearly">Half-yearly</option>
+                  </select>
+                </label>
+              </div>
+              <div className="processing-card-actions processing-automation-save-actions">
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={savingAutomation}
+                >
+                  <span className="button-label">
+                    {savingAutomation ? <LoadingSpinner size={14} /> : null}
+                    Save automation
+                  </span>
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </section>
     );
@@ -4862,8 +5188,9 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
               searchPlaceholder: "Search removed books",
               resultCount: removedIncompleteEntries.length,
               drawerId: `${activeTab}-removed-filters`,
-              onSubmit: (event) => {
+              onSubmit: (event, nextFilters) => {
                 event.preventDefault();
+                setRemovedFilters(nextFilters);
               },
               onSearchClear: (nextFilters) => {
                 setRemovedFilters(nextFilters);
@@ -4893,8 +5220,14 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             buttonsDisabled={sourceTabButtonsDisabled}
           />
         </div>
-        <div className="processing-table-shell processing-removed-shell">
-          {removedIncompleteEntries.length ? (
+        <div
+          className={`processing-table-shell processing-removed-shell${
+            incompleteOverviewLoading ? " is-loading" : ""
+          }`}
+        >
+          {incompleteOverviewLoading ? (
+            renderProcessingCardLoader("Loading removed books")
+          ) : removedIncompleteEntries.length ? (
             <table className="simple-table processing-table processing-removed-table">
               <thead>
                 <tr>
@@ -4907,12 +5240,12 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                   <tr key={`removed-${entry.book_id}`}>
                     <td className="processing-col-request">
                       {entry.book_slug ? (
-                        <Link
-                          to={`/books/${entry.book_slug}`}
+                        <BookRouteLink
+                          slug={entry.book_slug}
                           className="meta-link"
                         >
                           {entry.book_title}
-                        </Link>
+                        </BookRouteLink>
                       ) : (
                         <span>{entry.book_title}</span>
                       )}
@@ -4940,24 +5273,28 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                 <h2>Incomplete Overview</h2>
               </div>
             </div>
-            <div className="processing-summary-bar processing-summary-bar--incomplete">
-              {[
-                ["Incomplete Books", incompleteSummary.total_incomplete_books],
-                ["Removed", incompleteSummary.removed_from_unfinished],
-                ["Still Unfinished", incompleteSummary.still_in_unfinished],
-                ["Missing", incompleteSummary.missing_in_catalog],
-                ["Queued", incompleteSummary.queued],
-                ["Processing", incompleteSummary.processing],
-                ["Failed", incompleteSummary.failed],
-                ["Stopped", incompleteSummary.stopped],
-                ["Requeued", incompleteSummary.requeued],
-              ].map(([label, value]) => (
-                <article key={label} className="processing-summary-stat">
-                  <span className="fact-label">{label}</span>
-                  <strong>{value}</strong>
-                </article>
-              ))}
-            </div>
+            {incompleteOverviewLoading ? (
+              renderProcessingCardLoader("Loading incomplete overview")
+            ) : (
+              <div className="processing-summary-bar processing-summary-bar--incomplete">
+                {[
+                  ["Incomplete Books", incompleteSummary.total_incomplete_books],
+                  ["Removed", incompleteSummary.removed_from_unfinished],
+                  ["Still Unfinished", incompleteSummary.still_in_unfinished],
+                  ["Missing", incompleteSummary.missing_in_catalog],
+                  ["Queued", incompleteSummary.queued],
+                  ["Processing", incompleteSummary.processing],
+                  ["Failed", incompleteSummary.failed],
+                  ["Stopped", incompleteSummary.stopped],
+                  ["Requeued", incompleteSummary.requeued],
+                ].map(([label, value]) => (
+                  <article key={label} className="processing-summary-stat">
+                    <span className="fact-label">{label}</span>
+                    <strong>{value}</strong>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
           {renderIncompleteAutomationCard()}
         </div>
@@ -4965,7 +5302,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           <QueueTableCard
             title="Incomplete Catalog"
             emptyTitle="No incomplete-category books found"
-            loading={loading}
+            loading={incompleteBrowseLoading}
             loadingLabel="Loading incomplete-category books"
             headerAside={
               <CatalogSearchRow
@@ -4979,15 +5316,18 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                 resultCount={incompleteEntries.length}
                 drawerId={`${activeTab}-incomplete-filters`}
                 compact
+                showFilterToggle={false}
                 buttonsDisabled={sourceTabButtonsDisabled}
-                onSubmit={(event) => {
+                onSubmit={(event, nextFilters) => {
                   event.preventDefault();
-                  reloadCurrent({
-                    nextIncompleteFilters: incompleteFilters,
+                  setIncompleteFilters(nextFilters);
+                  reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
+                    nextIncompleteFilters: nextFilters,
                   }).catch(() => {});
                 }}
                 onSearchClear={(nextFilters) => {
-                  reloadCurrent({
+                  setIncompleteFilters(nextFilters);
+                  reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
                     nextIncompleteFilters: nextFilters,
                   }).catch(() => {});
                 }}
@@ -5000,7 +5340,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                     type="button"
                     className="ghost-button"
                     onClick={() =>
-                      reloadCurrent({
+                      reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
                         nextIncompleteFilters: incompleteFilters,
                       })
                     }
@@ -5032,10 +5372,10 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             }
           >
             {incompleteEntries.length ? (
-              <table className="simple-table processing-table processing-catalog-table">
+              <table className="simple-table processing-table processing-catalog-table processing-incomplete-table">
                 <thead>
                   <tr>
-                    <th className="processing-col-select">
+                    <th className="processing-col-select processing-incomplete-col-select">
                       <input
                         type="checkbox"
                         className="processing-checkbox"
@@ -5064,7 +5404,9 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                         aria-label="Select all incomplete-category books"
                       />
                     </th>
-                    <th className="processing-col-request">Book</th>
+                    <th className="processing-col-request processing-incomplete-col-book">
+                      Book
+                    </th>
                     <th className="processing-col-category">
                       Local Categories
                     </th>
@@ -5082,7 +5424,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                     );
                     return (
                       <tr key={entry.book_id}>
-                        <td className="processing-col-select">
+                        <td className="processing-col-select processing-incomplete-col-select">
                           <input
                             type="checkbox"
                             className="processing-checkbox"
@@ -5096,15 +5438,15 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                             aria-label={`Select ${entry.book_title}`}
                           />
                         </td>
-                        <td className="processing-col-request">
+                        <td className="processing-col-request processing-incomplete-col-book">
                           <div className="table-cell-stack table-request-cell">
                             {entry.book_slug ? (
-                              <Link
-                                to={`/books/${entry.book_slug}`}
+                              <BookRouteLink
+                                slug={entry.book_slug}
                                 className="meta-link"
                               >
                                 {entry.book_title}
-                              </Link>
+                              </BookRouteLink>
                             ) : (
                               <strong>{entry.book_title}</strong>
                             )}
@@ -5114,8 +5456,8 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                               </span>
                             ) : null}
                             {entry.source_url ? (
-                              <span className="table-note">
-                                {entry.source_url}
+                              <span className="table-note processing-incomplete-source-url">
+                                {safeDecode(entry.source_url)}
                               </span>
                             ) : null}
                             {entry.latest_job_error ? (

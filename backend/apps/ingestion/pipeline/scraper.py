@@ -1,6 +1,7 @@
+from copy import deepcopy
 import requests
 from requests.adapters import HTTPAdapter
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 from urllib3.util.retry import Retry
 import time
 import json
@@ -9,9 +10,10 @@ import os
 import shutil
 import unicodedata
 from pathlib import Path
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from apps.ingestion.services.normalization import extract_main_content_segments
+from apps.common.text import clean_display_text
 
 HEADERS = {
     "User-Agent": (
@@ -22,6 +24,7 @@ HEADERS = {
 }
 
 ALLOWED_SOURCE_HOSTS = {"ebanglalibrary.com", "www.ebanglalibrary.com"}
+INLINE_TOC_PATTERNS = ("সূচীপত্র", "সুচিপত্র", "table of contents", "contents")
 
 
 def normalize_source_url(url):
@@ -807,6 +810,420 @@ def scrape_main_content(soup):
         return content
     return ""
 
+
+def inline_toc_container(soup):
+    top_level_tags = [child for child in soup.contents if isinstance(child, Tag)]
+    if len(top_level_tags) == 1 and top_level_tags[0].name in {"div", "article", "section"}:
+        return top_level_tags[0]
+    return soup
+
+
+def inline_toc_heading_text(block):
+    return clean_display_text(block.get_text(" ", strip=True))
+
+
+def is_inline_toc_heading(block):
+    heading_text = inline_toc_heading_text(block)
+    if not heading_text or len(heading_text) > 60:
+        return False
+
+    normalized_heading = normalize_text(heading_text)
+    return any(normalize_text(pattern) == normalized_heading for pattern in INLINE_TOC_PATTERNS)
+
+
+def extract_inline_toc_entries_from_list(list_block):
+    entries = []
+
+    for item in list_block.find_all("li", recursive=False):
+        nested_list = item.find(["ul", "ol"], recursive=False)
+        title_node = item.find("a") or item
+        title = clean_display_text(title_node.get_text(" ", strip=True))
+        if not title:
+            continue
+
+        entry = {
+            "title": title,
+            "url": title_node.get("href") if title_node.name == "a" else "",
+            "type": "lesson",
+            "has_content": True,
+        }
+        if nested_list:
+            children = extract_inline_toc_entries_from_list(nested_list)
+            if children:
+                entry["children"] = children
+
+        entries.append(entry)
+
+    return entries
+
+
+def inline_content_heading_text(block):
+    text = clean_display_text(block.get_text(" ", strip=True))
+    if not text or len(text) > 180:
+        return ""
+
+    if block.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return text
+
+    strong_text = clean_display_text(
+        " ".join(strong.get_text(" ", strip=True) for strong in block.find_all("strong"))
+    )
+    if strong_text and strong_text == text:
+        return text
+
+    return ""
+
+
+def extract_inline_toc_and_content(main_content_html):
+    if not main_content_html:
+        return [], [], main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    container = inline_toc_container(soup)
+    blocks = [child for child in list(container.children) if isinstance(child, Tag)]
+
+    toc_heading_index = -1
+    for index, block in enumerate(blocks):
+        if is_inline_toc_heading(block):
+            toc_heading_index = index
+            break
+
+    if toc_heading_index < 0:
+        return [], [], main_content_html
+
+    toc_entries = []
+    toc_blocks = [blocks[toc_heading_index]]
+    next_index = toc_heading_index + 1
+
+    while next_index < len(blocks):
+        block = blocks[next_index]
+        if block.name not in {"ul", "ol"}:
+            break
+        toc_entries.extend(extract_inline_toc_entries_from_list(block))
+        toc_blocks.append(block)
+        next_index += 1
+
+    if not toc_entries:
+        return [], [], main_content_html
+
+    content_items = []
+    current_section = None
+    for block in blocks[next_index:]:
+        if block.parent is None:
+            continue
+
+        heading = inline_content_heading_text(block)
+        if heading:
+            if current_section and current_section["content_parts"]:
+                content_items.append(
+                    {
+                        "title": current_section["title"],
+                        "content": "\n".join(current_section["content_parts"]).strip(),
+                        "type": "lesson",
+                        "parent": None,
+                    }
+                )
+            current_section = {"title": heading, "content_parts": []}
+            block.decompose()
+            continue
+
+        if current_section is not None:
+            current_section["content_parts"].append(str(block))
+            block.decompose()
+
+    if current_section and current_section["content_parts"]:
+        content_items.append(
+            {
+                "title": current_section["title"],
+                "content": "\n".join(current_section["content_parts"]).strip(),
+                "type": "lesson",
+                "parent": None,
+            }
+        )
+
+    for block in toc_blocks:
+        if block.parent is not None:
+            block.decompose()
+
+    return toc_entries, content_items, str(soup)
+
+
+def normalize_crawl_url(url, base_url=""):
+    if not url:
+        return ""
+
+    candidate = urljoin(base_url, str(url).strip()) if base_url else str(url).strip()
+    parsed = urlparse(candidate)
+
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if parsed.netloc.lower() not in ALLOWED_SOURCE_HOSTS:
+        return ""
+
+    normalized_path = parsed.path or "/"
+    if normalized_path.startswith("/books/"):
+        normalized_path = normalized_path.rstrip("/") + "/"
+
+    return urlunparse(
+        ("https", "www.ebanglalibrary.com", normalized_path, parsed.params, parsed.query, "")
+    )
+
+
+def clean_content_html(html_content, title=""):
+    if not html_content:
+        return ""
+
+    cleaned = remove_redundant_headers(html_content, title).strip()
+    text_content = clean_display_text(
+        BeautifulSoup(cleaned, "html.parser").get_text(" ", strip=True)
+    )
+    if not text_content:
+        return ""
+    return cleaned
+
+
+def build_content_node(title, node_type="lesson", content="", children=None):
+    return {
+        "title": clean_display_text(title or ""),
+        "type": node_type or "lesson",
+        "content": content or "",
+        "children": list(children or []),
+    }
+
+
+def consume_inline_content_item(title, remaining_items):
+    if not title:
+        return None
+
+    for index, item in enumerate(remaining_items):
+        if texts_are_similar(item.get("title", ""), title):
+            return remaining_items.pop(index)
+
+    return None
+
+
+def merge_unique_children(existing_children, incoming_children):
+    merged = list(existing_children or [])
+    seen = {
+        (normalize_text(child.get("title", "")), child.get("type", "lesson"))
+        for child in merged
+    }
+
+    for child in incoming_children or []:
+        key = (normalize_text(child.get("title", "")), child.get("type", "lesson"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(child)
+
+    return merged
+
+
+def scrape_recursive_content_node(
+    url,
+    title_hint="",
+    node_type="lesson",
+    cache=None,
+    active_urls=None,
+    prefetched_soup=None,
+    prefetched_main_content=None,
+):
+    cache = cache if cache is not None else {}
+    active_urls = active_urls if active_urls is not None else set()
+    normalized_url = normalize_crawl_url(url)
+
+    if not normalized_url:
+        return build_content_node(title_hint, node_type=node_type)
+
+    if prefetched_soup is None and prefetched_main_content is None and normalized_url in cache:
+        cached_node = deepcopy(cache[normalized_url])
+        if clean_display_text(title_hint):
+            cached_node["title"] = clean_display_text(title_hint)
+        if node_type:
+            cached_node["type"] = node_type
+        return cached_node
+
+    if normalized_url in active_urls:
+        return build_content_node(title_hint or normalized_url, node_type=node_type)
+
+    active_urls.add(normalized_url)
+
+    try:
+        soup = prefetched_soup or get_soup(normalized_url)
+        if not soup:
+            node = build_content_node(title_hint or normalized_url, node_type=node_type)
+            cache[normalized_url] = deepcopy(node)
+            return node
+
+        page_title, _ = extract_title_and_author(soup)
+        resolved_title = clean_display_text(title_hint or page_title or normalized_url)
+        main_content = (
+            prefetched_main_content
+            if prefetched_main_content is not None
+            else scrape_main_content(soup)
+        )
+
+        if prefetched_main_content is None:
+            _, _, main_content = extract_main_content_segments(main_content)
+
+        children = []
+        cleaned_page_content = clean_content_html(main_content, resolved_title)
+
+        if urlparse(normalized_url).path.startswith("/books/"):
+            lessons = scrape_all_lessons(normalized_url)
+            if lessons:
+                for lesson_data in lessons:
+                    if lesson_data["has_topics"]:
+                        topic_children = []
+                        for topic_title, topic_url in lesson_data["topics"]:
+                            topic_children.append(
+                                scrape_recursive_content_node(
+                                    topic_url,
+                                    title_hint=topic_title,
+                                    node_type="topic",
+                                    cache=cache,
+                                    active_urls=active_urls,
+                                )
+                            )
+                        children.append(
+                            build_content_node(
+                                lesson_data["title"],
+                                node_type="lesson",
+                                children=topic_children,
+                            )
+                        )
+                    else:
+                        children.append(
+                            scrape_recursive_content_node(
+                                lesson_data["url"],
+                                title_hint=lesson_data["title"],
+                                node_type="lesson",
+                                cache=cache,
+                                active_urls=active_urls,
+                            )
+                        )
+
+        if not children:
+            inline_toc, inline_content_items, cleaned_main_content = extract_inline_toc_and_content(
+                main_content
+            )
+            if inline_toc:
+                remaining_inline_items = [dict(item) for item in inline_content_items]
+                children = [
+                    child
+                    for child in (
+                        crawl_inline_toc_entry(
+                            entry,
+                            remaining_inline_items,
+                            normalized_url,
+                            cache,
+                            active_urls,
+                        )
+                        for entry in inline_toc
+                    )
+                    if child
+                ]
+                cleaned_page_content = clean_content_html(cleaned_main_content, resolved_title)
+
+        node = build_content_node(
+            resolved_title,
+            node_type=node_type,
+            content=cleaned_page_content,
+            children=children,
+        )
+        cache[normalized_url] = deepcopy(node)
+        return node
+    finally:
+        active_urls.discard(normalized_url)
+
+
+def crawl_inline_toc_entry(entry, remaining_items, base_url, cache, active_urls):
+    title = clean_display_text(entry.get("title", ""))
+    node_type = entry.get("type") or "lesson"
+    raw_url = (entry.get("url") or "").strip()
+    local_content_item = consume_inline_content_item(title, remaining_items)
+    local_content = clean_content_html(
+        local_content_item.get("content", "") if local_content_item else "",
+        title,
+    )
+
+    nested_children = [
+        child
+        for child in (
+            crawl_inline_toc_entry(child_entry, remaining_items, base_url, cache, active_urls)
+            for child_entry in entry.get("children", []) or []
+        )
+        if child
+    ]
+
+    if raw_url and not raw_url.startswith("#"):
+        normalized_url = normalize_crawl_url(raw_url, base_url=base_url)
+        if normalized_url:
+            linked_node = scrape_recursive_content_node(
+                normalized_url,
+                title_hint=title,
+                node_type=node_type,
+                cache=cache,
+                active_urls=active_urls,
+            )
+            if local_content and not linked_node.get("content"):
+                linked_node["content"] = local_content
+            if title:
+                linked_node["title"] = title
+            linked_node["type"] = node_type
+            linked_node["children"] = merge_unique_children(
+                linked_node.get("children", []),
+                nested_children,
+            )
+            return linked_node
+
+    if not title and not local_content and not nested_children:
+        return None
+
+    return build_content_node(
+        title,
+        node_type=node_type,
+        content=local_content,
+        children=nested_children,
+    )
+
+
+def content_node_to_toc_entry(node, parent_path=()):
+    path = list(parent_path) + [node.get("title", "")]
+    entry = {
+        "title": node.get("title", ""),
+        "type": node.get("type", "lesson"),
+        "has_content": bool(node.get("content")),
+        "path": path,
+    }
+    if node.get("children"):
+        entry["children"] = [
+            content_node_to_toc_entry(child, tuple(path))
+            for child in node["children"]
+        ]
+    return entry
+
+
+def flatten_content_nodes(nodes, parent_path=()):
+    items = []
+
+    for node in nodes:
+        title = node.get("title", "")
+        path = list(parent_path) + [title]
+        if node.get("content"):
+            items.append(
+                {
+                    "title": title,
+                    "content": node["content"],
+                    "type": node.get("type", "lesson"),
+                    "parent": parent_path[-1] if parent_path else None,
+                    "path": path,
+                }
+            )
+        items.extend(flatten_content_nodes(node.get("children", []), tuple(path)))
+
+    return items
+
 def get_total_pages(soup):
     pager = soup.find("div", class_="ld-pagination ld-pagination-page-course_content_shortcode")
     if pager and pager.has_attr("data-pager-results"):
@@ -940,8 +1357,7 @@ def scrape_lesson_content(url, title=""):
     if div:
         div = clean_buttons(div)
         content = div.decode_contents()
-        # Remove redundant headers (debug=True to see what's happening)
-        content = remove_redundant_headers(content, title, debug=True)
+        content = remove_redundant_headers(content, title)
         return content
     return ""
 
@@ -990,44 +1406,22 @@ def scrape_book_data(book_url):
     
     # Extract book info and dedication from main content
     book_info, dedication, main_content = extract_dedication(main_content)
-
-    # Get all lessons with their nested structure
-    print("Fetching lesson structure...")
-    all_lessons = scrape_all_lessons(book_url)
-    
-    # Build TOC
-    toc = build_toc_structure(all_lessons)
-    
-    # Scrape content
-    content_items = []
-    
-    for lesson_data in all_lessons:
-        if lesson_data["has_topics"]:
-            # If lesson has topics, scrape each topic
-            print(f"\nLesson: {lesson_data['title']}")
-            print(f"  → {len(lesson_data['topics'])} topics")
-            
-            for topic_title, topic_url in lesson_data["topics"]:
-                print(f"  Scraping topic: {topic_title}")
-                content = scrape_lesson_content(topic_url, topic_title)
-                content_items.append({
-                    "title": topic_title,
-                    "content": content,
-                    "type": "topic",
-                    "parent": lesson_data["title"]
-                })
-                time.sleep(1)
-        else:
-            # If lesson has no topics, scrape the lesson itself
-            print(f"\nScraping lesson: {lesson_data['title']}")
-            content = scrape_lesson_content(lesson_data["url"], lesson_data["title"])
-            content_items.append({
-                "title": lesson_data["title"],
-                "content": content,
-                "type": "lesson",
-                "parent": None
-            })
-            time.sleep(1)
+    print("Fetching recursive content structure...")
+    root_node = scrape_recursive_content_node(
+        book_url,
+        title_hint=book_title,
+        node_type="book",
+        cache={},
+        active_urls=set(),
+        prefetched_soup=soup,
+        prefetched_main_content=main_content,
+    )
+    toc = [
+        content_node_to_toc_entry(child)
+        for child in root_node.get("children", [])
+    ]
+    content_items = flatten_content_nodes(root_node.get("children", []))
+    main_content = root_node.get("content", main_content)
 
     return {
         "book_title": book_title,
