@@ -192,6 +192,7 @@ export default function CatalogToolbar({
   searchActionsExtra = null,
   secondaryBelow = false,
   buttonsLoading = false,
+  drawerFirst = false,
 }) {
   const wrapperClassName = `catalog-toolbar-wrap${filtersExpanded ? " is-expanded" : ""}${inline ? " is-inline" : ""}${
     bare ? " is-bare" : ""
@@ -224,11 +225,48 @@ export default function CatalogToolbar({
   const secondaryShellClassName = `catalog-toolbar-secondary-shell${hasSecondaryOnlyTopline ? " is-standalone" : ""}${
     bare ? " is-bare" : ""
   }${secondaryBelow ? " is-below" : ""}`;
+  const filterDrawer = (
+    <div
+      id={drawerId}
+      className={`catalog-filter-drawer${filtersExpanded ? " is-open" : ""}`}
+      aria-hidden={filtersExpanded ? "false" : "true"}
+    >
+      <div className="catalog-filter-grid">
+        {fields.map((field) => (
+          <label key={field.key} className="catalog-filter-field">
+            <span className="fact-label">{field.label}</span>
+            {renderField(field, filters, setFilters)}
+          </label>
+        ))}
+      </div>
+      <div className="catalog-filter-actions">
+        <button
+          type="submit"
+          className="primary-button"
+          disabled={buttonsDisabled || buttonsLoading}
+        >
+          <span className="button-label">
+            {buttonsLoading ? <LoadingSpinner size={14} /> : null}
+            {submitLabel}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="ghost-button"
+          onClick={onReset}
+          disabled={buttonsDisabled}
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <section className={wrapperClassName}>
       <div className="catalog-toolbar-surface">
         <form className="catalog-toolbar-form" onSubmit={onSubmit}>
+          {drawerFirst ? filterDrawer : null}
           {searchRow || hasInlineSecondary ? (
             <div className={toplineClassName}>
               {searchRow ? (
@@ -252,45 +290,7 @@ export default function CatalogToolbar({
           {secondaryContent && secondaryBelow ? (
             <div className={secondaryShellClassName}>{secondaryContent}</div>
           ) : null}
-          <div
-            id={drawerId}
-            className={`catalog-filter-drawer${filtersExpanded ? " is-open" : ""}`}
-            aria-hidden={filtersExpanded ? "false" : "true"}
-          >
-            <div className="catalog-filter-grid">
-              {fields.map((field) => (
-                <label key={field.key} className="catalog-filter-field">
-                  <span className="fact-label">{field.label}</span>
-                  {renderField(field, filters, setFilters)}
-                </label>
-              ))}
-            </div>
-            <div className="catalog-filter-actions">
-              <button
-                type="submit"
-                className="primary-button"
-                disabled={buttonsDisabled || buttonsLoading}
-              >
-                <span className="button-label button-label--stable">
-                  <span
-                    className={`button-label-spinner-slot${buttonsLoading ? " is-visible" : ""}`}
-                    aria-hidden="true"
-                  >
-                    <LoadingSpinner size={14} />
-                  </span>
-                  {submitLabel}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={onReset}
-                disabled={buttonsDisabled}
-              >
-                Reset
-              </button>
-            </div>
-          </div>
+          {!drawerFirst ? filterDrawer : null}
         </form>
       </div>
     </section>
