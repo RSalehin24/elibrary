@@ -672,6 +672,25 @@ def extract_dedication_title_and_content(dedication_html, default_title="উৎ�
     return title, content_html
 
 
+def resolve_dedication_heading(dedication_html, default_title="উৎসর্গ"):
+    plain_text = plain_text_from_html(dedication_html)
+    lines = [clean_display_text(line) for line in plain_text.splitlines() if clean_display_text(line)]
+    if not lines:
+        return default_title
+
+    first_line = lines[0]
+    if re.match(r"^dedication(?:\b|\s)", first_line, re.IGNORECASE):
+        return "Dedication"
+
+    return default_title
+
+
+def normalize_dedication_heading_and_content(dedication_html, default_title="উৎসর্গ"):
+    heading = resolve_dedication_heading(dedication_html, default_title=default_title)
+    cleaned_html = clean_extracted_dedication_html(dedication_html)
+    return heading, cleaned_html
+
+
 def extract_leading_front_matter_html(html):
     extracted_html, _, _ = extract_main_content_segments(html)
     return extracted_html

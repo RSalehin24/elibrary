@@ -7,6 +7,7 @@ from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -14,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.access.models import PermissionScope
-from apps.catalog.models import GeneratedAssetStatus, GeneratedAssetType
+from apps.catalog.models import Book, BookSource, GeneratedAssetStatus, GeneratedAssetType
 from apps.common.models import ReviewState
 from apps.common.permissions import CanManageProcessing, user_has_scope
 from apps.common.url_utils import public_api_url
@@ -43,6 +44,7 @@ from apps.ingestion.serializers import (
     DuplicateReviewDecisionSerializer,
     DuplicateReviewSerializer,
     ProcessingJobSerializer,
+    ProcessingLogSerializer,
     SourceCatalogRefreshStateSerializer,
     SourceCatalogEntrySnapshotSerializer,
     SubmissionBatchCreateSerializer,
@@ -71,6 +73,7 @@ from apps.ingestion.services.submissions import (
     fulfill_submission_with_existing_book,
     queue_submission,
     recover_stale_processing_jobs,
+    queue_reprocess_book,
     resume_processing_job,
     sync_deduplicated_submissions,
 )
@@ -86,6 +89,20 @@ def apply_submission_origin_filter(queryset, origin, *, field_name="origin"):
     if origin == "catalog":
         return queryset.filter(**{f"{field_name}__in": CATALOG_ORIGIN_VALUES})
     return queryset.filter(**{field_name: origin})
+
+
+def normalize_status_filter(value):
+    return "cancelled" if value == "stopped" else value
+
+
+INCOMPLETE_CATEGORY_KEYWORDS = ("unfinished", "অসম্পূর্ণ বই", "অসম্পূর্ণ")
+
+
+def has_incomplete_keyword(value):
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in INCOMPLETE_CATEGORY_KEYWORDS)
 
 
 def active_automation_run():
@@ -185,10 +202,12 @@ def sort_source_catalog_snapshots(snapshots, sort_key):
     status_order = {
         "processing": 0,
         "failed": 1,
-        "unfinished": 2,
-        "new": 3,
-        "ready": 4,
-        "deleted": 5,
+        "stopped": 2,
+        "requeued": 3,
+        "unfinished": 4,
+        "new": 5,
+        "ready": 6,
+        "deleted": 7,
     }
 
     if sort_key == "created_desc":
@@ -368,7 +387,7 @@ class SubmissionListCreateView(APIView):
         queryset = visible_submissions_queryset(request.user)
         origin = request.query_params.get("origin", "").strip()
         queryset = apply_submission_origin_filter(queryset, origin, field_name="origin")
-        status_filter = request.query_params.get("status")
+        status_filter = normalize_status_filter(request.query_params.get("status", "").strip())
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         review_state = request.query_params.get("review_state", "").strip()
@@ -517,7 +536,7 @@ class SubmissionConfirmCandidateView(APIView):
 
 
 class SubmissionActionLinksView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request, pk):
         submission = get_accessible_submission(request, pk)
@@ -526,11 +545,12 @@ class SubmissionActionLinksView(APIView):
         if submission.linked_book.deleted_at:
             return Response({"detail": "This book was deleted."}, status=status.HTTP_410_GONE)
 
+        is_guest_submission = is_public_submission(submission)
         preview_session = ensure_preview_session(
-            request.user,
+            request.user if getattr(request.user, "is_authenticated", False) else None,
             submission.linked_book,
             submission=submission,
-            allow_guest=False,
+            allow_guest=is_guest_submission,
         )
         if preview_session is None:
             return Response({"detail": "Could not prepare access for this book."}, status=status.HTTP_400_BAD_REQUEST)
@@ -576,10 +596,10 @@ class ProcessingJobListView(generics.ListAPIView):
         queryset = visible_jobs_queryset(self.request.user)
         origin = self.request.query_params.get("origin", "").strip()
         queryset = apply_submission_origin_filter(queryset, origin, field_name="submission__origin")
-        status_filter = self.request.query_params.get("status", "").strip()
+        status_filter = normalize_status_filter(self.request.query_params.get("status", "").strip())
         if status_filter:
             queryset = queryset.filter(status=status_filter)
-        submission_status = self.request.query_params.get("submission_status", "").strip()
+        submission_status = normalize_status_filter(self.request.query_params.get("submission_status", "").strip())
         if submission_status:
             queryset = queryset.filter(submission__status=submission_status)
         job_type = self.request.query_params.get("job_type", "").strip()
@@ -639,6 +659,15 @@ class ProcessingJobDetailView(APIView):
             )
         job.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProcessingJobLogsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        job = get_object_or_404(visible_jobs_queryset(request.user), pk=pk)
+        logs = job.logs.order_by("created_at")[:200]
+        return Response(ProcessingLogSerializer(logs, many=True).data)
 
 
 class ProcessingJobRecoverView(APIView):
@@ -773,6 +802,8 @@ class SubmissionRetryView(APIView):
     def post(self, request, pk):
         submission = visible_submissions_queryset(request.user).get(pk=pk)
         target_submission = submission.canonical_submission or submission
+        previous_status = target_submission.status
+        previous_error_message = (target_submission.error_message or "").strip()
         can_manage_processing = user_has_scope(request.user, [PermissionScope.PROCESSING_MANAGE])
         if not request.user.is_staff and not can_manage_processing and submission.submitter_id != request.user.id:
             raise PermissionDenied("You cannot retry this submission.")
@@ -796,10 +827,15 @@ class SubmissionRetryView(APIView):
             update_fields.append("error_message")
         next_payload = dict(target_submission.raw_payload or {})
         payload_changed = False
+        next_payload["requeued"] = True
+        next_payload["requeued_at"] = timezone.now().isoformat()
+        next_payload["requeue_requested_by"] = str(request.user.id)
+        next_payload["requeue_reason"] = previous_error_message or f"Retry requested from status: {previous_status}."
+        payload_changed = True
         for key in ("served_from_database", "existing_book_source", "linked_book_slug"):
             if key in next_payload:
                 next_payload.pop(key, None)
-                payload_changed = True
+            payload_changed = True
         if payload_changed:
             target_submission.raw_payload = next_payload
             update_fields.append("raw_payload")
@@ -926,7 +962,11 @@ class SourceCatalogEntryListView(APIView):
         snapshots, _ = source_catalog_entry_snapshots(queryset)
         status_filter = request.query_params.get("status", "").strip()
         if status_filter:
-            snapshots = [snapshot for snapshot in snapshots if snapshot["curation_status"] == status_filter]
+            snapshots = [
+                snapshot
+                for snapshot in snapshots
+                if normalize_status_filter(snapshot["curation_status"]) == normalize_status_filter(status_filter)
+            ]
         summary = summarize_source_catalog_snapshots(snapshots)
         sort_source_catalog_snapshots(snapshots, request.query_params.get("sort", "").strip())
 
@@ -1032,7 +1072,7 @@ class SourceCatalogEntryCreateBooksView(APIView):
                     summary["queued_creates"] += 1
                     continue
 
-                if status_value in {"unfinished", "failed"}:
+                if status_value in {"unfinished", "failed", "stopped", "requeued"}:
                     _, created = queue_reprocess_book(
                         inspection["local_book"],
                         actor=request.user,
@@ -1052,6 +1092,160 @@ class SourceCatalogEntryCreateBooksView(APIView):
         return Response(summary, status=status.HTTP_202_ACCEPTED)
 
 
+class IncompleteCatalogCheckListView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def get(self, request):
+        books = list(
+            Book.objects.filter(deleted_at__isnull=True)
+            .prefetch_related("book_categories__category", "source_urls", "processing_jobs")
+            .order_by("title")
+        )
+
+        source_urls = []
+        for book in books:
+            source = next(iter(book.source_urls.all()), None)
+            if source and source.normalized_source_url:
+                source_urls.append(source.normalized_source_url)
+
+        entry_map = {
+            entry.source_url: entry
+            for entry in SourceCatalogEntry.objects.filter(source_url__in=source_urls)
+        }
+
+        rows = []
+        summary = {
+            "total_incomplete_books": 0,
+            "removed_from_unfinished": 0,
+            "still_in_unfinished": 0,
+            "missing_in_catalog": 0,
+            "queued": 0,
+            "processing": 0,
+            "failed": 0,
+            "stopped": 0,
+            "requeued": 0,
+        }
+
+        for book in books:
+            local_categories = ", ".join(
+                relation.category.name
+                for relation in book.book_categories.all()
+                if relation.category_id and relation.category and relation.category.name
+            )
+            if not has_incomplete_keyword(local_categories):
+                continue
+
+            source = next(iter(book.source_urls.all()), None)
+            source_url = source.normalized_source_url if source else ""
+            entry = entry_map.get(source_url)
+            source_categories = ""
+            if entry:
+                raw_data = entry.raw_data or {}
+                source_categories = (raw_data.get("category") or raw_data.get("book_type") or "").strip()
+
+            removed_from_unfinished = bool(entry) and not has_incomplete_keyword(source_categories)
+            latest_job = next(iter(book.processing_jobs.all()), None)
+            latest_status = latest_job.status if latest_job else ""
+
+            summary["total_incomplete_books"] += 1
+            if removed_from_unfinished:
+                summary["removed_from_unfinished"] += 1
+            elif entry:
+                summary["still_in_unfinished"] += 1
+            else:
+                summary["missing_in_catalog"] += 1
+
+            if latest_status in {"queued", "processing", "failed", "cancelled"}:
+                mapped_status = "stopped" if latest_status == "cancelled" else latest_status
+                summary[mapped_status] += 1
+
+            requeued = bool(latest_job and latest_job.job_type == "reprocess")
+            if requeued:
+                summary["requeued"] += 1
+
+            rows.append(
+                {
+                    "book_id": str(book.id),
+                    "book_title": book.title,
+                    "book_slug": book.slug,
+                    "author_line": ", ".join(book.authors or []),
+                    "local_categories": local_categories,
+                    "source_url": source_url,
+                    "source_categories": source_categories,
+                    "catalog_entry_id": str(entry.id) if entry else "",
+                    "removed_from_unfinished": removed_from_unfinished,
+                    "latest_job_status": "stopped" if latest_status == "cancelled" else latest_status,
+                    "latest_job_error": latest_job.last_error if latest_job else "",
+                    "is_requeued": requeued,
+                    "updated_at": book.updated_at,
+                }
+            )
+
+        query = request.query_params.get("q", "").strip().lower()
+        if query:
+            rows = [
+                row
+                for row in rows
+                if query in row["book_title"].lower()
+                or query in (row["author_line"] or "").lower()
+                or query in (row["source_categories"] or "").lower()
+            ]
+
+        status_filter = request.query_params.get("status", "").strip().lower()
+        if status_filter == "removed":
+            rows = [row for row in rows if row["removed_from_unfinished"]]
+        elif status_filter == "still":
+            rows = [row for row in rows if row["catalog_entry_id"] and not row["removed_from_unfinished"]]
+        elif status_filter == "missing":
+            rows = [row for row in rows if not row["catalog_entry_id"]]
+
+        rows.sort(
+            key=lambda row: (
+                0 if row["removed_from_unfinished"] else 1,
+                row.get("book_title") or "",
+            )
+        )
+
+        return Response({"summary": summary, "entries": rows})
+
+
+class IncompleteCatalogCheckCreateBooksView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def post(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        locked_response = automation_manual_creation_locked_response()
+        if locked_response:
+            return locked_response
+
+        books = list(Book.objects.filter(pk__in=serializer.validated_data["ids"], deleted_at__isnull=True))
+
+        summary = {
+            "queued_updates": 0,
+            "skipped_processing": 0,
+            "skipped_missing": max(len(serializer.validated_data["ids"]) - len(books), 0),
+            "errors": [],
+        }
+
+        for book in books:
+            try:
+                _, created = queue_reprocess_book(
+                    book,
+                    actor=request.user,
+                    origin=SubmissionOrigin.CURATION,
+                )
+                if created:
+                    summary["queued_updates"] += 1
+                else:
+                    summary["skipped_processing"] += 1
+            except Exception as exc:
+                if len(summary["errors"]) < 20:
+                    summary["errors"].append({"book_id": str(book.id), "error": str(exc)})
+
+        return Response(summary, status=status.HTTP_202_ACCEPTED)
+
+
 class CatalogCurationRunListCreateView(APIView):
     permission_classes = [CanManageProcessing]
 
@@ -1060,7 +1254,7 @@ class CatalogCurationRunListCreateView(APIView):
         trigger = request.query_params.get("trigger", "").strip()
         if trigger:
             queryset = queryset.filter(trigger=trigger)
-        status_filter = request.query_params.get("status", "").strip()
+        status_filter = normalize_status_filter(request.query_params.get("status", "").strip())
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         mode = request.query_params.get("mode", "").strip()

@@ -67,8 +67,12 @@ class EpubBuilder:
         self.book.add_item(c)
         self.chapters.append(c)
 
-    def add_dedication_page(self, dedication_text=""):
-        html_content = self.render_template("dedication.html", dedication_text=dedication_text)
+    def add_dedication_page(self, dedication_title="উৎসর্গ", dedication_html=""):
+        html_content = self.render_template(
+            "dedication.html",
+            dedication_title=dedication_title,
+            dedication_html=dedication_html,
+        )
         c = epub.EpubHtml(title="উৎসর্গ", file_name="dedication.xhtml", content=html_content)
         self.book.add_item(c)
         self.chapters.append(c)

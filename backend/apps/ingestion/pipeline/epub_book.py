@@ -1,7 +1,10 @@
 import os
 
 from .epub_properties.epub_builder import EpubBuilder
-from apps.ingestion.services.normalization import split_leading_front_sections
+from apps.ingestion.services.normalization import (
+    normalize_dedication_heading_and_content,
+    split_leading_front_sections,
+)
 
 
 def display_value(value):
@@ -56,8 +59,13 @@ def create_epub(book_data):
     book_info = book_data.get("book_info", "")
     builder.add_info_page(translator="", additional_info="", scraped_book_info=book_info)
     
-    dedication_text = book_data.get("dedication", "")
-    builder.add_dedication_page(dedication_text=dedication_text)
+    dedication_title, dedication_html = normalize_dedication_heading_and_content(
+        book_data.get("dedication", "")
+    )
+    builder.add_dedication_page(
+        dedication_title=dedication_title,
+        dedication_html=dedication_html,
+    )
     
     main_content = book_data.get("main_content", "")
     front_sections, compact_main_content = split_leading_front_sections(main_content)

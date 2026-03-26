@@ -11,12 +11,17 @@ from apps.ingestion.models import (
     DuplicateReview,
     MatchCandidate,
     ProcessingJob,
+    ProcessingLog,
     SourceCatalogEntry,
     SourceCatalogRefreshState,
     SubmissionInputType,
 )
 from apps.catalog.serializers import BookListSerializer
 from apps.ingestion.services.curation import get_catalog_automation_settings, next_catalog_automation_run_at
+
+
+def present_status(value):
+    return "stopped" if value == "cancelled" else value
 
 
 class SubmissionBatchCreateSerializer(serializers.Serializer):
@@ -83,15 +88,18 @@ class MatchCandidateSerializer(serializers.ModelSerializer):
 
 
 class ProcessingJobSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
     submission_id = serializers.UUIDField(source="submission.id", read_only=True)
     submission_input = serializers.CharField(source="submission.original_input", read_only=True)
     submission_origin = serializers.CharField(source="submission.origin", read_only=True)
-    submission_status = serializers.CharField(source="submission.status", read_only=True)
+    submission_status = serializers.SerializerMethodField()
     submission_resolution_status = serializers.CharField(source="submission.resolution_status", read_only=True)
     queue_name = serializers.CharField(read_only=True)
     target_book_slug = serializers.SerializerMethodField()
     target_book_title = serializers.SerializerMethodField()
     target_book_deleted = serializers.SerializerMethodField()
+    is_requeued = serializers.SerializerMethodField()
+    requeue_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcessingJob
@@ -111,6 +119,8 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
             "target_book_slug",
             "target_book_title",
             "target_book_deleted",
+            "is_requeued",
+            "requeue_reason",
             "last_error",
             "created_at",
             "updated_at",
@@ -143,9 +153,25 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
         book = self.get_raw_target_book(obj)
         return book.title if book else ""
 
+    def get_status(self, obj):
+        return present_status(obj.status)
+
+    def get_submission_status(self, obj):
+        return present_status(obj.submission.status)
+
     def get_target_book_deleted(self, obj):
         book = self.get_raw_target_book(obj)
         return bool(book and book.deleted_at)
+
+    def get_is_requeued(self, obj):
+        raw_payload = obj.submission.raw_payload or {}
+        return bool(obj.job_type == "reprocess" or raw_payload.get("requeued", False))
+
+    def get_requeue_reason(self, obj):
+        raw_payload = obj.submission.raw_payload or {}
+        if obj.job_type == "reprocess":
+            return "Regeneration requested."
+        return raw_payload.get("requeue_reason", "")
 
 
 class SubmissionSerializer(serializers.ModelSerializer):
@@ -194,7 +220,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
         linked_book = self.linked_book_for(obj)
         if linked_book and linked_book.deleted_at:
             return "deleted"
-        return obj.status
+        return present_status(obj.status)
 
     def get_candidates(self, obj):
         attempt = obj.resolution_attempts.first()
@@ -258,6 +284,12 @@ class DuplicateReviewSerializer(serializers.ModelSerializer):
         return bool(obj.existing_book_id and obj.existing_book.deleted_at)
 
 
+class ProcessingLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProcessingLog
+        fields = ["id", "level", "message", "details", "created_at"]
+
+
 class DuplicateReviewDecisionSerializer(serializers.Serializer):
     decision = serializers.ChoiceField(choices=["confirm_existing", "dismiss"])
     notes = serializers.CharField(required=False, allow_blank=True)
@@ -281,8 +313,16 @@ class SourceCatalogEntrySnapshotSerializer(serializers.Serializer):
     activity_at = serializers.DateTimeField(allow_null=True)
     updated_at = serializers.DateTimeField(allow_null=True)
 
+    def to_representation(self, instance):
+        payload = super().to_representation(instance)
+        payload["latest_submission_status"] = present_status(payload.get("latest_submission_status", ""))
+        payload["latest_job_status"] = present_status(payload.get("latest_job_status", ""))
+        payload["curation_status"] = present_status(payload.get("curation_status", ""))
+        return payload
+
 
 class CatalogCurationRunSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
     requested_by_email = serializers.EmailField(source="requested_by.email", read_only=True)
 
     class Meta:
@@ -306,6 +346,9 @@ class CatalogCurationRunSerializer(serializers.ModelSerializer):
             "started_at",
             "finished_at",
         ]
+
+    def get_status(self, obj):
+        return present_status(obj.status)
 
 
 class CatalogCurationRunCreateSerializer(serializers.Serializer):

@@ -34,6 +34,7 @@ ACTIVE_SOURCE_CATALOG_REFRESH_STATUSES = (
 REQUIRED_READY_ASSETS = (GeneratedAssetType.HTML, GeneratedAssetType.EPUB)
 RUN_CANCEL_MESSAGE = "Stopped by user."
 SOURCE_REFRESH_STOP_MESSAGE = "Stopped by user."
+FAILED_AUTOMATION_RETRY_COOLDOWN = timedelta(hours=6)
 
 
 def normalize_refresh_max_pages(value):
@@ -311,6 +312,7 @@ def inspect_source_catalog_entry(entry, source_map, submission_map=None):
     local_book = book_source.book if book_source and book_source.book_id else None
     latest_submission = submission_map.get(entry.source_url)
     latest_job = local_book.processing_jobs.first() if local_book else latest_processing_job_for_submission(latest_submission)
+    is_requeued = bool(latest_submission and (latest_submission.raw_payload or {}).get("requeued"))
 
     if local_book and local_book.deleted_at:
         status = "deleted"
@@ -322,9 +324,15 @@ def inspect_source_catalog_entry(entry, source_map, submission_map=None):
         "processing",
     }:
         status = "processing"
+    elif latest_job and latest_job.status == JobStatus.CANCELLED:
+        status = "stopped"
+    elif latest_submission and latest_submission.status == "cancelled":
+        status = "stopped"
+    elif is_requeued:
+        status = "requeued"
     elif latest_job and latest_job.status == JobStatus.FAILED:
         status = "failed"
-    elif latest_submission and latest_submission.status in {"failed", "needs_review", "duplicate", "cancelled"}:
+    elif latest_submission and latest_submission.status in {"failed", "needs_review", "duplicate"}:
         status = "failed"
     elif not local_book:
         status = "new"
@@ -384,6 +392,8 @@ def summarize_source_catalog_snapshots(snapshots):
         "total": len(snapshots),
         "new": summary.get("new", 0),
         "processing": summary.get("processing", 0),
+        "requeued": summary.get("requeued", 0),
+        "stopped": summary.get("stopped", 0),
         "unfinished": summary.get("unfinished", 0),
         "failed": summary.get("failed", 0),
         "ready": summary.get("ready", 0),
@@ -413,6 +423,8 @@ def build_catalog_curation_run_summary():
         "status_counts": {
             "new": 0,
             "processing": 0,
+            "requeued": 0,
+            "stopped": 0,
             "unfinished": 0,
             "failed": 0,
             "ready": 0,
@@ -514,6 +526,18 @@ def should_create_missing_book(inspection):
     return (local_book is None or bool(local_book.deleted_at)) and inspection["curation_status"] in {"new", "failed", "deleted"}
 
 
+def should_retry_failed_entry(inspection, now=None):
+    if inspection["curation_status"] != "failed":
+        return True
+
+    now = now or timezone.now()
+    activity_at = inspection.get("activity_at")
+    if activity_at is None:
+        return True
+
+    return now - activity_at >= FAILED_AUTOMATION_RETRY_COOLDOWN
+
+
 def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
     run = CatalogCurationRun.objects.select_related("requested_by").get(pk=run_id)
     if run.status == JobStatus.CANCELLED:
@@ -553,6 +577,10 @@ def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
             inspection = inspect_source_catalog_entry(entry, source_map, submission_map)
             status = inspection["curation_status"]
             summary["status_counts"][status] += 1
+
+            if not should_retry_failed_entry(inspection):
+                summary["skipped_processing"] += 1
+                continue
 
             try:
                 if should_create_missing_book(inspection):

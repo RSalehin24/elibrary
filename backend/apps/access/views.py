@@ -34,8 +34,7 @@ from apps.common.permissions import IsSuperAdmin, user_can_download_book_assets,
 from apps.common.models import LifecycleState, ReviewState
 from apps.common.url_utils import public_api_url
 from apps.ingestion.services.normalization import (
-    clean_extracted_dedication_html,
-    extract_dedication_title_and_content,
+    normalize_dedication_heading_and_content,
     promote_leading_front_matter,
     split_leading_front_sections,
 )
@@ -428,39 +427,35 @@ def normalize_preview_book_sections(soup, dedication_html=""):
     if dedication_content is not None:
         current_dedication_html = dedication_content.decode_contents()
         dedication_title_tag = soup.find("h2", class_="dedication-title")
-        cleaned_dedication_html = clean_extracted_dedication_html(current_dedication_html)
-        dedication_title, normalized_dedication_html = extract_dedication_title_and_content(
-            cleaned_dedication_html or raw_book_dedication_html
+        dedication_title, normalized_dedication_html = normalize_dedication_heading_and_content(
+            current_dedication_html or raw_book_dedication_html
         )
 
         if dedication_title_tag is not None and dedication_title_tag.get_text(strip=True) != dedication_title:
             dedication_title_tag.string = dedication_title
             updated = True
 
-        if cleaned_dedication_html:
-            if normalized_dedication_html != current_dedication_html:
-                replace_tag_contents(dedication_content, normalized_dedication_html)
-                updated = True
-        elif raw_book_dedication_html:
-            replace_tag_contents(dedication_content, raw_book_dedication_html)
+        if normalized_dedication_html != current_dedication_html:
+            replace_tag_contents(dedication_content, normalized_dedication_html)
             updated = True
     elif raw_book_dedication_html:
-        dedication_title, normalized_dedication_html = extract_dedication_title_and_content(
+        dedication_title, normalized_dedication_html = normalize_dedication_heading_and_content(
             raw_book_dedication_html
         )
-        dedication_section = build_dedication_section_with_title(
-            normalized_dedication_html,
-            dedication_title,
-        )
-        if insertion_anchor is not None:
-            insertion_anchor.insert_before(dedication_section)
-            updated = True
-        elif container is not None:
-            container.append(dedication_section)
-            updated = True
-        elif soup.body is not None:
-            soup.body.append(dedication_section)
-            updated = True
+        if normalized_dedication_html:
+            dedication_section = build_dedication_section_with_title(
+                normalized_dedication_html,
+                dedication_title,
+            )
+            if insertion_anchor is not None:
+                insertion_anchor.insert_before(dedication_section)
+                updated = True
+            elif container is not None:
+                container.append(dedication_section)
+                updated = True
+            elif soup.body is not None:
+                soup.body.append(dedication_section)
+                updated = True
 
     return updated
 
@@ -591,10 +586,10 @@ class ReaderLaunchView(APIView):
 
 
 class ReaderManifestView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request, token):
-        session = get_authenticated_token_preview_session(request, token)
+        session = get_token_preview_session(token)
 
         epub_asset = session.book.generated_assets.filter(asset_type=GeneratedAssetType.EPUB).first()
         html_asset = session.book.generated_assets.filter(asset_type=GeneratedAssetType.HTML).first()
@@ -637,10 +632,10 @@ class ReaderManifestView(APIView):
 
 
 class ReaderEpubDownloadView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request, token, asset_path=""):
-        session = get_authenticated_token_preview_session(request, token)
+        session = get_token_preview_session(token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.EPUB)
         if not asset_is_available(asset):
@@ -683,10 +678,10 @@ class ReaderEpubDownloadView(APIView):
 
 
 class ReaderHtmlPreviewView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request, token):
-        session = get_authenticated_token_preview_session(request, token)
+        session = get_token_preview_session(token)
 
         asset = resolve_asset(session.book, GeneratedAssetType.HTML)
         if not asset_is_available(asset):

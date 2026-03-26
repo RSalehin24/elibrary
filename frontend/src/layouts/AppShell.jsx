@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
+import { hasCapability } from "../utils/capabilities";
 
 function initialsForUser(value) {
   return (
@@ -21,6 +22,35 @@ const bookPropertiesItems = [
   { to: "/manual-books", label: "Physical Books' List" },
 ];
 
+const processingPropertiesItems = [
+  {
+    to: "/processing-my-requests",
+    label: "My Requests",
+    capabilityRequired: false,
+  },
+  {
+    to: "/processing-catalog-books",
+    label: "Catalog Books",
+    capabilityRequired: true,
+  },
+  {
+    to: "/processing-automation",
+    label: "Automation",
+    capabilityRequired: true,
+  },
+
+  {
+    to: "/processing-incomplete-check",
+    label: "Incomplete Automation",
+    capabilityRequired: true,
+  },
+  {
+    to: "/processing-all-activity",
+    label: "All Activity",
+    capabilityRequired: true,
+  },
+];
+
 export default function AppShell({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -32,13 +62,18 @@ export default function AppShell({ children }) {
   const showTopbar = !readerNavHidden;
   const [menuOpen, setMenuOpen] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
+  const [processingOpen, setProcessingOpen] = useState(false);
   const profileMenuRef = useRef(null);
   const propertiesMenuRef = useRef(null);
+  const processingMenuRef = useRef(null);
+  const canManageProcessing = hasCapability(user, "processing:manage");
+  const visibleProcessingItems = processingPropertiesItems.filter(
+    (item) => !item.capabilityRequired || canManageProcessing,
+  );
   const navigation = authenticated
     ? [
         { to: "/home", label: "Home" },
         { to: "/create", label: "Create Books" },
-        { to: "/processing", label: "Processing" },
         ...(user?.is_superuser
           ? [{ to: "/access", label: "Users & Access" }]
           : []),
@@ -54,14 +89,17 @@ export default function AppShell({ children }) {
     location.pathname === "/editors" ||
     location.pathname === "/manual-books" ||
     location.pathname.startsWith("/books/");
+  const isProcessingPropertiesActive =
+    location.pathname.startsWith("/processing");
 
   useEffect(() => {
     setMenuOpen(false);
     setPropertiesOpen(false);
+    setProcessingOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
-    if (!menuOpen && !propertiesOpen) {
+    if (!menuOpen && !propertiesOpen && !processingOpen) {
       return undefined;
     }
 
@@ -79,13 +117,20 @@ export default function AppShell({ children }) {
       ) {
         setPropertiesOpen(false);
       }
+
+      if (
+        processingMenuRef.current &&
+        !processingMenuRef.current.contains(event.target)
+      ) {
+        setProcessingOpen(false);
+      }
     }
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
     };
-  }, [menuOpen, propertiesOpen]);
+  }, [menuOpen, propertiesOpen, processingOpen]);
 
   const displayName = user?.full_name || user?.email || "";
   const initials = initialsForUser(displayName);
@@ -186,6 +231,58 @@ export default function AppShell({ children }) {
                             : "nav-dropdown-link"
                         }
                         onClick={() => setPropertiesOpen(false)}
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div ref={processingMenuRef} className="nav-dropdown-shell">
+                <button
+                  type="button"
+                  className={
+                    isProcessingPropertiesActive
+                      ? "nav-link is-active nav-dropdown-trigger"
+                      : "nav-link nav-dropdown-trigger"
+                  }
+                  onClick={() => setProcessingOpen((current) => !current)}
+                  aria-expanded={processingOpen}
+                  aria-haspopup="menu"
+                >
+                  <span>Processing</span>
+                  <span
+                    className={
+                      processingOpen
+                        ? "nav-dropdown-caret is-open"
+                        : "nav-dropdown-caret"
+                    }
+                    aria-hidden="true"
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="m3.5 6 4.5 4 4.5-4" />
+                    </svg>
+                  </span>
+                </button>
+                {processingOpen ? (
+                  <div className="nav-dropdown-panel" role="menu">
+                    {visibleProcessingItems.map((item) => (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        className={({ isActive }) =>
+                          isActive
+                            ? "nav-dropdown-link is-active"
+                            : "nav-dropdown-link"
+                        }
+                        onClick={() => setProcessingOpen(false)}
                       >
                         {item.label}
                       </NavLink>

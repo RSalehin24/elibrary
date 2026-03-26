@@ -1,13 +1,30 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="bn">
   <head>
-    <meta charset="UTF-8">
-    <title>Dedication</title>
+    <meta charset="UTF-8" />
+    <title>{{ dedication_title }}</title>
   </head>
   <body>
-    <div style="width: 100%; height: 100%; margin: 100px 40px 60px 40px; display: flex; flex-direction: column; justify-content: flex-start; align-items: center; font-family: Arial, sans-serif; font-style: italic;">
-      <style>a { text-decoration: none; }</style>
-      <p>{{dedication_text}}</p>
+    <div
+      style="
+        width: 100%;
+        height: 100%;
+        margin: 100px 40px 60px 40px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+        font-family: Arial, sans-serif;
+        font-style: italic;
+      "
+    >
+      <style>
+        a {
+          text-decoration: none;
+        }
+      </style>
+      <h2>{{ dedication_title }}</h2>
+      <div>{{ dedication_html | safe }}</div>
     </div>
   </body>
 </html>

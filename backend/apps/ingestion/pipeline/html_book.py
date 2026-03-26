@@ -4,7 +4,10 @@ import os
 import re
 from html import escape
 
-from apps.ingestion.services.normalization import split_leading_front_sections
+from apps.ingestion.services.normalization import (
+  normalize_dedication_heading_and_content,
+  split_leading_front_sections,
+)
 
 
 def render_preview_single_tab_guard_script():
@@ -751,13 +754,15 @@ def save_html(book_title, author, series, book_type, cover, main_content, book_i
         html += "\n        </div>"
         html += "\n      </div>"
 
+    dedication_title, normalized_dedication_html = normalize_dedication_heading_and_content(dedication or "")
+
     # Dedication Section (if present)
-    if dedication:
+    if normalized_dedication_html:
         html += "\n      <div class='dedication-section'>"
-        html += "\n        <h2 class='dedication-title'>উৎসর্গ</h2>"
+        html += f"\n        <h2 class='dedication-title'>{escape(dedication_title)}</h2>"
         html += "\n        <div class='dedication-content'>"
         # Insert dedication HTML directly (already contains <p> tags)
-        indented_dedication = "\n".join(f"          {line}" for line in dedication.splitlines())
+        indented_dedication = "\n".join(f"          {line}" for line in normalized_dedication_html.splitlines())
         html += f"\n{indented_dedication}"
         html += "\n        </div>"
         html += "\n      </div>"

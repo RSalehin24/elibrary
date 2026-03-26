@@ -45,6 +45,7 @@ from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_w
 from apps.ingestion.services.submissions import (
     create_submission_records,
     detect_metadata_duplicate,
+    find_exact_existing_book,
     process_submission_job,
     queue_submission,
     sync_assets,
@@ -1218,7 +1219,7 @@ def test_clean_extracted_dedication_html_keeps_inline_content_after_label():
         """
     )
 
-    assert "পাঠক, আপনাকে…" in dedication_html
+    assert "পাঠক, আপনাকে" in dedication_html
     assert "উৎসর্গ" not in dedication_html
 
 
@@ -1466,6 +1467,101 @@ def test_retrying_deleted_submission_clears_reused_state_and_queues_recreation(c
 
 
 @pytest.mark.django_db
+def test_resume_cancelled_job_requeues_submission(client, monkeypatch):
+    user = User.objects.create_user(email="resume-cancelled@example.com", password="strong-password-123")
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/resume-cancelled/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/resume-cancelled/"),
+        resolved_url="https://www.ebanglalibrary.com/books/resume-cancelled/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.CANCELLED,
+        error_message="Stopped by user.",
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.CANCELLED,
+        cancel_requested=False,
+        task_id="old-task-id",
+        queue_name="celery",
+        last_error="Stopped by user.",
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.dispatch_processing_job",
+        lambda queued_job, force=False: queued_job,
+    )
+
+    client.force_login(user)
+    response = client.post(
+        f"/api/ingestion/jobs/{job.id}/resume/",
+        data=json.dumps({}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 202
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert job.status == JobStatus.QUEUED
+    assert job.cancel_requested is False
+    assert job.task_id == ""
+    assert submission.status == SubmissionStatus.QUEUED
+    assert submission.error_message == ""
+
+
+@pytest.mark.django_db
+def test_bulk_resume_requeues_cancelled_jobs(client, monkeypatch):
+    user = User.objects.create_user(email="resume-cancelled-bulk@example.com", password="strong-password-123")
+    submission_one = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/bulk-resume-one/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/bulk-resume-one/"),
+        resolved_url="https://www.ebanglalibrary.com/books/bulk-resume-one/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.CANCELLED,
+        error_message="Stopped by user.",
+    )
+    submission_two = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/bulk-resume-two/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/bulk-resume-two/"),
+        resolved_url="https://www.ebanglalibrary.com/books/bulk-resume-two/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.CANCELLED,
+        error_message="Stopped by user.",
+    )
+    job_one = ProcessingJob.objects.create(submission=submission_one, status=JobStatus.CANCELLED, cancel_requested=False)
+    job_two = ProcessingJob.objects.create(submission=submission_two, status=JobStatus.CANCELLED, cancel_requested=False)
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.dispatch_processing_job",
+        lambda queued_job, force=False: queued_job,
+    )
+
+    client.force_login(user)
+    response = client.post(
+        "/api/ingestion/jobs/bulk-resume/",
+        data=json.dumps({"ids": [str(job_one.id), str(job_two.id)]}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["resumed_count"] == 2
+    assert payload["skipped_invalid"] == 0
+
+    job_one.refresh_from_db()
+    job_two.refresh_from_db()
+    submission_one.refresh_from_db()
+    submission_two.refresh_from_db()
+    assert job_one.status == JobStatus.QUEUED
+    assert job_two.status == JobStatus.QUEUED
+    assert submission_one.status == SubmissionStatus.QUEUED
+    assert submission_two.status == SubmissionStatus.QUEUED
+
+
+@pytest.mark.django_db
 def test_detect_metadata_duplicate_ignores_deleted_books():
     deleted_book = Book.objects.create(title="ম্যালিস", state="soft_deleted", review_state="approved")
     contributor = Contributor.objects.create(name="সৈকত মুখোপাধ্যায়")
@@ -1475,6 +1571,259 @@ def test_detect_metadata_duplicate_ignores_deleted_books():
     duplicate = detect_metadata_duplicate({"book_title": "ম্যালিস", "author": "সৈকত মুখোপাধ্যায়"})
 
     assert duplicate is None
+
+
+@pytest.mark.django_db
+def test_detect_metadata_duplicate_does_not_match_same_title_with_different_author():
+    existing_book = Book.objects.create(title="শ্রেষ্ঠ কবিতা", state="ready", review_state="approved")
+    existing_author = Contributor.objects.create(name="কবি এক")
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+
+    duplicate = detect_metadata_duplicate({"book_title": "শ্রেষ্ঠ কবিতা", "author": "কবি দুই"})
+
+    assert duplicate is None
+
+
+@pytest.mark.django_db
+def test_find_exact_existing_book_requires_author_overlap_for_same_title():
+    existing_book = Book.objects.create(
+        title="শ্রেষ্ঠ কবিতা",
+        source_site="ebanglalibrary.com",
+        state="ready",
+        review_state="approved",
+    )
+    existing_author = Contributor.objects.create(name="কবি এক")
+    existing_category = Category.objects.create(name="কবিতা")
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+    existing_book.book_categories.model.objects.create(
+        book=existing_book,
+        category=existing_category,
+        raw_value=existing_category.name,
+    )
+
+    matched = find_exact_existing_book(
+        {"book_title": "শ্রেষ্ঠ কবিতা", "author": "কবি দুই", "book_type": "কবিতা"}
+    )
+    assert matched is None
+
+    matched_same_author = find_exact_existing_book(
+        {"book_title": "শ্রেষ্ঠ কবিতা", "author": "কবি এক", "book_type": "কবিতা"}
+    )
+    assert matched_same_author is not None
+    assert matched_same_author.id == existing_book.id
+
+
+@pytest.mark.django_db
+def test_find_exact_existing_book_does_not_match_when_categories_differ():
+    existing_book = Book.objects.create(
+        title="শ্রেষ্ঠ কবিতা",
+        source_site="ebanglalibrary.com",
+        state="ready",
+        review_state="approved",
+    )
+    existing_author = Contributor.objects.create(name="মহাদেব সাহ")
+    existing_category = Category.objects.create(name="কবিতা")
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+    book_category = existing_book.book_categories.model
+    book_category.objects.create(book=existing_book, category=existing_category, raw_value=existing_category.name)
+
+    matched = find_exact_existing_book(
+        {
+            "book_title": "শ্রেষ্ঠ কবিতা",
+            "author": "মহাদেব সাহ",
+            "book_type": "গল্প",
+        }
+    )
+
+    assert matched is None
+
+
+@pytest.mark.django_db
+def test_detect_metadata_duplicate_does_not_match_when_categories_differ():
+    existing_book = Book.objects.create(title="শ্রেষ্ঠ কবিতা", state="ready", review_state="approved")
+    existing_author = Contributor.objects.create(name="মহাদেব সাহ")
+    existing_category = Category.objects.create(name="কবিতা")
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+    book_category = existing_book.book_categories.model
+    book_category.objects.create(book=existing_book, category=existing_category, raw_value=existing_category.name)
+
+    duplicate = detect_metadata_duplicate(
+        {
+            "book_title": "শ্রেষ্ঠ কবিতা",
+            "author": "মহাদেব সাহ",
+            "book_type": "গল্প",
+        }
+    )
+
+    assert duplicate is None
+
+
+@pytest.mark.django_db
+def test_detect_metadata_duplicate_does_not_match_when_target_series_does_not_match_existing():
+    existing_book = Book.objects.create(title="শ্রেষ্ঠ কবিতা", state="ready", review_state="approved")
+    existing_author = Contributor.objects.create(name="মহাদেব সাহ")
+    existing_category = Category.objects.create(name="কবিতা")
+    existing_series = Series.objects.create(name="প্রথম খণ্ড")
+
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+    existing_book.book_categories.model.objects.create(
+        book=existing_book,
+        category=existing_category,
+        raw_value=existing_category.name,
+    )
+    existing_book.book_series.model.objects.create(
+        book=existing_book,
+        series=existing_series,
+        raw_value=existing_series.name,
+        sort_order=0,
+    )
+
+    duplicate = detect_metadata_duplicate(
+        {
+            "book_title": "শ্রেষ্ঠ কবিতা",
+            "author": "মহাদেব সাহ",
+            "book_type": "কবিতা",
+            "series": "দ্বিতীয় খণ্ড",
+        }
+    )
+
+    assert duplicate is None
+
+
+@pytest.mark.django_db
+def test_detect_metadata_duplicate_does_not_match_when_translators_differ():
+    existing_book = Book.objects.create(title="শ্রেষ্ঠ কবিতা", state="ready", review_state="approved")
+    existing_author = Contributor.objects.create(name="মহাদেব সাহ")
+    existing_translator = Contributor.objects.create(name="অনুবাদক এক")
+    existing_category = Category.objects.create(name="কবিতা")
+
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+    BookContributor.objects.create(book=existing_book, contributor=existing_translator, role="translator")
+    existing_book.book_categories.model.objects.create(
+        book=existing_book,
+        category=existing_category,
+        raw_value=existing_category.name,
+    )
+
+    duplicate = detect_metadata_duplicate(
+        {
+            "book_title": "শ্রেষ্ঠ কবিতা",
+            "author": "মহাদেব সাহ",
+            "book_type": "কবিতা",
+            "book_info": "<p>অনুবাদক: অনুবাদক দুই</p>",
+        }
+    )
+
+    assert duplicate is None
+
+
+@pytest.mark.django_db
+def test_find_exact_existing_book_does_not_match_when_translators_differ():
+    existing_book = Book.objects.create(
+        title="শ্রেষ্ঠ কবিতা",
+        source_site="ebanglalibrary.com",
+        state="ready",
+        review_state="approved",
+    )
+    existing_author = Contributor.objects.create(name="মহাদেব সাহ")
+    existing_translator = Contributor.objects.create(name="অনুবাদক এক")
+    existing_category = Category.objects.create(name="কবিতা")
+
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+    BookContributor.objects.create(book=existing_book, contributor=existing_translator, role="translator")
+    existing_book.book_categories.model.objects.create(
+        book=existing_book,
+        category=existing_category,
+        raw_value=existing_category.name,
+    )
+
+    matched = find_exact_existing_book(
+        {
+            "book_title": "শ্রেষ্ঠ কবিতা",
+            "author": "মহাদেব সাহ",
+            "book_type": "কবিতা",
+            "book_info": "<p>অনুবাদক: অনুবাদক দুই</p>",
+        }
+    )
+
+    assert matched is None
+
+
+@pytest.mark.django_db
+def test_title_submission_does_not_auto_fulfill_from_title_only_local_match(monkeypatch):
+    user = User.objects.create_user(email="title-only-local@example.com", password="strong-password-123")
+    existing_book = Book.objects.create(title="শ্রেষ্ঠ কবিতা", state="ready", review_state="approved")
+    existing_author = Contributor.objects.create(name="অন্য কবি")
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+
+    def fake_resolve_submission(submission, force_refresh=False):
+        submission.resolution_status = ResolutionStatus.UNRESOLVED
+        submission.status = SubmissionStatus.NEEDS_REVIEW
+        submission.review_state = ReviewState.NEEDS_REVIEW
+        submission.error_message = "No confident catalog match was found."
+        submission.save(update_fields=["resolution_status", "status", "review_state", "error_message", "updated_at"])
+        return submission
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.resolve_submission", fake_resolve_submission)
+
+    submission = create_submission_records(
+        submitter=user,
+        parsed_entries=[{"kind": "title", "value": "শ্রেষ্ঠ কবিতা"}],
+        auto_process=False,
+    )[0]
+
+    submission.refresh_from_db()
+    assert submission.linked_book_id is None
+    assert submission.status == SubmissionStatus.NEEDS_REVIEW
+    assert submission.raw_payload.get("served_from_database") is None
+
+
+@pytest.mark.django_db
+def test_process_submission_job_handles_missing_cover_url_without_db_null_violation(tmp_path, monkeypatch):
+    user = User.objects.create_user(email="cover-null@example.com", password="strong-password-123")
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/cover-null-book/",
+        normalized_input="cover null book",
+        resolved_url="https://www.ebanglalibrary.com/books/cover-null-book/",
+        resolution_status="resolved",
+        resolution_confidence=1.0,
+        status="queued",
+    )
+    job = ProcessingJob.objects.create(submission=submission)
+    output_dir = tmp_path / "legacy-output"
+
+    sample = {
+        "book_title": "কভারবিহীন বই",
+        "author": "লেখক এক",
+        "series": "",
+        "book_type": "",
+        "cover": None,
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [{"title": "অধ্যায় ১", "content": "<p>বিষয়বস্তু</p>", "type": "lesson", "parent": None}],
+        "output_folder": str(output_dir),
+    }
+
+    def fake_scrape_book(_url):
+        return sample
+
+    def fake_generate_exports(_book_data):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "book.html").write_text("<html><body>book</body></html>", encoding="utf-8")
+        (output_dir / "কভারবিহীন বই.epub").write_bytes(b"epub-bytes")
+        (output_dir / "book_cover.jpg").write_bytes(b"cover-bytes")
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.scrape_book", fake_scrape_book)
+    monkeypatch.setattr("apps.ingestion.services.submissions.generate_exports", fake_generate_exports)
+
+    process_submission_job(str(job.id))
+
+    book = Book.objects.get(title="কভারবিহীন বই")
+    assert book.cover_source_url == ""
 
 
 @pytest.mark.django_db
@@ -1809,8 +2158,14 @@ def test_public_submission_accepts_mixed_entries_and_reuses_existing_books(clien
     assert response.status_code == 201
     payload = response.json()
     assert len(payload) == 2
-    assert all(entry["served_from_database"] is True for entry in payload)
-    assert all(entry["linked_book_slug"] == existing_book.slug for entry in payload)
+    reused_entry = next(entry for entry in payload if entry["input_type"] == "url")
+    title_entry = next(entry for entry in payload if entry["input_type"] == "title")
+
+    assert reused_entry["served_from_database"] is True
+    assert reused_entry["linked_book_slug"] == existing_book.slug
+    assert title_entry["served_from_database"] is False
+    assert title_entry["linked_book_slug"] == ""
+    assert title_entry["status"] in {"queued", "processing", "needs_review", "ready"}
     assert PreviewAccessSession.objects.count() == 0
 
 
@@ -2159,7 +2514,7 @@ def test_url_submission_checks_database_first_and_returns_existing_book(client):
 
 
 @pytest.mark.django_db
-def test_title_submission_checks_database_first_and_returns_existing_book(client):
+def test_title_submission_requires_resolution_instead_of_local_title_only_reuse(client):
     user = User.objects.create_user(email="existing-title@example.com", password="strong-password-123")
     existing_book = Book.objects.create(title="একই বই", state="ready", review_state="approved")
     client.force_login(user)
@@ -2178,10 +2533,9 @@ def test_title_submission_checks_database_first_and_returns_existing_book(client
 
     assert response.status_code == 201
     payload = response.json()[0]
-    assert payload["status"] == "ready"
-    assert payload["served_from_database"] is True
-    assert payload["linked_book_slug"] == existing_book.slug
-    assert ProcessingJob.objects.count() == 0
+    assert payload["served_from_database"] is False
+    assert payload["linked_book_slug"] == ""
+    assert payload["status"] in {"queued", "processing", "needs_review", "ready"}
 
 
 @pytest.mark.django_db

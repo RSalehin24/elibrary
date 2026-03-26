@@ -320,7 +320,7 @@ def test_normalize_preview_book_sections_inserts_dedication_without_main_content
         assert dedication_text.startswith("পাঠক, আপনাকে")
 
 
-def test_normalize_preview_book_sections_uses_content_driven_dedication_title():
+def test_normalize_preview_book_sections_keeps_standard_dedication_title():
         soup = BeautifulSoup(
                 """
                 <html>
@@ -347,9 +347,42 @@ def test_normalize_preview_book_sections_uses_content_driven_dedication_title():
         dedication_title = soup.find("h2", class_="dedication-title")
         dedication_content = soup.find("div", class_="dedication-content")
         assert dedication_title is not None
-        assert dedication_title.get_text(strip=True) == "স্ট্যানলির স্মৃতির প্রতি"
+        assert dedication_title.get_text(strip=True) == "উৎসর্গ"
         assert dedication_content is not None
         assert "তোমাকে শ্রদ্ধা।" in dedication_content.get_text(" ", strip=True)
+
+
+def test_normalize_preview_book_sections_uses_english_dedication_heading_when_content_is_english():
+        soup = BeautifulSoup(
+                """
+                <html>
+                    <body>
+                        <div class='dedication-section'>
+                            <h2 class='dedication-title'>উৎসর্গ</h2>
+                            <div class='dedication-content'>
+                                <p>Dedication</p>
+                                <p>For everyone who kept reading.</p>
+                            </div>
+                        </div>
+                        <div class='main-content'>
+                            <p>Main content.</p>
+                        </div>
+                    </body>
+                </html>
+                """,
+                "html.parser",
+        )
+
+        updated = normalize_preview_book_sections(soup)
+
+        assert updated is True
+        dedication_title = soup.find("h2", class_="dedication-title")
+        dedication_content = soup.find("div", class_="dedication-content")
+        assert dedication_title is not None
+        assert dedication_title.get_text(strip=True) == "Dedication"
+        assert dedication_content is not None
+        assert "Dedication" not in dedication_content.get_text(" ", strip=True)
+        assert "For everyone who kept reading." in dedication_content.get_text(" ", strip=True)
 
 
 def test_normalize_preview_book_sections_extracts_leading_front_sections_from_main_content():

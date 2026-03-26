@@ -1,4 +1,11 @@
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import AppShell from "./layouts/AppShell";
 import AccessPage from "./pages/AccessPage";
 import BookDetailPage from "./pages/BookDetailPage";
@@ -17,6 +24,122 @@ import SeriesPage from "./pages/SeriesPage";
 import WriterPage from "./pages/WriterPage";
 import PageLoader from "./components/PageLoader";
 import { useSession } from "./hooks/useSession";
+import { useToast } from "./hooks/useToast";
+import { probeBackendHealth } from "./api/client";
+
+function SessionRestartHandler() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { expireSession } = useSession();
+
+  useEffect(() => {
+    function handleSessionExpired() {
+      expireSession("The application has restarted. Please log in again.");
+      toast.info("The application has restarted. Please log in again.");
+      if (location.pathname !== "/login") {
+        navigate("/login", {
+          replace: true,
+          state: { from: location.pathname, reason: "app-restarted" },
+        });
+      }
+    }
+
+    window.addEventListener("app:session-expired", handleSessionExpired);
+    return () =>
+      window.removeEventListener("app:session-expired", handleSessionExpired);
+  }, [expireSession, location.pathname, navigate, toast]);
+
+  return null;
+}
+
+function BackendStatusModal() {
+  const [status, setStatus] = useState(null);
+
+  useEffect(() => {
+    function handleBackendStatus(event) {
+      const detail = event.detail || {};
+      if (detail.state === "up") {
+        setStatus(null);
+        return;
+      }
+      if (detail.state === "down") {
+        setStatus({ mode: detail.mode || "outage" });
+      }
+    }
+
+    window.addEventListener("app:backend-status", handleBackendStatus);
+    return () => {
+      window.removeEventListener("app:backend-status", handleBackendStatus);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkHealth = async () => {
+      const healthy = await probeBackendHealth();
+      if (cancelled) {
+        return;
+      }
+      if (!healthy) {
+        setStatus((current) => current || { mode: "outage" });
+      } else {
+        setStatus(null);
+      }
+    };
+
+    checkHealth();
+    const healthInterval = window.setInterval(checkHealth, 6000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(healthInterval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!status) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setInterval(async () => {
+      const healthy = await probeBackendHealth();
+      if (healthy && !cancelled) {
+        setStatus(null);
+      }
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [status]);
+
+  if (!status) {
+    return null;
+  }
+
+  const waitingMessage =
+    status.mode === "restarting"
+      ? "Please wait a few minutes while the server restarts."
+      : "Please wait a few hours and try again.";
+
+  return (
+    <div className="backend-status-overlay" role="presentation">
+      <section
+        className="backend-status-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-live="assertive"
+      >
+        <h2>There is an error.</h2>
+        <p>{waitingMessage}</p>
+      </section>
+    </div>
+  );
+}
 
 function ProtectedRoute({ children }) {
   const { authenticated, loading, user } = useSession();
@@ -47,6 +170,8 @@ function ProtectedRoute({ children }) {
 export default function App() {
   return (
     <AppShell>
+      <SessionRestartHandler />
+      <BackendStatusModal />
       <Routes>
         <Route
           path="/"
@@ -148,13 +273,52 @@ export default function App() {
         />
         <Route
           path="/processing"
+          element={<Navigate to="/processing-my-requests" replace />}
+        />
+        <Route
+          path="/processing-my-requests"
           element={
             <ProtectedRoute>
-              <QueuePage />
+              <QueuePage sectionKey="my-requests" />
             </ProtectedRoute>
           }
         />
-        <Route path="/queue" element={<Navigate to="/processing" replace />} />
+        <Route
+          path="/processing-catalog-books"
+          element={
+            <ProtectedRoute>
+              <QueuePage sectionKey="catalog-books" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/processing-automation"
+          element={
+            <ProtectedRoute>
+              <QueuePage sectionKey="automation" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/processing-all-activity"
+          element={
+            <ProtectedRoute>
+              <QueuePage sectionKey="all-activity" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/processing-incomplete-check"
+          element={
+            <ProtectedRoute>
+              <QueuePage sectionKey="incomplete-monitor" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/queue"
+          element={<Navigate to="/processing-my-requests" replace />}
+        />
         <Route
           path="/books/:slug"
           element={

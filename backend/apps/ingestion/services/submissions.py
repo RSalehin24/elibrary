@@ -28,7 +28,6 @@ from apps.catalog.models import (
 from apps.catalog.services import (
     find_deleted_book_by_title,
     find_existing_book_by_source_url,
-    find_existing_book_by_title,
     replace_book_relations,
 )
 from apps.common.models import AuditLog, LifecycleState, ReviewState
@@ -62,6 +61,7 @@ from apps.ingestion.services.resolution import (
     fetch_source_page_metadata,
     upsert_source_catalog_entry,
 )
+from apps.common.text import normalize_catalog_text
 
 logger = logging.getLogger(__name__)
 
@@ -179,8 +179,33 @@ def cancel_processing_job(job, message=JOB_CANCEL_MESSAGE):
 
 def resume_processing_job(job):
     job = ProcessingJob.objects.select_related("submission").get(pk=job.pk)
-    if job.status != JobStatus.QUEUED:
-        raise ValueError("Only queued jobs can be resumed.")
+    if job.status not in {JobStatus.QUEUED, JobStatus.CANCELLED}:
+        raise ValueError("Only queued or stopped jobs can be resumed.")
+    if job.status == JobStatus.CANCELLED:
+        job.status = JobStatus.QUEUED
+        job.cancel_requested = False
+        job.task_id = ""
+        job.queue_name = ""
+        job.last_error = ""
+        job.started_at = None
+        job.finished_at = None
+        job.save(
+            update_fields=[
+                "status",
+                "cancel_requested",
+                "task_id",
+                "queue_name",
+                "last_error",
+                "started_at",
+                "finished_at",
+                "updated_at",
+            ]
+        )
+        if job.submission.status == SubmissionStatus.CANCELLED:
+            job.submission.status = SubmissionStatus.QUEUED
+            job.submission.error_message = ""
+            job.submission.save(update_fields=["status", "error_message", "updated_at"])
+            sync_deduplicated_submissions(job.submission)
     if job.cancel_requested:
         raise ValueError("This job has a pending stop request.")
     dispatch_processing_job(job, force=True)
@@ -559,18 +584,6 @@ def create_submission_records(submitter, parsed_entries, auto_process=True, orig
                 submission.error_message = str(exc)
                 submission.save()
         else:
-            existing_book = find_existing_book_by_title(entry["value"])
-            if existing_book:
-                create_local_resolution_attempt(submission, existing_book, confidence=1.0)
-                fulfill_submission_with_existing_book(
-                    submission,
-                    existing_book,
-                    source="title_match",
-                    confidence=1.0,
-                )
-                submissions.append(submission)
-                continue
-
             reusable_submission = find_reusable_submission(
                 normalized_input=submission.normalized_input,
                 exclude_submission_id=submission.id,
@@ -614,28 +627,154 @@ def create_submission_records(submitter, parsed_entries, auto_process=True, orig
 
 def detect_metadata_duplicate(scraped_data):
     target_title = scraped_data.get("book_title", "")
-    target_author = scraped_data.get("author", "")
+    normalized_scraped = normalize_scraped_book(scraped_data)
+    target_author_names = {
+        normalize_catalog_text(entry["name"])
+        for entry in normalized_scraped.get("contributors", [])
+        if entry.get("role") == ContributorRole.AUTHOR and normalize_catalog_text(entry.get("name", ""))
+    }
+    target_translator_names = {
+        normalize_catalog_text(entry["name"])
+        for entry in normalized_scraped.get("contributors", [])
+        if entry.get("role") == ContributorRole.TRANSLATOR and normalize_catalog_text(entry.get("name", ""))
+    }
+    target_category_names = {
+        normalize_catalog_text(value)
+        for value in normalized_scraped.get("categories", [])
+        if normalize_catalog_text(value)
+    }
+    target_series_names = {
+        normalize_catalog_text(value)
+        for value in normalized_scraped.get("series", [])
+        if normalize_catalog_text(value)
+    }
+
+    if not target_title:
+        return None
+
     books = Book.objects.filter(deleted_at__isnull=True).prefetch_related("book_contributors__contributor")
     for book in books:
         if not texts_are_similar(target_title, book.title):
             continue
 
-        existing_authors = [
-            relation.contributor.name
+        existing_author_names = {
+            normalize_catalog_text(relation.contributor.name)
             for relation in book.book_contributors.all()
-            if relation.role == "author"
-        ]
-        if not target_author or not existing_authors:
-            return book
+            if relation.role == ContributorRole.AUTHOR and normalize_catalog_text(relation.contributor.name)
+        }
+        existing_translator_names = {
+            normalize_catalog_text(relation.contributor.name)
+            for relation in book.book_contributors.all()
+            if relation.role == ContributorRole.TRANSLATOR and normalize_catalog_text(relation.contributor.name)
+        }
+        existing_category_names = {
+            normalize_catalog_text(relation.category.name)
+            for relation in book.book_categories.all()
+            if normalize_catalog_text(relation.category.name)
+        }
+        existing_series_names = {
+            normalize_catalog_text(relation.series.name)
+            for relation in book.book_series.all()
+            if normalize_catalog_text(relation.series.name)
+        }
 
-        if any(texts_are_similar(target_author, author) for author in existing_authors):
+        if (
+            not target_author_names
+            or not existing_author_names
+            or not target_category_names
+            or not existing_category_names
+        ):
+            continue
+
+        if not (target_category_names & existing_category_names):
+            continue
+
+        if target_series_names and not (target_series_names & existing_series_names):
+            continue
+
+        if target_translator_names and not (target_translator_names & existing_translator_names):
+            continue
+
+        if target_author_names & existing_author_names:
             return book
 
     return None
 
 
 def find_exact_existing_book(scraped_data):
-    return find_existing_book_by_title(scraped_data.get("book_title", ""))
+    normalized_title = normalize_catalog_text(scraped_data.get("book_title", ""))
+    if not normalized_title:
+        return None
+
+    candidate_books = (
+        Book.objects.filter(
+            source_site="ebanglalibrary.com",
+            normalized_title=normalized_title,
+            deleted_at__isnull=True,
+        )
+        .prefetch_related("book_contributors__contributor")
+        .order_by("-created_at")
+    )
+
+    normalized_scraped = normalize_scraped_book(scraped_data)
+    target_author_names = {
+        normalize_catalog_text(entry["name"])
+        for entry in normalized_scraped.get("contributors", [])
+        if entry.get("role") == ContributorRole.AUTHOR and normalize_catalog_text(entry.get("name", ""))
+    }
+    target_translator_names = {
+        normalize_catalog_text(entry["name"])
+        for entry in normalized_scraped.get("contributors", [])
+        if entry.get("role") == ContributorRole.TRANSLATOR and normalize_catalog_text(entry.get("name", ""))
+    }
+    target_category_names = {
+        normalize_catalog_text(value)
+        for value in normalized_scraped.get("categories", [])
+        if normalize_catalog_text(value)
+    }
+    target_series_names = {
+        normalize_catalog_text(value)
+        for value in normalized_scraped.get("series", [])
+        if normalize_catalog_text(value)
+    }
+
+    if not target_author_names or not target_category_names:
+        return None
+
+    for book in candidate_books:
+        existing_author_names = {
+            normalize_catalog_text(relation.contributor.name)
+            for relation in book.book_contributors.all()
+            if relation.role == ContributorRole.AUTHOR and normalize_catalog_text(relation.contributor.name)
+        }
+        existing_translator_names = {
+            normalize_catalog_text(relation.contributor.name)
+            for relation in book.book_contributors.all()
+            if relation.role == ContributorRole.TRANSLATOR and normalize_catalog_text(relation.contributor.name)
+        }
+        existing_category_names = {
+            normalize_catalog_text(relation.category.name)
+            for relation in book.book_categories.all()
+            if normalize_catalog_text(relation.category.name)
+        }
+        existing_series_names = {
+            normalize_catalog_text(relation.series.name)
+            for relation in book.book_series.all()
+            if normalize_catalog_text(relation.series.name)
+        }
+
+        if not existing_author_names or not existing_category_names:
+            continue
+        if not (target_category_names & existing_category_names):
+            continue
+        if target_series_names and not (target_series_names & existing_series_names):
+            continue
+        if target_translator_names and not (target_translator_names & existing_translator_names):
+            continue
+        if existing_author_names and target_author_names & existing_author_names:
+            return book
+
+    return None
 
 
 def calculate_checksum(path):
@@ -809,9 +948,8 @@ def sync_metadata_relations(book, normalized):
 def persist_scraped_book(submission, job, scraped_data, target_book=None):
     normalized = normalize_scraped_book(scraped_data)
     cleaned_dedication_html = clean_extracted_dedication_html(scraped_data.get("dedication", ""))
-    existing_book = target_book or find_existing_book_by_title(scraped_data["book_title"]) or find_deleted_book_by_title(
-        scraped_data["book_title"]
-    )
+    cover_source_url = scraped_data.get("cover") or ""
+    existing_book = target_book or find_deleted_book_by_title(scraped_data["book_title"])
     if existing_book:
         book = existing_book
         book.deleted_at = None
@@ -824,7 +962,7 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
         book.dedication_html = cleaned_dedication_html
         book.toc = scraped_data.get("toc", [])
         book.content_items = scraped_data.get("content_items", [])
-        book.cover_source_url = scraped_data.get("cover", "")
+        book.cover_source_url = cover_source_url
         book.save()
     else:
         book = Book.objects.create(
@@ -838,8 +976,9 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
             dedication_html=cleaned_dedication_html,
             toc=scraped_data.get("toc", []),
             content_items=scraped_data.get("content_items", []),
-            cover_source_url=scraped_data.get("cover", ""),
+            cover_source_url=cover_source_url,
         )
+
     sync_metadata_relations(book, normalized)
     BookSource.objects.update_or_create(
         normalized_source_url=normalize_source_url(submission.resolved_url),
@@ -868,7 +1007,7 @@ def export_payload_from_book(book, scraped_data):
         "author": author_names or scraped_data.get("author", ""),
         "series": series_names or scraped_data.get("series", ""),
         "book_type": category_names or scraped_data.get("book_type", ""),
-        "cover": book.cover_source_url or scraped_data.get("cover", ""),
+        "cover": book.cover_source_url or scraped_data.get("cover") or "",
         "main_content": book.main_content_html or "",
         "book_info": book.book_info_html or "",
         "dedication": book.dedication_html or "",
@@ -883,7 +1022,6 @@ def cancel_requested_for_job(job):
     return job.status == JobStatus.CANCELLED or job.cancel_requested
 
 
-@transaction.atomic
 def process_submission_job(job_id, retry_count=0, task_id=""):
     job = ProcessingJob.objects.select_related("submission", "submission__submitter", "book").get(pk=job_id)
     submission = job.submission

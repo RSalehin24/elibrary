@@ -8,7 +8,7 @@ export function SessionProvider({ children }) {
     loading: true,
     authenticated: false,
     user: null,
-    error: ""
+    error: "",
   });
 
   async function refreshSession() {
@@ -18,14 +18,14 @@ export function SessionProvider({ children }) {
         loading: false,
         authenticated: payload.authenticated,
         user: payload.user,
-        error: ""
+        error: "",
       });
     } catch (error) {
       setSession({
         loading: false,
         authenticated: false,
         user: null,
-        error: error.message
+        error: error.message,
       });
     }
   }
@@ -40,6 +40,15 @@ export function SessionProvider({ children }) {
     await refreshSession();
   }
 
+  function expireSession(errorMessage = "") {
+    setSession({
+      loading: false,
+      authenticated: false,
+      user: null,
+      error: errorMessage,
+    });
+  }
+
   useEffect(() => {
     refreshSession();
   }, []);
@@ -49,12 +58,15 @@ export function SessionProvider({ children }) {
       ...session,
       refreshSession,
       login,
-      logout
+      logout,
+      expireSession,
     }),
-    [session]
+    [session],
   );
 
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
+  );
 }
 
 export function useSession() {

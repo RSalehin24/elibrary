@@ -1,84 +1,107 @@
 const STATUS_META = {
   draft: {
     label: "Draft",
-    description: "This record is still being prepared."
+    description: "This record is still being prepared.",
   },
   processing: {
     label: "Processing",
-    description: "The system is still generating or organizing this book."
+    description: "The system is still generating or organizing this book.",
   },
   queued: {
     label: "Queued",
-    description: "This task is waiting to start."
+    description: "This task is waiting to start.",
   },
   ready: {
     label: "Ready",
-    description: "This book is ready to open and download."
+    description: "This book is ready to open and download.",
   },
   published: {
     label: "Published",
-    description: "This record has been finalized for readers."
+    description: "This record has been finalized for readers.",
   },
   archived: {
     label: "Archived",
-    description: "This record is kept for reference."
+    description: "This record is kept for reference.",
   },
   pending: {
     label: "Awaiting review",
-    description: "Metadata exists, but no one has reviewed it yet."
+    description: "Metadata exists, but no one has reviewed it yet.",
   },
   needs_review: {
     label: "Needs review",
-    description: "This record should be checked before users rely on it."
+    description: "This record should be checked before users rely on it.",
   },
   approved: {
     label: "Reviewed",
-    description: "Metadata has been reviewed and approved."
+    description: "Metadata has been reviewed and approved.",
   },
   rejected: {
     label: "Needs correction",
-    description: "A reviewer requested changes to this metadata."
+    description: "A reviewer requested changes to this metadata.",
   },
   pending_resolution: {
     label: "Resolving source",
-    description: "The system is still matching this submission to the right source."
+    description:
+      "The system is still matching this submission to the right source.",
   },
   ambiguous: {
     label: "Needs choice",
-    description: "More than one possible source matched this title."
+    description: "More than one possible source matched this title.",
   },
   failed: {
     label: "Failed",
-    description: "Something went wrong and needs attention."
+    description: "Something went wrong and needs attention.",
   },
   cancelled: {
-    label: "Cancelled",
-    description: "This task was stopped before it finished."
+    label: "Stopped",
+    description: "This task was stopped before it finished.",
+  },
+  stopped: {
+    label: "Stopped",
+    description: "This task was stopped before it finished.",
+  },
+  requeued: {
+    label: "Requeued",
+    description: "This item has been queued again for processing.",
   },
   duplicate: {
     label: "Duplicate",
-    description: "This request matches an existing book."
+    description: "This request matches an existing book.",
   },
   new: {
     label: "New",
-    description: "This source has not been created locally yet."
+    description: "This source has not been created locally yet.",
   },
   unfinished: {
     label: "Unfinished",
-    description: "This source still needs another processing pass."
+    description: "This source still needs another processing pass.",
   },
   deleted: {
     label: "Deleted",
-    description: "This source points to a deleted local book."
+    description: "This source points to a deleted local book.",
   },
   succeeded: {
     label: "Completed",
-    description: "The background job finished successfully."
-  }
+    description: "The background job finished successfully.",
+  },
 };
 
-const CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "compiler", "editor", "illustrator", "cover_artist", "publisher", "other"];
-const PRIMARY_CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "compiler", "editor"];
+const CONTRIBUTOR_ROLE_ORDER = [
+  "author",
+  "translator",
+  "compiler",
+  "editor",
+  "illustrator",
+  "cover_artist",
+  "publisher",
+  "other",
+];
+const PRIMARY_CONTRIBUTOR_ROLE_ORDER = [
+  "author",
+  "translator",
+  "compiler",
+  "editor",
+];
 const CONTRIBUTOR_ROLE_LABELS = {
   author: "",
   translator: "Translator",
@@ -87,11 +110,15 @@ const CONTRIBUTOR_ROLE_LABELS = {
   illustrator: "Illustration",
   cover_artist: "Cover",
   publisher: "Publisher",
-  other: "Contributor"
+  other: "Contributor",
 };
 
 function normalizeContributorName(value) {
-  return (value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+  return (value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function getNormalizedContributorEntries(book) {
@@ -120,12 +147,18 @@ function getNormalizedContributorEntries(book) {
     });
 
     return entries.filter(
-      (entry) => !(entry.role === "author" && nonAuthorNames.has(normalizeContributorName(entry.name)))
+      (entry) =>
+        !(
+          entry.role === "author" &&
+          nonAuthorNames.has(normalizeContributorName(entry.name))
+        ),
     );
   }
 
   if (book.authors?.length) {
-    return book.authors.filter(Boolean).map((name) => ({ name, role: "author" }));
+    return book.authors
+      .filter(Boolean)
+      .map((name) => ({ name, role: "author" }));
   }
 
   return [];
@@ -135,14 +168,14 @@ export function getStatusMeta(value) {
   if (!value) {
     return {
       label: "Unknown",
-      description: "No status is available yet."
+      description: "No status is available yet.",
     };
   }
 
   return (
     STATUS_META[value] || {
       label: value.replace(/_/g, " "),
-      description: ""
+      description: "",
     }
   );
 }
@@ -164,7 +197,7 @@ export function formatBookDate(value, options = {}) {
     year: "numeric",
     month: "short",
     day: "numeric",
-    ...options
+    ...options,
   }).format(new Date(value));
 }
 
@@ -178,7 +211,7 @@ export function formatBookDateTime(value) {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(new Date(value));
 }
 
@@ -203,16 +236,29 @@ export function getWriterColumnGroups(book) {
   const compilers = getContributorNamesByRole(book, "compiler");
   const editors = getContributorNamesByRole(book, "editor");
 
-  if (authors.length || translators.length || compilers.length || editors.length) {
+  if (
+    authors.length ||
+    translators.length ||
+    compilers.length ||
+    editors.length
+  ) {
     const groups = [];
     if (authors.length) {
       groups.push({ label: "", names: authors, queryKey: "author" });
     }
     if (translators.length) {
-      groups.push({ label: "Translator", names: translators, queryKey: "contributor" });
+      groups.push({
+        label: "Translator",
+        names: translators,
+        queryKey: "contributor",
+      });
     }
     if (compilers.length) {
-      groups.push({ label: "Compiler", names: compilers, queryKey: "contributor" });
+      groups.push({
+        label: "Compiler",
+        names: compilers,
+        queryKey: "contributor",
+      });
     }
     if (editors.length) {
       groups.push({ label: "Editor", names: editors, queryKey: "contributor" });
@@ -257,16 +303,24 @@ export function getContributorGroups(book) {
     }
   });
 
-  return CONTRIBUTOR_ROLE_ORDER.filter((role) => grouped.has(role)).map((role) => ({
-    role,
-    label: getContributorRoleLabel(role),
-    names: grouped.get(role)
-  }));
+  return CONTRIBUTOR_ROLE_ORDER.filter((role) => grouped.has(role)).map(
+    (role) => ({
+      role,
+      label: getContributorRoleLabel(role),
+      names: grouped.get(role),
+    }),
+  );
 }
 
 export function getPrimaryContributorGroup(book) {
   const groups = getContributorGroups(book);
-  return groups.find((group) => PRIMARY_CONTRIBUTOR_ROLE_ORDER.includes(group.role)) || groups[0] || null;
+  return (
+    groups.find((group) =>
+      PRIMARY_CONTRIBUTOR_ROLE_ORDER.includes(group.role),
+    ) ||
+    groups[0] ||
+    null
+  );
 }
 
 export function getContributorLine(book) {
@@ -276,14 +330,20 @@ export function getContributorLine(book) {
   }
 
   return groups
-    .map((group) => (group.label ? `${group.label}: ${group.names.join(", ")}` : group.names.join(", ")))
+    .map((group) =>
+      group.label
+        ? `${group.label}: ${group.names.join(", ")}`
+        : group.names.join(", "),
+    )
     .join(" · ");
 }
 
 export function getBookCardCaption(book) {
   const sourceTitle = book.primary_source?.source_title;
   const sourcePath = book.primary_source?.display_path;
-  return sourceTitle || sourcePath || "Source record will appear here after review";
+  return (
+    sourceTitle || sourcePath || "Source record will appear here after review"
+  );
 }
 
 export function getSourceLabel(source) {
@@ -291,7 +351,13 @@ export function getSourceLabel(source) {
     return "";
   }
 
-  return source.source_title || source.display_path || source.display_url || source.url || "";
+  return (
+    source.source_title ||
+    source.display_path ||
+    source.display_url ||
+    source.url ||
+    ""
+  );
 }
 
 export function getSourceHostLabel(source) {

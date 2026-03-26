@@ -51,6 +51,29 @@ def test_legacy_exports_inline_existing_cover_even_if_requested_extension_is_wro
     assert "book_cover.jog" not in html
 
 
+def test_legacy_exports_dedication_section_uses_standard_heading_and_clean_content(tmp_path):
+    book_data = {
+        "book_title": "রূপান্তর",
+        "author": "লেখক এক",
+        "series": "",
+        "book_type": "",
+        "cover": "",
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "<p>Dedication</p><p>For readers.</p>",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [{"title": "অধ্যায় ১", "content": "<p>বিষয়</p>", "type": "lesson", "parent": None}],
+        "output_folder": str(tmp_path),
+    }
+
+    generate_exports(book_data)
+
+    html = (Path(tmp_path) / "book.html").read_text(encoding="utf-8")
+    assert "<h2 class='dedication-title'>Dedication</h2>" in html
+    assert "<p>For readers.</p>" in html
+    assert "<p>Dedication</p>" not in html
+
+
 def test_legacy_scraper_extracts_leading_front_matter_without_dedication():
     scraper, _, _ = legacy_modules()
     main_content = """
