@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 import pytest
 import requests
+from django.db import IntegrityError
 from django.utils import timezone
 
 from apps.access.models import PreviewAccessSession
@@ -36,6 +37,7 @@ from apps.ingestion.services.curation import (
 )
 from apps.ingestion.pipeline import scraper as legacy_scraper
 from apps.ingestion.services.legacy_adapter import normalize_text
+from apps.ingestion.services.legacy_adapter import normalize_source_url
 from apps.ingestion.services.normalization import (
     clean_extracted_dedication_html,
     extract_main_content_segments,
@@ -1852,6 +1854,76 @@ def test_retrying_deleted_submission_clears_reused_state_and_queues_recreation(c
 
 
 @pytest.mark.django_db
+def test_bulk_retry_requeues_unique_submission_targets(client, monkeypatch):
+    user = User.objects.create_user(email="retry-bulk@example.com", password="strong-password-123")
+    canonical_submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/retry-bulk-root/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/retry-bulk-root/"),
+        resolved_url="https://www.ebanglalibrary.com/books/retry-bulk-root/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.FAILED,
+        error_message="Root failed.",
+    )
+    duplicate_submission = BookSubmission.objects.create(
+        submitter=user,
+        canonical_submission=canonical_submission,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/retry-bulk-root/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/retry-bulk-root/"),
+        resolved_url="https://www.ebanglalibrary.com/books/retry-bulk-root/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.FAILED,
+        error_message="Duplicate failed.",
+    )
+    independent_submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/retry-bulk-independent/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/retry-bulk-independent/"),
+        resolved_url="https://www.ebanglalibrary.com/books/retry-bulk-independent/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.FAILED,
+        error_message="Independent failed.",
+    )
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.dispatch_processing_job",
+        lambda queued_job, force=False: queued_job,
+    )
+
+    client.force_login(user)
+    response = client.post(
+        "/api/ingestion/submissions/bulk-retry/",
+        data=json.dumps(
+            {
+                "ids": [
+                    str(canonical_submission.id),
+                    str(duplicate_submission.id),
+                    str(independent_submission.id),
+                ]
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["queued_count"] == 2
+    assert payload["skipped_invalid"] == 0
+    assert payload["skipped_duplicate_targets"] == 1
+    assert payload["skipped_missing"] == 0
+
+    canonical_submission.refresh_from_db()
+    independent_submission.refresh_from_db()
+    assert canonical_submission.status == SubmissionStatus.QUEUED
+    assert independent_submission.status == SubmissionStatus.QUEUED
+    assert ProcessingJob.objects.filter(submission=canonical_submission, status=JobStatus.QUEUED).count() == 1
+    assert ProcessingJob.objects.filter(submission=independent_submission, status=JobStatus.QUEUED).count() == 1
+
+
+@pytest.mark.django_db
 def test_resume_cancelled_job_requeues_submission(client, monkeypatch):
     user = User.objects.create_user(email="resume-cancelled@example.com", password="strong-password-123")
     submission = BookSubmission.objects.create(
@@ -1996,6 +2068,187 @@ def test_find_exact_existing_book_requires_author_overlap_for_same_title():
     )
     assert matched_same_author is not None
     assert matched_same_author.id == existing_book.id
+
+
+@pytest.mark.django_db
+def test_process_submission_job_recovers_when_book_create_hits_source_title_unique_conflict(
+    tmp_path,
+    monkeypatch,
+):
+    user = User.objects.create_user(email="unique-conflict@example.com", password="strong-password-123")
+    source_url = "https://www.ebanglalibrary.com/books/unique-conflict-book/"
+    existing_book = Book.objects.create(
+        title="শ্রেষ্ঠ কবিতা",
+        source_site="ebanglalibrary.com",
+        state="ready",
+        review_state="approved",
+    )
+    existing_author = Contributor.objects.create(name="কবি এক")
+    existing_category = Category.objects.create(name="কবিতা")
+    BookContributor.objects.create(book=existing_book, contributor=existing_author, role="author")
+    existing_book.book_categories.model.objects.create(
+        book=existing_book,
+        category=existing_category,
+        raw_value=existing_category.name,
+    )
+    lookup_calls = {"count": 0}
+    normalized_source_url = normalize_source_url(source_url)
+
+    def staged_source_url_lookup(normalized_url):
+        lookup_calls["count"] += 1
+        if lookup_calls["count"] == 1:
+            return None
+        if normalized_url == normalized_source_url:
+            return existing_book
+        return None
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.find_existing_book_by_source_url", staged_source_url_lookup)
+
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input=source_url,
+        normalized_input=normalize_text(source_url),
+        resolved_url=source_url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        resolution_confidence=1.0,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(submission=submission)
+
+    sample = {
+        "book_title": "শ্রেষ্ঠ কবিতা",
+        "author": "কবি দুই",
+        "book_type": "গল্প",
+        "series": "",
+        "cover": "book_cover.jpg",
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [
+            {
+                "title": "অধ্যায় ১",
+                "content": "<p>বিষয়বস্তু</p>",
+                "type": "lesson",
+                "parent": None,
+            }
+        ],
+        "output_folder": str(tmp_path),
+    }
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.capture_source_page_metadata", lambda _url: None)
+    monkeypatch.setattr("apps.ingestion.services.submissions.scrape_book", lambda _url: sample)
+
+    def fake_generate_exports(book_data):
+        output_dir = Path(book_data["output_folder"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "book.html").write_text("<html><body>book</body></html>", encoding="utf-8")
+        (output_dir / "শ্রেষ্ঠ কবিতা.epub").write_bytes(b"epub-bytes")
+        (output_dir / "book_cover.jpg").write_bytes(b"cover-bytes")
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.generate_exports", fake_generate_exports)
+
+    original_create = Book.objects.create
+    conflict_raised = {"value": False}
+
+    def flaky_create(*args, **kwargs):
+        if not conflict_raised["value"] and kwargs.get("title") == "শ্রেষ্ঠ কবিতা":
+            conflict_raised["value"] = True
+            raise IntegrityError(
+                'duplicate key value violates unique constraint "uniq_book_source_normalized_title"'
+            )
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(Book.objects, "create", flaky_create)
+
+    process_submission_job(str(job.id))
+    submission.refresh_from_db()
+
+    assert conflict_raised["value"] is True
+    assert lookup_calls["count"] >= 2
+    assert submission.status == SubmissionStatus.READY
+    assert submission.linked_book_id == existing_book.id
+
+
+@pytest.mark.django_db
+def test_process_submission_job_does_not_reuse_same_title_book_when_source_url_differs(
+    tmp_path,
+    monkeypatch,
+):
+    user = User.objects.create_user(email="unique-title-only@example.com", password="strong-password-123")
+    existing_source_url = "https://www.ebanglalibrary.com/books/shared-title-old/"
+    incoming_source_url = "https://www.ebanglalibrary.com/books/shared-title-new/"
+
+    existing_book = Book.objects.create(
+        title="শ্রেষ্ঠ কবিতা",
+        source_site="ebanglalibrary.com",
+        state="ready",
+        review_state="approved",
+    )
+    BookSource.objects.create(
+        book=existing_book,
+        source_url=existing_source_url,
+        normalized_source_url=normalize_source_url(existing_source_url),
+        source_title=existing_book.title,
+    )
+
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input=incoming_source_url,
+        normalized_input=normalize_text(incoming_source_url),
+        resolved_url=incoming_source_url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        resolution_confidence=1.0,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(submission=submission)
+
+    sample = {
+        "book_title": "শ্রেষ্ঠ কবিতা",
+        "author": "কবি দুই",
+        "book_type": "গল্প",
+        "series": "",
+        "cover": "book_cover.jpg",
+        "main_content": "<p>মূল অংশ</p>",
+        "book_info": "",
+        "dedication": "",
+        "toc": [{"title": "অধ্যায় ১", "type": "lesson", "has_content": True}],
+        "content_items": [
+            {
+                "title": "অধ্যায় ১",
+                "content": "<p>বিষয়বস্তু</p>",
+                "type": "lesson",
+                "parent": None,
+            }
+        ],
+        "output_folder": str(tmp_path),
+    }
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.capture_source_page_metadata", lambda _url: None)
+    monkeypatch.setattr("apps.ingestion.services.submissions.scrape_book", lambda _url: sample)
+
+    original_create = Book.objects.create
+    conflict_raised = {"value": False}
+
+    def flaky_create(*args, **kwargs):
+        if not conflict_raised["value"] and kwargs.get("title") == "শ্রেষ্ঠ কবিতা":
+            conflict_raised["value"] = True
+            raise IntegrityError(
+                'duplicate key value violates unique constraint "uniq_book_source_normalized_title"'
+            )
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(Book.objects, "create", flaky_create)
+
+    with pytest.raises(IntegrityError, match="uniq_book_source_normalized_title"):
+        process_submission_job(str(job.id))
+
+    submission.refresh_from_db()
+    assert conflict_raised["value"] is True
+    assert submission.status == SubmissionStatus.FAILED
+    assert submission.linked_book_id is None
 
 
 @pytest.mark.django_db

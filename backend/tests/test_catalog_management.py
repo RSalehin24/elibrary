@@ -82,6 +82,23 @@ def test_book_slug_and_normalized_title_preserve_bengali_marks():
 
 
 @pytest.mark.django_db
+def test_book_allows_duplicate_titles_for_same_source_site():
+    first_book = Book.objects.create(title="শ্রেষ্ঠ কবিতা", state="ready", review_state="pending")
+    second_book = Book.objects.create(title="শ্রেষ্ঠ কবিতা", state="ready", review_state="pending")
+
+    assert first_book.normalized_title == "শ্রেষ্ঠ কবিতা"
+    assert second_book.normalized_title == "শ্রেষ্ঠ কবিতা"
+    assert first_book.slug != second_book.slug
+    assert (
+        Book.objects.filter(
+            source_site="ebanglalibrary.com",
+            normalized_title="শ্রেষ্ঠ কবিতা",
+        ).count()
+        == 2
+    )
+
+
+@pytest.mark.django_db
 def test_book_detail_lookup_accepts_legacy_slug_for_unicode_titles(client):
     user = User.objects.create_user(email="reader@example.com", password="strong-password-123")
     book = Book.objects.create(title="ম্যালিস", state="ready", review_state="pending")

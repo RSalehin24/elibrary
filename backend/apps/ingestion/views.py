@@ -66,6 +66,7 @@ from apps.ingestion.services.curation import (
     summarize_source_catalog_snapshots,
 )
 from apps.ingestion.services.submissions import (
+    can_manage_processing_records,
     cancel_processing_job,
     create_submission_records,
     ensure_preview_session,
@@ -74,6 +75,8 @@ from apps.ingestion.services.submissions import (
     queue_submission,
     recover_stale_processing_jobs,
     queue_reprocess_book,
+    retry_submission_record,
+    retry_submission_records,
     resume_processing_job,
     sync_deduplicated_submissions,
 )
@@ -371,20 +374,16 @@ def duplicate_reviews_ordered_queryset(queryset):
 
 def visible_submissions_queryset(user):
     queryset = submission_base_queryset()
-    if user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]):
+    if can_manage_processing_records(user):
         return queryset
     return queryset.filter(submitter=user)
 
 
 def visible_jobs_queryset(user):
     queryset = ProcessingJob.objects.select_related("submission", "submission__linked_book", "book")
-    if user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]):
+    if can_manage_processing_records(user):
         return queryset
     return queryset.filter(submission__submitter=user)
-
-
-def can_manage_processing_records(user):
-    return bool(user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]))
 
 
 def has_active_root_jobs(submission):
@@ -402,7 +401,7 @@ def get_accessible_submission(request, pk):
     submission = get_object_or_404(submission_base_queryset(), pk=pk)
     user = request.user
     if getattr(user, "is_authenticated", False):
-        if user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]):
+        if can_manage_processing_records(user):
             return submission
         if submission.submitter_id == user.id:
             return submission
@@ -746,6 +745,29 @@ class SubmissionBulkDeleteView(APIView):
         )
 
 
+class SubmissionBulkRetryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        requested_ids = serializer.validated_data["ids"]
+        submissions = list(visible_submissions_queryset(request.user).filter(pk__in=requested_ids))
+        locked_response = automation_manual_creation_locked_response()
+        if locked_response:
+            return locked_response
+
+        payload = retry_submission_records(submissions, request.user)
+
+        return Response(
+            {
+                **payload,
+                "skipped_missing": max(len(requested_ids) - len(submissions), 0),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
 class ProcessingJobBulkStopView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -835,55 +857,13 @@ class SubmissionRetryView(APIView):
 
     def post(self, request, pk):
         submission = visible_submissions_queryset(request.user).get(pk=pk)
-        target_submission = submission.canonical_submission or submission
-        previous_status = target_submission.status
-        previous_error_message = (target_submission.error_message or "").strip()
-        can_manage_processing = user_has_scope(request.user, [PermissionScope.PROCESSING_MANAGE])
-        if not request.user.is_staff and not can_manage_processing and submission.submitter_id != request.user.id:
-            raise PermissionDenied("You cannot retry this submission.")
-        if not target_submission.resolved_url and target_submission.input_type != "title":
-            return Response({"detail": "This submission does not have a resolved URL yet."}, status=status.HTTP_400_BAD_REQUEST)
         locked_response = automation_manual_creation_locked_response()
         if locked_response:
             return locked_response
-
-        update_fields = []
-        if target_submission.linked_book_id and target_submission.linked_book and target_submission.linked_book.deleted_at:
-            target_submission.linked_book = None
-            update_fields.append("linked_book")
-        if target_submission.duplicate_of_book_id and (
-            not target_submission.duplicate_of_book or target_submission.duplicate_of_book.deleted_at
-        ):
-            target_submission.duplicate_of_book = None
-            update_fields.append("duplicate_of_book")
-        if target_submission.error_message:
-            target_submission.error_message = ""
-            update_fields.append("error_message")
-        next_payload = dict(target_submission.raw_payload or {})
-        payload_changed = False
-        next_payload["requeued"] = True
-        next_payload["requeued_at"] = timezone.now().isoformat()
-        next_payload["requeue_requested_by"] = str(request.user.id)
-        next_payload["requeue_reason"] = previous_error_message or f"Retry requested from status: {previous_status}."
-        payload_changed = True
-        for key in ("served_from_database", "existing_book_source", "linked_book_slug"):
-            if key in next_payload:
-                next_payload.pop(key, None)
-            payload_changed = True
-        if payload_changed:
-            target_submission.raw_payload = next_payload
-            update_fields.append("raw_payload")
-        if target_submission.review_state != ReviewState.PENDING:
-            target_submission.review_state = ReviewState.PENDING
-            update_fields.append("review_state")
-        if target_submission.status not in {SubmissionStatus.QUEUED, SubmissionStatus.PROCESSING}:
-            target_submission.status = SubmissionStatus.QUEUED
-            update_fields.append("status")
-        if update_fields:
-            target_submission.save(update_fields=[*dict.fromkeys(update_fields), "updated_at"])
-            sync_deduplicated_submissions(target_submission)
-
-        job = queue_submission(target_submission, actor=request.user)
+        try:
+            job = retry_submission_record(submission, request.user)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(ProcessingJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
 

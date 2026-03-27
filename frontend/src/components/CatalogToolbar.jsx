@@ -74,6 +74,7 @@ export function CatalogSearchRow({
   setFiltersExpanded,
   searchPlaceholder,
   resultCount,
+  resultCountLoading = false,
   drawerId,
   compact = false,
   className = "",
@@ -158,14 +159,17 @@ export function CatalogSearchRow({
           </button>
         ) : null}
         {showResultCount &&
-        resultCount !== "" &&
-        resultCount !== undefined &&
-        resultCount !== null ? (
+        (resultCountLoading ||
+          (resultCount !== "" &&
+            resultCount !== undefined &&
+            resultCount !== null)) ? (
           <span
-            className="catalog-result-count"
-            aria-label={`${resultCount} results`}
+            className={`catalog-result-count${resultCountLoading ? " is-loading" : ""}`}
+            aria-label={
+              resultCountLoading ? "Loading results" : `${resultCount} results`
+            }
           >
-            {resultCount}
+            {resultCountLoading ? <LoadingSpinner size={14} /> : resultCount}
           </span>
         ) : null}
         {actionsExtra ? (
@@ -187,6 +191,7 @@ export default function CatalogToolbar({
   onReset,
   searchPlaceholder,
   resultCount,
+  resultCountLoading = false,
   secondaryContent = null,
   submitLabel = "Apply filters",
   inline = false,
@@ -222,6 +227,7 @@ export default function CatalogToolbar({
       setFiltersExpanded={setFiltersExpanded}
       searchPlaceholder={searchPlaceholder}
       resultCount={resultCount}
+      resultCountLoading={resultCountLoading}
       drawerId={drawerId}
       compact={searchRowCompact}
       className={searchRowClassName}

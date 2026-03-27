@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import BookRouteLink from "../components/BookRouteLink";
 import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import EmptyState from "../components/EmptyState";
 import LoadingSpinner from "../components/LoadingSpinner";
+import ProcessingJobReviewCard from "../components/ProcessingJobReviewCard";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -42,29 +42,6 @@ const ALL_LOAD_SCOPES = [
   LOAD_SCOPE_INCOMPLETE_BROWSE,
   LOAD_SCOPE_INCOMPLETE_OVERVIEW,
 ];
-
-const TAB_TO_ROUTE = {
-  [USER_TAB]: "/processing-my-requests",
-  [SOURCE_TAB]: "/processing-catalog-books",
-  [AUTOMATION_TAB]: "/processing-automation",
-  [ALL_TAB]: "/processing-all-activity",
-  [INCOMPLETE_TAB]: "/processing-incomplete-check",
-};
-
-const SECTION_TO_TAB = {
-  "my-requests": USER_TAB,
-  "catalog-books": SOURCE_TAB,
-  automation: AUTOMATION_TAB,
-  "all-activity": ALL_TAB,
-  "incomplete-monitor": INCOMPLETE_TAB,
-};
-
-function normalizeQueueTab(tab, canManageProcessing) {
-  const allowedTabs = canManageProcessing
-    ? [USER_TAB, SOURCE_TAB, AUTOMATION_TAB, ALL_TAB, INCOMPLETE_TAB]
-    : [USER_TAB];
-  return allowedTabs.includes(tab) ? tab : USER_TAB;
-}
 
 const defaultSubmissionFilters = {
   q: "",
@@ -347,15 +324,6 @@ function getOriginForTab(tab) {
   return "";
 }
 
-function tabFromSection(section, canManageProcessing) {
-  const mapped = SECTION_TO_TAB[(section || "").trim()] || USER_TAB;
-  return normalizeQueueTab(mapped, canManageProcessing);
-}
-
-function routeFromTab(tab) {
-  return TAB_TO_ROUTE[tab] || TAB_TO_ROUTE[USER_TAB];
-}
-
 function normalizeStatusForApi(value) {
   return value === "stopped" ? "cancelled" : value;
 }
@@ -477,6 +445,20 @@ function toggleVisibleSelection(currentIds, visibleIds, allSelected) {
 
 function selectedActionLabel(label, count) {
   return count ? `${label} (${count})` : label;
+}
+
+function getUniqueSubmissionIds(jobRows, selectedJobIdSet = null) {
+  return Array.from(
+    new Set(
+      (jobRows || [])
+        .filter(
+          (job) =>
+            job.submission_id &&
+            (!selectedJobIdSet || selectedJobIdSet.has(job.id)),
+        )
+        .map((job) => job.submission_id),
+    ),
+  );
 }
 
 function isUrlValue(value) {
@@ -747,7 +729,9 @@ function QueueTableCard({
   );
   const countPill =
     count !== undefined && count !== null ? (
-      <span className="processing-card-count">{count}</span>
+      <span className="processing-card-count">
+        {loading ? <LoadingSpinner size={14} /> : count}
+      </span>
     ) : null;
   const shellContent = loading
     ? renderProcessingCardLoader(
@@ -784,12 +768,11 @@ function QueueTableCard({
   );
 }
 
-export default function QueuePage({ sectionKey = "my-requests" }) {
+export default function ProcessingIncompleteAutomationPage() {
   const { user } = useSession();
   const toast = useToast();
-  const navigate = useNavigate();
   const canManageProcessing = hasCapability(user, "processing:manage");
-  const [activeTab, setActiveTab] = useState(USER_TAB);
+  const activeTab = INCOMPLETE_TAB;
   const [jobs, setJobs] = useState([]);
   const [jobReviewRows, setJobReviewRows] = useState([]);
   const [submissions, setSubmissions] = useState([]);
@@ -829,6 +812,10 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   const [selectedSubmissionIds, setSelectedSubmissionIds] = useState([]);
   const [selectedJobIds, setSelectedJobIds] = useState([]);
   const [selectedCatalogEntryIds, setSelectedCatalogEntryIds] = useState([]);
+  const [selectedFailedCatalogEntryIds, setSelectedFailedCatalogEntryIds] =
+    useState([]);
+  const [selectedRequeuedCatalogEntryIds, setSelectedRequeuedCatalogEntryIds] =
+    useState([]);
   const [selectedRunIds, setSelectedRunIds] = useState([]);
   const [selectedIncompleteBookIds, setSelectedIncompleteBookIds] = useState(
     [],
@@ -883,26 +870,16 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   const [stoppingCatalogSync, setStoppingCatalogSync] = useState(false);
   const [catalogSyncDismissed, setCatalogSyncDismissed] = useState(false);
 
-  const tabs = useMemo(
-    () =>
-      canManageProcessing
-        ? [
-            { id: USER_TAB, label: "My Requests" },
-            { id: SOURCE_TAB, label: "Catalog Books" },
-            { id: AUTOMATION_TAB, label: "Automation" },
-            { id: ALL_TAB, label: "All Activity" },
-            { id: INCOMPLETE_TAB, label: "Incomplete Automation" },
-          ]
-        : [{ id: USER_TAB, label: "My Requests" }],
+  const defaultScopes = useMemo(
+    () => [
+      LOAD_SCOPE_JOB_REVIEWS,
+      LOAD_SCOPE_CATALOG_OVERVIEW,
+      LOAD_SCOPE_INCOMPLETE_BROWSE,
+      LOAD_SCOPE_INCOMPLETE_OVERVIEW,
+      ...(canManageProcessing ? [LOAD_SCOPE_RUNS, LOAD_SCOPE_AUTOMATION] : []),
+    ],
     [canManageProcessing],
   );
-
-  useEffect(() => {
-    const normalizedTab = tabFromSection(sectionKey, canManageProcessing);
-    if (activeTab !== normalizedTab) {
-      setActiveTab(normalizedTab);
-    }
-  }, [activeTab, canManageProcessing, sectionKey]);
 
   const globalActionsLocked = Boolean(
     busyActionId ||
@@ -911,56 +888,13 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     bulkActionKey ||
     confirmLoading ||
     creatingCatalog ||
-    savingAutomation ||
-    stoppingCatalogSync,
+    savingAutomation,
   );
-  const catalogSyncActive = isCatalogSyncActive(catalogSyncState?.status);
-  const refreshingCatalog = catalogSyncActive && !catalogSyncDismissed;
-  const automationRunning = isActiveStatus(automationState?.latest_run?.status);
-  const sourceTabButtonsDisabled =
-    (activeTab === SOURCE_TAB && refreshingCatalog) || globalActionsLocked;
-  const catalogActionsDisabled = refreshingCatalog || automationRunning;
-  const creationActionsDisabled = sourceTabButtonsDisabled || automationRunning;
-  const catalogActionDisabledReason = automationRunning
-    ? "Disabled while scheduled automation is syncing the catalog and creating books."
-    : refreshingCatalog
-      ? "Disabled while catalog sync is running."
-      : "";
+  const sourceTabButtonsDisabled = globalActionsLocked;
+  const creationActionsDisabled = globalActionsLocked;
 
-  function getScopesForTab(tab) {
-    const scopes = [LOAD_SCOPE_JOB_REVIEWS];
-
-    if (
-      [USER_TAB, SOURCE_TAB, AUTOMATION_TAB, ALL_TAB].includes(tab)
-    ) {
-      scopes.push(LOAD_SCOPE_SUBMISSIONS, LOAD_SCOPE_JOBS);
-    }
-
-    if (
-      canManageProcessing &&
-      [USER_TAB, SOURCE_TAB, AUTOMATION_TAB, ALL_TAB].includes(tab)
-    ) {
-      scopes.push(LOAD_SCOPE_REVIEWS);
-    }
-
-    if (tab === SOURCE_TAB) {
-      scopes.push(LOAD_SCOPE_CATALOG_BROWSE, LOAD_SCOPE_CATALOG_OVERVIEW);
-    }
-
-    if (
-      canManageProcessing &&
-      [AUTOMATION_TAB, ALL_TAB, INCOMPLETE_TAB].includes(tab)
-    ) {
-      scopes.push(LOAD_SCOPE_RUNS, LOAD_SCOPE_AUTOMATION);
-    } else if (canManageProcessing) {
-      scopes.push(LOAD_SCOPE_AUTOMATION);
-    }
-
-    if (tab === INCOMPLETE_TAB) {
-      scopes.push(LOAD_SCOPE_INCOMPLETE_BROWSE, LOAD_SCOPE_INCOMPLETE_OVERVIEW);
-    }
-
-    return scopes;
+  function getScopesForTab() {
+    return defaultScopes;
   }
 
   function setScopeLoading(scopes, isLoading) {
@@ -1258,11 +1192,6 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     }
   }
 
-  useEffect(() => {
-    if (!canManageProcessing && activeTab !== USER_TAB) {
-      navigate(routeFromTab(USER_TAB), { replace: true });
-    }
-  }, [activeTab, canManageProcessing, navigate]);
 
   useEffect(() => {
     load({ nextTab: activeTab }).catch(() => {});
@@ -1315,6 +1244,8 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     setSelectedSubmissionIds([]);
     setSelectedJobIds([]);
     setSelectedCatalogEntryIds([]);
+    setSelectedFailedCatalogEntryIds([]);
+    setSelectedRequeuedCatalogEntryIds([]);
     setSelectedRunIds([]);
     setSelectedIncompleteBookIds([]);
     setSelectedRequeueJobIds([]);
@@ -1322,12 +1253,6 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     setSelectedDuplicateReviewIds([]);
     setCatalogSyncDismissed(false);
   }, [activeTab]);
-
-  useEffect(() => {
-    if (!catalogSyncActive) {
-      setCatalogSyncDismissed(false);
-    }
-  }, [catalogSyncActive]);
 
   useEffect(() => {
     setSelectedSubmissionIds((current) =>
@@ -1348,6 +1273,29 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       current.filter((id) => curationRuns.some((run) => run.id === id)),
     );
   }, [curationRuns]);
+
+  useEffect(() => {
+    setSelectedFailedCatalogEntryIds((current) =>
+      current.filter((id) =>
+        catalogOverviewEntries.some(
+          (entry) =>
+            entry.id === id &&
+            entry.curation_status === "failed" &&
+            canCreateCatalogEntry(entry),
+        ),
+      ),
+    );
+    setSelectedRequeuedCatalogEntryIds((current) =>
+      current.filter((id) =>
+        catalogOverviewEntries.some(
+          (entry) =>
+            entry.id === id &&
+            entry.curation_status === "requeued" &&
+            canCreateCatalogEntry(entry),
+        ),
+      ),
+    );
+  }, [catalogOverviewEntries]);
 
   useEffect(() => {
     setSelectedIncompleteBookIds((current) =>
@@ -1488,21 +1436,23 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     const uniqueIds = Array.from(
       new Set((submissionIds || []).filter(Boolean)),
     );
-    if (!uniqueIds.length) {
+    if (!uniqueIds.length || creationActionsDisabled) {
       return;
     }
 
     setBulkActionKey(actionKey);
     try {
-      let queuedCount = 0;
-      for (const submissionId of uniqueIds) {
-        await apiFetch(`/ingestion/submissions/${submissionId}/retry/`, {
-          method: "POST",
-          body: {},
-        });
-        queuedCount += 1;
-      }
-      toast.success(`${queuedCount} requests queued.`);
+      const payload = await apiFetch("/ingestion/submissions/bulk-retry/", {
+        method: "POST",
+        body: { ids: uniqueIds },
+      });
+      toast.success(
+        summarizeResponse(payload, {
+          queued_count: "queued",
+          skipped_duplicate_targets: "grouped",
+          skipped_invalid: "skipped",
+        }) || "Requests queued.",
+      );
       await reloadCurrent();
     } catch (nextError) {
       toast.error(nextError.message);
@@ -1633,130 +1583,6 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     }
   }
 
-  async function refreshCatalog() {
-    if (automationRunning) {
-      return;
-    }
-    if (refreshingCatalog) {
-      return;
-    }
-
-    try {
-      setCatalogSyncDismissed(false);
-      const payload = await apiFetch("/ingestion/catalog/refresh/", {
-        method: "POST",
-        body: { max_pages: 80 },
-      });
-      setCatalogSyncState(payload);
-      await reloadCurrent({ silent: true });
-    } catch (nextError) {
-      toast.error(nextError.message);
-    }
-  }
-
-  async function stopCatalogRefresh() {
-    if (!refreshingCatalog || stoppingCatalogSync) {
-      return;
-    }
-
-    const previousSyncState = catalogSyncState;
-    setStoppingCatalogSync(true);
-    setCatalogSyncDismissed(true);
-    setCatalogSyncState((current) =>
-      current
-        ? {
-            ...current,
-            status: "idle",
-            task_id: "",
-            queue_name: "",
-            finished_at: new Date().toISOString(),
-          }
-        : current,
-    );
-    try {
-      const payload = await apiFetch("/ingestion/catalog/refresh/stop/", {
-        method: "POST",
-        body: {},
-      });
-      setCatalogSyncState(payload);
-      await reloadCurrent({ silent: true });
-    } catch (nextError) {
-      setCatalogSyncDismissed(false);
-      setCatalogSyncState(previousSyncState);
-      toast.error(nextError.message);
-      await reloadCurrent({ silent: true }).catch(() => {});
-    } finally {
-      setStoppingCatalogSync(false);
-    }
-  }
-
-  async function queueCatalogBooks(entryIds, rowId = "", mode = "") {
-    if (catalogActionsDisabled) {
-      return;
-    }
-    if (!entryIds.length || creatingCatalog) {
-      return;
-    }
-
-    const creatableEntryIds = entryIds.filter((id) => {
-      const entry = catalogEntries.find(
-        (catalogEntry) => catalogEntry.id === id,
-      );
-      return !entry || canCreateCatalogEntry(entry);
-    });
-
-    if (creatableEntryIds.length !== entryIds.length) {
-      const skippedIds = new Set(
-        entryIds.filter((id) => !creatableEntryIds.includes(id)),
-      );
-      setSelectedCatalogEntryIds((current) =>
-        current.filter((id) => !skippedIds.has(id)),
-      );
-    }
-
-    if (!creatableEntryIds.length) {
-      toast.info(
-        "Only new, failed, stopped, requeued, or unfinished catalog rows can be created.",
-      );
-      return;
-    }
-
-    if (rowId) {
-      setBusyActionId(rowId);
-    } else {
-      setCreatingCatalog(true);
-      setCatalogActionMode(mode || "all");
-    }
-
-    try {
-      const payload = await apiFetch(
-        "/ingestion/catalog/entries/create-books/",
-        {
-          method: "POST",
-          body: { ids: creatableEntryIds },
-        },
-      );
-      toast.success(
-        summarizeResponse(payload, {
-          queued_creates: "create",
-          queued_updates: "update",
-          skipped_processing: "busy",
-        }) || "Book creation queued.",
-      );
-      setSelectedCatalogEntryIds([]);
-      await reloadCurrent();
-    } catch (nextError) {
-      toast.error(nextError.message);
-    } finally {
-      if (rowId) {
-        setBusyActionId("");
-      } else {
-        setCreatingCatalog(false);
-        setCatalogActionMode("");
-      }
-    }
-  }
-
   async function queueIncompleteBooks(bookIds) {
     if (creationActionsDisabled || !bookIds.length || creatingCatalog) {
       return;
@@ -1785,6 +1611,76 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     } finally {
       setCreatingCatalog(false);
       setCatalogActionMode("");
+    }
+  }
+
+  async function queueCatalogStatusBooks(
+    entryIds,
+    { rowId = "", mode = "", clearSelection = null } = {},
+  ) {
+    if (creationActionsDisabled) {
+      return;
+    }
+    if (!entryIds.length || creatingCatalog) {
+      return;
+    }
+
+    const creatableEntryIds = entryIds.filter((id) => {
+      const entry = catalogOverviewEntries.find(
+        (catalogEntry) => catalogEntry.id === id,
+      );
+      return !entry || canCreateCatalogEntry(entry);
+    });
+
+    if (creatableEntryIds.length !== entryIds.length && clearSelection) {
+      const skippedIds = new Set(
+        entryIds.filter((id) => !creatableEntryIds.includes(id)),
+      );
+      clearSelection((current) =>
+        current.filter((id) => !skippedIds.has(id)),
+      );
+    }
+
+    if (!creatableEntryIds.length) {
+      toast.info(
+        "Only new, failed, stopped, requeued, or unfinished catalog rows can be created.",
+      );
+      return;
+    }
+
+    if (rowId) {
+      setBusyActionId(rowId);
+    } else {
+      setCreatingCatalog(true);
+      setCatalogActionMode(mode || "catalog-status");
+    }
+
+    try {
+      const payload = await apiFetch(
+        "/ingestion/catalog/entries/create-books/",
+        {
+          method: "POST",
+          body: { ids: creatableEntryIds },
+        },
+      );
+      toast.success(
+        summarizeResponse(payload, {
+          queued_creates: "create",
+          queued_updates: "update",
+          skipped_processing: "busy",
+        }) || "Book creation queued.",
+      );
+      clearSelection?.([]);
+      await reloadCurrent();
+    } catch (nextError) {
+      toast.error(nextError.message);
+    } finally {
+      if (rowId) {
+        setBusyActionId("");
+      } else {
+        setCreatingCatalog(false);
+        setCatalogActionMode("");
+      }
     }
   }
 
@@ -1995,6 +1891,56 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   const allCatalogSelected =
     creatableCatalogEntryIdsOnPage.length > 0 &&
     selectedCatalogCountOnPage === creatableCatalogEntryIdsOnPage.length;
+  const failedCatalogEntries = useMemo(
+    () =>
+      catalogOverviewEntries.filter((entry) => entry.curation_status === "failed"),
+    [catalogOverviewEntries],
+  );
+  const requeuedCatalogEntries = useMemo(
+    () =>
+      catalogOverviewEntries.filter(
+        (entry) => entry.curation_status === "requeued",
+      ),
+    [catalogOverviewEntries],
+  );
+  const selectedFailedCatalogIdSet = useMemo(
+    () => new Set(selectedFailedCatalogEntryIds),
+    [selectedFailedCatalogEntryIds],
+  );
+  const selectedRequeuedCatalogIdSet = useMemo(
+    () => new Set(selectedRequeuedCatalogEntryIds),
+    [selectedRequeuedCatalogEntryIds],
+  );
+  const failedCatalogEntryIdsOnPage = useMemo(
+    () =>
+      failedCatalogEntries
+        .filter((entry) => canCreateCatalogEntry(entry))
+        .map((entry) => entry.id),
+    [failedCatalogEntries],
+  );
+  const requeuedCatalogEntryIdsOnPage = useMemo(
+    () =>
+      requeuedCatalogEntries
+        .filter((entry) => canCreateCatalogEntry(entry))
+        .map((entry) => entry.id),
+    [requeuedCatalogEntries],
+  );
+  const selectedFailedCatalogCount = selectedFailedCatalogEntryIds.length;
+  const selectedFailedCatalogCountOnPage = failedCatalogEntryIdsOnPage.filter(
+    (id) => selectedFailedCatalogIdSet.has(id),
+  ).length;
+  const selectedRequeuedCatalogCount = selectedRequeuedCatalogEntryIds.length;
+  const selectedRequeuedCatalogCountOnPage =
+    requeuedCatalogEntryIdsOnPage.filter((id) =>
+      selectedRequeuedCatalogIdSet.has(id),
+    ).length;
+  const allFailedCatalogSelected =
+    failedCatalogEntryIdsOnPage.length > 0 &&
+    selectedFailedCatalogCountOnPage === failedCatalogEntryIdsOnPage.length;
+  const allRequeuedCatalogSelected =
+    requeuedCatalogEntryIdsOnPage.length > 0 &&
+    selectedRequeuedCatalogCountOnPage ===
+      requeuedCatalogEntryIdsOnPage.length;
 
   const selectedRunIdSet = useMemo(
     () => new Set(selectedRunIds),
@@ -2056,33 +2002,17 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     () => filteredRequeuedJobs.map((job) => job.id),
     [filteredRequeuedJobs],
   );
-  const selectedRequeueCount = selectedRequeueJobIds.length;
   const selectedRequeueCountOnPage = requeueJobIdsOnPage.filter((id) =>
     selectedRequeueJobIdSet.has(id),
   ).length;
   const allRequeueSelected =
     filteredRequeuedJobs.length > 0 &&
     selectedRequeueCountOnPage === filteredRequeuedJobs.length;
-  const selectedRequeueResumeIds = filteredRequeuedJobs
-    .filter(
-      (job) =>
-        selectedRequeueJobIdSet.has(job.id) &&
-        job.status === "queued" &&
-        !job.task_id,
-    )
-    .map((job) => job.id);
-  const selectedRequeueStopIds = filteredRequeuedJobs
-    .filter(
-      (job) =>
-        selectedRequeueJobIdSet.has(job.id) && isActiveStatus(job.status),
-    )
-    .map((job) => job.id);
-  const requeueResumeIds = filteredRequeuedJobs
-    .filter((job) => job.status === "queued" && !job.task_id)
-    .map((job) => job.id);
-  const requeueStopIds = filteredRequeuedJobs
-    .filter((job) => isActiveStatus(job.status))
-    .map((job) => job.id);
+  const selectedRequeueSubmissionIds = getUniqueSubmissionIds(
+    filteredRequeuedJobs,
+    selectedRequeueJobIdSet,
+  );
+  const requeueSubmissionIds = getUniqueSubmissionIds(filteredRequeuedJobs);
 
   const selectedFailedJobIdSet = useMemo(
     () => new Set(selectedFailedJobIds),
@@ -2092,20 +2022,17 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     () => filteredFailedJobs.map((job) => job.id),
     [filteredFailedJobs],
   );
-  const selectedFailedCount = selectedFailedJobIds.length;
   const selectedFailedCountOnPage = failedJobIdsOnPage.filter((id) =>
     selectedFailedJobIdSet.has(id),
   ).length;
   const allFailedSelected =
     filteredFailedJobs.length > 0 &&
     selectedFailedCountOnPage === filteredFailedJobs.length;
-  const selectedFailedSubmissionIds = filteredFailedJobs
-    .filter((job) => selectedFailedJobIdSet.has(job.id))
-    .map((job) => job.submission_id)
-    .filter(Boolean);
-  const failedSubmissionIds = filteredFailedJobs
-    .map((job) => job.submission_id)
-    .filter(Boolean);
+  const selectedFailedSubmissionIds = getUniqueSubmissionIds(
+    filteredFailedJobs,
+    selectedFailedJobIdSet,
+  );
+  const failedSubmissionIds = getUniqueSubmissionIds(filteredFailedJobs);
 
   const selectedDuplicateReviewIdSet = useMemo(
     () => new Set(selectedDuplicateReviewIds),
@@ -2293,6 +2220,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     setFiltersExpanded,
     searchPlaceholder,
     resultCount,
+    resultCountLoading = false,
     drawerId,
     onSubmit,
     onSearchClear,
@@ -2308,6 +2236,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         setFiltersExpanded={setFiltersExpanded}
         searchPlaceholder={searchPlaceholder}
         resultCount={resultCount}
+        resultCountLoading={resultCountLoading}
         drawerId={drawerId}
         compact
         onSubmit={onSubmit}
@@ -2334,6 +2263,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           setFiltersExpanded: setSubmissionFiltersExpanded,
           searchPlaceholder: "Search requests",
           resultCount: submissions.length,
+          resultCountLoading: submissionsLoading,
           drawerId: `${activeTab}-submission-filters`,
           onSubmit: (event, nextFilters) => {
             event.preventDefault();
@@ -2747,6 +2677,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           setFiltersExpanded: setJobFiltersExpanded,
           searchPlaceholder: "Search book creation",
           resultCount: jobs.length,
+          resultCountLoading: jobsLoading,
           drawerId: `${activeTab}-job-filters`,
           onSubmit: (event, nextFilters) => {
             event.preventDefault();
@@ -3130,6 +3061,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           setFiltersExpanded: setReviewFiltersExpanded,
           searchPlaceholder: "Search duplicate checks",
           resultCount: duplicateReviews.length,
+          resultCountLoading: reviewsLoading,
           drawerId: `${activeTab}-review-filters`,
           onSubmit: (event, nextFilters) => {
             event.preventDefault();
@@ -3377,15 +3309,11 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
   }
 
   function renderRequeueReviewCard() {
-    const activeJob =
-      filteredRequeuedJobs.find((job) => job.id === activeRequeueJobId) ||
-      filteredRequeuedJobs[0];
-    const activeReason = activeJob ? getRequeueReasonText(activeJob) : "";
-
     return (
-      <QueueTableCard
-        title="Requeued Jobs Review"
-        emptyTitle="No requeued jobs"
+      <ProcessingJobReviewCard
+        visible={jobReviewsLoading || requeuedJobs.length > 0}
+        title="Requeued Jobs Create Queue"
+        emptyTitle="No requeued jobs match these filters"
         cardClassName="processing-requeue-card"
         loading={jobReviewsLoading}
         loadingLabel="Loading requeued jobs"
@@ -3398,6 +3326,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           setFiltersExpanded: setRequeueFiltersExpanded,
           searchPlaceholder: "Search requeued jobs",
           resultCount: filteredRequeuedJobs.length,
+          resultCountLoading: jobReviewsLoading,
           drawerId: `${activeTab}-requeue-filters`,
           onSubmit: (event, nextFilters) => {
             event.preventDefault();
@@ -3430,325 +3359,52 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             buttonsLoading={jobReviewsLoading}
           />
         }
-        actions={
-          <div className="processing-card-actions processing-card-actions-grouped">
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !selectedRequeueResumeIds.length ||
-                  bulkActionKey === "requeue:resume" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "requeue:resume",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-resume/", {
-                        method: "POST",
-                        body: { ids: selectedRequeueResumeIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        resumed_count: "started",
-                        skipped_invalid: "skipped",
-                      }) || "Jobs started.",
-                  )
-                }
-              >
-                {selectedActionLabel(
-                  "Resume selected",
-                  selectedRequeueResumeIds.length,
-                )}
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !selectedRequeueStopIds.length ||
-                  bulkActionKey === "requeue:stop" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "requeue:stop",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-stop/", {
-                        method: "POST",
-                        body: { ids: selectedRequeueStopIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        stopped_count: "stopped",
-                        skipped_complete: "done",
-                      }) || "Jobs stopped.",
-                  )
-                }
-              >
-                {selectedActionLabel(
-                  "Stop selected",
-                  selectedRequeueStopIds.length,
-                )}
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !selectedRequeueCount ||
-                  bulkActionKey === "jobs:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "job-bulk",
-                    selectedRequeueJobIds,
-                    "Delete selected requeued jobs",
-                    "This will remove the selected requeued jobs.",
-                  )
-                }
-              >
-                {selectedActionLabel("Delete selected", selectedRequeueCount)}
-              </button>
-            </div>
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !requeueResumeIds.length ||
-                  bulkActionKey === "requeue:resume" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "requeue:resume",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-resume/", {
-                        method: "POST",
-                        body: { ids: requeueResumeIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        resumed_count: "started",
-                        skipped_invalid: "skipped",
-                      }) || "Jobs started.",
-                  )
-                }
-              >
-                Resume all
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !requeueStopIds.length ||
-                  bulkActionKey === "requeue:stop" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "requeue:stop",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-stop/", {
-                        method: "POST",
-                        body: { ids: requeueStopIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        stopped_count: "stopped",
-                        skipped_complete: "done",
-                      }) || "Jobs stopped.",
-                  )
-                }
-              >
-                Stop all
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !filteredRequeuedJobs.length ||
-                  bulkActionKey === "jobs:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "job-bulk",
-                    filteredRequeuedJobs.map((job) => job.id),
-                    "Delete requeued jobs",
-                    "This will remove every visible requeued job.",
-                  )
-                }
-              >
-                Delete all
-              </button>
-            </div>
-          </div>
+        jobs={filteredRequeuedJobs}
+        selectedJobIdSet={selectedRequeueJobIdSet}
+        allSelected={allRequeueSelected}
+        jobIdsOnPage={requeueJobIdsOnPage}
+        onToggleAll={() =>
+          setSelectedRequeueJobIds((current) =>
+            toggleVisibleSelection(
+              current,
+              requeueJobIdsOnPage,
+              allRequeueSelected,
+            ),
+          )
         }
-      >
-        {filteredRequeuedJobs.length ? (
-          <div className="processing-requeue-layout">
-            <div className="processing-requeue-table-wrap">
-              <table className="simple-table processing-table">
-                <thead>
-                  <tr>
-                    <th className="processing-col-select processing-incomplete-col-select">
-                      <input
-                        type="checkbox"
-                        className="processing-checkbox"
-                        checked={allRequeueSelected}
-                        onChange={() =>
-                          setSelectedRequeueJobIds((current) =>
-                            toggleVisibleSelection(
-                              current,
-                              requeueJobIdsOnPage,
-                              allRequeueSelected,
-                            ),
-                          )
-                        }
-                        aria-label={
-                          allRequeueSelected
-                            ? "Clear visible requeued selections"
-                            : "Select all visible requeued jobs"
-                        }
-                      />
-                    </th>
-                    <th className="processing-col-request">Request</th>
-                    <th className="processing-col-status">Status</th>
-                    <th className="processing-col-type">Step</th>
-                    <th className="processing-col-time">Updated</th>
-                    <th className="processing-col-action">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRequeuedJobs.map((job) => {
-                    const isBusy = busyActionId === job.id;
-                    const isDeleting = busyDeleteId === `job:${job.id}`;
-                    const isActive = activeRequeueJobId === job.id;
-
-                    return (
-                      <tr
-                        key={job.id}
-                        className={isActive ? "is-active-row" : ""}
-                      >
-                        <td className="processing-col-select processing-incomplete-col-select">
-                          <input
-                            type="checkbox"
-                            className="processing-checkbox"
-                            checked={selectedRequeueJobIdSet.has(job.id)}
-                            onChange={() =>
-                              setSelectedRequeueJobIds((current) =>
-                                toggleSelectedId(current, job.id),
-                              )
-                            }
-                            aria-label={`Select requeued job ${job.id}`}
-                          />
-                        </td>
-                        <td className="processing-col-request processing-incomplete-col-book">
-                          <button
-                            type="button"
-                            className="ghost-button processing-requeue-select"
-                            onClick={() => setActiveRequeueJobId(job.id)}
-                          >
-                            {getRequestPrimaryText(job.submission_input)}
-                          </button>
-                        </td>
-                        <td>
-                          <StatusPill value={job.status} />
-                        </td>
-                        <td>{jobTypeLabel(job.job_type)}</td>
-                        <td>{formatBookDateTime(getJobActivityAt(job))}</td>
-                        <td>
-                          <div className="table-actions">
-                            {job.status === "queued" && !job.task_id ? (
-                              <button
-                                type="button"
-                                className="ghost-button"
-                                onClick={() => resumeJob(job.id)}
-                                disabled={isBusy || creationActionsDisabled}
-                              >
-                                {isBusy ? "Starting..." : "Start"}
-                              </button>
-                            ) : isActiveStatus(job.status) ? (
-                              <button
-                                type="button"
-                                className="ghost-button"
-                                onClick={() => stopJob(job.id)}
-                                disabled={isBusy || sourceTabButtonsDisabled}
-                              >
-                                {isBusy ? "Stopping..." : "Stop"}
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="ghost-button"
-                                onClick={() =>
-                                  retrySubmission(job.submission_id)
-                                }
-                                disabled={isBusy || creationActionsDisabled}
-                              >
-                                {isBusy ? "Queueing..." : "Requeue"}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="ghost-button danger-button processing-inline-danger"
-                              onClick={() =>
-                                openDeleteDialog(
-                                  "job-single",
-                                  [job.id],
-                                  "Delete requeued job",
-                                  "This requeued job row will be removed from history.",
-                                )
-                              }
-                              disabled={isDeleting || sourceTabButtonsDisabled}
-                            >
-                              {isDeleting ? "Deleting..." : "Delete"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <aside className="processing-requeue-error-panel">
-              <h3>Requeue Error Details</h3>
-              {activeJob ? (
-                <>
-                  <p className="table-note">
-                    {getRequestPrimaryText(activeJob.submission_input)}
-                  </p>
-                  <div
-                    className="processing-requeue-error-scroll"
-                    role="region"
-                    aria-label="Requeue error details"
-                  >
-                    <pre>{activeReason}</pre>
-                  </div>
-                </>
-              ) : (
-                <p className="table-note">No requeued job selected.</p>
-              )}
-            </aside>
-          </div>
-        ) : null}
-      </QueueTableCard>
+        onToggleJob={(jobId) =>
+          setSelectedRequeueJobIds((current) => toggleSelectedId(current, jobId))
+        }
+        selectedSubmissionIds={selectedRequeueSubmissionIds}
+        submissionIds={requeueSubmissionIds}
+        actionKey="requeue:create"
+        bulkActionKey={bulkActionKey}
+        creationActionsDisabled={creationActionsDisabled}
+        onCreate={retrySubmissionsBulk}
+        selectedActionLabel={selectedActionLabel}
+        activeJobId={activeRequeueJobId}
+        onActiveJobChange={setActiveRequeueJobId}
+        showStatusColumn
+        detailTitle="Requeue Error Details"
+        detailRegionAriaLabel="Requeue error details"
+        emptySelectionMessage="No requeued job selected."
+        renderDetailBody={(job) => <pre>{getRequeueReasonText(job)}</pre>}
+        getRequestPrimaryText={getRequestPrimaryText}
+        jobTypeLabel={jobTypeLabel}
+        getJobActivityAt={getJobActivityAt}
+        selectAllAriaLabel="Select all visible requeued jobs"
+        clearAllAriaLabel="Clear visible requeued selections"
+        rowAriaLabel={(job) => `Select requeued job ${job.id}`}
+      />
     );
   }
 
   function renderFailedJobsCard() {
-    const activeJob =
-      filteredFailedJobs.find((job) => job.id === activeFailedJobId) ||
-      filteredFailedJobs[0];
-
     return (
-      <QueueTableCard
-        title="Failed Jobs Review"
-        emptyTitle="No failed jobs"
+      <ProcessingJobReviewCard
+        visible={jobReviewsLoading || failedJobs.length > 0}
+        title="Failed Jobs Create Queue"
+        emptyTitle="No failed jobs match these filters"
         cardClassName="processing-failed-card"
         loading={jobReviewsLoading}
         loadingLabel="Loading failed jobs"
@@ -3761,6 +3417,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           setFiltersExpanded: setFailedFiltersExpanded,
           searchPlaceholder: "Search failed jobs",
           resultCount: filteredFailedJobs.length,
+          resultCountLoading: jobReviewsLoading,
           drawerId: `${activeTab}-failed-filters`,
           onSubmit: (event, nextFilters) => {
             event.preventDefault();
@@ -3793,726 +3450,77 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             buttonsLoading={jobReviewsLoading}
           />
         }
-        actions={
-          <div className="processing-card-actions processing-card-actions-grouped">
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !selectedFailedSubmissionIds.length ||
-                  bulkActionKey === "failed:resume" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  retrySubmissionsBulk(
-                    selectedFailedSubmissionIds,
-                    "failed:resume",
-                  )
-                }
-              >
-                {selectedActionLabel(
-                  "Resume selected",
-                  selectedFailedSubmissionIds.length,
-                )}
-              </button>
-              <button type="button" className="ghost-button" disabled>
-                Stop selected
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !selectedFailedCount ||
-                  bulkActionKey === "jobs:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "job-bulk",
-                    selectedFailedJobIds,
-                    "Delete selected failed jobs",
-                    "This will remove the selected failed jobs.",
-                  )
-                }
-              >
-                {selectedActionLabel("Delete selected", selectedFailedCount)}
-              </button>
-            </div>
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !failedSubmissionIds.length ||
-                  bulkActionKey === "failed:resume" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  retrySubmissionsBulk(failedSubmissionIds, "failed:resume")
-                }
-              >
-                Resume all
-              </button>
-              <button type="button" className="ghost-button" disabled>
-                Stop all
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !filteredFailedJobs.length ||
-                  bulkActionKey === "jobs:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "job-bulk",
-                    filteredFailedJobs.map((job) => job.id),
-                    "Delete failed jobs",
-                    "This will remove every visible failed job.",
-                  )
-                }
-              >
-                Delete all
-              </button>
-            </div>
-          </div>
+        jobs={filteredFailedJobs}
+        selectedJobIdSet={selectedFailedJobIdSet}
+        allSelected={allFailedSelected}
+        jobIdsOnPage={failedJobIdsOnPage}
+        onToggleAll={() =>
+          setSelectedFailedJobIds((current) =>
+            toggleVisibleSelection(current, failedJobIdsOnPage, allFailedSelected),
+          )
         }
-      >
-        {filteredFailedJobs.length ? (
-          <div className="processing-failed-layout">
-            <div className="processing-failed-table-wrap">
-              <table className="simple-table processing-table">
-                <thead>
-                  <tr>
-                    <th className="processing-col-select processing-incomplete-col-select">
-                      <input
-                        type="checkbox"
-                        className="processing-checkbox"
-                        checked={allFailedSelected}
-                        onChange={() =>
-                          setSelectedFailedJobIds((current) =>
-                            toggleVisibleSelection(
-                              current,
-                              failedJobIdsOnPage,
-                              allFailedSelected,
-                            ),
-                          )
-                        }
-                        aria-label={
-                          allFailedSelected
-                            ? "Clear visible failed selections"
-                            : "Select all visible failed jobs"
-                        }
-                      />
-                    </th>
-                    <th className="processing-col-request">Request</th>
-                    <th className="processing-col-type">Step</th>
-                    <th className="processing-col-time">Updated</th>
-                    <th className="processing-col-action">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredFailedJobs.map((job) => {
-                    const isBusy = busyActionId === job.id;
-                    const isDeleting = busyDeleteId === `job:${job.id}`;
-                    const isActive = activeFailedJobId === job.id;
-                    return (
-                      <tr
-                        key={job.id}
-                        className={isActive ? "is-active-row" : ""}
-                      >
-                        <td className="processing-col-select processing-incomplete-col-select">
-                          <input
-                            type="checkbox"
-                            className="processing-checkbox"
-                            checked={selectedFailedJobIdSet.has(job.id)}
-                            onChange={() =>
-                              setSelectedFailedJobIds((current) =>
-                                toggleSelectedId(current, job.id),
-                              )
-                            }
-                            aria-label={`Select failed job ${job.id}`}
-                          />
-                        </td>
-                        <td className="processing-col-request processing-incomplete-col-book">
-                          <button
-                            type="button"
-                            className="ghost-button processing-requeue-select"
-                            onClick={() => setActiveFailedJobId(job.id)}
-                          >
-                            {getRequestPrimaryText(job.submission_input)}
-                          </button>
-                        </td>
-                        <td>{jobTypeLabel(job.job_type)}</td>
-                        <td>{formatBookDateTime(getJobActivityAt(job))}</td>
-                        <td>
-                          <div className="table-actions">
-                            <button
-                              type="button"
-                              className="ghost-button"
-                              onClick={() => retrySubmission(job.submission_id)}
-                              disabled={isBusy || creationActionsDisabled}
-                            >
-                              {isBusy ? "Queueing..." : "Requeue"}
-                            </button>
-                            <button
-                              type="button"
-                              className="ghost-button danger-button processing-inline-danger"
-                              onClick={() =>
-                                openDeleteDialog(
-                                  "job-single",
-                                  [job.id],
-                                  "Delete failed job",
-                                  "This failed job row will be removed from history.",
-                                )
-                              }
-                              disabled={isDeleting || sourceTabButtonsDisabled}
-                            >
-                              {isDeleting ? "Deleting..." : "Delete"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <aside className="processing-requeue-error-panel">
-              <h3>Failure Cause & Log</h3>
-              {activeJob ? (
-                <>
-                  <p className="table-note">
-                    {getRequestPrimaryText(activeJob.submission_input)}
-                  </p>
-                  <div
-                    className="processing-requeue-error-scroll"
-                    role="region"
-                    aria-label="Failed job error and logs"
-                  >
-                    <pre>
-                      {activeJob.last_error || "No error message found."}
-                    </pre>
-                    <hr />
-                    {loadingFailedLogs ? (
-                      <p className="table-note">Loading logs...</p>
-                    ) : activeFailedJobLogs.length ? (
-                      <pre>
-                        {activeFailedJobLogs
-                          .map(
-                            (entry) =>
-                              `${entry.created_at} [${entry.level}] ${entry.message}`,
-                          )
-                          .join("\n")}
-                      </pre>
-                    ) : (
-                      <p className="table-note">No logs found for this job.</p>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <p className="table-note">No failed job selected.</p>
-              )}
-            </aside>
-          </div>
-        ) : null}
-      </QueueTableCard>
-    );
-  }
-
-  function renderCatalogSummaryCard() {
-    const countPill = (
-      <span className="processing-card-count">
-        {catalogOverviewLoading ? (
-          <LoadingSpinner size={14} />
-        ) : (
-          catalogSummary.total
+        onToggleJob={(jobId) =>
+          setSelectedFailedJobIds((current) => toggleSelectedId(current, jobId))
+        }
+        selectedSubmissionIds={selectedFailedSubmissionIds}
+        submissionIds={failedSubmissionIds}
+        actionKey="failed:create"
+        bulkActionKey={bulkActionKey}
+        creationActionsDisabled={creationActionsDisabled}
+        onCreate={retrySubmissionsBulk}
+        selectedActionLabel={selectedActionLabel}
+        activeJobId={activeFailedJobId}
+        onActiveJobChange={setActiveFailedJobId}
+        layoutClassName="processing-failed-layout"
+        tableWrapClassName="processing-failed-table-wrap"
+        detailTitle="Failure Cause & Log"
+        detailRegionAriaLabel="Failed job error and logs"
+        emptySelectionMessage="No failed job selected."
+        renderDetailBody={(job) => (
+          <>
+            <pre>{job.last_error || "No error message found."}</pre>
+            <hr />
+            {loadingFailedLogs ? (
+              <p className="table-note">Loading logs...</p>
+            ) : activeFailedJobLogs.length ? (
+              <pre>
+                {activeFailedJobLogs
+                  .map(
+                    (entry) =>
+                      `${entry.created_at} [${entry.level}] ${entry.message}`,
+                  )
+                  .join("\n")}
+              </pre>
+            ) : (
+              <p className="table-note">No logs found for this job.</p>
+            )}
+          </>
         )}
-      </span>
-    );
-
-    return (
-      <section className="detail-card processing-card processing-summary-card">
-        <div className="processing-card-head">
-          <div className="section-title-block">
-            <h2>Catalog Overview</h2>
-          </div>
-          {countPill}
-        </div>
-        {catalogOverviewLoading ? (
-          renderProcessingCardLoader("Loading catalog overview")
-        ) : (
-          <div className="processing-summary-bar processing-summary-bar--catalog">
-            {[
-              ["New", catalogSummary.new],
-              ["Queued", catalogSummary.queued],
-              ["Processing", catalogSummary.processing],
-              ["Stopped", catalogSummary.stopped],
-              ["Requeued", catalogSummary.requeued],
-              ["Failed", catalogSummary.failed],
-              ["Ready", catalogSummary.ready],
-              ["Deleted", catalogSummary.deleted],
-            ].map(([label, value]) => (
-              <article key={label} className="processing-summary-stat">
-                <span className="fact-label">{label}</span>
-                <strong>{value}</strong>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+        getRequestPrimaryText={getRequestPrimaryText}
+        jobTypeLabel={jobTypeLabel}
+        getJobActivityAt={getJobActivityAt}
+        selectAllAriaLabel="Select all visible failed jobs"
+        clearAllAriaLabel="Clear visible failed selections"
+        rowAriaLabel={(job) => `Select failed job ${job.id}`}
+      />
     );
   }
 
-  function renderCatalogCard() {
-    const catalogPageCount = catalogPagination.page_count || 1;
-    const isFirstCatalogPage = (catalogPagination.page || 1) <= 1;
-    const isLastCatalogPage = (catalogPagination.page || 1) >= catalogPageCount;
-    const catalogSyncControlLabel = stoppingCatalogSync
-      ? "Stopping catalog sync"
-      : refreshingCatalog
-        ? "Stop catalog sync"
-        : "Sync catalog";
-    const catalogSyncControlTitle =
-      !refreshingCatalog && automationRunning
-        ? "Disabled while scheduled automation is syncing the catalog and creating books."
-        : catalogSyncControlLabel;
-
-    return (
-      <QueueTableCard
-        title="Catalog Books"
-        emptyTitle="No catalog rows"
-        cardClassName="processing-catalog-card"
-        loading={catalogBrowseLoading}
-        loadingLabel="Loading catalog books"
-        headerAside={
-          <CatalogSearchRow
-            filters={catalogFilters}
-            setFilters={setCatalogFilters}
-            fields={catalogFilterFields}
-            defaultFilters={defaultCatalogFilters}
-            filtersExpanded={catalogFiltersExpanded}
-            setFiltersExpanded={setCatalogFiltersExpanded}
-            searchPlaceholder="Search catalog books"
-            resultCount={catalogPagination.total_count}
-            drawerId={`${activeTab}-catalog-filters`}
-            compact
-            buttonsDisabled={sourceTabButtonsDisabled}
-            onSubmit={(event, nextFilters) => {
-              event.preventDefault();
-              setCatalogFilters(nextFilters);
-              applyCatalogFilters({ ...nextFilters, page: 1 });
-            }}
-            onSearchClear={(nextFilters) => {
-              applyCatalogFilters({ ...nextFilters, page: 1 });
-            }}
-          />
-        }
-        toolbar={
-          <CatalogToolbar
-            filters={catalogFilters}
-            setFilters={setCatalogFilters}
-            fields={catalogFilterFields}
-            defaultFilters={defaultCatalogFilters}
-            filtersExpanded={catalogFiltersExpanded}
-            setFiltersExpanded={setCatalogFiltersExpanded}
-            onSubmit={(event) => {
-              event.preventDefault();
-              applyCatalogFilters({ ...catalogFilters, page: 1 });
-            }}
-            onReset={() =>
-              resetWithLoad(
-                defaultCatalogFilters,
-                setCatalogFilters,
-                "nextCatalogFilters",
-                [LOAD_SCOPE_CATALOG_BROWSE],
-              )
-            }
-            searchPlaceholder="Search catalog books"
-            resultCount={catalogPagination.total_count}
-            showSearchRow={false}
-            drawerFirst
-            secondaryContent={
-              <div className="catalog-toolbar-secondary-layout">
-                <div className="catalog-toolbar-sync-panel">
-                  <button
-                    type="button"
-                    className={`icon-button catalog-toolbar-sync-button${refreshingCatalog || stoppingCatalogSync ? " warning-button" : ""}`}
-                    onClick={
-                      refreshingCatalog ? stopCatalogRefresh : refreshCatalog
-                    }
-                    disabled={
-                      stoppingCatalogSync ||
-                      (!refreshingCatalog && catalogActionsDisabled)
-                    }
-                    title={catalogSyncControlTitle}
-                    aria-label={catalogSyncControlLabel}
-                  >
-                    {stoppingCatalogSync ? (
-                      <LoadingSpinner size={18} />
-                    ) : refreshingCatalog ? (
-                      <CatalogStopIcon />
-                    ) : (
-                      <CatalogRefreshIcon />
-                    )}
-                  </button>
-                </div>
-                <div className="catalog-toolbar-secondary catalog-toolbar-secondary--catalog-card">
-                  <label className="catalog-toolbar-field catalog-toolbar-field-sort">
-                    <span className="fact-label">Sort</span>
-                    <select
-                      className="catalog-toolbar-select"
-                      value={catalogFilters.sort}
-                      onChange={(event) =>
-                        updateCatalogFilters(
-                          { sort: event.target.value },
-                          { resetPage: true },
-                        )
-                      }
-                      disabled={sourceTabButtonsDisabled}
-                    >
-                      <option value="status_recent">Status + recent</option>
-                      <option value="activity_desc">Recent activity</option>
-                      <option value="activity_asc">Oldest activity</option>
-                      <option value="created_desc">Newest added</option>
-                      <option value="created_asc">Oldest added</option>
-                      <option value="title_asc">Title A-Z</option>
-                      <option value="title_desc">Title Z-A</option>
-                    </select>
-                  </label>
-                  <label className="catalog-toolbar-field catalog-toolbar-field-rows">
-                    <span className="fact-label">Rows</span>
-                    <select
-                      className="catalog-toolbar-select"
-                      value={String(catalogFilters.limit)}
-                      onChange={(event) =>
-                        updateCatalogFilters(
-                          { limit: Number(event.target.value) || 180 },
-                          { resetPage: true },
-                        )
-                      }
-                      disabled={sourceTabButtonsDisabled}
-                    >
-                      <option value="180">180</option>
-                      <option value="200">200</option>
-                      <option value="400">400</option>
-                    </select>
-                  </label>
-                  <div className="catalog-pagination">
-                    <span className="catalog-page-indicator">
-                      {getCatalogPageLabel(catalogPagination)}
-                    </span>
-                    <div className="catalog-pagination-actions">
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => updateCatalogFilters({ page: 1 })}
-                        disabled={
-                          isFirstCatalogPage || sourceTabButtonsDisabled
-                        }
-                      >
-                        First
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() =>
-                          updateCatalogFilters({
-                            page: Math.max(
-                              1,
-                              (catalogPagination.page || 1) - 1,
-                            ),
-                          })
-                        }
-                        disabled={
-                          isFirstCatalogPage || sourceTabButtonsDisabled
-                        }
-                      >
-                        Prev
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() =>
-                          updateCatalogFilters({
-                            page: Math.min(
-                              catalogPageCount,
-                              (catalogPagination.page || 1) + 1,
-                            ),
-                          })
-                        }
-                        disabled={isLastCatalogPage || sourceTabButtonsDisabled}
-                      >
-                        Next
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() =>
-                          updateCatalogFilters({ page: catalogPageCount })
-                        }
-                        disabled={isLastCatalogPage || sourceTabButtonsDisabled}
-                      >
-                        Last
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            }
-            inline
-            drawerId={`${activeTab}-catalog-filters`}
-            buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={catalogBrowseLoading}
-          />
-        }
-        actions={
-          <div className="processing-card-actions processing-card-actions-grouped">
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() =>
-                  queueCatalogBooks(selectedCatalogEntryIds, "", "selected")
-                }
-                disabled={
-                  !selectedCatalogCount ||
-                  creatingCatalog ||
-                  catalogActionsDisabled
-                }
-                title={catalogActionDisabledReason || undefined}
-              >
-                <span className="button-label">
-                  {creatingCatalog && catalogActionMode === "selected" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  {selectedActionLabel("Create selected", selectedCatalogCount)}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                onClick={() =>
-                  openDeleteDialog(
-                    "catalog-bulk",
-                    selectedCatalogEntryIds,
-                    "Delete selected catalog rows",
-                    "This will remove the selected catalog rows.",
-                  )
-                }
-                disabled={
-                  !selectedCatalogCount ||
-                  bulkActionKey === "catalog:delete" ||
-                  sourceTabButtonsDisabled
-                }
-              >
-                {selectedActionLabel("Delete selected", selectedCatalogCount)}
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() =>
-                  queueCatalogBooks(creatableCatalogEntryIdsOnPage, "", "all")
-                }
-                disabled={
-                  !creatableCatalogEntryIdsOnPage.length ||
-                  creatingCatalog ||
-                  catalogActionsDisabled
-                }
-                title={catalogActionDisabledReason || undefined}
-              >
-                <span className="button-label">
-                  {creatingCatalog && catalogActionMode === "all" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Create all
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                onClick={() =>
-                  openDeleteDialog(
-                    "catalog-bulk",
-                    catalogEntries.map((entry) => entry.id),
-                    "Delete catalog rows",
-                    "This will remove every visible catalog row.",
-                  )
-                }
-                disabled={
-                  !catalogEntries.length ||
-                  bulkActionKey === "catalog:delete" ||
-                  sourceTabButtonsDisabled
-                }
-              >
-                Delete all
-              </button>
-            </div>
-          </div>
-        }
-      >
-        {catalogEntries.length ? (
-          <table className="simple-table processing-table processing-catalog-table">
-            <thead>
-              <tr>
-                <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allCatalogSelected}
-                    onChange={() =>
-                      setSelectedCatalogEntryIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          creatableCatalogEntryIdsOnPage,
-                          allCatalogSelected,
-                        ),
-                      )
-                    }
-                    disabled={
-                      !creatableCatalogEntryIdsOnPage.length ||
-                      catalogActionsDisabled
-                    }
-                    aria-label={
-                      allCatalogSelected
-                        ? "Clear visible catalog selections"
-                        : "Select all visible catalog rows"
-                    }
-                  />
-                </th>
-                <th className="processing-col-request">Book</th>
-                <th className="processing-col-category">Categories</th>
-                <th className="processing-col-status">Status</th>
-                <th className="processing-col-book">Local Book</th>
-                <th className="processing-col-time">Updated</th>
-                <th className="processing-col-action">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {catalogEntries.map((entry) => {
-                const isSelectable = canCreateCatalogEntry(entry);
-                const isSelected = selectedCatalogIdSet.has(entry.id);
-                const isBusy = busyActionId === entry.id;
-                const isDeleting = busyDeleteId === `catalog:${entry.id}`;
-                return (
-                  <tr key={entry.id}>
-                    <td className="processing-col-select">
-                      <input
-                        type="checkbox"
-                        className="processing-checkbox"
-                        checked={isSelected}
-                        onChange={() =>
-                          setSelectedCatalogEntryIds((current) =>
-                            toggleSelectedId(current, entry.id),
-                          )
-                        }
-                        disabled={!isSelectable || catalogActionsDisabled}
-                        aria-label={`Select ${entry.title}`}
-                      />
-                    </td>
-                    <td className="processing-col-request">
-                      <div className="table-cell-stack table-request-cell">
-                        <strong>{entry.title}</strong>
-                        {entry.author_line ? (
-                          <span className="table-note">
-                            {entry.author_line}
-                          </span>
-                        ) : null}
-                        {entry.latest_job_error ? (
-                          <span className="processing-row-error">
-                            {entry.latest_job_error}
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="processing-col-category">
-                      {entry.categories ? (
-                        <span>{entry.categories}</span>
-                      ) : (
-                        <span className="table-note">-</span>
-                      )}
-                    </td>
-                    <td>
-                      <StatusPill value={entry.curation_status} />
-                    </td>
-                    <td>
-                      {entry.local_book_slug ? (
-                        <BookRouteLink
-                          slug={entry.local_book_slug}
-                          className="meta-link"
-                        >
-                          {entry.local_book_title}
-                        </BookRouteLink>
-                      ) : (
-                        <span className="table-note">-</span>
-                      )}
-                    </td>
-                    <td>
-                      {formatBookDateTime(getCatalogEntryActivityAt(entry))}
-                    </td>
-                    <td>
-                      <div className="table-actions">
-                        {entry.local_book_slug &&
-                        entry.curation_status === "ready" ? (
-                          <BookRouteLink
-                            slug={entry.local_book_slug}
-                            className="ghost-button"
-                          >
-                            Open
-                          </BookRouteLink>
-                        ) : canCreateCatalogEntry(entry) ? (
-                          <button
-                            type="button"
-                            className="ghost-button"
-                            onClick={() =>
-                              queueCatalogBooks([entry.id], entry.id)
-                            }
-                            disabled={isBusy || catalogActionsDisabled}
-                          >
-                            {isBusy
-                              ? entry.curation_status === "stopped"
-                                ? "Resuming..."
-                                : "Queueing..."
-                              : entry.curation_status === "stopped"
-                                ? "Resume"
-                                : "Create"}
-                          </button>
-                        ) : (
-                          <span className="table-note">-</span>
-                        )}
-                        <button
-                          type="button"
-                          className="ghost-button danger-button processing-inline-danger"
-                          onClick={() =>
-                            openDeleteDialog(
-                              "catalog-single",
-                              [entry.id],
-                              "Delete catalog row",
-                              "This catalog row will be removed.",
-                            )
-                          }
-                          disabled={isDeleting || sourceTabButtonsDisabled}
-                        >
-                          {isDeleting ? "Deleting..." : "Delete"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : null}
-      </QueueTableCard>
-    );
-  }
-
-  function renderCatalogStatusCard(title, statusValue, emptyTitle) {
-    const matchingEntries = catalogOverviewEntries.filter(
-      (entry) => entry.curation_status === statusValue,
-    );
+  function renderCatalogStatusCard({
+    title,
+    entries,
+    emptyTitle,
+    selectedIdSet,
+    selectedIdsOnPage,
+    allSelected,
+    selectedCount,
+    onToggleAll,
+    onToggleEntry,
+    onCreateSelected,
+    onCreateAll,
+    bulkMode,
+  }) {
+    const matchingEntries = entries;
     if (!matchingEntries.length) {
       return null;
     }
@@ -4523,10 +3531,63 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         emptyTitle={emptyTitle}
         loading={catalogOverviewLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        actions={
+          <div className="processing-card-actions processing-card-actions-grouped">
+            <div className="processing-card-action-row">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={onCreateSelected}
+                disabled={
+                  !selectedCount || creatingCatalog || creationActionsDisabled
+                }
+              >
+                <span className="button-label">
+                  {creatingCatalog &&
+                  catalogActionMode === `${bulkMode}:selected` ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  {selectedActionLabel("Create selected", selectedCount)}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={onCreateAll}
+                disabled={
+                  !selectedIdsOnPage.length ||
+                  creatingCatalog ||
+                  creationActionsDisabled
+                }
+              >
+                <span className="button-label">
+                  {creatingCatalog && catalogActionMode === `${bulkMode}:all` ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  Create all
+                </span>
+              </button>
+            </div>
+          </div>
+        }
       >
         <table className="simple-table processing-table processing-catalog-table">
           <thead>
             <tr>
+              <th className="processing-col-select">
+                <input
+                  type="checkbox"
+                  className="processing-checkbox"
+                  checked={allSelected}
+                  onChange={onToggleAll}
+                  disabled={!selectedIdsOnPage.length || creationActionsDisabled}
+                  aria-label={
+                    allSelected
+                      ? `Clear visible ${title.toLowerCase()} selections`
+                      : `Select all visible ${title.toLowerCase()} rows`
+                  }
+                />
+              </th>
               <th className="processing-col-request">Book</th>
               <th className="processing-col-category">Categories</th>
               <th className="processing-col-status">Status</th>
@@ -4538,7 +3599,19 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             {matchingEntries.map((entry) => {
               const isBusy = busyActionId === entry.id;
               return (
-                <tr key={`catalog-${statusValue}-${entry.id}`}>
+                <tr key={`catalog-status-${entry.id}`}>
+                  <td className="processing-col-select">
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={selectedIdSet.has(entry.id)}
+                      onChange={() => onToggleEntry(entry.id)}
+                      disabled={
+                        !canCreateCatalogEntry(entry) || creationActionsDisabled
+                      }
+                      aria-label={`Select ${entry.title}`}
+                    />
+                  </td>
                   <td className="processing-col-request">
                     <div className="table-cell-stack table-request-cell">
                       <strong>{entry.title}</strong>
@@ -4570,16 +3643,14 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
                       <button
                         type="button"
                         className="ghost-button"
-                        onClick={() => queueCatalogBooks([entry.id], entry.id)}
-                        disabled={isBusy || catalogActionsDisabled}
+                        onClick={() =>
+                          queueCatalogStatusBooks([entry.id], {
+                            rowId: entry.id,
+                          })
+                        }
+                        disabled={isBusy || creationActionsDisabled}
                       >
-                        {isBusy
-                          ? statusValue === "stopped"
-                            ? "Resuming..."
-                            : "Queueing..."
-                          : statusValue === "stopped"
-                            ? "Resume"
-                            : "Create"}
+                        {isBusy ? "Queueing..." : "Create"}
                       </button>
                     </div>
                   </td>
@@ -4611,9 +3682,10 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
           defaultFilters: defaultRunFilters,
           filtersExpanded: runFiltersExpanded,
           setFiltersExpanded: setRunFiltersExpanded,
-          searchPlaceholder: "Search runs",
-          resultCount: curationRuns.length,
-          drawerId: `${activeTab}-run-filters`,
+              searchPlaceholder: "Search runs",
+              resultCount: curationRuns.length,
+              resultCountLoading: runsLoading,
+              drawerId: `${activeTab}-run-filters`,
           onSubmit: (event, nextFilters) => {
             event.preventDefault();
             setRunFilters(nextFilters);
@@ -4884,209 +3956,6 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     );
   }
 
-  function renderUserTab() {
-    return (
-      <div className="processing-section-grid">
-        {renderSubmissionsCard("Requests")}
-        {renderJobsCard("Book Creation")}
-        {renderRequeueReviewCard()}
-        {renderFailedJobsCard()}
-        {renderDuplicateCard("Duplicate Checks")}
-      </div>
-    );
-  }
-
-  function renderSourceTab() {
-    return (
-      <div className="processing-section-grid">
-        {renderCatalogSummaryCard()}
-        {renderCatalogCard()}
-        {renderCatalogStatusCard(
-          "Failed Catalog",
-          "failed",
-          "No failed catalog rows",
-        )}
-        {renderCatalogStatusCard(
-          "Requeued Catalog",
-          "requeued",
-          "No requeued catalog rows",
-        )}
-        {renderJobsCard("Book Creation", "processing-catalog-height-card")}
-        {renderRequeueReviewCard()}
-        {renderFailedJobsCard()}
-        {renderSubmissionsCard("Catalog Requests")}
-        {renderDuplicateCard("Duplicate Checks")}
-      </div>
-    );
-  }
-
-  function renderAutomationTab() {
-    const nextRunContent = automationLoading ? (
-      <span className="processing-card-count">
-        <LoadingSpinner size={14} />
-      </span>
-    ) : automationState?.settings?.next_run_at ? (
-      <span className="processing-card-count">
-        {formatBookDateTime(automationState.settings.next_run_at)}
-      </span>
-    ) : null;
-
-    return (
-      <div className="processing-section-grid">
-        <section className="detail-card processing-card processing-summary-card card-automation">
-          <div className="processing-card-head">
-            <div className="section-title-block">
-              <h2>Automation</h2>
-            </div>
-            <div className="processing-card-head-meta">
-              {nextRunContent}
-              {!automationLoading ? (
-                <label
-                  className="processing-switch"
-                  title={
-                    automationForm.enabled
-                      ? "Automation enabled"
-                      : "Automation disabled"
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    aria-label={
-                      automationForm.enabled
-                        ? "Disable automation"
-                        : "Enable automation"
-                    }
-                    checked={automationForm.enabled}
-                    onChange={(event) =>
-                      setAutomationForm({
-                        ...automationForm,
-                        enabled: event.target.checked,
-                      })
-                    }
-                  />
-                  <span className="processing-switch-track" aria-hidden="true">
-                    <span className="processing-switch-state">
-                      {automationForm.enabled ? "On" : "Off"}
-                    </span>
-                    <span className="processing-switch-thumb" />
-                  </span>
-                </label>
-              ) : null}
-            </div>
-          </div>
-          <div className="processing-automation-body">
-            {automationLoading ? (
-              renderProcessingCardLoader("Loading automation settings")
-            ) : (
-              <form
-                className="stack-form processing-automation-form"
-                onSubmit={saveAutomation}
-              >
-                <div className="detail-facts processing-automation-grid">
-                  <label>
-                    <span className="fact-label">Time</span>
-                    <input
-                      type="time"
-                      value={automationForm.daily_run_time}
-                      onChange={(event) =>
-                        setAutomationForm({
-                          ...automationForm,
-                          daily_run_time: event.target.value,
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    <span className="fact-label">Frequency</span>
-                    <select
-                      value={automationForm.frequency}
-                      onChange={(event) =>
-                        setAutomationForm({
-                          ...automationForm,
-                          frequency: event.target.value,
-                        })
-                      }
-                    >
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="biweekly">Bi-weekly</option>
-                      <option value="monthly">Monthly</option>
-                      <option value="bimonthly">Bi-monthly</option>
-                      <option value="quarterly">Every 3 months</option>
-                      <option value="four_monthly">Every 4 months</option>
-                      <option value="half_yearly">Half-yearly</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span className="fact-label">Mode</span>
-                    <select
-                      value={automationForm.mode}
-                      onChange={(event) =>
-                        setAutomationForm({
-                          ...automationForm,
-                          mode: event.target.value,
-                        })
-                      }
-                    >
-                      <option value="pending">New + unfinished</option>
-                      <option value="all">All tracked</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span className="fact-label">Pages</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="80"
-                      value={automationForm.refresh_max_pages}
-                      onChange={(event) =>
-                        setAutomationForm({
-                          ...automationForm,
-                          refresh_max_pages: event.target.value,
-                        })
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="processing-card-actions processing-automation-save-actions">
-                  <button
-                    type="submit"
-                    className="primary-button"
-                    disabled={savingAutomation}
-                  >
-                    <span className="button-label">
-                      {savingAutomation ? <LoadingSpinner size={14} /> : null}
-                      Save automation
-                    </span>
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </section>
-        {renderSubmissionsCard("Automation Requests")}
-        {renderJobsCard("Book Creation")}
-        {renderRequeueReviewCard()}
-        {renderFailedJobsCard()}
-        {renderRunsCard("Run History")}
-        {renderDuplicateCard("Duplicate Checks")}
-      </div>
-    );
-  }
-
-  function renderAllTab() {
-    return (
-      <div className="processing-section-grid">
-        {renderSubmissionsCard("All Requests")}
-        {renderJobsCard("Book Creation")}
-        {renderRequeueReviewCard()}
-        {renderFailedJobsCard()}
-        {renderRunsCard("Run History")}
-        {renderDuplicateCard("Duplicate Checks")}
-      </div>
-    );
-  }
-
   function renderIncompleteAutomationCard() {
     return (
       <section className="detail-card processing-card processing-summary-card processing-incomplete-top-card card-automation">
@@ -5211,6 +4080,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
               setFiltersExpanded: setRemovedFiltersExpanded,
               searchPlaceholder: "Search removed books",
               resultCount: removedIncompleteEntries.length,
+              resultCountLoading: incompleteOverviewLoading,
               drawerId: `${activeTab}-removed-filters`,
               onSubmit: (event, nextFilters) => {
                 event.preventDefault();
@@ -5238,6 +4108,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
             }}
             searchPlaceholder="Search removed books"
             resultCount={removedIncompleteEntries.length}
+            resultCountLoading={incompleteOverviewLoading}
             showSearchRow={false}
             inline
             drawerId={`${activeTab}-removed-filters`}
@@ -5287,264 +4158,327 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
     );
   }
 
+  function renderIncompleteOverviewCard() {
+    return (
+      <section className="detail-card processing-card processing-summary-card processing-incomplete-top-card">
+        <div className="processing-card-head">
+          <div className="section-title-block">
+            <h2>Incomplete Overview</h2>
+          </div>
+        </div>
+        {incompleteOverviewLoading ? (
+          renderProcessingCardLoader("Loading incomplete overview")
+        ) : (
+          <div className="processing-summary-bar processing-summary-bar--incomplete">
+            {[
+              ["Incomplete Books", incompleteSummary.total_incomplete_books],
+              ["Removed", incompleteSummary.removed_from_unfinished],
+              ["Still Unfinished", incompleteSummary.still_in_unfinished],
+              ["Missing", incompleteSummary.missing_in_catalog],
+              ["Queued", incompleteSummary.queued],
+              ["Processing", incompleteSummary.processing],
+              ["Failed", incompleteSummary.failed],
+              ["Stopped", incompleteSummary.stopped],
+              ["Requeued", incompleteSummary.requeued],
+            ].map(([label, value]) => (
+              <article key={label} className="processing-summary-stat">
+                <span className="fact-label">{label}</span>
+                <strong>{value}</strong>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  function renderIncompleteCatalogCard() {
+    return (
+      <QueueTableCard
+        title="Incomplete Catalog"
+        emptyTitle="No incomplete-category books found"
+        loading={incompleteBrowseLoading}
+        loadingLabel="Loading incomplete-category books"
+        headerAside={
+          <CatalogSearchRow
+            filters={incompleteFilters}
+            setFilters={setIncompleteFilters}
+            fields={incompleteFilterFields}
+            defaultFilters={defaultIncompleteFilters}
+            filtersExpanded={incompleteFiltersExpanded}
+            setFiltersExpanded={setIncompleteFiltersExpanded}
+            searchPlaceholder="Search incomplete books"
+            resultCount={incompleteEntries.length}
+            resultCountLoading={incompleteBrowseLoading}
+            drawerId={`${activeTab}-incomplete-filters`}
+            compact
+            showFilterToggle={false}
+            buttonsDisabled={sourceTabButtonsDisabled}
+            onSubmit={(event, nextFilters) => {
+              event.preventDefault();
+              setIncompleteFilters(nextFilters);
+              reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
+                nextIncompleteFilters: nextFilters,
+              }).catch(() => {});
+            }}
+            onSearchClear={(nextFilters) => {
+              setIncompleteFilters(nextFilters);
+              reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
+                nextIncompleteFilters: nextFilters,
+              }).catch(() => {});
+            }}
+          />
+        }
+        actions={
+          <div className="processing-card-actions processing-card-actions-grouped">
+            <div className="processing-card-action-row">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() =>
+                  reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
+                    nextIncompleteFilters: incompleteFilters,
+                  })
+                }
+                disabled={sourceTabButtonsDisabled}
+              >
+                Reload
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => queueIncompleteBooks(selectedIncompleteBookIds)}
+                disabled={
+                  !selectedIncompleteBookIds.length ||
+                  creatingCatalog ||
+                  creationActionsDisabled
+                }
+              >
+                <span className="button-label">
+                  {creatingCatalog && catalogActionMode === "incomplete" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  Reprocess selected
+                </span>
+              </button>
+            </div>
+          </div>
+        }
+      >
+        {incompleteEntries.length ? (
+          <table className="simple-table processing-table processing-catalog-table processing-incomplete-table">
+            <thead>
+              <tr>
+                <th className="processing-col-select processing-incomplete-col-select">
+                  <input
+                    type="checkbox"
+                    className="processing-checkbox"
+                    checked={
+                      incompleteEntries.length > 0 &&
+                      incompleteEntries.every((entry) =>
+                        selectedIncompleteBookIds.includes(entry.book_id),
+                      )
+                    }
+                    onChange={() =>
+                      setSelectedIncompleteBookIds((current) => {
+                        const visibleIds = incompleteEntries.map(
+                          (entry) => entry.book_id,
+                        );
+                        const allSelected = visibleIds.every((id) =>
+                          current.includes(id),
+                        );
+                        return toggleVisibleSelection(
+                          current,
+                          visibleIds,
+                          allSelected,
+                        );
+                      })
+                    }
+                    disabled={creationActionsDisabled}
+                    aria-label="Select all incomplete-category books"
+                  />
+                </th>
+                <th className="processing-col-request processing-incomplete-col-book">
+                  Book
+                </th>
+                <th className="processing-col-category">Local Categories</th>
+                <th className="processing-col-category">Source Categories</th>
+                <th className="processing-col-status">Status</th>
+                <th className="processing-col-action">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {incompleteEntries.map((entry) => {
+                const isSelected = selectedIncompleteBookIds.includes(
+                  entry.book_id,
+                );
+                return (
+                  <tr key={entry.book_id}>
+                    <td className="processing-col-select processing-incomplete-col-select">
+                      <input
+                        type="checkbox"
+                        className="processing-checkbox"
+                        checked={isSelected}
+                        onChange={() =>
+                          setSelectedIncompleteBookIds((current) =>
+                            toggleSelectedId(current, entry.book_id),
+                          )
+                        }
+                        disabled={creationActionsDisabled}
+                        aria-label={`Select ${entry.book_title}`}
+                      />
+                    </td>
+                    <td className="processing-col-request processing-incomplete-col-book">
+                      <div className="table-cell-stack table-request-cell">
+                        {entry.book_slug ? (
+                          <BookRouteLink
+                            slug={entry.book_slug}
+                            className="meta-link"
+                          >
+                            {entry.book_title}
+                          </BookRouteLink>
+                        ) : (
+                          <strong>{entry.book_title}</strong>
+                        )}
+                        {entry.author_line ? (
+                          <span className="table-note">{entry.author_line}</span>
+                        ) : null}
+                        {entry.source_url ? (
+                          <span className="table-note processing-incomplete-source-url">
+                            {safeDecode(entry.source_url)}
+                          </span>
+                        ) : null}
+                        {entry.latest_job_error ? (
+                          <span className="processing-row-error">
+                            {entry.latest_job_error}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="processing-col-category">
+                      {entry.local_categories || "-"}
+                    </td>
+                    <td className="processing-col-category">
+                      {entry.source_categories || (
+                        <span className="table-note">Missing in catalog</span>
+                      )}
+                    </td>
+                    <td>
+                      {entry.removed_from_unfinished ? (
+                        <StatusPill value="ready" />
+                      ) : entry.catalog_entry_id ? (
+                        <StatusPill value="unfinished" />
+                      ) : (
+                        <StatusPill value="needs_review" />
+                      )}
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => queueIncompleteBooks([entry.book_id])}
+                          disabled={creationActionsDisabled}
+                        >
+                          Reprocess
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : null}
+      </QueueTableCard>
+    );
+  }
+
   function renderIncompleteTab() {
     return (
       <div className="processing-section-grid">
         <div className="processing-incomplete-top-grid">
-          <section className="detail-card processing-card processing-summary-card processing-incomplete-top-card">
-            <div className="processing-card-head">
-              <div className="section-title-block">
-                <h2>Incomplete Overview</h2>
-              </div>
-            </div>
-            {incompleteOverviewLoading ? (
-              renderProcessingCardLoader("Loading incomplete overview")
-            ) : (
-              <div className="processing-summary-bar processing-summary-bar--incomplete">
-                {[
-                  ["Incomplete Books", incompleteSummary.total_incomplete_books],
-                  ["Removed", incompleteSummary.removed_from_unfinished],
-                  ["Still Unfinished", incompleteSummary.still_in_unfinished],
-                  ["Missing", incompleteSummary.missing_in_catalog],
-                  ["Queued", incompleteSummary.queued],
-                  ["Processing", incompleteSummary.processing],
-                  ["Failed", incompleteSummary.failed],
-                  ["Stopped", incompleteSummary.stopped],
-                  ["Requeued", incompleteSummary.requeued],
-                ].map(([label, value]) => (
-                  <article key={label} className="processing-summary-stat">
-                    <span className="fact-label">{label}</span>
-                    <strong>{value}</strong>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
+          {renderIncompleteOverviewCard()}
           {renderIncompleteAutomationCard()}
         </div>
         <div className="processing-incomplete-catalog-grid">
-          <QueueTableCard
-            title="Incomplete Catalog"
-            emptyTitle="No incomplete-category books found"
-            loading={incompleteBrowseLoading}
-            loadingLabel="Loading incomplete-category books"
-            headerAside={
-              <CatalogSearchRow
-                filters={incompleteFilters}
-                setFilters={setIncompleteFilters}
-                fields={incompleteFilterFields}
-                defaultFilters={defaultIncompleteFilters}
-                filtersExpanded={incompleteFiltersExpanded}
-                setFiltersExpanded={setIncompleteFiltersExpanded}
-                searchPlaceholder="Search incomplete books"
-                resultCount={incompleteEntries.length}
-                drawerId={`${activeTab}-incomplete-filters`}
-                compact
-                showFilterToggle={false}
-                buttonsDisabled={sourceTabButtonsDisabled}
-                onSubmit={(event, nextFilters) => {
-                  event.preventDefault();
-                  setIncompleteFilters(nextFilters);
-                  reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
-                    nextIncompleteFilters: nextFilters,
-                  }).catch(() => {});
-                }}
-                onSearchClear={(nextFilters) => {
-                  setIncompleteFilters(nextFilters);
-                  reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
-                    nextIncompleteFilters: nextFilters,
-                  }).catch(() => {});
-                }}
-              />
-            }
-            actions={
-              <div className="processing-card-actions processing-card-actions-grouped">
-                <div className="processing-card-action-row">
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() =>
-                      reloadScoped([LOAD_SCOPE_INCOMPLETE_BROWSE], {
-                        nextIncompleteFilters: incompleteFilters,
-                      })
-                    }
-                    disabled={sourceTabButtonsDisabled}
-                  >
-                    Reload
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    onClick={() =>
-                      queueIncompleteBooks(selectedIncompleteBookIds)
-                    }
-                    disabled={
-                      !selectedIncompleteBookIds.length ||
-                      creatingCatalog ||
-                      creationActionsDisabled
-                    }
-                  >
-                    <span className="button-label">
-                      {creatingCatalog && catalogActionMode === "incomplete" ? (
-                        <LoadingSpinner size={14} />
-                      ) : null}
-                      Reprocess selected
-                    </span>
-                  </button>
-                </div>
-              </div>
-            }
-          >
-            {incompleteEntries.length ? (
-              <table className="simple-table processing-table processing-catalog-table processing-incomplete-table">
-                <thead>
-                  <tr>
-                    <th className="processing-col-select processing-incomplete-col-select">
-                      <input
-                        type="checkbox"
-                        className="processing-checkbox"
-                        checked={
-                          incompleteEntries.length > 0 &&
-                          incompleteEntries.every((entry) =>
-                            selectedIncompleteBookIds.includes(entry.book_id),
-                          )
-                        }
-                        onChange={() =>
-                          setSelectedIncompleteBookIds((current) => {
-                            const visibleIds = incompleteEntries.map(
-                              (entry) => entry.book_id,
-                            );
-                            const allSelected = visibleIds.every((id) =>
-                              current.includes(id),
-                            );
-                            return toggleVisibleSelection(
-                              current,
-                              visibleIds,
-                              allSelected,
-                            );
-                          })
-                        }
-                        disabled={creationActionsDisabled}
-                        aria-label="Select all incomplete-category books"
-                      />
-                    </th>
-                    <th className="processing-col-request processing-incomplete-col-book">
-                      Book
-                    </th>
-                    <th className="processing-col-category">
-                      Local Categories
-                    </th>
-                    <th className="processing-col-category">
-                      Source Categories
-                    </th>
-                    <th className="processing-col-status">Status</th>
-                    <th className="processing-col-action">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {incompleteEntries.map((entry) => {
-                    const isSelected = selectedIncompleteBookIds.includes(
-                      entry.book_id,
-                    );
-                    return (
-                      <tr key={entry.book_id}>
-                        <td className="processing-col-select processing-incomplete-col-select">
-                          <input
-                            type="checkbox"
-                            className="processing-checkbox"
-                            checked={isSelected}
-                            onChange={() =>
-                              setSelectedIncompleteBookIds((current) =>
-                                toggleSelectedId(current, entry.book_id),
-                              )
-                            }
-                            disabled={creationActionsDisabled}
-                            aria-label={`Select ${entry.book_title}`}
-                          />
-                        </td>
-                        <td className="processing-col-request processing-incomplete-col-book">
-                          <div className="table-cell-stack table-request-cell">
-                            {entry.book_slug ? (
-                              <BookRouteLink
-                                slug={entry.book_slug}
-                                className="meta-link"
-                              >
-                                {entry.book_title}
-                              </BookRouteLink>
-                            ) : (
-                              <strong>{entry.book_title}</strong>
-                            )}
-                            {entry.author_line ? (
-                              <span className="table-note">
-                                {entry.author_line}
-                              </span>
-                            ) : null}
-                            {entry.source_url ? (
-                              <span className="table-note processing-incomplete-source-url">
-                                {safeDecode(entry.source_url)}
-                              </span>
-                            ) : null}
-                            {entry.latest_job_error ? (
-                              <span className="processing-row-error">
-                                {entry.latest_job_error}
-                              </span>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className="processing-col-category">
-                          {entry.local_categories || "-"}
-                        </td>
-                        <td className="processing-col-category">
-                          {entry.source_categories || (
-                            <span className="table-note">
-                              Missing in catalog
-                            </span>
-                          )}
-                        </td>
-                        <td>
-                          {entry.removed_from_unfinished ? (
-                            <StatusPill value="ready" />
-                          ) : entry.catalog_entry_id ? (
-                            <StatusPill value="unfinished" />
-                          ) : (
-                            <StatusPill value="needs_review" />
-                          )}
-                        </td>
-                        <td>
-                          <div className="table-actions">
-                            <button
-                              type="button"
-                              className="ghost-button"
-                              onClick={() =>
-                                queueIncompleteBooks([entry.book_id])
-                              }
-                              disabled={creationActionsDisabled}
-                            >
-                              Reprocess
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            ) : null}
-          </QueueTableCard>
+          {renderIncompleteCatalogCard()}
           {renderRemovedFromUnfinishedCard()}
         </div>
         {renderCatalogStatusCard(
-          "Failed Catalog",
-          "failed",
-          "No failed catalog rows",
+          {
+            title: "Failed Catalog",
+            entries: failedCatalogEntries,
+            emptyTitle: "No failed catalog rows",
+            selectedIdSet: selectedFailedCatalogIdSet,
+            selectedIdsOnPage: failedCatalogEntryIdsOnPage,
+            allSelected: allFailedCatalogSelected,
+            selectedCount: selectedFailedCatalogCount,
+            onToggleAll: () =>
+              setSelectedFailedCatalogEntryIds((current) =>
+                toggleVisibleSelection(
+                  current,
+                  failedCatalogEntryIdsOnPage,
+                  allFailedCatalogSelected,
+                ),
+              ),
+            onToggleEntry: (entryId) =>
+              setSelectedFailedCatalogEntryIds((current) =>
+                toggleSelectedId(current, entryId),
+              ),
+            onCreateSelected: () =>
+              queueCatalogStatusBooks(selectedFailedCatalogEntryIds, {
+                mode: "failed-catalog:selected",
+                clearSelection: setSelectedFailedCatalogEntryIds,
+              }),
+            onCreateAll: () =>
+              queueCatalogStatusBooks(failedCatalogEntryIdsOnPage, {
+                mode: "failed-catalog:all",
+                clearSelection: setSelectedFailedCatalogEntryIds,
+              }),
+            bulkMode: "failed-catalog",
+          }
         )}
         {renderCatalogStatusCard(
-          "Requeued Catalog",
-          "requeued",
-          "No requeued catalog rows",
+          {
+            title: "Requeued Catalog",
+            entries: requeuedCatalogEntries,
+            emptyTitle: "No requeued catalog rows",
+            selectedIdSet: selectedRequeuedCatalogIdSet,
+            selectedIdsOnPage: requeuedCatalogEntryIdsOnPage,
+            allSelected: allRequeuedCatalogSelected,
+            selectedCount: selectedRequeuedCatalogCount,
+            onToggleAll: () =>
+              setSelectedRequeuedCatalogEntryIds((current) =>
+                toggleVisibleSelection(
+                  current,
+                  requeuedCatalogEntryIdsOnPage,
+                  allRequeuedCatalogSelected,
+                ),
+              ),
+            onToggleEntry: (entryId) =>
+              setSelectedRequeuedCatalogEntryIds((current) =>
+                toggleSelectedId(current, entryId),
+              ),
+            onCreateSelected: () =>
+              queueCatalogStatusBooks(selectedRequeuedCatalogEntryIds, {
+                mode: "requeued-catalog:selected",
+                clearSelection: setSelectedRequeuedCatalogEntryIds,
+              }),
+            onCreateAll: () =>
+              queueCatalogStatusBooks(requeuedCatalogEntryIdsOnPage, {
+                mode: "requeued-catalog:all",
+                clearSelection: setSelectedRequeuedCatalogEntryIds,
+              }),
+            bulkMode: "requeued-catalog",
+          }
         )}
-        {renderRequeueReviewCard()}
-        {renderFailedJobsCard()}
+        {jobReviewsLoading || requeuedJobs.length > 0
+          ? renderRequeueReviewCard()
+          : null}
+        {jobReviewsLoading || failedJobs.length > 0
+          ? renderFailedJobsCard()
+          : null}
         {renderRunsCard("Run History")}
       </div>
     );
@@ -5557,9 +4491,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
       <section className="detail-card">
         <div className="panel-header">
           <div className="section-title-block">
-            <h1>
-              {tabs.find((tab) => tab.id === activeTab)?.label || "Processing"}
-            </h1>
+            <h1>Incomplete Automation</h1>
           </div>
           {loading ? <LoadingSpinner size={18} /> : null}
         </div>
@@ -5568,11 +4500,7 @@ export default function QueuePage({ sectionKey = "my-requests" }) {
         ) : null}
       </section>
 
-      {activeTab === USER_TAB ? renderUserTab() : null}
-      {activeTab === SOURCE_TAB ? renderSourceTab() : null}
-      {activeTab === AUTOMATION_TAB ? renderAutomationTab() : null}
-      {activeTab === ALL_TAB ? renderAllTab() : null}
-      {activeTab === INCOMPLETE_TAB ? renderIncompleteTab() : null}
+      {renderIncompleteTab()}
 
       {reviewSubmission ? (
         <div className="dialog-backdrop" role="presentation">

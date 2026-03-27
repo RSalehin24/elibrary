@@ -1,4 +1,4 @@
--r backend.txt
+-r requirements.txt
 factory_boy==3.3.3
 pytest==8.4.2
 pytest-django==4.12.0

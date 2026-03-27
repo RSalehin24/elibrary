@@ -140,6 +140,28 @@ def rehash_catalog_codes(apps, schema_editor):
         Book.objects.filter(pk=book.pk).update(catalog_code=build_book_catalog_code(pair[0], pair[1], next_sequence))
 
 
+def alter_catalog_code_columns(schema_editor, table_names):
+    if schema_editor.connection.vendor != "postgresql":
+        return
+
+    with schema_editor.connection.cursor() as cursor:
+        for table_name in table_names:
+            cursor.execute(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "catalog_code" TYPE varchar({CATALOG_CODE_LENGTH})'
+            )
+
+
+def alter_entity_catalog_code_columns(apps, schema_editor):
+    alter_catalog_code_columns(
+        schema_editor,
+        ["catalog_category", "catalog_contributor"],
+    )
+
+
+def alter_book_catalog_code_column(apps, schema_editor):
+    alter_catalog_code_columns(schema_editor, ["catalog_book"])
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -147,16 +169,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunSQL(
-            sql=[
-                f'ALTER TABLE "catalog_category" ALTER COLUMN "catalog_code" TYPE varchar({CATALOG_CODE_LENGTH})',
-                f'ALTER TABLE "catalog_contributor" ALTER COLUMN "catalog_code" TYPE varchar({CATALOG_CODE_LENGTH})',
-            ],
-            reverse_sql=migrations.RunSQL.noop,
-        ),
+        migrations.RunPython(alter_entity_catalog_code_columns, migrations.RunPython.noop),
         migrations.RunPython(rehash_catalog_codes, migrations.RunPython.noop),
-        migrations.RunSQL(
-            sql=f'ALTER TABLE "catalog_book" ALTER COLUMN "catalog_code" TYPE varchar({CATALOG_CODE_LENGTH})',
-            reverse_sql=migrations.RunSQL.noop,
-        ),
+        migrations.RunPython(alter_book_catalog_code_column, migrations.RunPython.noop),
     ]

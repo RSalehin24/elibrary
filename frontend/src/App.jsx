@@ -17,8 +17,12 @@ import LibraryPage from "./pages/LibraryPage";
 import LoginPage from "./pages/LoginPage";
 import ManualBooksPage from "./pages/ManualBooksPage";
 import PasswordResetPage from "./pages/PasswordResetPage";
+import ProcessingAllActivityPage from "./pages/ProcessingAllActivityPage";
+import ProcessingAutomationPage from "./pages/ProcessingAutomationPage";
+import ProcessingCatalogBooksPage from "./pages/ProcessingCatalogBooksPage";
+import ProcessingIncompleteAutomationPage from "./pages/ProcessingIncompleteAutomationPage";
+import ProcessingMyRequestsPage from "./pages/ProcessingMyRequestsPage";
 import ProfilePage from "./pages/ProfilePage";
-import QueuePage from "./pages/QueuePage";
 import ReaderPage from "./pages/ReaderPage";
 import SeriesPage from "./pages/SeriesPage";
 import WriterPage from "./pages/WriterPage";
@@ -292,10 +296,7 @@ export default function App() {
           path="/processing-my-requests"
           element={
             <ProtectedRoute>
-              <QueuePage
-                key="processing-my-requests"
-                sectionKey="my-requests"
-              />
+              <ProcessingMyRequestsPage />
             </ProtectedRoute>
           }
         />
@@ -303,10 +304,7 @@ export default function App() {
           path="/processing-catalog-books"
           element={
             <ProtectedRoute>
-              <QueuePage
-                key="processing-catalog-books"
-                sectionKey="catalog-books"
-              />
+              <ProcessingCatalogBooksPage />
             </ProtectedRoute>
           }
         />
@@ -314,7 +312,7 @@ export default function App() {
           path="/processing-automation"
           element={
             <ProtectedRoute>
-              <QueuePage key="processing-automation" sectionKey="automation" />
+              <ProcessingAutomationPage />
             </ProtectedRoute>
           }
         />
@@ -322,10 +320,7 @@ export default function App() {
           path="/processing-all-activity"
           element={
             <ProtectedRoute>
-              <QueuePage
-                key="processing-all-activity"
-                sectionKey="all-activity"
-              />
+              <ProcessingAllActivityPage />
             </ProtectedRoute>
           }
         />
@@ -333,10 +328,7 @@ export default function App() {
           path="/processing-incomplete-check"
           element={
             <ProtectedRoute>
-              <QueuePage
-                key="processing-incomplete-check"
-                sectionKey="incomplete-monitor"
-              />
+              <ProcessingIncompleteAutomationPage />
             </ProtectedRoute>
           }
         />

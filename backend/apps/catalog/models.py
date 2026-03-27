@@ -482,12 +482,7 @@ class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
 
     class Meta:
         ordering = ["-created_at", "title"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["source_site", "normalized_title"],
-                name="uniq_book_source_normalized_title",
-            )
-        ]
+        constraints = []
 
     def _should_refresh_slug(self):
         if not self.slug or not self.pk:

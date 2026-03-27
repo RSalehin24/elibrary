@@ -5,11 +5,12 @@ from pathlib import Path
 from celery import current_app
 from django.conf import settings
 from django.core.files import File
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied
 
-from apps.access.models import PreviewAccessSession
+from apps.access.models import PermissionScope, PreviewAccessSession
 from apps.catalog.models import (
     Book,
     BookCategory,
@@ -31,6 +32,7 @@ from apps.catalog.services import (
     replace_book_relations,
 )
 from apps.common.models import AuditLog, LifecycleState, ReviewState
+from apps.common.permissions import user_has_scope
 from apps.ingestion.models import (
     BookSubmission,
     DuplicateReview,
@@ -88,6 +90,15 @@ GENERATED_ASSET_LABELS = {
     GeneratedAssetType.HTML: "HTML",
     GeneratedAssetType.EPUB: "EPUB",
 }
+RETRY_PAYLOAD_RESET_KEYS = (
+    "served_from_database",
+    "existing_book_source",
+    "linked_book_slug",
+)
+
+
+def can_manage_processing_records(user):
+    return bool(user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]))
 
 
 def ensure_preview_session(user, book, submission=None, allow_guest=False):
@@ -246,6 +257,93 @@ def primary_source_url_for_book(book):
 
 def root_submission(submission):
     return submission.canonical_submission or submission
+
+
+def build_retry_payload(raw_payload, actor, previous_status, previous_error_message):
+    next_payload = dict(raw_payload or {})
+    next_payload["requeued"] = True
+    next_payload["requeued_at"] = timezone.now().isoformat()
+    next_payload["requeue_requested_by"] = str(actor.id)
+    next_payload["requeue_reason"] = previous_error_message or f"Retry requested from status: {previous_status}."
+    for key in RETRY_PAYLOAD_RESET_KEYS:
+        next_payload.pop(key, None)
+    return next_payload
+
+
+def retry_submission_record(submission, actor):
+    target_submission = root_submission(submission)
+    can_manage_processing = can_manage_processing_records(actor)
+    if not actor.is_staff and not can_manage_processing and submission.submitter_id != actor.id:
+        raise PermissionDenied("You cannot retry this submission.")
+    if not target_submission.resolved_url and target_submission.input_type != "title":
+        raise ValueError("This submission does not have a resolved URL yet.")
+
+    previous_status = target_submission.status
+    previous_error_message = (target_submission.error_message or "").strip()
+    update_fields = []
+
+    if target_submission.linked_book_id and target_submission.linked_book and target_submission.linked_book.deleted_at:
+        target_submission.linked_book = None
+        update_fields.append("linked_book")
+    if target_submission.duplicate_of_book_id and (
+        not target_submission.duplicate_of_book or target_submission.duplicate_of_book.deleted_at
+    ):
+        target_submission.duplicate_of_book = None
+        update_fields.append("duplicate_of_book")
+    if target_submission.error_message:
+        target_submission.error_message = ""
+        update_fields.append("error_message")
+
+    next_payload = build_retry_payload(
+        target_submission.raw_payload,
+        actor,
+        previous_status,
+        previous_error_message,
+    )
+    if next_payload != (target_submission.raw_payload or {}):
+        target_submission.raw_payload = next_payload
+        update_fields.append("raw_payload")
+
+    if target_submission.review_state != ReviewState.PENDING:
+        target_submission.review_state = ReviewState.PENDING
+        update_fields.append("review_state")
+    if target_submission.status not in {SubmissionStatus.QUEUED, SubmissionStatus.PROCESSING}:
+        target_submission.status = SubmissionStatus.QUEUED
+        update_fields.append("status")
+
+    if update_fields:
+        target_submission.save(update_fields=[*dict.fromkeys(update_fields), "updated_at"])
+        sync_deduplicated_submissions(target_submission)
+
+    return queue_submission(target_submission, actor=actor)
+
+
+def retry_submission_records(submissions, actor):
+    queued_count = 0
+    skipped_invalid = 0
+    skipped_duplicate_targets = 0
+    seen_target_ids = set()
+
+    for submission in submissions:
+        target_id = str(submission.canonical_submission_id or submission.id)
+        if target_id in seen_target_ids:
+            skipped_duplicate_targets += 1
+            continue
+        seen_target_ids.add(target_id)
+
+        try:
+            retry_submission_record(submission, actor)
+        except ValueError:
+            skipped_invalid += 1
+            continue
+
+        queued_count += 1
+
+    return {
+        "queued_count": queued_count,
+        "skipped_invalid": skipped_invalid,
+        "skipped_duplicate_targets": skipped_duplicate_targets,
+    }
 
 
 def sync_submission_from_canonical(submission, canonical_submission):
@@ -949,9 +1047,9 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
     normalized = normalize_scraped_book(scraped_data)
     cleaned_dedication_html = clean_extracted_dedication_html(scraped_data.get("dedication", ""))
     cover_source_url = scraped_data.get("cover") or ""
-    existing_book = target_book or find_deleted_book_by_title(scraped_data["book_title"])
-    if existing_book:
-        book = existing_book
+    normalized_submission_source_url = normalize_source_url(submission.resolved_url)
+
+    def apply_scraped_fields(book):
         book.deleted_at = None
         book.state = LifecycleState.READY
         book.review_state = ReviewState.PENDING
@@ -963,25 +1061,41 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
         book.toc = scraped_data.get("toc", [])
         book.content_items = scraped_data.get("content_items", [])
         book.cover_source_url = cover_source_url
+
+    existing_book = target_book or find_deleted_book_by_title(scraped_data["book_title"])
+    if existing_book:
+        book = existing_book
+        apply_scraped_fields(book)
         book.save()
     else:
-        book = Book.objects.create(
-            title=scraped_data["book_title"],
-            state=LifecycleState.READY,
-            review_state=ReviewState.PENDING,
-            raw_scraped_metadata=normalized["raw_strings"],
-            raw_scrape_payload=scraped_data,
-            main_content_html=scraped_data.get("main_content", ""),
-            book_info_html=scraped_data.get("book_info", ""),
-            dedication_html=cleaned_dedication_html,
-            toc=scraped_data.get("toc", []),
-            content_items=scraped_data.get("content_items", []),
-            cover_source_url=cover_source_url,
-        )
+        create_kwargs = {
+            "title": scraped_data["book_title"],
+            "state": LifecycleState.READY,
+            "review_state": ReviewState.PENDING,
+            "raw_scraped_metadata": normalized["raw_strings"],
+            "raw_scrape_payload": scraped_data,
+            "main_content_html": scraped_data.get("main_content", ""),
+            "book_info_html": scraped_data.get("book_info", ""),
+            "dedication_html": cleaned_dedication_html,
+            "toc": scraped_data.get("toc", []),
+            "content_items": scraped_data.get("content_items", []),
+            "cover_source_url": cover_source_url,
+        }
+        try:
+            with transaction.atomic():
+                book = Book.objects.create(**create_kwargs)
+        except IntegrityError:
+            if not normalized_submission_source_url:
+                raise
+            book = find_existing_book_by_source_url(normalized_submission_source_url)
+            if book is None:
+                raise
+            apply_scraped_fields(book)
+            book.save()
 
     sync_metadata_relations(book, normalized)
     BookSource.objects.update_or_create(
-        normalized_source_url=normalize_source_url(submission.resolved_url),
+        normalized_source_url=normalized_submission_source_url,
         defaults={
             "book": book,
             "source_url": submission.resolved_url,
