@@ -22,10 +22,21 @@ npm ci
 npm run dev
 ```
 
+If port `5173` is already occupied, the dev server now exits with an error.
+Close stale Vite sessions and restart:
+
+```bash
+lsof -nP -iTCP:5173 -sTCP:LISTEN
+kill <pid>
+cd frontend && npm run dev
+```
+
 4. Open app.
 
 - Frontend: `http://localhost:5173`
 - Backend API: `http://127.0.0.1:8000`
+
+Note: `docker-compose` in this repository starts backend services only; it does not serve the React frontend in local development.
 
 5. Useful local checks.
 

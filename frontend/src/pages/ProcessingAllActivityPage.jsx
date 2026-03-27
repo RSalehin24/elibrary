@@ -387,6 +387,14 @@ function buildJobsParams(filters, tab) {
   return params;
 }
 
+function isDefaultJobRequest(filters) {
+  return (
+    String(filters?.q || "") === defaultJobFilters.q &&
+    String(filters?.status || "") === defaultJobFilters.status &&
+    String(filters?.job_type || "") === defaultJobFilters.job_type
+  );
+}
+
 function buildSubmissionParams(filters, tab) {
   const params = { ...filters, limit: 60 };
   if (params.status) {
@@ -972,6 +980,10 @@ export default function ProcessingAllActivityPage() {
 
     try {
       const requests = [];
+      const shouldReuseJobReviewRows =
+        scopes.has(LOAD_SCOPE_JOBS) &&
+        scopes.has(LOAD_SCOPE_JOB_REVIEWS) &&
+        isDefaultJobRequest(nextJobFilters);
       const shouldReuseCatalogOverview =
         scopes.has(LOAD_SCOPE_CATALOG_BROWSE) &&
         scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW) &&
@@ -995,12 +1007,14 @@ export default function ProcessingAllActivityPage() {
       }
 
       if (scopes.has(LOAD_SCOPE_JOB_REVIEWS)) {
-        queueScopeRequest(
-          LOAD_SCOPE_JOB_REVIEWS,
-          `/ingestion/jobs/${toQueryString(
-            buildJobsParams(defaultJobFilters, nextTab),
-          )}`,
-        );
+        if (!shouldReuseJobReviewRows) {
+          queueScopeRequest(
+            LOAD_SCOPE_JOB_REVIEWS,
+            `/ingestion/jobs/${toQueryString(
+              buildJobsParams(defaultJobFilters, nextTab),
+            )}`,
+          );
+        }
       }
 
       if (scopes.has(LOAD_SCOPE_SUBMISSIONS)) {
@@ -1087,8 +1101,12 @@ export default function ProcessingAllActivityPage() {
         setJobs(payloadByScope.get(LOAD_SCOPE_JOBS) || []);
       }
 
-      if (payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS)) {
-        setJobReviewRows(payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS) || []);
+      if (payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS) || shouldReuseJobReviewRows) {
+        setJobReviewRows(
+          (shouldReuseJobReviewRows
+            ? payloadByScope.get(LOAD_SCOPE_JOBS)
+            : payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS)) || [],
+        );
       }
 
       if (payloadByScope.has(LOAD_SCOPE_SUBMISSIONS)) {
@@ -1197,8 +1215,10 @@ export default function ProcessingAllActivityPage() {
 
       setError("");
     } catch (nextError) {
-      setError(nextError.message);
-      toast.error(nextError.message);
+      if (!silent) {
+        setError(nextError.message);
+        toast.error(nextError.message);
+      }
     } finally {
       if (!silent) {
         setScopeLoading(scopes, false);
@@ -3200,7 +3220,7 @@ export default function ProcessingAllActivityPage() {
   function renderRequeueReviewCard() {
     return (
       <ProcessingJobReviewCard
-        visible={jobReviewsLoading || requeuedJobs.length > 0}
+        visible
         title="Requeued Jobs Create Queue"
         emptyTitle="No requeued jobs match these filters"
         cardClassName="processing-requeue-card"
@@ -3291,7 +3311,7 @@ export default function ProcessingAllActivityPage() {
   function renderFailedJobsCard() {
     return (
       <ProcessingJobReviewCard
-        visible={jobReviewsLoading || failedJobs.length > 0}
+        visible
         title="Failed Jobs Create Queue"
         emptyTitle="No failed jobs match these filters"
         cardClassName="processing-failed-card"
@@ -3694,12 +3714,8 @@ export default function ProcessingAllActivityPage() {
         {renderAllActivityOverviewCard()}
         {renderSubmissionsCard("All Requests")}
         {renderJobsCard("Book Creation")}
-        {jobReviewsLoading || requeuedJobs.length > 0
-          ? renderRequeueReviewCard()
-          : null}
-        {jobReviewsLoading || failedJobs.length > 0
-          ? renderFailedJobsCard()
-          : null}
+        {renderRequeueReviewCard()}
+        {renderFailedJobsCard()}
         {renderRunsCard("Run History")}
         {renderDuplicateCard("Duplicate Checks")}
       </div>

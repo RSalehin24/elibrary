@@ -135,11 +135,11 @@ def record_job_log(job, level, message, details=None):
     )
 
 
-def revoke_processing_task(task_id):
+def revoke_processing_task(task_id, *, terminate=False):
     if not task_id:
         return
     try:
-        current_app.control.revoke(task_id)
+        current_app.control.revoke(task_id, terminate=terminate)
     except Exception:
         logger.warning("Failed to revoke processing task.", exc_info=True)
 
@@ -181,8 +181,8 @@ def cancel_processing_job(job, message=JOB_CANCEL_MESSAGE):
 
     job.cancel_requested = True
     job.save(update_fields=["cancel_requested", "updated_at"])
-    if job.status == JobStatus.QUEUED:
-        revoke_processing_task(job.task_id)
+    if job.status in {JobStatus.QUEUED, JobStatus.PROCESSING}:
+        revoke_processing_task(job.task_id, terminate=job.status == JobStatus.PROCESSING)
         return finalize_cancelled_job(job, message=message)
     record_job_log(job, "warning", "Stop requested.")
     return job

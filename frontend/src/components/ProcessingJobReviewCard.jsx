@@ -60,7 +60,8 @@ export default function ProcessingJobReviewCard({
     return null;
   }
 
-  const activeJob = jobs.find((job) => job.id === activeJobId) || jobs[0] || null;
+  const activeJob =
+    jobs.find((job) => job.id === activeJobId) || jobs[0] || null;
   const shellContent = loading ? (
     renderProcessingCardLoader(loadingLabel || `Loading ${title.toLowerCase()}`)
   ) : jobs.length ? (
@@ -75,7 +76,9 @@ export default function ProcessingJobReviewCard({
                   className="processing-checkbox"
                   checked={allSelected}
                   onChange={onToggleAll}
-                  aria-label={allSelected ? clearAllAriaLabel : selectAllAriaLabel}
+                  aria-label={
+                    allSelected ? clearAllAriaLabel : selectAllAriaLabel
+                  }
                 />
               </th>
               <th className="processing-col-request">Request</th>
@@ -168,33 +171,40 @@ export default function ProcessingJobReviewCard({
           <div className="processing-card-head-aside">{headerAside}</div>
         ) : null}
       </div>
-      {toolbar ? <div className="processing-card-toolbar">{toolbar}</div> : null}
+      {toolbar ? (
+        <div className="processing-card-toolbar">{toolbar}</div>
+      ) : null}
       <div className="processing-bulk-bar">
-        <div className="processing-card-actions">
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={
-              !selectedSubmissionIds.length ||
-              bulkActionKey === actionKey ||
-              creationActionsDisabled
-            }
-            onClick={() => onCreate(selectedSubmissionIds, actionKey)}
-          >
-            {selectedActionLabel("Create selected", selectedSubmissionIds.length)}
-          </button>
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={
-              !submissionIds.length ||
-              bulkActionKey === actionKey ||
-              creationActionsDisabled
-            }
-            onClick={() => onCreate(submissionIds, actionKey)}
-          >
-            Create all
-          </button>
+        <div className="processing-card-actions processing-card-actions-grouped">
+          <div className="processing-card-action-row">
+            <button
+              type="button"
+              className="ghost-button"
+              disabled={
+                !selectedSubmissionIds.length ||
+                bulkActionKey === actionKey ||
+                creationActionsDisabled
+              }
+              onClick={() => onCreate(selectedSubmissionIds, actionKey)}
+            >
+              {selectedActionLabel(
+                "Create selected",
+                selectedSubmissionIds.length,
+              )}
+            </button>
+            <button
+              type="button"
+              className="ghost-button"
+              disabled={
+                !submissionIds.length ||
+                bulkActionKey === actionKey ||
+                creationActionsDisabled
+              }
+              onClick={() => onCreate(submissionIds, actionKey)}
+            >
+              Create all
+            </button>
+          </div>
         </div>
       </div>
       <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>

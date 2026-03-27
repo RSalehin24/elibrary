@@ -65,6 +65,10 @@ const defaultCatalogFilters = {
   limit: 60,
 };
 
+const defaultCatalogStatusFilters = {
+  q: "",
+};
+
 const defaultCatalogPagination = {
   page: 1,
   limit: 60,
@@ -389,6 +393,14 @@ function buildJobsParams(filters, tab) {
   return params;
 }
 
+function isDefaultJobRequest(filters) {
+  return (
+    String(filters?.q || "") === defaultJobFilters.q &&
+    String(filters?.status || "") === defaultJobFilters.status &&
+    String(filters?.job_type || "") === defaultJobFilters.job_type
+  );
+}
+
 function buildSubmissionParams(filters, tab) {
   const params = { ...filters, limit: 60 };
   if (params.status) {
@@ -589,6 +601,28 @@ function filterJobsByControls(jobRows, filters) {
       .trim();
     const errorText = String(job.last_error || "").toLowerCase();
     return requestText.includes(query) || errorText.includes(query);
+  });
+}
+
+function filterCatalogEntriesByControls(entryRows, filters) {
+  const query = String(filters.q || "")
+    .trim()
+    .toLowerCase();
+  if (!query) {
+    return entryRows;
+  }
+  return entryRows.filter((entry) => {
+    const searchText = [
+      entry.title,
+      entry.author_line,
+      entry.categories,
+      entry.local_book_title,
+      entry.latest_job_error,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return searchText.includes(query);
   });
 }
 
@@ -800,6 +834,12 @@ export default function ProcessingCatalogBooksPage() {
   const [removedFilters, setRemovedFilters] = useState(defaultRemovedFilters);
   const [requeueFilters, setRequeueFilters] = useState(defaultJobFilters);
   const [failedFilters, setFailedFilters] = useState(defaultJobFilters);
+  const [failedCatalogFilters, setFailedCatalogFilters] = useState(
+    defaultCatalogStatusFilters,
+  );
+  const [requeuedCatalogFilters, setRequeuedCatalogFilters] = useState(
+    defaultCatalogStatusFilters,
+  );
   const [submissionFiltersExpanded, setSubmissionFiltersExpanded] =
     useState(false);
   const [jobFiltersExpanded, setJobFiltersExpanded] = useState(false);
@@ -963,6 +1003,10 @@ export default function ProcessingCatalogBooksPage() {
 
     try {
       const requests = [];
+      const shouldReuseJobReviewRows =
+        scopes.has(LOAD_SCOPE_JOBS) &&
+        scopes.has(LOAD_SCOPE_JOB_REVIEWS) &&
+        isDefaultJobRequest(nextJobFilters);
       const shouldReuseCatalogOverview =
         scopes.has(LOAD_SCOPE_CATALOG_BROWSE) &&
         scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW) &&
@@ -986,12 +1030,14 @@ export default function ProcessingCatalogBooksPage() {
       }
 
       if (scopes.has(LOAD_SCOPE_JOB_REVIEWS)) {
-        queueScopeRequest(
-          LOAD_SCOPE_JOB_REVIEWS,
-          `/ingestion/jobs/${toQueryString(
-            buildJobsParams(defaultJobFilters, nextTab),
-          )}`,
-        );
+        if (!shouldReuseJobReviewRows) {
+          queueScopeRequest(
+            LOAD_SCOPE_JOB_REVIEWS,
+            `/ingestion/jobs/${toQueryString(
+              buildJobsParams(defaultJobFilters, nextTab),
+            )}`,
+          );
+        }
       }
 
       if (scopes.has(LOAD_SCOPE_SUBMISSIONS)) {
@@ -1017,7 +1063,8 @@ export default function ProcessingCatalogBooksPage() {
           LOAD_SCOPE_CATALOG_BROWSE,
           `/ingestion/catalog/entries/${toQueryString({
             ...nextCatalogFilters,
-            limit: Number(nextCatalogFilters.limit) || defaultCatalogFilters.limit,
+            limit:
+              Number(nextCatalogFilters.limit) || defaultCatalogFilters.limit,
           })}`,
         );
       }
@@ -1078,8 +1125,15 @@ export default function ProcessingCatalogBooksPage() {
         setJobs(payloadByScope.get(LOAD_SCOPE_JOBS) || []);
       }
 
-      if (payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS)) {
-        setJobReviewRows(payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS) || []);
+      if (
+        payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS) ||
+        shouldReuseJobReviewRows
+      ) {
+        setJobReviewRows(
+          (shouldReuseJobReviewRows
+            ? payloadByScope.get(LOAD_SCOPE_JOBS)
+            : payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS)) || [],
+        );
       }
 
       if (payloadByScope.has(LOAD_SCOPE_SUBMISSIONS)) {
@@ -1140,7 +1194,9 @@ export default function ProcessingCatalogBooksPage() {
           automationPayload?.settings &&
           [AUTOMATION_TAB, INCOMPLETE_TAB].includes(nextTab)
         ) {
-          setAutomationForm(automationFormFromSettings(automationPayload.settings));
+          setAutomationForm(
+            automationFormFromSettings(automationPayload.settings),
+          );
         }
       }
 
@@ -1188,8 +1244,10 @@ export default function ProcessingCatalogBooksPage() {
 
       setError("");
     } catch (nextError) {
-      setError(nextError.message);
-      toast.error(nextError.message);
+      if (!silent) {
+        setError(nextError.message);
+        toast.error(nextError.message);
+      }
     } finally {
       if (!silent) {
         setScopeLoading(scopes, false);
@@ -1199,7 +1257,6 @@ export default function ProcessingCatalogBooksPage() {
       }
     }
   }
-
 
   useEffect(() => {
     load({ nextTab: activeTab }).catch(() => {});
@@ -1734,9 +1791,7 @@ export default function ProcessingCatalogBooksPage() {
       const skippedIds = new Set(
         entryIds.filter((id) => !creatableEntryIds.includes(id)),
       );
-      clearSelection((current) =>
-        current.filter((id) => !skippedIds.has(id)),
-      );
+      clearSelection((current) => current.filter((id) => !skippedIds.has(id)));
     }
 
     if (!creatableEntryIds.length) {
@@ -2022,7 +2077,9 @@ export default function ProcessingCatalogBooksPage() {
     selectedCatalogCountOnPage === creatableCatalogEntryIdsOnPage.length;
   const failedCatalogEntries = useMemo(
     () =>
-      catalogOverviewEntries.filter((entry) => entry.curation_status === "failed"),
+      catalogOverviewEntries.filter(
+        (entry) => entry.curation_status === "failed",
+      ),
     [catalogOverviewEntries],
   );
   const requeuedCatalogEntries = useMemo(
@@ -2031,6 +2088,22 @@ export default function ProcessingCatalogBooksPage() {
         (entry) => entry.curation_status === "requeued",
       ),
     [catalogOverviewEntries],
+  );
+  const filteredFailedCatalogEntries = useMemo(
+    () =>
+      filterCatalogEntriesByControls(
+        failedCatalogEntries,
+        failedCatalogFilters,
+      ),
+    [failedCatalogEntries, failedCatalogFilters],
+  );
+  const filteredRequeuedCatalogEntries = useMemo(
+    () =>
+      filterCatalogEntriesByControls(
+        requeuedCatalogEntries,
+        requeuedCatalogFilters,
+      ),
+    [requeuedCatalogEntries, requeuedCatalogFilters],
   );
   const selectedFailedCatalogIdSet = useMemo(
     () => new Set(selectedFailedCatalogEntryIds),
@@ -2042,34 +2115,44 @@ export default function ProcessingCatalogBooksPage() {
   );
   const failedCatalogEntryIdsOnPage = useMemo(
     () =>
-      failedCatalogEntries
+      filteredFailedCatalogEntries
         .filter((entry) => canCreateCatalogEntry(entry))
         .map((entry) => entry.id),
-    [failedCatalogEntries],
+    [filteredFailedCatalogEntries],
   );
   const requeuedCatalogEntryIdsOnPage = useMemo(
     () =>
-      requeuedCatalogEntries
+      filteredRequeuedCatalogEntries
         .filter((entry) => canCreateCatalogEntry(entry))
         .map((entry) => entry.id),
-    [requeuedCatalogEntries],
+    [filteredRequeuedCatalogEntries],
   );
-  const selectedFailedCatalogCount = selectedFailedCatalogEntryIds.length;
-  const selectedFailedCatalogCountOnPage = failedCatalogEntryIdsOnPage.filter(
-    (id) => selectedFailedCatalogIdSet.has(id),
-  ).length;
-  const selectedRequeuedCatalogCount = selectedRequeuedCatalogEntryIds.length;
+  const selectedFailedCatalogVisibleIds = useMemo(
+    () =>
+      failedCatalogEntryIdsOnPage.filter((id) =>
+        selectedFailedCatalogIdSet.has(id),
+      ),
+    [failedCatalogEntryIdsOnPage, selectedFailedCatalogIdSet],
+  );
+  const selectedRequeuedCatalogVisibleIds = useMemo(
+    () =>
+      requeuedCatalogEntryIdsOnPage.filter((id) =>
+        selectedRequeuedCatalogIdSet.has(id),
+      ),
+    [requeuedCatalogEntryIdsOnPage, selectedRequeuedCatalogIdSet],
+  );
+  const selectedFailedCatalogCount = selectedFailedCatalogVisibleIds.length;
+  const selectedFailedCatalogCountOnPage =
+    selectedFailedCatalogVisibleIds.length;
+  const selectedRequeuedCatalogCount = selectedRequeuedCatalogVisibleIds.length;
   const selectedRequeuedCatalogCountOnPage =
-    requeuedCatalogEntryIdsOnPage.filter((id) =>
-      selectedRequeuedCatalogIdSet.has(id),
-    ).length;
+    selectedRequeuedCatalogVisibleIds.length;
   const allFailedCatalogSelected =
     failedCatalogEntryIdsOnPage.length > 0 &&
     selectedFailedCatalogCountOnPage === failedCatalogEntryIdsOnPage.length;
   const allRequeuedCatalogSelected =
     requeuedCatalogEntryIdsOnPage.length > 0 &&
-    selectedRequeuedCatalogCountOnPage ===
-      requeuedCatalogEntryIdsOnPage.length;
+    selectedRequeuedCatalogCountOnPage === requeuedCatalogEntryIdsOnPage.length;
 
   const selectedRunIdSet = useMemo(
     () => new Set(selectedRunIds),
@@ -2246,7 +2329,9 @@ export default function ProcessingCatalogBooksPage() {
 
   useEffect(() => {
     setSelectedDuplicateReviewIds((current) =>
-      current.filter((id) => duplicateReviews.some((review) => review.id === id)),
+      current.filter((id) =>
+        duplicateReviews.some((review) => review.id === id),
+      ),
     );
   }, [duplicateReviews]);
 
@@ -3440,7 +3525,7 @@ export default function ProcessingCatalogBooksPage() {
   function renderRequeueReviewCard() {
     return (
       <ProcessingJobReviewCard
-        visible={jobReviewsLoading || requeuedJobs.length > 0}
+        visible
         title="Requeued Jobs Create Queue"
         emptyTitle="No requeued jobs match these filters"
         cardClassName="processing-requeue-card"
@@ -3502,7 +3587,9 @@ export default function ProcessingCatalogBooksPage() {
           )
         }
         onToggleJob={(jobId) =>
-          setSelectedRequeueJobIds((current) => toggleSelectedId(current, jobId))
+          setSelectedRequeueJobIds((current) =>
+            toggleSelectedId(current, jobId),
+          )
         }
         selectedSubmissionIds={selectedRequeueSubmissionIds}
         submissionIds={requeueSubmissionIds}
@@ -3531,7 +3618,7 @@ export default function ProcessingCatalogBooksPage() {
   function renderFailedJobsCard() {
     return (
       <ProcessingJobReviewCard
-        visible={jobReviewsLoading || failedJobs.length > 0}
+        visible
         title="Failed Jobs Create Queue"
         emptyTitle="No failed jobs match these filters"
         cardClassName="processing-failed-card"
@@ -3585,7 +3672,11 @@ export default function ProcessingCatalogBooksPage() {
         jobIdsOnPage={failedJobIdsOnPage}
         onToggleAll={() =>
           setSelectedFailedJobIds((current) =>
-            toggleVisibleSelection(current, failedJobIdsOnPage, allFailedSelected),
+            toggleVisibleSelection(
+              current,
+              failedJobIdsOnPage,
+              allFailedSelected,
+            ),
           )
         }
         onToggleJob={(jobId) =>
@@ -4130,6 +4221,9 @@ export default function ProcessingCatalogBooksPage() {
     title,
     entries,
     emptyTitle,
+    filters,
+    setFilters,
+    searchPlaceholder,
     selectedIdSet,
     selectedIdsOnPage,
     allSelected,
@@ -4141,16 +4235,31 @@ export default function ProcessingCatalogBooksPage() {
     bulkMode,
   }) {
     const matchingEntries = entries;
-    if (!matchingEntries.length) {
-      return null;
-    }
-
+    const hasEntries = matchingEntries.length > 0;
     return (
       <QueueTableCard
         title={title}
         emptyTitle={emptyTitle}
         loading={catalogOverviewLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        headerAside={
+          <CatalogSearchRow
+            filters={filters}
+            setFilters={setFilters}
+            fields={[]}
+            defaultFilters={defaultCatalogStatusFilters}
+            filtersExpanded={false}
+            setFiltersExpanded={() => {}}
+            searchPlaceholder={searchPlaceholder}
+            resultCount={matchingEntries.length}
+            resultCountLoading={catalogOverviewLoading}
+            drawerId={`${activeTab}-${title.toLowerCase().replace(/\s+/g, "-")}-filters`}
+            compact
+            showFilterToggle={false}
+            onSearchClear={setFilters}
+            buttonsDisabled={catalogActionsDisabled}
+          />
+        }
         actions={
           <div className="processing-card-actions processing-card-actions-grouped">
             <div className="processing-card-action-row">
@@ -4183,7 +4292,8 @@ export default function ProcessingCatalogBooksPage() {
                 title={catalogActionDisabledReason || undefined}
               >
                 <span className="button-label">
-                  {creatingCatalog && catalogActionMode === `${bulkMode}:all` ? (
+                  {creatingCatalog &&
+                  catalogActionMode === `${bulkMode}:all` ? (
                     <LoadingSpinner size={14} />
                   ) : null}
                   Create all
@@ -4193,94 +4303,103 @@ export default function ProcessingCatalogBooksPage() {
           </div>
         }
       >
-        <table className="simple-table processing-table processing-catalog-table">
-          <thead>
-            <tr>
-              <th className="processing-col-select">
-                <input
-                  type="checkbox"
-                  className="processing-checkbox"
-                  checked={allSelected}
-                  onChange={onToggleAll}
-                  disabled={!selectedIdsOnPage.length || catalogActionsDisabled}
-                  aria-label={
-                    allSelected
-                      ? `Clear visible ${title.toLowerCase()} selections`
-                      : `Select all visible ${title.toLowerCase()} rows`
-                  }
-                />
-              </th>
-              <th className="processing-col-request">Book</th>
-              <th className="processing-col-category">Categories</th>
-              <th className="processing-col-status">Status</th>
-              <th className="processing-col-book">Local Book</th>
-              <th className="processing-col-action">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {matchingEntries.map((entry) => {
-              const isBusy = busyActionId === entry.id;
-              return (
-                <tr key={`catalog-status-${entry.id}`}>
-                  <td className="processing-col-select">
-                    <input
-                      type="checkbox"
-                      className="processing-checkbox"
-                      checked={selectedIdSet.has(entry.id)}
-                      onChange={() => onToggleEntry(entry.id)}
-                      disabled={
-                        !canCreateCatalogEntry(entry) || catalogActionsDisabled
-                      }
-                      aria-label={`Select ${entry.title}`}
-                    />
-                  </td>
-                  <td className="processing-col-request">
-                    <div className="table-cell-stack table-request-cell">
-                      <strong>{entry.title}</strong>
-                      {entry.author_line ? (
-                        <span className="table-note">{entry.author_line}</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="processing-col-category">
-                    {entry.categories || <span className="table-note">-</span>}
-                  </td>
-                  <td>
-                    <StatusPill value={entry.curation_status} />
-                  </td>
-                  <td>
-                    {entry.local_book_slug ? (
-                      <BookRouteLink
-                        slug={entry.local_book_slug}
-                        className="meta-link"
-                      >
-                        {entry.local_book_title}
-                      </BookRouteLink>
-                    ) : (
-                      <span className="table-note">-</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="table-actions">
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() =>
-                          queueCatalogStatusBooks([entry.id], {
-                            rowId: entry.id,
-                          })
+        {hasEntries ? (
+          <table className="simple-table processing-table processing-catalog-table">
+            <thead>
+              <tr>
+                <th className="processing-col-select">
+                  <input
+                    type="checkbox"
+                    className="processing-checkbox"
+                    checked={allSelected}
+                    onChange={onToggleAll}
+                    disabled={
+                      !selectedIdsOnPage.length || catalogActionsDisabled
+                    }
+                    aria-label={
+                      allSelected
+                        ? `Clear visible ${title.toLowerCase()} selections`
+                        : `Select all visible ${title.toLowerCase()} rows`
+                    }
+                  />
+                </th>
+                <th className="processing-col-request">Book</th>
+                <th className="processing-col-category">Categories</th>
+                <th className="processing-col-status">Status</th>
+                <th className="processing-col-book">Local Book</th>
+                <th className="processing-col-action">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matchingEntries.map((entry) => {
+                const isBusy = busyActionId === entry.id;
+                return (
+                  <tr key={`catalog-status-${entry.id}`}>
+                    <td className="processing-col-select">
+                      <input
+                        type="checkbox"
+                        className="processing-checkbox"
+                        checked={selectedIdSet.has(entry.id)}
+                        onChange={() => onToggleEntry(entry.id)}
+                        disabled={
+                          !canCreateCatalogEntry(entry) ||
+                          catalogActionsDisabled
                         }
-                        disabled={isBusy || catalogActionsDisabled}
-                      >
-                        {isBusy ? "Queueing..." : "Create"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                        aria-label={`Select ${entry.title}`}
+                      />
+                    </td>
+                    <td className="processing-col-request">
+                      <div className="table-cell-stack table-request-cell">
+                        <strong>{entry.title}</strong>
+                        {entry.author_line ? (
+                          <span className="table-note">
+                            {entry.author_line}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="processing-col-category">
+                      {entry.categories || (
+                        <span className="table-note">-</span>
+                      )}
+                    </td>
+                    <td>
+                      <StatusPill value={entry.curation_status} />
+                    </td>
+                    <td>
+                      {entry.local_book_slug ? (
+                        <BookRouteLink
+                          slug={entry.local_book_slug}
+                          className="meta-link"
+                        >
+                          {entry.local_book_title}
+                        </BookRouteLink>
+                      ) : (
+                        <span className="table-note">-</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() =>
+                            queueCatalogStatusBooks([entry.id], {
+                              rowId: entry.id,
+                            })
+                          }
+                          disabled={isBusy || catalogActionsDisabled}
+                        >
+                          {isBusy ? "Queueing..." : "Create"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : null}
       </QueueTableCard>
     );
   }
@@ -4583,81 +4702,79 @@ export default function ProcessingCatalogBooksPage() {
       <div className="processing-section-grid">
         {renderCatalogSummaryCard()}
         {renderCatalogCard()}
-        {renderCatalogStatusCard(
-          {
-            title: "Failed Catalog",
-            entries: failedCatalogEntries,
-            emptyTitle: "No failed catalog rows",
-            selectedIdSet: selectedFailedCatalogIdSet,
-            selectedIdsOnPage: failedCatalogEntryIdsOnPage,
-            allSelected: allFailedCatalogSelected,
-            selectedCount: selectedFailedCatalogCount,
-            onToggleAll: () =>
-              setSelectedFailedCatalogEntryIds((current) =>
-                toggleVisibleSelection(
-                  current,
-                  failedCatalogEntryIdsOnPage,
-                  allFailedCatalogSelected,
-                ),
-              ),
-            onToggleEntry: (entryId) =>
-              setSelectedFailedCatalogEntryIds((current) =>
-                toggleSelectedId(current, entryId),
-              ),
-            onCreateSelected: () =>
-              queueCatalogStatusBooks(selectedFailedCatalogEntryIds, {
-                mode: "failed-catalog:selected",
-                clearSelection: setSelectedFailedCatalogEntryIds,
-              }),
-            onCreateAll: () =>
-              queueCatalogStatusBooks(failedCatalogEntryIdsOnPage, {
-                mode: "failed-catalog:all",
-                clearSelection: setSelectedFailedCatalogEntryIds,
-              }),
-            bulkMode: "failed-catalog",
-          }
-        )}
-        {renderCatalogStatusCard(
-          {
-            title: "Requeued Catalog",
-            entries: requeuedCatalogEntries,
-            emptyTitle: "No requeued catalog rows",
-            selectedIdSet: selectedRequeuedCatalogIdSet,
-            selectedIdsOnPage: requeuedCatalogEntryIdsOnPage,
-            allSelected: allRequeuedCatalogSelected,
-            selectedCount: selectedRequeuedCatalogCount,
-            onToggleAll: () =>
-              setSelectedRequeuedCatalogEntryIds((current) =>
-                toggleVisibleSelection(
-                  current,
-                  requeuedCatalogEntryIdsOnPage,
-                  allRequeuedCatalogSelected,
-                ),
-              ),
-            onToggleEntry: (entryId) =>
-              setSelectedRequeuedCatalogEntryIds((current) =>
-                toggleSelectedId(current, entryId),
-              ),
-            onCreateSelected: () =>
-              queueCatalogStatusBooks(selectedRequeuedCatalogEntryIds, {
-                mode: "requeued-catalog:selected",
-                clearSelection: setSelectedRequeuedCatalogEntryIds,
-              }),
-            onCreateAll: () =>
-              queueCatalogStatusBooks(requeuedCatalogEntryIdsOnPage, {
-                mode: "requeued-catalog:all",
-                clearSelection: setSelectedRequeuedCatalogEntryIds,
-              }),
-            bulkMode: "requeued-catalog",
-          }
-        )}
         {renderJobsCard("Book Creation", "processing-catalog-height-card")}
-        {jobReviewsLoading || requeuedJobs.length > 0
-          ? renderRequeueReviewCard()
-          : null}
-        {jobReviewsLoading || failedJobs.length > 0
-          ? renderFailedJobsCard()
-          : null}
+        {renderCatalogStatusCard({
+          title: "Failed Catalog",
+          entries: filteredFailedCatalogEntries,
+          emptyTitle: "No failed catalog rows",
+          filters: failedCatalogFilters,
+          setFilters: setFailedCatalogFilters,
+          searchPlaceholder: "Search failed catalog",
+          selectedIdSet: selectedFailedCatalogIdSet,
+          selectedIdsOnPage: failedCatalogEntryIdsOnPage,
+          allSelected: allFailedCatalogSelected,
+          selectedCount: selectedFailedCatalogCount,
+          onToggleAll: () =>
+            setSelectedFailedCatalogEntryIds((current) =>
+              toggleVisibleSelection(
+                current,
+                failedCatalogEntryIdsOnPage,
+                allFailedCatalogSelected,
+              ),
+            ),
+          onToggleEntry: (entryId) =>
+            setSelectedFailedCatalogEntryIds((current) =>
+              toggleSelectedId(current, entryId),
+            ),
+          onCreateSelected: () =>
+            queueCatalogStatusBooks(selectedFailedCatalogVisibleIds, {
+              mode: "failed-catalog:selected",
+              clearSelection: setSelectedFailedCatalogEntryIds,
+            }),
+          onCreateAll: () =>
+            queueCatalogStatusBooks(failedCatalogEntryIdsOnPage, {
+              mode: "failed-catalog:all",
+              clearSelection: setSelectedFailedCatalogEntryIds,
+            }),
+          bulkMode: "failed-catalog",
+        })}
+        {renderCatalogStatusCard({
+          title: "Requeued Catalog",
+          entries: filteredRequeuedCatalogEntries,
+          emptyTitle: "No requeued catalog rows",
+          filters: requeuedCatalogFilters,
+          setFilters: setRequeuedCatalogFilters,
+          searchPlaceholder: "Search requeued catalog",
+          selectedIdSet: selectedRequeuedCatalogIdSet,
+          selectedIdsOnPage: requeuedCatalogEntryIdsOnPage,
+          allSelected: allRequeuedCatalogSelected,
+          selectedCount: selectedRequeuedCatalogCount,
+          onToggleAll: () =>
+            setSelectedRequeuedCatalogEntryIds((current) =>
+              toggleVisibleSelection(
+                current,
+                requeuedCatalogEntryIdsOnPage,
+                allRequeuedCatalogSelected,
+              ),
+            ),
+          onToggleEntry: (entryId) =>
+            setSelectedRequeuedCatalogEntryIds((current) =>
+              toggleSelectedId(current, entryId),
+            ),
+          onCreateSelected: () =>
+            queueCatalogStatusBooks(selectedRequeuedCatalogVisibleIds, {
+              mode: "requeued-catalog:selected",
+              clearSelection: setSelectedRequeuedCatalogEntryIds,
+            }),
+          onCreateAll: () =>
+            queueCatalogStatusBooks(requeuedCatalogEntryIdsOnPage, {
+              mode: "requeued-catalog:all",
+              clearSelection: setSelectedRequeuedCatalogEntryIds,
+            }),
+          bulkMode: "requeued-catalog",
+        })}
+        {renderRequeueReviewCard()}
+        {renderFailedJobsCard()}
         {renderSubmissionsCard("Catalog Requests")}
         {renderDuplicateCard("Duplicate Checks")}
       </div>

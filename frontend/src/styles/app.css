@@ -2372,6 +2372,10 @@ textarea {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.processing-summary-bar--automation {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .processing-incomplete-top-grid {
   grid-column: 1 / -1;
   display: grid;
@@ -2407,6 +2411,18 @@ textarea {
 .processing-summary-card.processing-incomplete-top-card .processing-card-head,
 .processing-summary-card.processing-incomplete-side-card .processing-card-head {
   min-height: 50px;
+}
+
+@media (max-width: 1180px) {
+  .processing-summary-bar--automation {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .processing-summary-bar--automation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .processing-removed-card {

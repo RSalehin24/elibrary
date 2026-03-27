@@ -1149,7 +1149,10 @@ def test_processing_manager_can_stop_queued_job(client, monkeypatch):
         queue_name="celery",
     )
 
-    monkeypatch.setattr("apps.ingestion.services.submissions.revoke_processing_task", lambda task_id: None)
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.revoke_processing_task",
+        lambda task_id, terminate=False: None,
+    )
 
     response = client.post(f"/api/ingestion/jobs/{job.id}/stop/", data=json.dumps({}), content_type="application/json")
 
@@ -1157,6 +1160,45 @@ def test_processing_manager_can_stop_queued_job(client, monkeypatch):
     job.refresh_from_db()
     submission.refresh_from_db()
     assert job.status == JobStatus.CANCELLED
+    assert submission.status == SubmissionStatus.CANCELLED
+
+
+@pytest.mark.django_db
+def test_processing_manager_can_stop_processing_job(client, monkeypatch):
+    admin = User.objects.create_superuser(email="stop-processing-job-admin@example.com", password="strong-password-123")
+    client.force_login(admin)
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        origin=SubmissionOrigin.USER,
+        original_input="https://www.ebanglalibrary.com/books/processing-book/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/processing-book/"),
+        resolved_url="https://www.ebanglalibrary.com/books/processing-book/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.PROCESSING,
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.PROCESSING,
+        task_id="processing-task",
+        queue_name="celery",
+        cancel_requested=False,
+    )
+
+    revoke_calls = []
+
+    def fake_revoke(task_id, terminate=False):
+        revoke_calls.append({"task_id": task_id, "terminate": terminate})
+
+    monkeypatch.setattr("apps.ingestion.services.submissions.revoke_processing_task", fake_revoke)
+
+    response = client.post(f"/api/ingestion/jobs/{job.id}/stop/", data=json.dumps({}), content_type="application/json")
+
+    assert response.status_code == 200
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert revoke_calls == [{"task_id": "processing-task", "terminate": True}]
+    assert job.status == JobStatus.CANCELLED
+    assert job.cancel_requested is False
     assert submission.status == SubmissionStatus.CANCELLED
 
 

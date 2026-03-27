@@ -2,7 +2,7 @@ import logging
 from urllib.parse import quote
 
 from django.conf import settings
-from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models import Case, IntegerField, OuterRef, Prefetch, Q, Subquery, Value, When
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -15,7 +15,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.access.models import PermissionScope
-from apps.catalog.models import Book, BookSource, ContributorRole, GeneratedAssetStatus, GeneratedAssetType
+from apps.catalog.models import (
+    Book,
+    BookCategory,
+    BookContributor,
+    BookSource,
+    ContributorRole,
+    GeneratedAssetStatus,
+    GeneratedAssetType,
+)
 from apps.common.models import ReviewState
 from apps.common.permissions import CanManageProcessing, user_has_scope
 from apps.common.url_utils import public_api_url
@@ -1118,26 +1126,72 @@ class IncompleteCatalogCheckListView(APIView):
     permission_classes = [CanManageProcessing]
 
     def get(self, request):
+        incomplete_category_filter = Q()
+        for keyword in INCOMPLETE_CATEGORY_KEYWORDS:
+            incomplete_category_filter |= Q(book_categories__category__name__icontains=keyword)
+
+        latest_job_queryset = ProcessingJob.objects.filter(book=OuterRef("pk")).order_by("-created_at")
         books = list(
             Book.objects.filter(deleted_at__isnull=True)
+            .filter(incomplete_category_filter)
+            .distinct()
+            .only("id", "title", "slug", "updated_at")
+            .annotate(
+                latest_job_status=Subquery(latest_job_queryset.values("status")[:1]),
+                latest_job_error=Subquery(latest_job_queryset.values("last_error")[:1]),
+                latest_job_type=Subquery(latest_job_queryset.values("job_type")[:1]),
+            )
             .prefetch_related(
-                "book_categories__category",
-                "source_urls",
-                "processing_jobs",
-                "book_contributors__contributor",
+                Prefetch(
+                    "book_categories",
+                    queryset=BookCategory.objects.select_related("category").only(
+                        "book_id",
+                        "category_id",
+                        "category__name",
+                    ),
+                ),
+                Prefetch(
+                    "source_urls",
+                    queryset=BookSource.objects.only(
+                        "book_id",
+                        "normalized_source_url",
+                        "created_at",
+                    ).order_by("-created_at"),
+                    to_attr="prefetched_source_urls",
+                ),
+                Prefetch(
+                    "book_contributors",
+                    queryset=BookContributor.objects.filter(
+                        role=ContributorRole.AUTHOR,
+                    )
+                    .select_related("contributor")
+                    .only(
+                        "book_id",
+                        "role",
+                        "sort_order",
+                        "contributor_id",
+                        "contributor__name",
+                    )
+                    .order_by("sort_order", "contributor__name"),
+                    to_attr="prefetched_author_relations",
+                ),
             )
             .order_by("title")
         )
 
         source_urls = []
         for book in books:
-            source = next(iter(book.source_urls.all()), None)
+            source = next(iter(getattr(book, "prefetched_source_urls", [])), None)
             if source and source.normalized_source_url:
                 source_urls.append(source.normalized_source_url)
 
         entry_map = {
             entry.source_url: entry
-            for entry in SourceCatalogEntry.objects.filter(source_url__in=source_urls)
+            for entry in SourceCatalogEntry.objects.filter(source_url__in=source_urls).only(
+                "id",
+                "source_url",
+                "raw_data",
+            )
         }
 
         rows = []
@@ -1162,7 +1216,7 @@ class IncompleteCatalogCheckListView(APIView):
             if not has_incomplete_keyword(local_categories):
                 continue
 
-            source = next(iter(book.source_urls.all()), None)
+            source = next(iter(getattr(book, "prefetched_source_urls", [])), None)
             source_url = source.normalized_source_url if source else ""
             entry = entry_map.get(source_url)
             source_categories = ""
@@ -1171,8 +1225,7 @@ class IncompleteCatalogCheckListView(APIView):
                 source_categories = (raw_data.get("category") or raw_data.get("book_type") or "").strip()
 
             removed_from_unfinished = bool(entry) and not has_incomplete_keyword(source_categories)
-            latest_job = next(iter(book.processing_jobs.all()), None)
-            latest_status = latest_job.status if latest_job else ""
+            latest_status = book.latest_job_status or ""
 
             summary["total_incomplete_books"] += 1
             if removed_from_unfinished:
@@ -1186,13 +1239,13 @@ class IncompleteCatalogCheckListView(APIView):
                 mapped_status = "stopped" if latest_status == "cancelled" else latest_status
                 summary[mapped_status] += 1
 
-            requeued = bool(latest_job and latest_job.job_type == "reprocess")
+            requeued = book.latest_job_type == "reprocess"
             if requeued:
                 summary["requeued"] += 1
 
             author_names = [
                 relation.contributor.name
-                for relation in book.book_contributors.all()
+                for relation in getattr(book, "prefetched_author_relations", [])
                 if relation.role == ContributorRole.AUTHOR
                 and relation.contributor_id
                 and relation.contributor
@@ -1211,7 +1264,7 @@ class IncompleteCatalogCheckListView(APIView):
                     "catalog_entry_id": str(entry.id) if entry else "",
                     "removed_from_unfinished": removed_from_unfinished,
                     "latest_job_status": "stopped" if latest_status == "cancelled" else latest_status,
-                    "latest_job_error": latest_job.last_error if latest_job else "",
+                    "latest_job_error": book.latest_job_error or "",
                     "is_requeued": requeued,
                     "updated_at": book.updated_at,
                 }
