@@ -1,0 +1,247 @@
+.catalog-table-shell {
+  overflow: auto;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.64),
+    0 16px 28px rgba(12, 47, 36, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.catalog-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+.book-table {
+  min-width: 1120px;
+}
+
+.book-table-col-id {
+  width: 152px;
+}
+
+.book-table-col-writer {
+  width: 320px;
+}
+
+.book-table-col-action {
+  width: 112px;
+}
+
+.catalog-table th,
+.catalog-table td {
+  padding: 14px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(17, 70, 54, 0.1);
+}
+
+.catalog-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(244, 249, 246, 0.94);
+  color: rgba(11, 61, 46, 0.78);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.catalog-table tbody tr:hover {
+  background: rgba(15, 75, 56, 0.04);
+}
+
+.catalog-table tbody tr.is-highlighted td {
+  background: rgba(19, 91, 69, 0.08);
+}
+
+.catalog-table tbody tr.is-highlighted:hover td {
+  background: rgba(19, 91, 69, 0.12);
+}
+
+.catalog-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table-code-cell {
+  width: 152px;
+  max-width: 152px;
+  white-space: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-code-link,
+.table-title-link {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.table-code-link:hover,
+.table-title-link:hover {
+  color: var(--accent-strong);
+}
+
+.table-title-cell {
+  min-width: 240px;
+}
+
+.table-secondary-line {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.table-muted {
+  color: var(--muted);
+}
+
+.table-writer-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.table-writer-line {
+  display: grid;
+  gap: 4px;
+}
+
+.table-role-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(15, 75, 56, 0.08);
+  color: var(--accent-strong);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.table-type-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.table-type-pill-digital {
+  background: rgba(15, 75, 56, 0.08);
+  color: var(--accent-strong);
+}
+
+.table-type-pill-manual {
+  background: rgba(167, 111, 33, 0.12);
+  color: #8f5a17;
+}
+
+.table-action-cell {
+  white-space: nowrap;
+}
+
+.table-row-action {
+  min-width: 88px;
+}
+
+.property-table {
+  min-width: 720px;
+}
+
+.property-table th,
+.property-table td {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.manual-books-tabs {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.manual-books-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.52),
+    0 8px 16px rgba(12, 47, 36, 0.06);
+}
+
+.manual-books-tab.is-active {
+  background: linear-gradient(180deg, #135b45 0%, #0b3d2e 100%);
+  color: #ecfff6;
+  border-color: rgba(11, 61, 46, 0.42);
+}
+
+.manual-books-panel {
+  width: 100%;
+}
+
+.manual-book-composer {
+  gap: 22px;
+}
+
+.manual-book-composer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.manual-book-composer-header h2 {
+  margin: 0;
+}
+
+.manual-book-composer-header .muted-copy {
+  margin: 0;
+}
+
+.manual-book-form-actions {
+  margin-top: 6px;
+}
+
+.manual-books-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.toolbar-action-panel {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  min-height: 124px;
+  padding: 16px;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 24px;
+  background: linear-gradient(
+    180deg,
+    rgba(248, 252, 250, 0.82),
+    rgba(240, 247, 243, 0.74)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.68),
+    0 10px 18px rgba(12, 47, 36, 0.05);
+}

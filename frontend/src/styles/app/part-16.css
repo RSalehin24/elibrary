@@ -1,0 +1,250 @@
+.catalog-result-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64px;
+  min-width: 72px;
+  margin: 0;
+  padding: 0 22px;
+  border: 1px solid rgba(17, 70, 54, 0.12);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.88),
+    rgba(245, 249, 247, 0.82)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.74),
+    0 14px 28px rgba(12, 47, 36, 0.08);
+  color: rgba(11, 61, 46, 0.76);
+  font-size: 0.98rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.catalog-result-count.is-loading {
+  min-width: 56px;
+  padding: 0 16px;
+}
+
+.catalog-toolbar-secondary-shell {
+  display: grid;
+  min-width: 0;
+  height: 100%;
+}
+
+.catalog-toolbar-secondary-shell.is-standalone {
+  height: auto;
+}
+
+.catalog-toolbar-secondary-shell.is-below {
+  height: auto;
+}
+
+.catalog-toolbar-secondary-layout {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.property-table-toolbar-layout {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(280px, 1fr);
+  gap: 12px;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.catalog-toolbar-sync-panel,
+.catalog-toolbar-secondary:not(.property-table-controls),
+.property-table-toolbar-leading {
+  min-height: 124px;
+  border: 1px solid rgba(17, 70, 54, 0.14);
+  border-radius: 24px;
+  background: linear-gradient(
+    180deg,
+    rgba(248, 252, 250, 0.82),
+    rgba(240, 247, 243, 0.74)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.68),
+    0 10px 18px rgba(12, 47, 36, 0.05);
+}
+
+.catalog-toolbar-sync-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+}
+
+.property-table-toolbar-leading {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  padding: 14px 16px;
+}
+
+.property-table-toolbar-leading .toolbar-action-panel {
+  min-height: 0;
+}
+
+.catalog-toolbar-sync-button {
+  width: 46px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0;
+  color: rgba(11, 61, 46, 0.82);
+}
+
+.catalog-toolbar-sync-button svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.catalog-toolbar-sync-button .loading-spinner {
+  --spinner-size: 18px;
+}
+
+.catalog-toolbar-secondary {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 110px minmax(0, 1fr);
+  grid-template-areas: "sort rows pagination";
+  align-items: end;
+  gap: 12px;
+  height: auto;
+  padding: 14px 16px;
+}
+
+.property-table-controls {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.property-table-controls .catalog-toolbar-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.property-table-controls .catalog-toolbar-select {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.catalog-toolbar-inline-label {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.property-table-controls .catalog-toolbar-inline-label {
+  order: 0;
+}
+
+.catalog-toolbar-secondary--catalog-card {
+  grid-template-columns: minmax(180px, 1fr) 120px;
+  grid-template-areas:
+    "sort rows"
+    "pagination pagination";
+  align-items: center;
+  row-gap: 10px;
+}
+
+.catalog-toolbar-secondary--catalog-card .catalog-pagination {
+  width: 100%;
+  justify-content: space-between;
+  align-self: center;
+}
+
+.catalog-page-header--with-toolbar:not(.catalog-page-header--stacked) {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.catalog-page-header--with-toolbar:not(.catalog-page-header--stacked)
+  .catalog-toolbar-wrap {
+  justify-self: stretch;
+}
+
+.catalog-page-header--property-layout {
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "title toolbar"
+    "controls controls";
+  align-items: start;
+  row-gap: 8px;
+}
+
+.catalog-page-header--property-layout .catalog-toolbar-wrap {
+  grid-area: toolbar;
+  justify-self: stretch;
+}
+
+.catalog-page-header--property-layout > h1 {
+  grid-area: title;
+  align-self: center;
+}
+
+.catalog-page-controls-row {
+  grid-area: controls;
+  display: block;
+  width: 100%;
+  margin-top: 0;
+}
+
+.catalog-page-controls-row .property-table-controls {
+  grid-template-columns: minmax(170px, 1fr) 120px minmax(0, 1fr);
+  align-items: center;
+  padding: 0;
+}
+
+.catalog-page-controls-row .catalog-toolbar-select {
+  min-height: 36px;
+  padding: 0 34px 0 12px;
+  font-size: 0.84rem;
+  border-radius: 12px;
+}
+
+.catalog-page-controls-row .catalog-toolbar-field .fact-label {
+  font-size: 0.68rem;
+}
+
+.catalog-page-controls-row .catalog-page-indicator {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 0.8rem;
+}
+
+.catalog-page-controls-row .catalog-pagination-actions .ghost-button {
+  min-height: 32px;
+  padding: 0 9px;
+  font-size: 0.72rem;
+}
+
+.catalog-page-header--property-layout
+  .catalog-search-actions-extra
+  .toolbar-icon-button {
+  min-height: 40px;
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+}
+
+.catalog-page-header--property-layout
+  .catalog-search-actions-extra
+  .toolbar-icon-button.is-icon-only {
+  width: 40px;
+  min-width: 40px;
+}

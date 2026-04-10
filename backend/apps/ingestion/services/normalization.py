@@ -1,7 +1,7 @@
 import re
 from html import escape
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from apps.catalog.models import ContributorRole
 from apps.catalog.services import normalize_book_contributors
@@ -28,6 +28,12 @@ DEDICATION_PATTERNS = [
     "অনুবাদকের উৎসর্গ",
     "লেখকের উৎসর্গ",
     "dedication",
+]
+INLINE_TOC_HEADING_PATTERNS = [
+    "সূচীপত্র",
+    "সুচিপত্র",
+    "table of contents",
+    "contents",
 ]
 
 DEDICATION_INLINE_PREFIX_PATTERN = re.compile(
@@ -194,6 +200,57 @@ def text_matches_patterns(text, patterns):
         if normalize_catalog_text(cleaned_pattern) in normalized:
             return True
     return False
+
+
+def heading_matches_patterns(text, patterns):
+    normalized = normalize_catalog_text(text)
+    if not normalized:
+        return False
+    for pattern in patterns:
+        normalized_pattern = normalize_catalog_text(pattern)
+        if not normalized_pattern:
+            continue
+        if normalized == normalized_pattern or normalized.startswith(
+            f"{normalized_pattern} ",
+        ):
+            return True
+    return False
+
+
+def remove_inline_toc_heading_and_lists(block):
+    current_block = block
+    while current_block is not None:
+        next_block = current_block.find_next_sibling()
+        if current_block.parent is not None:
+            current_block.decompose()
+        if next_block is None or next_block.name not in {"ul", "ol"}:
+            break
+        current_block = next_block
+
+
+def is_probable_inline_toc_list(block):
+    if block.name not in {"ul", "ol"}:
+        return False
+    items = [
+        clean_display_text(item.get_text(" ", strip=True))
+        for item in block.find_all("li", recursive=False)
+    ]
+    return bool(items) and all(item and len(item) <= 140 for item in items)
+
+
+def strip_leading_probable_toc_lists(soup):
+    root = soup.find()
+    if root is None:
+        return
+
+    while True:
+        first_child = next(
+            (child for child in root.children if isinstance(child, Tag)),
+            None,
+        )
+        if first_child is None or not is_probable_inline_toc_list(first_child):
+            break
+        first_child.decompose()
 
 
 def match_pattern_key(label, pattern_map):
@@ -424,7 +481,7 @@ def is_dedication_heading(text, strong_text="", tag_name=""):
         return False
     if text_matches_patterns(heading_text, BODY_SECTION_PATTERNS):
         return False
-    if not text_matches_patterns(heading_text, DEDICATION_PATTERNS):
+    if not heading_matches_patterns(heading_text, DEDICATION_PATTERNS):
         return False
     if search_front_matter_label_value(text, strong_text=strong_text, has_break=False):
         return False
@@ -538,6 +595,9 @@ def split_leading_front_sections(main_content_html):
         if is_separator_paragraph(text):
             block.decompose()
             continue
+        if text_matches_patterns(text, INLINE_TOC_HEADING_PATTERNS):
+            remove_inline_toc_heading_and_lists(block)
+            break
 
         if is_dedication_heading(text, strong_text=strong_text, tag_name=block.name):
             break
@@ -561,6 +621,9 @@ def split_leading_front_sections(main_content_html):
                 "html": "\n".join(current_section["html_parts"]),
             }
         )
+
+    if sections:
+        strip_leading_probable_toc_lists(soup)
 
     return sections, str(soup)
 

@@ -5,7 +5,7 @@ import unicodedata
 def clean_display_text(value):
     if not value:
         return ""
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value))).strip()
+    return re.sub(r"\s+", " ", str(value)).strip()
 
 
 def _is_textual_slug_character(char):
@@ -22,7 +22,7 @@ def normalize_catalog_text(value):
     if not value:
         return ""
 
-    text = clean_display_text(value).lower()
+    text = unicodedata.normalize("NFKC", clean_display_text(value)).lower()
     normalized = []
     for char in text:
         if char.isspace():
@@ -38,7 +38,7 @@ def unicode_slugify(value):
     if not value:
         return ""
 
-    text = clean_display_text(value).lower()
+    text = unicodedata.normalize("NFKC", clean_display_text(value)).lower()
     slug = []
     previous_was_separator = False
 

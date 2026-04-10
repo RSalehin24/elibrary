@@ -1,55 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import NavDropdown from "../features/layout/NavDropdown";
+import ProfileMenu from "../features/layout/ProfileMenu";
+import {
+  authenticatedNavigation,
+  bookPropertiesItems,
+  isBookPropertiesRoute,
+  isProcessingRoute,
+  processingItems,
+} from "../features/layout/navigation";
 import { useSession } from "../hooks/useSession";
 import { hasCapability } from "../utils/capabilities";
-
-function initialsForUser(value) {
-  return (
-    (value || "")
-      .trim()
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() || "")
-      .join("") || "?"
-  );
-}
-
-const bookPropertiesItems = [
-  { to: "/library", label: "Books" },
-  { to: "/categories", label: "Categories" },
-  { to: "/series", label: "Series" },
-  { to: "/writers", label: "Writers" },
-  { to: "/manual-books", label: "Physical Books' List" },
-];
-
-const processingPropertiesItems = [
-  {
-    to: "/processing-my-requests",
-    label: "My Requests",
-    capabilityRequired: false,
-  },
-  {
-    to: "/processing-catalog-books",
-    label: "Catalog Books",
-    capabilityRequired: true,
-  },
-  {
-    to: "/processing-automation",
-    label: "Automation",
-    capabilityRequired: true,
-  },
-
-  {
-    to: "/processing-incomplete-check",
-    label: "Incomplete Automation",
-    capabilityRequired: true,
-  },
-  {
-    to: "/processing-all-activity",
-    label: "All Activity",
-    capabilityRequired: true,
-  },
-];
 
 export default function AppShell({ children }) {
   const location = useLocation();
@@ -67,30 +28,12 @@ export default function AppShell({ children }) {
   const propertiesMenuRef = useRef(null);
   const processingMenuRef = useRef(null);
   const canManageProcessing = hasCapability(user, "processing:manage");
-  const visibleProcessingItems = processingPropertiesItems.filter(
+  const visibleProcessingItems = processingItems.filter(
     (item) => !item.capabilityRequired || canManageProcessing,
   );
-  const navigation = authenticated
-    ? [
-        { to: "/home", label: "Home" },
-        { to: "/create", label: "Create Books" },
-        ...(user?.is_superuser
-          ? [{ to: "/access", label: "Users & Access" }]
-          : []),
-      ]
-    : [];
-  const isBookPropertiesActive =
-    location.pathname === "/library" ||
-    location.pathname === "/categories" ||
-    location.pathname === "/series" ||
-    location.pathname === "/writers" ||
-    location.pathname === "/translators" ||
-    location.pathname === "/compilers" ||
-    location.pathname === "/editors" ||
-    location.pathname === "/manual-books" ||
-    location.pathname.startsWith("/books/");
-  const isProcessingPropertiesActive =
-    location.pathname.startsWith("/processing");
+  const navigation = authenticated ? authenticatedNavigation(user) : [];
+  const isBookPropertiesActive = isBookPropertiesRoute(location.pathname);
+  const isProcessingPropertiesActive = isProcessingRoute(location.pathname);
   const isLoginRoute = location.pathname === "/login";
 
   useEffect(() => {
@@ -134,7 +77,6 @@ export default function AppShell({ children }) {
   }, [menuOpen, propertiesOpen, processingOpen]);
 
   const displayName = user?.full_name || user?.email || "";
-  const initials = initialsForUser(displayName);
 
   function hideReaderTopbar() {
     if (!isReaderRoute) {
@@ -187,110 +129,24 @@ export default function AppShell({ children }) {
                   {item.label}
                 </NavLink>
               ))}
-              <div ref={propertiesMenuRef} className="nav-dropdown-shell">
-                <button
-                  type="button"
-                  className={
-                    isBookPropertiesActive
-                      ? "nav-link is-active nav-dropdown-trigger"
-                      : "nav-link nav-dropdown-trigger"
-                  }
-                  onClick={() => setPropertiesOpen((current) => !current)}
-                  aria-expanded={propertiesOpen}
-                  aria-haspopup="menu"
-                >
-                  <span>Book Properties</span>
-                  <span
-                    className={
-                      propertiesOpen
-                        ? "nav-dropdown-caret is-open"
-                        : "nav-dropdown-caret"
-                    }
-                    aria-hidden="true"
-                  >
-                    <svg
-                      viewBox="0 0 16 16"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="m3.5 6 4.5 4 4.5-4" />
-                    </svg>
-                  </span>
-                </button>
-                {propertiesOpen ? (
-                  <div className="nav-dropdown-panel" role="menu">
-                    {bookPropertiesItems.map((item) => (
-                      <NavLink
-                        key={item.to}
-                        to={item.to}
-                        className={({ isActive }) =>
-                          isActive
-                            ? "nav-dropdown-link is-active"
-                            : "nav-dropdown-link"
-                        }
-                        onClick={() => setPropertiesOpen(false)}
-                      >
-                        {item.label}
-                      </NavLink>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-              <div ref={processingMenuRef} className="nav-dropdown-shell">
-                <button
-                  type="button"
-                  className={
-                    isProcessingPropertiesActive
-                      ? "nav-link is-active nav-dropdown-trigger"
-                      : "nav-link nav-dropdown-trigger"
-                  }
-                  onClick={() => setProcessingOpen((current) => !current)}
-                  aria-expanded={processingOpen}
-                  aria-haspopup="menu"
-                >
-                  <span>Processing</span>
-                  <span
-                    className={
-                      processingOpen
-                        ? "nav-dropdown-caret is-open"
-                        : "nav-dropdown-caret"
-                    }
-                    aria-hidden="true"
-                  >
-                    <svg
-                      viewBox="0 0 16 16"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="m3.5 6 4.5 4 4.5-4" />
-                    </svg>
-                  </span>
-                </button>
-                {processingOpen ? (
-                  <div className="nav-dropdown-panel" role="menu">
-                    {visibleProcessingItems.map((item) => (
-                      <NavLink
-                        key={item.to}
-                        to={item.to}
-                        className={({ isActive }) =>
-                          isActive
-                            ? "nav-dropdown-link is-active"
-                            : "nav-dropdown-link"
-                        }
-                        onClick={() => setProcessingOpen(false)}
-                      >
-                        {item.label}
-                      </NavLink>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+              <NavDropdown
+                menuRef={propertiesMenuRef}
+                active={isBookPropertiesActive}
+                open={propertiesOpen}
+                label="Book Properties"
+                items={bookPropertiesItems}
+                onToggle={() => setPropertiesOpen((current) => !current)}
+                onItemClick={() => setPropertiesOpen(false)}
+              />
+              <NavDropdown
+                menuRef={processingMenuRef}
+                active={isProcessingPropertiesActive}
+                open={processingOpen}
+                label="Processing"
+                items={visibleProcessingItems}
+                onToggle={() => setProcessingOpen((current) => !current)}
+                onItemClick={() => setProcessingOpen(false)}
+              />
             </nav>
           ) : null}
           <div className="session-box">
@@ -304,83 +160,19 @@ export default function AppShell({ children }) {
                 >
                   My Books
                 </NavLink>
-                <div ref={profileMenuRef} className="profile-menu-shell">
-                  <button
-                    type="button"
-                    className="profile-menu-trigger"
-                    onClick={() => setMenuOpen((current) => !current)}
-                    aria-expanded={menuOpen}
-                    aria-haspopup="menu"
-                  >
-                    {user?.profile_image_url ? (
-                      <img
-                        className="profile-avatar"
-                        src={user.profile_image_url}
-                        alt={displayName}
-                      />
-                    ) : (
-                      <div className="profile-avatar">{initials}</div>
-                    )}
-                  </button>
-                  {menuOpen ? (
-                    <div className="profile-menu-dropdown" role="menu">
-                      <div className="profile-menu-summary">
-                        {user?.profile_image_url ? (
-                          <img
-                            className="profile-avatar profile-avatar-large"
-                            src={user.profile_image_url}
-                            alt={displayName}
-                          />
-                        ) : (
-                          <div className="profile-avatar profile-avatar-large">
-                            {initials}
-                          </div>
-                        )}
-                        <div className="profile-menu-meta">
-                          <strong>{displayName}</strong>
-                          <span>{user?.email}</span>
-                        </div>
-                      </div>
-                      <div className="profile-menu-actions">
-                        <NavLink
-                          to="/profile"
-                          className="profile-menu-link"
-                          onClick={() => setMenuOpen(false)}
-                        >
-                          Profile
-                        </NavLink>
-                        <div className="profile-menu-divider" />
-                        <button
-                          type="button"
-                          className="profile-menu-link profile-menu-signout"
-                          onClick={async () => {
-                            setMenuOpen(false);
-                            await logout();
-                          }}
-                        >
-                          <span
-                            className="profile-menu-icon"
-                            aria-hidden="true"
-                          >
-                            <svg
-                              viewBox="0 0 20 20"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.8"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M8 4.75H5.75A1.75 1.75 0 0 0 4 6.5v7a1.75 1.75 0 0 0 1.75 1.75H8" />
-                              <path d="M11 6.5 15 10l-4 3.5" />
-                              <path d="M14.75 10H8.5" />
-                            </svg>
-                          </span>
-                          <span>Sign Out</span>
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
+                <ProfileMenu
+                  displayName={displayName}
+                  email={user?.email}
+                  profileImageUrl={user?.profile_image_url}
+                  menuOpen={menuOpen}
+                  menuRef={profileMenuRef}
+                  onToggle={() => setMenuOpen((current) => !current)}
+                  onClose={() => setMenuOpen(false)}
+                  onLogout={async () => {
+                    setMenuOpen(false);
+                    await logout();
+                  }}
+                />
               </>
             ) : !isLoginRoute ? (
               <NavLink to="/login" className="ghost-button">

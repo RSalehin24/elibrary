@@ -1,0 +1,249 @@
+.processing-inline-loader {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.2;
+}
+
+.processing-summary-card > .processing-inline-loader,
+.processing-summary-card > .processing-summary-bar,
+.processing-summary-card > .stack-form {
+  min-height: 69px;
+}
+
+.processing-summary-card.processing-incomplete-top-card
+  > .processing-table-shell {
+  min-height: 0;
+  height: 100%;
+}
+
+.processing-table {
+  min-width: 860px;
+  table-layout: fixed;
+}
+
+.processing-catalog-table {
+  min-width: 1140px;
+}
+
+.processing-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(244, 248, 245, 0.96);
+  backdrop-filter: blur(6px);
+}
+
+.processing-col-select {
+  width: 56px;
+}
+
+.processing-catalog-table .processing-incomplete-col-select {
+  width: 24px;
+}
+
+.processing-incomplete-table {
+  min-width: 880px;
+  table-layout: fixed;
+}
+
+.processing-incomplete-table th,
+.processing-incomplete-table td {
+  padding: 10px 12px;
+}
+
+.processing-incomplete-table thead th.processing-incomplete-col-select,
+.processing-incomplete-table tbody td.processing-incomplete-col-select {
+  width: 24px;
+  min-width: 24px;
+  max-width: 24px;
+  padding-left: 4px;
+  padding-right: 4px;
+  text-align: center;
+}
+
+.processing-incomplete-table thead th.processing-incomplete-col-book,
+.processing-incomplete-table tbody td.processing-incomplete-col-book {
+  width: 32%;
+}
+
+.processing-incomplete-table .processing-col-category {
+  width: 18%;
+}
+
+.processing-incomplete-table .processing-col-status {
+  width: 14%;
+}
+
+.processing-incomplete-table .processing-col-action {
+  width: 14%;
+}
+
+.processing-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: #0b3d2e;
+}
+
+.processing-col-request {
+  width: 32%;
+}
+
+.processing-col-status {
+  width: 16%;
+}
+
+.processing-col-category,
+.processing-col-type,
+.processing-col-time,
+.processing-col-book {
+  width: 15%;
+}
+
+.processing-col-action {
+  width: 20%;
+}
+
+.processing-catalog-table .processing-col-request {
+  width: 26%;
+}
+
+.processing-catalog-table .processing-col-category {
+  width: 16%;
+}
+
+.processing-catalog-table .processing-col-status {
+  width: 14%;
+}
+
+.processing-catalog-table .processing-col-time,
+.processing-catalog-table .processing-col-book {
+  width: 15%;
+}
+
+.processing-catalog-table .processing-col-action {
+  width: 16%;
+}
+
+.processing-catalog-table .processing-incomplete-col-book {
+  width: 24%;
+}
+
+.processing-incomplete-source-url {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.table-request-cell,
+.processing-table td,
+.processing-table th {
+  min-width: 0;
+}
+
+.table-request-cell strong,
+.processing-table td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.processing-table td {
+  line-height: 1.35;
+}
+
+.processing-row-error {
+  color: var(--danger);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.processing-requeue-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+  gap: 14px;
+}
+
+.processing-failed-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+  gap: 14px;
+}
+
+.processing-requeue-table-wrap {
+  min-width: 0;
+}
+
+.processing-failed-table-wrap {
+  min-width: 0;
+}
+
+.processing-requeue-select {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.processing-requeue-layout .is-active-row {
+  background: rgba(15, 75, 56, 0.06);
+}
+
+.processing-requeue-error-panel {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-muted);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.processing-requeue-error-panel h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.processing-requeue-error-scroll {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 10px;
+}
+
+.processing-requeue-error-scroll pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+  font-family: "SFMono-Regular", "Menlo", monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.processing-requeue-error-scroll hr {
+  border: 0;
+  border-top: 1px dashed var(--line-strong);
+  margin: 10px 0;
+}
+
+.processing-inline-danger {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.processing-toggle-card {
+  width: 100%;
+}
+
+.detail-facts strong {
+  font-size: 0.95rem;
+  line-height: 1.4;
+}

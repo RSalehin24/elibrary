@@ -1,0 +1,121 @@
+from django.db.models import Exists, OuterRef, Q, Subquery
+from django.utils.dateparse import parse_date, parse_datetime
+
+from apps.catalog.models import Book, BookRecordType, ContributorRole
+from apps.ingestion.models import BookSubmission
+
+
+VALID_RECORD_TYPES = {choice for choice, _ in BookRecordType.choices}
+VALID_CONTRIBUTOR_ROLES = {choice for choice, _ in ContributorRole.choices}
+CONTRIBUTOR_ROLE_BY_PAGE = {
+    "writers": ContributorRole.AUTHOR,
+    "translators": ContributorRole.TRANSLATOR,
+    "compilers": ContributorRole.COMPILER,
+    "editors": ContributorRole.EDITOR,
+}
+
+
+def apply_created_at_filters(queryset, request):
+    created_after = request.query_params.get("created_after", "").strip()
+    created_before = request.query_params.get("created_before", "").strip()
+    if created_after:
+        parsed_after = parse_datetime(created_after) or parse_date(created_after)
+        if parsed_after:
+            queryset = queryset.filter(created_at__gte=parsed_after)
+    if created_before:
+        parsed_before = parse_datetime(created_before) or parse_date(created_before)
+        if parsed_before:
+            queryset = queryset.filter(created_at__lte=parsed_before)
+    return queryset
+
+
+def requested_record_type(request, default_record_type):
+    record_type = request.query_params.get("record_type", "").strip()
+    if record_type == "all":
+        return "all"
+    if record_type in VALID_RECORD_TYPES:
+        return record_type
+    return default_record_type
+
+
+def export_record_type(request, default_record_type):
+    record_type = requested_record_type(request, default_record_type)
+    return "all" if record_type == "all" else record_type
+
+
+def filtered_book_queryset(queryset, request, *, default_record_type):
+    record_type = requested_record_type(request, default_record_type)
+    if record_type != "all":
+        queryset = queryset.filter(record_type=record_type)
+    ownership = request.query_params.get("ownership", "").strip()
+    if ownership == "mine":
+        latest_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=request.user).order_by("-created_at").values("created_at")[:1]
+        queryset = queryset.annotate(latest_submission_at=Subquery(latest_submission)).filter(latest_submission_at__isnull=False)
+
+    query = request.query_params.get("q", "").strip()
+    if query:
+        submission_query = Q(linked_submissions__original_input__icontains=query)
+        if ownership == "mine":
+            submission_query &= Q(linked_submissions__submitter=request.user)
+        queryset = queryset.filter(Q(catalog_code__icontains=query) | Q(title__icontains=query) | Q(book_contributors__contributor__name__icontains=query) | Q(book_contributors__contributor__catalog_code__icontains=query) | Q(book_series__series__name__icontains=query) | Q(book_categories__category__name__icontains=query) | Q(book_categories__category__catalog_code__icontains=query) | submission_query)
+
+    filter_map = {
+        "book_code": {"catalog_code__icontains": None},
+        "series": {"book_series__series__name__icontains": None},
+        "category": {"book_categories__category__name__icontains": None},
+        "category_code": {"book_categories__category__catalog_code": None},
+        "category_slug": {"book_categories__category__slug": None},
+        "state": {"state": None},
+        "review_state": {"review_state": None},
+        "submission_status": {"linked_submissions__status": None},
+        "processing_status": {"processing_jobs__status": None},
+    }
+    for param, filters in filter_map.items():
+        value = request.query_params.get(param, "").strip()
+        if value:
+            field = next(iter(filters))
+            queryset = queryset.filter(**{field: value})
+
+    author = request.query_params.get("author", "").strip() or request.query_params.get("writer", "").strip()
+    if author:
+        queryset = queryset.filter(book_contributors__role=ContributorRole.AUTHOR, book_contributors__contributor__name__icontains=author)
+    for param, filters in {
+        "writer_code": {"book_contributors__role": ContributorRole.AUTHOR, "book_contributors__contributor__catalog_code": None},
+        "writer_slug": {"book_contributors__role": ContributorRole.AUTHOR, "book_contributors__contributor__slug": None},
+        "contributor": {"book_contributors__contributor__name__icontains": None},
+    }.items():
+        value = request.query_params.get(param, "").strip()
+        if value:
+            resolved = {key: (value if current is None else current) for key, current in filters.items()}
+            queryset = queryset.filter(**resolved)
+
+    contributor_role = request.query_params.get("contributor_role", "").strip()
+    for param, field in {
+        "contributor_code": "book_contributors__contributor__catalog_code",
+        "contributor_slug": "book_contributors__contributor__slug",
+    }.items():
+        value = request.query_params.get(param, "").strip()
+        if value:
+            contributor_filters = {field: value}
+            if contributor_role in VALID_CONTRIBUTOR_ROLES:
+                contributor_filters["book_contributors__role"] = contributor_role
+            queryset = queryset.filter(**contributor_filters)
+
+    queryset = apply_created_at_filters(queryset, request).distinct()
+    sort = request.query_params.get("sort", "-requested_at" if ownership == "mine" else "-created_at")
+    sort_map = {"catalog_code": "catalog_code", "-catalog_code": "-catalog_code", "title": "title", "-title": "-title", "created_at": "created_at", "-created_at": "-created_at"}
+    if ownership == "mine":
+        sort_map.update({"requested_at": "latest_submission_at", "-requested_at": "-latest_submission_at"})
+    sort_field = sort_map.get(sort, "-latest_submission_at" if ownership == "mine" else "-created_at")
+    return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "-created_at")
+
+
+class BookQueryMixin:
+    default_record_type = BookRecordType.DIGITAL
+
+    def base_queryset(self):
+        owned_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=self.request.user)
+        return Book.objects.prefetch_related("book_contributors__contributor", "book_series__series", "book_categories__category", "generated_assets", "source_urls").annotate(user_owns_book=Exists(owned_submission)).filter(deleted_at__isnull=True)
+
+    def get_queryset(self):
+        return filtered_book_queryset(self.base_queryset(), self.request, default_record_type=self.default_record_type)

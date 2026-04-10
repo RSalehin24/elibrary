@@ -1,25 +1,43 @@
 import logging
-from calendar import monthrange
-from collections import Counter
-from datetime import datetime, timedelta
 
-from celery import current_app
 from django.utils import timezone
 
-from apps.catalog.models import BookSource, GeneratedAssetStatus, GeneratedAssetType
-from apps.common.models import LifecycleState
 from apps.ingestion.models import (
-    BookSubmission,
     CatalogAutomationSettings,
-    CatalogAutomationFrequency,
     CatalogCurationMode,
     CatalogCurationRun,
     CatalogCurationTrigger,
     JobStatus,
     SourceCatalogEntry,
-    SourceCatalogRefreshState,
     SourceCatalogRefreshStatus,
-    SubmissionOrigin,
+)
+from apps.ingestion.services.curation_support.catalog_entries import (
+    build_catalog_curation_run_summary,
+    inspect_source_catalog_entry as support_inspect_source_catalog_entry,
+    serialize_source_catalog_entry_inspection as support_serialize_source_catalog_entry_inspection,
+    should_create_missing_book,
+    should_retry_failed_entry,
+    should_update_existing_book,
+    source_catalog_book_source_map,
+    source_catalog_entry_snapshots as support_source_catalog_entry_snapshots,
+    source_catalog_submission_map,
+    submission_origin_for_run,
+    summarize_source_catalog_snapshots as support_summarize_source_catalog_snapshots,
+)
+from apps.ingestion.services.curation_support.schedule import (
+    next_catalog_automation_due_at as support_next_catalog_automation_due_at,
+    normalize_refresh_max_pages as support_normalize_refresh_max_pages,
+)
+from apps.ingestion.services.curation_support.run_lifecycle import (
+    dispatch_catalog_curation_run as support_dispatch_catalog_curation_run,
+    finalize_cancelled_catalog_curation_run as support_finalize_cancelled_catalog_curation_run,
+    revoke_curation_task as support_revoke_curation_task,
+)
+from apps.ingestion.services.curation_support.source_refresh import (
+    finalize_source_catalog_refresh_stop as support_finalize_source_catalog_refresh_stop,
+    get_source_catalog_refresh_state as support_get_source_catalog_refresh_state,
+    process_source_catalog_refresh as support_process_source_catalog_refresh,
+    revoke_source_catalog_refresh_task as support_revoke_source_catalog_refresh_task,
 )
 from apps.ingestion.services.resolution import ARCHIVE_MAX_PAGES, TitleResolver
 from apps.ingestion.services.submissions import create_submission_records, queue_reprocess_book
@@ -27,23 +45,12 @@ from apps.ingestion.services.submissions import create_submission_records, queue
 logger = logging.getLogger(__name__)
 
 ACTIVE_RUN_STATUSES = (JobStatus.QUEUED, JobStatus.PROCESSING)
-ACTIVE_SOURCE_CATALOG_REFRESH_STATUSES = (
-    SourceCatalogRefreshStatus.QUEUED,
-    SourceCatalogRefreshStatus.PROCESSING,
-)
-REQUIRED_READY_ASSETS = (GeneratedAssetType.HTML, GeneratedAssetType.EPUB)
+ACTIVE_SOURCE_CATALOG_REFRESH_STATUSES = (SourceCatalogRefreshStatus.QUEUED, SourceCatalogRefreshStatus.PROCESSING)
 RUN_CANCEL_MESSAGE = "Stopped by user."
 SOURCE_REFRESH_STOP_MESSAGE = "Stopped by user."
-FAILED_AUTOMATION_RETRY_COOLDOWN = timedelta(hours=6)
-SOURCE_LOOKUP_CHUNK_SIZE = 500
 
 
-def normalize_refresh_max_pages(value):
-    try:
-        page_count = int(value)
-    except (TypeError, ValueError):
-        page_count = ARCHIVE_MAX_PAGES
-    return max(1, min(page_count, ARCHIVE_MAX_PAGES))
+def normalize_refresh_max_pages(value): return support_normalize_refresh_max_pages(value)
 
 
 def get_catalog_automation_settings():
@@ -51,13 +58,10 @@ def get_catalog_automation_settings():
     return settings_obj
 
 
-def get_source_catalog_refresh_state():
-    state, _ = SourceCatalogRefreshState.objects.get_or_create(singleton_key="default")
-    return state
+def get_source_catalog_refresh_state(): return support_get_source_catalog_refresh_state()
 
 
-def latest_catalog_automation_run():
-    return CatalogCurationRun.objects.filter(trigger=CatalogCurationTrigger.SCHEDULED).order_by("-created_at").first()
+def latest_catalog_automation_run(): return CatalogCurationRun.objects.filter(trigger=CatalogCurationTrigger.SCHEDULED).order_by("-created_at").first()
 
 
 def dispatch_source_catalog_refresh(state, force=False):
@@ -82,34 +86,10 @@ def dispatch_source_catalog_refresh(state, force=False):
     return state
 
 
-def revoke_source_catalog_refresh_task(task_id, terminate=False):
-    if not task_id:
-        return
-    try:
-        current_app.control.revoke(task_id, terminate=terminate)
-    except Exception:
-        logger.warning("Failed to revoke source catalog refresh task.", exc_info=True)
+def revoke_source_catalog_refresh_task(task_id, terminate=False): return support_revoke_source_catalog_refresh_task(task_id, terminate=terminate)
 
 
-def finalize_source_catalog_refresh_stop(state, message=SOURCE_REFRESH_STOP_MESSAGE):
-    state.status = SourceCatalogRefreshStatus.IDLE
-    state.task_id = ""
-    state.queue_name = ""
-    state.retry_count = 0
-    state.last_error = message
-    state.finished_at = timezone.now()
-    state.save(
-        update_fields=[
-            "status",
-            "task_id",
-            "queue_name",
-            "retry_count",
-            "last_error",
-            "finished_at",
-            "updated_at",
-        ]
-    )
-    return state
+def finalize_source_catalog_refresh_stop(state, message=SOURCE_REFRESH_STOP_MESSAGE): return support_finalize_source_catalog_refresh_stop(state, message)
 
 
 def cancel_source_catalog_refresh(state=None, message=SOURCE_REFRESH_STOP_MESSAGE):
@@ -137,351 +117,41 @@ def begin_source_catalog_refresh(*, requested_by=None, max_pages=ARCHIVE_MAX_PAG
     state.requested_by = requested_by if getattr(requested_by, "is_authenticated", False) else None
     state.started_at = None
     state.finished_at = None
-    state.save(
-        update_fields=[
-            "status",
-            "max_pages",
-            "task_id",
-            "queue_name",
-            "retry_count",
-            "refreshed_entries",
-            "last_error",
-            "requested_by",
-            "started_at",
-            "finished_at",
-            "updated_at",
-        ]
-    )
+    state.save(update_fields=["status", "max_pages", "task_id", "queue_name", "retry_count", "refreshed_entries", "last_error", "requested_by", "started_at", "finished_at", "updated_at"])
     dispatch_source_catalog_refresh(state)
     return state, True
 
 
-def process_source_catalog_refresh(retry_count=0, task_id=""):
-    state = SourceCatalogRefreshState.objects.select_related("requested_by").get(singleton_key="default")
-    state.status = SourceCatalogRefreshStatus.PROCESSING
-    state.retry_count = retry_count
-    state.task_id = task_id or state.task_id
-    state.started_at = timezone.now()
-    state.finished_at = None
-    state.last_error = ""
-    state.save(update_fields=["status", "retry_count", "task_id", "started_at", "finished_at", "last_error", "updated_at"])
-
-    try:
-        resolver = TitleResolver()
-        refreshed = resolver.refresh_catalog(max_pages=normalize_refresh_max_pages(state.max_pages))
-        state.status = SourceCatalogRefreshStatus.SUCCEEDED
-        state.refreshed_entries = len(refreshed)
-        state.finished_at = timezone.now()
-        state.save(update_fields=["status", "refreshed_entries", "finished_at", "updated_at"])
-        return state
-    except Exception as exc:
-        logger.exception("Source catalog refresh failed")
-        state.status = SourceCatalogRefreshStatus.FAILED
-        state.last_error = str(exc)
-        state.finished_at = timezone.now()
-        state.save(update_fields=["status", "last_error", "finished_at", "updated_at"])
-        raise
-
-
-def combine_local_date_and_time(date_value, time_value):
-    return timezone.make_aware(
-        datetime.combine(date_value, time_value),
-        timezone.get_current_timezone(),
-    )
-
-
-def day_interval_for_frequency(frequency):
-    intervals = {
-        CatalogAutomationFrequency.DAILY: 1,
-        CatalogAutomationFrequency.WEEKLY: 7,
-        CatalogAutomationFrequency.BIWEEKLY: 14,
-    }
-    return intervals.get(frequency)
-
-
-def month_interval_for_frequency(frequency):
-    intervals = {
-        CatalogAutomationFrequency.MONTHLY: 1,
-        CatalogAutomationFrequency.BIMONTHLY: 2,
-        CatalogAutomationFrequency.QUARTERLY: 3,
-        CatalogAutomationFrequency.FOUR_MONTHLY: 4,
-        CatalogAutomationFrequency.HALF_YEARLY: 6,
-    }
-    return intervals.get(frequency)
-
-
-def shift_date_by_months(date_value, months):
-    month_index = date_value.month - 1 + months
-    year = date_value.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(date_value.day, monthrange(year, month)[1])
-    return date_value.replace(year=year, month=month, day=day)
+def process_source_catalog_refresh(retry_count=0, task_id=""): return support_process_source_catalog_refresh(retry_count=retry_count, task_id=task_id)
 
 
 def next_catalog_automation_due_at(settings_obj, now=None, latest_run=None):
-    now = timezone.localtime(now or timezone.now())
-    today_slot = combine_local_date_and_time(now.date(), settings_obj.daily_run_time)
-    latest_run = latest_run or latest_catalog_automation_run()
-
-    latest_run_at = timezone.localtime(latest_run.created_at) if latest_run else None
-    settings_updated_at = timezone.localtime(settings_obj.updated_at or settings_obj.created_at)
-
-    # Treat schedule changes as a fresh cadence starting from the update time.
-    if latest_run_at is None or settings_updated_at > latest_run_at:
-        return today_slot
-
-    day_interval = day_interval_for_frequency(settings_obj.frequency)
-    if day_interval:
-        next_date = latest_run_at.date() + timedelta(days=day_interval)
-        return combine_local_date_and_time(next_date, settings_obj.daily_run_time)
-
-    month_interval = month_interval_for_frequency(settings_obj.frequency)
-    if month_interval:
-        next_date = shift_date_by_months(latest_run_at.date(), month_interval)
-        return combine_local_date_and_time(next_date, settings_obj.daily_run_time)
-
-    return today_slot
-
-
-def next_catalog_automation_run_at(settings_obj, now=None, latest_run=None):
-    return next_catalog_automation_due_at(settings_obj, now=now, latest_run=latest_run)
-
-
-def iter_source_url_chunks(source_urls, chunk_size=SOURCE_LOOKUP_CHUNK_SIZE):
-    unique_urls = [url for url in dict.fromkeys(source_urls or ()) if url]
-    for index in range(0, len(unique_urls), chunk_size):
-        yield unique_urls[index : index + chunk_size]
-
-
-def source_catalog_book_source_map(source_urls):
-    book_source_map = {}
-
-    for source_url_chunk in iter_source_url_chunks(source_urls):
-        book_sources = (
-            BookSource.objects.filter(normalized_source_url__in=source_url_chunk)
-            .select_related("book")
-            .prefetch_related("book__generated_assets", "book__processing_jobs", "book__book_categories__category")
-        )
-        book_source_map.update(
-            {
-                book_source.normalized_source_url: book_source
-                for book_source in book_sources
-            }
-        )
-
-    return book_source_map
-
-
-def source_catalog_submission_map(source_urls):
-    submission_map = {}
-
-    for source_url_chunk in iter_source_url_chunks(source_urls):
-        queryset = (
-            BookSubmission.objects.filter(resolved_url__in=source_url_chunk)
-            .select_related(
-                "linked_book",
-                "canonical_submission",
-                "canonical_submission__linked_book",
-            )
-            .prefetch_related(
-                "processing_jobs",
-                "canonical_submission__processing_jobs",
-            )
-            .order_by("-updated_at", "-created_at")
-        )
-
-        for submission in queryset:
-            submission_map.setdefault(submission.resolved_url, submission)
-
-    return submission_map
-
-
-def book_has_required_assets(book):
-    asset_statuses = {asset.asset_type: asset.status for asset in book.generated_assets.all()}
-    return all(asset_statuses.get(asset_type) == GeneratedAssetStatus.READY for asset_type in REQUIRED_READY_ASSETS)
-
-
-def root_submission(submission):
-    return submission.canonical_submission or submission
-
-
-def latest_processing_job_for_submission(submission):
-    if submission is None:
-        return None
-    canonical_submission = root_submission(submission)
-    return canonical_submission.processing_jobs.first()
-
-
-def latest_activity_at(entry, latest_submission, latest_job, local_book):
-    return (
-        (latest_job.finished_at if latest_job else None)
-        or (latest_job.started_at if latest_job else None)
-        or (latest_job.updated_at if latest_job else None)
-        or (latest_submission.updated_at if latest_submission else None)
-        or (local_book.updated_at if local_book else None)
-        or entry.last_seen_at
+    return support_next_catalog_automation_due_at(
+        settings_obj,
+        now=now,
+        latest_run=latest_run or latest_catalog_automation_run(),
     )
 
 
-def inspect_source_catalog_entry(entry, source_map, submission_map=None):
-    submission_map = submission_map or {}
-    book_source = source_map.get(entry.source_url)
-    local_book = book_source.book if book_source and book_source.book_id else None
-    latest_submission = submission_map.get(entry.source_url)
-    latest_job = local_book.processing_jobs.first() if local_book else latest_processing_job_for_submission(latest_submission)
-    is_requeued = bool(latest_submission and (latest_submission.raw_payload or {}).get("requeued"))
-
-    if local_book and local_book.deleted_at:
-        status = "deleted"
-    elif latest_job and latest_job.status in {JobStatus.QUEUED, JobStatus.PROCESSING}:
-        status = "processing"
-    elif latest_submission and latest_submission.status in {
-        "pending_resolution",
-        "queued",
-        "processing",
-    }:
-        status = "processing"
-    elif latest_job and latest_job.status == JobStatus.CANCELLED:
-        status = "stopped"
-    elif latest_submission and latest_submission.status == "cancelled":
-        status = "stopped"
-    elif is_requeued:
-        status = "requeued"
-    elif latest_job and latest_job.status == JobStatus.FAILED:
-        status = "failed"
-    elif latest_submission and latest_submission.status in {"failed", "needs_review", "duplicate"}:
-        status = "failed"
-    elif not local_book:
-        status = "new"
-    elif local_book.state != LifecycleState.READY or not book_has_required_assets(local_book):
-        status = "unfinished"
-    else:
-        status = "ready"
-
-    return {
-        "entry": entry,
-        "book_source": book_source,
-        "local_book": local_book,
-        "latest_submission": latest_submission,
-        "latest_job": latest_job,
-        "curation_status": status,
-        "activity_at": latest_activity_at(entry, latest_submission, latest_job, local_book),
-    }
+def next_catalog_automation_run_at(settings_obj, now=None, latest_run=None): return next_catalog_automation_due_at(settings_obj, now=now, latest_run=latest_run)
 
 
-def serialize_source_catalog_entry_inspection(inspection):
-    entry = inspection["entry"]
-    local_book = inspection["local_book"]
-    latest_submission = inspection["latest_submission"]
-    latest_job = inspection["latest_job"]
-    raw_data = entry.raw_data or {}
-    source_categories = (raw_data.get("category") or raw_data.get("book_type") or "").strip()
-    local_categories = ""
-    if local_book and not local_book.deleted_at:
-        local_categories = ", ".join(
-            relation.category.name
-            for relation in local_book.book_categories.all()
-            if relation.category_id and relation.category and relation.category.name
-        )
-    return {
-        "id": str(entry.id),
-        "title": entry.title,
-        "author_line": entry.author_line,
-        "categories": source_categories or local_categories,
-        "source_url": entry.source_url,
-        "created_at": entry.created_at,
-        "last_seen_at": entry.last_seen_at,
-        "curation_status": inspection["curation_status"],
-        "local_book_slug": local_book.slug if local_book and not local_book.deleted_at else "",
-        "local_book_title": local_book.title if local_book and not local_book.deleted_at else "",
-        "local_book_state": local_book.state if local_book and not local_book.deleted_at else "",
-        "latest_submission_status": latest_submission.status if latest_submission else "",
-        "latest_job_status": latest_job.status if latest_job else "",
-        "latest_job_error": latest_job.last_error if latest_job else "",
-        "activity_at": inspection["activity_at"],
-        "updated_at": local_book.updated_at if local_book and not local_book.deleted_at else None,
-    }
+def inspect_source_catalog_entry(entry, source_map, submission_map=None): return support_inspect_source_catalog_entry(entry, source_map, submission_map)
 
 
-def summarize_source_catalog_snapshots(snapshots):
-    summary = Counter(snapshot["curation_status"] for snapshot in snapshots)
-    queued_count = 0
-    processing_count = 0
-
-    for snapshot in snapshots:
-        if snapshot.get("curation_status") != "processing":
-            continue
-
-        latest_job_status = (snapshot.get("latest_job_status") or "").strip()
-        latest_submission_status = (snapshot.get("latest_submission_status") or "").strip()
-
-        if latest_job_status == JobStatus.QUEUED or latest_submission_status == "queued":
-            queued_count += 1
-        else:
-            processing_count += 1
-
-    return {
-        "total": len(snapshots),
-        "new": summary.get("new", 0),
-        "queued": queued_count,
-        "processing": processing_count,
-        "requeued": summary.get("requeued", 0),
-        "stopped": summary.get("stopped", 0),
-        "unfinished": summary.get("unfinished", 0),
-        "failed": summary.get("failed", 0),
-        "ready": summary.get("ready", 0),
-        "deleted": summary.get("deleted", 0),
-    }
+def serialize_source_catalog_entry_inspection(inspection): return support_serialize_source_catalog_entry_inspection(inspection)
 
 
-def source_catalog_entry_snapshots(queryset):
-    entries = list(queryset)
-    source_map = source_catalog_book_source_map([entry.source_url for entry in entries])
-    submission_map = source_catalog_submission_map([entry.source_url for entry in entries])
-    inspections = [inspect_source_catalog_entry(entry, source_map, submission_map) for entry in entries]
-    snapshots = [serialize_source_catalog_entry_inspection(inspection) for inspection in inspections]
-    return snapshots, summarize_source_catalog_snapshots(snapshots)
+def summarize_source_catalog_snapshots(snapshots): return support_summarize_source_catalog_snapshots(snapshots)
 
 
-def build_catalog_curation_run_summary():
-    return {
-        "catalog_entries": 0,
-        "refreshed_entries": 0,
-        "queued_creates": 0,
-        "queued_updates": 0,
-        "skipped_ready": 0,
-        "skipped_processing": 0,
-        "skipped_deleted": 0,
-        "errors": [],
-        "status_counts": {
-            "new": 0,
-            "processing": 0,
-            "requeued": 0,
-            "stopped": 0,
-            "unfinished": 0,
-            "failed": 0,
-            "ready": 0,
-            "deleted": 0,
-        },
-    }
+def source_catalog_entry_snapshots(queryset): return support_source_catalog_entry_snapshots(queryset)
 
 
-def revoke_curation_task(task_id):
-    if not task_id:
-        return
-    try:
-        current_app.control.revoke(task_id)
-    except Exception:
-        logger.warning("Failed to revoke catalog curation task.", exc_info=True)
+def revoke_curation_task(task_id): return support_revoke_curation_task(task_id, logger)
 
 
-def finalize_cancelled_catalog_curation_run(run, message=RUN_CANCEL_MESSAGE):
-    run.status = JobStatus.CANCELLED
-    run.cancel_requested = False
-    run.last_error = message
-    run.finished_at = timezone.now()
-    run.save(update_fields=["status", "cancel_requested", "last_error", "finished_at", "updated_at"])
-    return run
+def finalize_cancelled_catalog_curation_run(run, message=RUN_CANCEL_MESSAGE): return support_finalize_cancelled_catalog_curation_run(run, message)
 
 
 def cancel_catalog_curation_run(run, message=RUN_CANCEL_MESSAGE):
@@ -497,32 +167,13 @@ def cancel_catalog_curation_run(run, message=RUN_CANCEL_MESSAGE):
     return run
 
 
-def submission_origin_for_run(run):
-    if run.trigger == CatalogCurationTrigger.SCHEDULED:
-        return SubmissionOrigin.AUTOMATION
-    return SubmissionOrigin.CURATION
-
-
 def dispatch_catalog_curation_run(run, force=False):
-    from apps.ingestion.tasks import process_catalog_curation_run_task
-
-    run.refresh_from_db(fields=["status", "task_id", "queue_name", "cancel_requested", "updated_at"])
-    if run.status == JobStatus.CANCELLED or run.cancel_requested:
-        return run
-    if not force and run.status == JobStatus.QUEUED and run.task_id:
-        return run
-
-    try:
-        async_result = process_catalog_curation_run_task.delay(str(run.id))
-        run.task_id = getattr(async_result, "id", "")
-        run.queue_name = "celery"
-        run.save(update_fields=["task_id", "queue_name", "updated_at"])
-    except Exception as exc:
-        logger.warning("Catalog curation dispatch failed, falling back to inline processing", exc_info=True)
-        run.queue_name = "inline-fallback"
-        run.last_error = f"Celery dispatch failed: {exc}"
-        run.save(update_fields=["queue_name", "last_error", "updated_at"])
-        process_catalog_curation_run(str(run.id), retry_count=run.retry_count, task_id="")
+    return support_dispatch_catalog_curation_run(
+        run,
+        fallback_processor=process_catalog_curation_run,
+        logger=logger,
+        force=force,
+    )
 
 
 def create_catalog_curation_run(
@@ -545,32 +196,6 @@ def create_catalog_curation_run(
     return run
 
 
-def should_update_existing_book(inspection, mode):
-    status = inspection["curation_status"]
-    if status in {"processing", "deleted"}:
-        return False
-    if mode == CatalogCurationMode.ALL:
-        return inspection["local_book"] is not None
-    return status in {"unfinished", "failed"}
-
-
-def should_create_missing_book(inspection):
-    local_book = inspection["local_book"]
-    return (local_book is None or bool(local_book.deleted_at)) and inspection["curation_status"] in {"new", "failed", "deleted"}
-
-
-def should_retry_failed_entry(inspection, now=None):
-    if inspection["curation_status"] != "failed":
-        return True
-
-    now = now or timezone.now()
-    activity_at = inspection.get("activity_at")
-    if activity_at is None:
-        return True
-
-    return now - activity_at >= FAILED_AUTOMATION_RETRY_COOLDOWN
-
-
 def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
     run = CatalogCurationRun.objects.select_related("requested_by").get(pk=run_id)
     if run.status == JobStatus.CANCELLED:
@@ -591,8 +216,7 @@ def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
         if run.status == JobStatus.CANCELLED or run.cancel_requested:
             return finalize_cancelled_catalog_curation_run(run)
         if run.refresh_catalog:
-            resolver = TitleResolver()
-            refreshed = resolver.refresh_catalog(max_pages=normalize_refresh_max_pages(run.refresh_max_pages))
+            refreshed = TitleResolver().refresh_catalog(max_pages=normalize_refresh_max_pages(run.refresh_max_pages))
             summary["refreshed_entries"] = len(refreshed)
 
         entries = list(SourceCatalogEntry.objects.order_by("title"))
@@ -607,6 +231,7 @@ def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
                 run.summary = summary
                 run.save(update_fields=["summary", "updated_at"])
                 return finalize_cancelled_catalog_curation_run(run)
+
             inspection = inspect_source_catalog_entry(entry, source_map, submission_map)
             status = inspection["curation_status"]
             summary["status_counts"][status] += 1
@@ -617,31 +242,15 @@ def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
 
             try:
                 if should_create_missing_book(inspection):
-                    create_submission_records(
-                        submitter=run.requested_by,
-                        parsed_entries=[{"kind": "url", "value": entry.source_url}],
-                        auto_process=True,
-                        origin=submission_origin,
-                    )
+                    create_submission_records(submitter=run.requested_by, parsed_entries=[{"kind": "url", "value": entry.source_url}], auto_process=True, origin=submission_origin)
                     summary["queued_creates"] += 1
                     continue
-
                 if should_update_existing_book(inspection, run.mode):
-                    _, created = queue_reprocess_book(
-                        inspection["local_book"],
-                        actor=run.requested_by,
-                        origin=submission_origin,
-                    )
-                    if created:
-                        summary["queued_updates"] += 1
-                    else:
-                        summary["skipped_processing"] += 1
+                    _, created = queue_reprocess_book(inspection["local_book"], actor=run.requested_by, origin=submission_origin)
+                    summary["queued_updates"] += 1 if created else 0
+                    summary["skipped_processing"] += 0 if created else 1
                     continue
-
-                if status == "processing":
-                    summary["skipped_processing"] += 1
-                else:
-                    summary["skipped_ready"] += 1
+                summary["skipped_processing" if status == "processing" else "skipped_ready"] += 1
             except Exception as exc:
                 if len(summary["errors"]) < 20:
                     summary["errors"].append({"source_url": entry.source_url, "error": str(exc)})

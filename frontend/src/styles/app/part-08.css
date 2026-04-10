@@ -1,0 +1,246 @@
+
+.profile-password-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.profile-password-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.profile-save-bar {
+  justify-items: end;
+}
+
+.profile-security-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.profile-setup-grid {
+  align-items: start;
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.selection-list {
+  display: grid;
+  gap: 12px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.scope-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+}
+
+.scope-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 6px 14px rgba(12, 47, 36, 0.06);
+}
+
+.stack-form .scope-card {
+  display: flex;
+}
+
+.scope-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  box-shadow: 0 10px 18px rgba(12, 47, 36, 0.1);
+}
+
+.scope-card input {
+  width: auto;
+  min-height: 0;
+}
+
+.totp-setup-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.totp-setup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.totp-setup-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.totp-qr-card {
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border: 1px dashed rgba(17, 70, 54, 0.32);
+  border-radius: 18px;
+  background: rgba(239, 247, 243, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(12px);
+}
+
+.totp-qr-card svg {
+  display: block;
+  width: min(100%, 240px);
+  height: auto;
+}
+
+.table-shell {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+}
+
+.simple-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.simple-table th,
+.simple-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.simple-table th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.access-page .simple-table th {
+  color: var(--accent-strong);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  background: rgba(17, 70, 54, 0.05);
+}
+
+.access-page .simple-table td {
+  color: var(--ink-soft);
+  font-size: 0.96rem;
+  line-height: 1.45;
+}
+
+.access-page .simple-table tbody td:first-child,
+.access-page .simple-table tbody td:nth-child(2) {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.access-page .simple-table tbody tr:hover {
+  background: rgba(17, 70, 54, 0.035);
+}
+
+.access-users-toolbar {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+
+.access-users-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "title top"
+    "controls controls";
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+}
+
+.access-users-header > h2 {
+  grid-area: title;
+  margin: 0;
+}
+
+.access-users-header-row {
+  grid-area: top;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.access-users-header-row .catalog-toolbar-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.access-users-header-row .catalog-toolbar-field-sort {
+  min-width: 210px;
+}
+
+.access-users-header-row .catalog-toolbar-field .fact-label {
+  white-space: nowrap;
+}
+
+.access-users-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 560px;
+  height: 34px;
+  padding-left: 40px;
+  padding-right: 12px;
+  border: 1px solid rgba(17, 70, 54, 0.12);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.88),
+    rgba(245, 249, 247, 0.82)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.74),
+    0 14px 28px rgba(12, 47, 36, 0.08);
+}

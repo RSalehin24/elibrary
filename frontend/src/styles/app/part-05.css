@@ -1,0 +1,248 @@
+.request-controls .icon-button {
+  flex: 0 0 44px;
+}
+
+.stack-form textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.checkbox-row {
+  display: flex !important;
+  align-items: center;
+  gap: 10px !important;
+}
+
+.checkbox-row input {
+  width: auto;
+  min-height: 0;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  font-size: 1.35rem;
+  line-height: 1;
+  color: var(--ink-soft);
+}
+
+.icon-button-muted {
+  color: var(--muted);
+}
+
+.book-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.audience-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.audience-rule-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+}
+
+.audience-rule-card strong {
+  font-size: 0.94rem;
+  line-height: 1.3;
+}
+
+.book-card,
+.submission-card,
+.queue-card {
+  padding: 16px;
+}
+
+.submission-card {
+  display: grid;
+  gap: 12px;
+  border-color: rgba(17, 70, 54, 0.14);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.96),
+    rgba(243, 248, 245, 0.92)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 10px 20px rgba(12, 47, 36, 0.06);
+}
+
+.submission-card.is-deleted {
+  border-color: rgba(138, 52, 52, 0.18);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 251, 251, 0.98),
+    rgba(248, 241, 241, 0.94)
+  );
+}
+
+.book-card {
+  grid-template-columns: 78px 1fr;
+  align-items: start;
+}
+
+.book-card-body {
+  display: grid;
+  gap: 8px;
+}
+
+.book-card h3,
+.submission-card strong,
+.queue-card strong {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.3;
+}
+
+.submission-card-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.submission-card-title {
+  min-width: 0;
+}
+
+.submission-card-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.submission-card-link {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(17, 70, 54, 0.06);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.submission-card-reuse-note {
+  padding-block: 2px;
+}
+
+.submission-card-note {
+  color: var(--danger);
+  font-size: 0.88rem;
+}
+
+.submission-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.submission-card .result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.submission-card .result-meta span {
+  font-size: 0.86rem;
+}
+
+.book-meta,
+.book-taxonomy,
+.book-timestamp {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.book-cover-placeholder {
+  display: grid;
+  place-items: end start;
+  min-height: 112px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(17, 70, 54, 0.16);
+  background:
+    radial-gradient(
+      circle at 18% 16%,
+      rgba(120, 209, 120, 0.16),
+      transparent 44%
+    ),
+    linear-gradient(160deg, #eff6f2 0%, #dfece6 100%);
+  color: var(--accent);
+}
+
+.book-cover-placeholder span {
+  font-size: 1.9rem;
+  font-weight: 700;
+}
+
+.book-cover-large {
+  min-height: 220px;
+}
+
+.primary-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
+.primary-link:hover {
+  color: var(--accent);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(91, 111, 104, 0.1);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-transform: capitalize;
+}
+
+.status-ready,
+.status-succeeded,
+.status-approved {
+  background: rgba(36, 80, 66, 0.12);
+  color: var(--success);
+}
+
+.status-pending,
+.status-queued,
+.status-processing,
+.status-needs_review,
+.status-ambiguous,
+.status-pending_resolution {
+  background: rgba(124, 99, 37, 0.12);
+  color: var(--warning);
+}
+
+.status-cancelled,
+.status-stopped {
+  background: rgba(91, 111, 104, 0.14);
+  color: var(--muted);
+}
+
+.status-requeued {
+  background: rgba(35, 83, 67, 0.12);
+  color: var(--accent-strong);
+}

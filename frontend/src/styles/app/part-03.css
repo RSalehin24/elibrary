@@ -1,0 +1,242 @@
+.profile-avatar-large {
+  width: 72px;
+  height: 72px;
+  font-size: 1.35rem;
+}
+
+.profile-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 14px;
+  width: min(280px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.profile-menu-summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.profile-menu-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.profile-menu-meta strong,
+.profile-menu-meta span {
+  overflow-wrap: anywhere;
+}
+
+.profile-menu-meta span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.profile-menu-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-menu-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 2px 0;
+}
+
+.profile-menu-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 40px;
+  width: 100%;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.94),
+    rgba(241, 247, 243, 0.96)
+  );
+  color: var(--ink);
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+.profile-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  margin-right: 10px;
+}
+
+.profile-menu-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.profile-menu-signout {
+  color: var(--danger);
+  border-color: rgba(138, 52, 52, 0.18);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 250, 250, 0.98),
+    rgba(252, 241, 241, 0.96)
+  );
+}
+
+.profile-menu-link:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  box-shadow: 0 10px 16px rgba(12, 47, 36, 0.12);
+}
+
+.profile-menu-signout:hover {
+  border-color: rgba(138, 52, 52, 0.28);
+  box-shadow: 0 10px 16px rgba(138, 52, 52, 0.1);
+}
+
+.topbar-public .brand-block,
+.topbar-public .session-box {
+  flex: 0 0 auto;
+}
+
+.session-meta {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.page-shell {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.page-stack,
+.page-grid,
+.landing-shell,
+.landing-form,
+.landing-copy,
+.detail-layout,
+.two-column-layout,
+.submission-list,
+.queue-list,
+.candidate-stack,
+.stack-form,
+.detail-card,
+.detail-main,
+.detail-sidebar,
+.result-meta,
+.request-stack,
+.toast-viewport {
+  display: grid;
+  gap: 16px;
+}
+
+.page-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detail-layout {
+  grid-template-columns: minmax(260px, 300px) 1fr;
+}
+
+.two-column-layout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.landing-panel,
+.landing-results,
+.detail-card,
+.detail-sidebar,
+.detail-main {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.compact-card {
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
+.landing-shell {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.landing-shell-centered {
+  min-height: calc(100vh - 180px);
+  align-content: center;
+}
+
+.landing-panel {
+  gap: 18px;
+}
+
+.landing-create-panel {
+  padding: 24px;
+  max-width: 860px;
+  width: 100%;
+  justify-self: center;
+}
+
+.landing-create-stack {
+  display: grid;
+  gap: 20px;
+}
+
+.landing-hero {
+  display: grid;
+  gap: 16px;
+}
+
+.landing-create-stack > h1 {
+  margin-bottom: 0;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.compact-copy {
+  gap: 10px;
+}
+
+.landing-copy h1,
+.landing-panel h2,
+.landing-results h2,
+.detail-card h1,
+.detail-card h2,
+.detail-card h3,
+.detail-main h1,
+.detail-main h2 {
+  margin: 0;
+}
+
+.landing-panel h2,
+.landing-results h2,
+.detail-card h2,
+.detail-main h2,
+.detail-card h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25;
+}

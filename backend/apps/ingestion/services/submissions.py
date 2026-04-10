@@ -1,10 +1,7 @@
-import hashlib
 import logging
-from pathlib import Path
 
 from celery import current_app
 from django.conf import settings
-from django.core.files import File
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -16,13 +13,9 @@ from apps.catalog.models import (
     BookCategory,
     BookContributor,
     BookSeries,
-    BookSource,
     Category,
     Contributor,
-    GeneratedAsset,
-    GeneratedAssetStatus,
     GeneratedAssetType,
-    MetadataVersion,
     Series,
     ContributorRole,
 )
@@ -33,6 +26,7 @@ from apps.catalog.services import (
 )
 from apps.common.models import AuditLog, LifecycleState, ReviewState
 from apps.common.permissions import user_has_scope
+from apps.common.text import normalize_catalog_text
 from apps.ingestion.models import (
     BookSubmission,
     DuplicateReview,
@@ -63,7 +57,25 @@ from apps.ingestion.services.resolution import (
     fetch_source_page_metadata,
     upsert_source_catalog_entry,
 )
-from apps.common.text import normalize_catalog_text
+from apps.ingestion.services.submissions_support.assets import (
+    calculate_checksum,
+    candidate_asset_paths,
+    cleanup_staged_asset_files,
+    content_type_for_suffix,
+    path_is_within,
+    resolve_generated_cover_path,
+    sync_assets as _sync_assets,
+)
+from apps.ingestion.services.submissions_support.detection import (
+    detect_metadata_duplicate as _detect_metadata_duplicate,
+    find_exact_existing_book as _find_exact_existing_book,
+)
+from apps.ingestion.services.submissions_support.persistence import (
+    complete_processed_submission as _complete_processed_submission,
+    export_payload_from_book,
+    persist_scraped_book as _persist_scraped_book,
+    sync_metadata_relations as _sync_metadata_relations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -724,411 +736,62 @@ def create_submission_records(submitter, parsed_entries, auto_process=True, orig
 
 
 def detect_metadata_duplicate(scraped_data):
-    target_title = scraped_data.get("book_title", "")
-    normalized_scraped = normalize_scraped_book(scraped_data)
-    target_author_names = {
-        normalize_catalog_text(entry["name"])
-        for entry in normalized_scraped.get("contributors", [])
-        if entry.get("role") == ContributorRole.AUTHOR and normalize_catalog_text(entry.get("name", ""))
-    }
-    target_translator_names = {
-        normalize_catalog_text(entry["name"])
-        for entry in normalized_scraped.get("contributors", [])
-        if entry.get("role") == ContributorRole.TRANSLATOR and normalize_catalog_text(entry.get("name", ""))
-    }
-    target_category_names = {
-        normalize_catalog_text(value)
-        for value in normalized_scraped.get("categories", [])
-        if normalize_catalog_text(value)
-    }
-    target_series_names = {
-        normalize_catalog_text(value)
-        for value in normalized_scraped.get("series", [])
-        if normalize_catalog_text(value)
-    }
-
-    if not target_title:
-        return None
-
-    books = Book.objects.filter(deleted_at__isnull=True).prefetch_related("book_contributors__contributor")
-    for book in books:
-        if not texts_are_similar(target_title, book.title):
-            continue
-
-        existing_author_names = {
-            normalize_catalog_text(relation.contributor.name)
-            for relation in book.book_contributors.all()
-            if relation.role == ContributorRole.AUTHOR and normalize_catalog_text(relation.contributor.name)
-        }
-        existing_translator_names = {
-            normalize_catalog_text(relation.contributor.name)
-            for relation in book.book_contributors.all()
-            if relation.role == ContributorRole.TRANSLATOR and normalize_catalog_text(relation.contributor.name)
-        }
-        existing_category_names = {
-            normalize_catalog_text(relation.category.name)
-            for relation in book.book_categories.all()
-            if normalize_catalog_text(relation.category.name)
-        }
-        existing_series_names = {
-            normalize_catalog_text(relation.series.name)
-            for relation in book.book_series.all()
-            if normalize_catalog_text(relation.series.name)
-        }
-
-        if (
-            not target_author_names
-            or not existing_author_names
-            or not target_category_names
-            or not existing_category_names
-        ):
-            continue
-
-        if not (target_category_names & existing_category_names):
-            continue
-
-        if target_series_names and not (target_series_names & existing_series_names):
-            continue
-
-        if target_translator_names and not (target_translator_names & existing_translator_names):
-            continue
-
-        if target_author_names & existing_author_names:
-            return book
-
-    return None
+    return _detect_metadata_duplicate(
+        scraped_data,
+        normalize_scraped_book_fn=normalize_scraped_book,
+        texts_are_similar_fn=texts_are_similar,
+    )
 
 
 def find_exact_existing_book(scraped_data):
-    normalized_title = normalize_catalog_text(scraped_data.get("book_title", ""))
-    if not normalized_title:
-        return None
-
-    candidate_books = (
-        Book.objects.filter(
-            source_site="ebanglalibrary.com",
-            normalized_title=normalized_title,
-            deleted_at__isnull=True,
-        )
-        .prefetch_related("book_contributors__contributor")
-        .order_by("-created_at")
+    return _find_exact_existing_book(
+        scraped_data,
+        normalize_scraped_book_fn=normalize_scraped_book,
     )
-
-    normalized_scraped = normalize_scraped_book(scraped_data)
-    target_author_names = {
-        normalize_catalog_text(entry["name"])
-        for entry in normalized_scraped.get("contributors", [])
-        if entry.get("role") == ContributorRole.AUTHOR and normalize_catalog_text(entry.get("name", ""))
-    }
-    target_translator_names = {
-        normalize_catalog_text(entry["name"])
-        for entry in normalized_scraped.get("contributors", [])
-        if entry.get("role") == ContributorRole.TRANSLATOR and normalize_catalog_text(entry.get("name", ""))
-    }
-    target_category_names = {
-        normalize_catalog_text(value)
-        for value in normalized_scraped.get("categories", [])
-        if normalize_catalog_text(value)
-    }
-    target_series_names = {
-        normalize_catalog_text(value)
-        for value in normalized_scraped.get("series", [])
-        if normalize_catalog_text(value)
-    }
-
-    if not target_author_names or not target_category_names:
-        return None
-
-    for book in candidate_books:
-        existing_author_names = {
-            normalize_catalog_text(relation.contributor.name)
-            for relation in book.book_contributors.all()
-            if relation.role == ContributorRole.AUTHOR and normalize_catalog_text(relation.contributor.name)
-        }
-        existing_translator_names = {
-            normalize_catalog_text(relation.contributor.name)
-            for relation in book.book_contributors.all()
-            if relation.role == ContributorRole.TRANSLATOR and normalize_catalog_text(relation.contributor.name)
-        }
-        existing_category_names = {
-            normalize_catalog_text(relation.category.name)
-            for relation in book.book_categories.all()
-            if normalize_catalog_text(relation.category.name)
-        }
-        existing_series_names = {
-            normalize_catalog_text(relation.series.name)
-            for relation in book.book_series.all()
-            if normalize_catalog_text(relation.series.name)
-        }
-
-        if not existing_author_names or not existing_category_names:
-            continue
-        if not (target_category_names & existing_category_names):
-            continue
-        if target_series_names and not (target_series_names & existing_series_names):
-            continue
-        if target_translator_names and not (target_translator_names & existing_translator_names):
-            continue
-        if existing_author_names and target_author_names & existing_author_names:
-            return book
-
-    return None
-
-
-def calculate_checksum(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(8192), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def content_type_for_suffix(path):
-    suffix = path.suffix.lower()
-    if suffix == ".epub":
-        return "application/epub+zip"
-    if suffix in {".jpg", ".jpeg"}:
-        return "image/jpeg"
-    if suffix == ".webp":
-        return "image/webp"
-    if suffix == ".html":
-        return "text/html"
-    return "application/octet-stream"
-
-
-def resolve_generated_cover_path(output_folder, requested_cover):
-    if requested_cover:
-        requested_path = Path(str(requested_cover))
-        direct_path = requested_path if requested_path.is_absolute() else output_folder / requested_path
-        if direct_path.exists():
-            return direct_path
-
-        requested_stem = requested_path.stem
-        if requested_stem:
-            for candidate in sorted(output_folder.glob(f"{requested_stem}.*")):
-                if candidate.is_file():
-                    return candidate
-
-    for fallback_stem in ("book_cover", "book_image"):
-        for candidate in sorted(output_folder.glob(f"{fallback_stem}.*")):
-            if candidate.is_file():
-                return candidate
-
-    return None
-
-
-def candidate_asset_paths(scraped_data):
-    output_folder = Path(scraped_data["output_folder"])
-    epub_path = output_folder / f"{scraped_data['book_title']}.epub"
-    if not epub_path.exists():
-        epub_candidates = sorted(output_folder.glob("*.epub"))
-        epub_path = epub_candidates[0] if epub_candidates else None
-
-    cover_path = resolve_generated_cover_path(output_folder, scraped_data.get("cover", ""))
-    return {
-        GeneratedAssetType.HTML: output_folder / "book.html",
-        GeneratedAssetType.EPUB: epub_path,
-        GeneratedAssetType.COVER: cover_path,
-    }
-
-
-def path_is_within(path, root):
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
-
-
-def cleanup_staged_asset_files(output_folder, synced_paths):
-    if not output_folder:
-        return
-
-    output_folder = Path(output_folder)
-    if not output_folder.exists() or not output_folder.is_dir():
-        return
-
-    media_root = Path(settings.MEDIA_ROOT)
-    if path_is_within(output_folder, media_root):
-        return
-
-    for path in synced_paths:
-        if path.exists() and path_is_within(path, output_folder):
-            path.unlink()
-
-    try:
-        output_folder.rmdir()
-    except OSError:
-        pass
 
 
 def sync_assets(book, job, scraped_data):
-    synced_paths = []
-    ready_asset_types = set()
-    for asset_type, path in candidate_asset_paths(scraped_data).items():
-        asset, _ = GeneratedAsset.objects.get_or_create(book=book, asset_type=asset_type)
-        if not path or not Path(path).exists():
-            asset.status = GeneratedAssetStatus.FAILED
-            asset.save()
-            continue
-
-        path = Path(path)
-        asset.status = GeneratedAssetStatus.READY
-        asset.legacy_path = str(path)
-        asset.file_size = path.stat().st_size
-        asset.content_type = content_type_for_suffix(path)
-        asset.checksum = calculate_checksum(path)
-        asset.source_job = job
-        if asset.file and asset.file.name:
-            asset.file.delete(save=False)
-        with open(path, "rb") as handle:
-            asset.file.save(path.name, File(handle), save=False)
-        asset.storage_path = asset.file.name
-        asset.legacy_path = ""
-        asset.save()
-        synced_paths.append(path)
-        ready_asset_types.add(asset_type)
-
-    cleanup_staged_asset_files(scraped_data.get("output_folder"), synced_paths)
-
-    missing_required_assets = [
-        GENERATED_ASSET_LABELS[asset_type]
-        for asset_type in REQUIRED_GENERATED_ASSET_TYPES
-        if asset_type not in ready_asset_types
-    ]
-    if missing_required_assets:
-        book.state = LifecycleState.NEEDS_REVIEW
-        book.review_state = ReviewState.NEEDS_REVIEW
-        book.save(update_fields=["state", "review_state", "updated_at"])
-        raise ValueError(f"Missing generated assets: {', '.join(missing_required_assets)}.")
+    return _sync_assets(
+        book,
+        job,
+        scraped_data,
+        generated_asset_labels=GENERATED_ASSET_LABELS,
+        required_asset_types=REQUIRED_GENERATED_ASSET_TYPES,
+    )
 
 
 def complete_processed_submission(submission, book, normalized_url, source="scrape"):
-    submission.linked_book = book
-    submission.duplicate_of_book = None
-    submission.resolved_url = normalized_url
-    submission.resolution_status = ResolutionStatus.RESOLVED
-    submission.resolution_confidence = max(submission.resolution_confidence, 1.0)
-    submission.status = SubmissionStatus.READY
-    submission.review_state = book.review_state
-    submission.error_message = ""
-    submission.raw_payload = {
-        **submission.raw_payload,
-        "normalized_url": normalized_url,
-        "linked_book_slug": book.slug,
-        "processing_source": source,
-        "served_from_database": False,
-    }
-    submission.save()
-    sync_deduplicated_submissions(submission)
-
-    if submission.submitter_id:
-        ensure_preview_session(submission.submitter, book, submission=submission)
-
-    AuditLog.objects.create(
-        actor=submission.submitter,
-        verb="submission.processed",
-        target_type="BookSubmission",
-        target_id=str(submission.id),
-        payload={"book_id": str(book.id), "source": source},
+    return _complete_processed_submission(
+        submission,
+        book,
+        normalized_url,
+        ensure_preview_session_fn=ensure_preview_session,
+        source=source,
+        sync_deduplicated_submissions_fn=sync_deduplicated_submissions,
     )
 
 
 def sync_metadata_relations(book, normalized):
-    replace_book_relations(
+    return _sync_metadata_relations(
         book,
-        contributors=normalized["contributors"],
-        series_names=normalized["series"],
-        category_names=normalized["categories"],
+        normalized,
+        replace_book_relations_fn=replace_book_relations,
     )
 
 
 def persist_scraped_book(submission, job, scraped_data, target_book=None):
-    normalized = normalize_scraped_book(scraped_data)
-    cleaned_dedication_html = clean_extracted_dedication_html(scraped_data.get("dedication", ""))
-    cover_source_url = scraped_data.get("cover") or ""
-    normalized_submission_source_url = normalize_source_url(submission.resolved_url)
-
-    def apply_scraped_fields(book):
-        book.deleted_at = None
-        book.state = LifecycleState.READY
-        book.review_state = ReviewState.PENDING
-        book.raw_scraped_metadata = normalized["raw_strings"]
-        book.raw_scrape_payload = scraped_data
-        book.main_content_html = scraped_data.get("main_content", "")
-        book.book_info_html = scraped_data.get("book_info", "")
-        book.dedication_html = cleaned_dedication_html
-        book.toc = scraped_data.get("toc", [])
-        book.content_items = scraped_data.get("content_items", [])
-        book.cover_source_url = cover_source_url
-
-    existing_book = target_book or find_deleted_book_by_title(scraped_data["book_title"])
-    if existing_book:
-        book = existing_book
-        apply_scraped_fields(book)
-        book.save()
-    else:
-        create_kwargs = {
-            "title": scraped_data["book_title"],
-            "state": LifecycleState.READY,
-            "review_state": ReviewState.PENDING,
-            "raw_scraped_metadata": normalized["raw_strings"],
-            "raw_scrape_payload": scraped_data,
-            "main_content_html": scraped_data.get("main_content", ""),
-            "book_info_html": scraped_data.get("book_info", ""),
-            "dedication_html": cleaned_dedication_html,
-            "toc": scraped_data.get("toc", []),
-            "content_items": scraped_data.get("content_items", []),
-            "cover_source_url": cover_source_url,
-        }
-        try:
-            with transaction.atomic():
-                book = Book.objects.create(**create_kwargs)
-        except IntegrityError:
-            if not normalized_submission_source_url:
-                raise
-            book = find_existing_book_by_source_url(normalized_submission_source_url)
-            if book is None:
-                raise
-            apply_scraped_fields(book)
-            book.save()
-
-    sync_metadata_relations(book, normalized)
-    BookSource.objects.update_or_create(
-        normalized_source_url=normalized_submission_source_url,
-        defaults={
-            "book": book,
-            "source_url": submission.resolved_url,
-            "source_title": scraped_data.get("book_title", ""),
-            "raw_metadata": normalized["raw_strings"],
-        },
+    return _persist_scraped_book(
+        submission,
+        scraped_data,
+        clean_extracted_dedication_html_fn=clean_extracted_dedication_html,
+        find_deleted_book_by_title_fn=find_deleted_book_by_title,
+        find_existing_book_by_source_url_fn=find_existing_book_by_source_url,
+        job=job,
+        normalize_scraped_book_fn=normalize_scraped_book,
+        normalize_source_url_fn=normalize_source_url,
+        sync_metadata_relations_fn=sync_metadata_relations,
+        target_book=target_book,
     )
-    MetadataVersion.objects.create(book=book, snapshot=scraped_data, source="scrape")
-    return book
-
-
-def export_payload_from_book(book, scraped_data):
-    author_names = [
-        relation.contributor.name
-        for relation in book.book_contributors.all()
-        if relation.role == ContributorRole.AUTHOR
-    ]
-    series_names = [relation.series.name for relation in book.book_series.all()]
-    category_names = [relation.category.name for relation in book.book_categories.all()]
-
-    return {
-        "book_title": book.title,
-        "author": author_names or scraped_data.get("author", ""),
-        "series": series_names or scraped_data.get("series", ""),
-        "book_type": category_names or scraped_data.get("book_type", ""),
-        "cover": book.cover_source_url or scraped_data.get("cover") or "",
-        "main_content": book.main_content_html or "",
-        "book_info": book.book_info_html or "",
-        "dedication": book.dedication_html or "",
-        "toc": book.toc or [],
-        "content_items": book.content_items or [],
-        "output_folder": scraped_data["output_folder"],
-    }
 
 
 def cancel_requested_for_job(job):
