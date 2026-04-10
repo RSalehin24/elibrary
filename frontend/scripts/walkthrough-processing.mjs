@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import { execSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const envText = fs.readFileSync(
-  "/Users/rsalehin24/Documents/ebook-scrapping/.env",
-  "utf8",
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../..",
 );
+const envText = fs.readFileSync(path.join(repoRoot, ".env"), "utf8");
 const env = Object.fromEntries(
   envText
     .split(/\r?\n/)
@@ -24,8 +27,7 @@ if (!email || !password) {
 }
 
 const base = "http://127.0.0.1:5173";
-const artifacts =
-  "/Users/rsalehin24/Documents/ebook-scrapping/frontend/test-artifacts";
+const artifacts = path.join(repoRoot, "frontend", "test-artifacts");
 fs.mkdirSync(artifacts, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
@@ -89,7 +91,7 @@ if (await firstFilterToggle.count()) {
 }
 
 execSync("docker-compose stop backend", {
-  cwd: "/Users/rsalehin24/Documents/ebook-scrapping",
+  cwd: repoRoot,
   stdio: "ignore",
 });
 await page.waitForTimeout(3000);
@@ -98,7 +100,7 @@ await page.waitForSelector("text=There is an error.", { timeout: 20000 });
 await step("backend-down-modal");
 
 execSync("docker-compose start backend", {
-  cwd: "/Users/rsalehin24/Documents/ebook-scrapping",
+  cwd: repoRoot,
   stdio: "ignore",
 });
 for (let i = 0; i < 60; i += 1) {

@@ -1,112 +1,26 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
-set -eu
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" >/dev/null 2>&1 && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+export REPO_ROOT
+
+# shellcheck source=./lib/common.sh
+source "${REPO_ROOT}/scripts/lib/common.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
+  scripts/deploy.sh [--env-name production|test] [--env-file /path/to/file] [--sync-mode push|preserve|prompt]
+
+Examples:
+  scripts/generate-env.sh production
+  scripts/generate-env.sh deploy
   scripts/deploy.sh
-
-Example:
-  cp .env.example .env.production
-  nano .env.production
-  scripts/deploy.sh
-
-Optional env sync control:
-  DEPLOY_ENV_SYNC_MODE=push       # default behavior (overwrite remote .env with local .env.production)
-  DEPLOY_ENV_SYNC_MODE=preserve   # do not overwrite remote .env
-  DEPLOY_ENV_SYNC_MODE=prompt     # ask during deploy when running interactively
-
-What it does:
-  1) Runs preflight checks (DNS/SSH/sudo/docker)
-  2) Syncs code on the remote server
-  3) Syncs local workspace files to remote app dir
-  4) Builds frontend dist on the remote machine
-  5) Starts Docker Compose app stack (without nginx)
-  6) Configures host nginx + certbot automatically
-  7) Verifies nginx loaded exact config file
-  8) Verifies HTTPS endpoint
+  scripts/deploy.sh --env-name test --sync-mode preserve
 EOF
-}
-
-if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  usage
-  exit 0
-fi
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
-DEFAULT_ENV_FILE="$SCRIPT_DIR/.env.example"
-LOCAL_PRODUCTION_ENV_FILE="$REPO_ROOT/.env.production"
-LOCAL_DEFAULT_PRODUCTION_ENV_FILE="$REPO_ROOT/.env.example"
-
-if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
-  if [ -f "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE" ]; then
-    cp "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE" "$LOCAL_PRODUCTION_ENV_FILE"
-    printf 'Created %s from %s\n' "$LOCAL_PRODUCTION_ENV_FILE" "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE"
-    if [ -t 0 ]; then
-      printf 'Open %s now to edit values? [Y/n]: ' "$LOCAL_PRODUCTION_ENV_FILE"
-      read -r local_edit_choice || true
-      case "${local_edit_choice:-}" in
-        N|n|no|NO) ;;
-        *)
-          LOCAL_EDITOR="${EDITOR:-nano}"
-          "$LOCAL_EDITOR" "$LOCAL_PRODUCTION_ENV_FILE"
-          ;;
-      esac
-    else
-      printf 'Action required: update %s before deploying (non-interactive session).\n' "$LOCAL_PRODUCTION_ENV_FILE"
-      exit 1
-    fi
-  else
-    printf 'Missing %s\n' "$LOCAL_DEFAULT_PRODUCTION_ENV_FILE"
-    exit 1
-  fi
-fi
-
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  . "$ENV_FILE"
-  set +a
-else
-  printf 'Optional config not found: %s (using defaults or current shell env)\n' "$ENV_FILE"
-fi
-
-DEPLOY_USER_NAME="${DEPLOY_USER_NAME:-ubuntu}"
-DEPLOY_IP="${DEPLOY_IP:-54.169.28.248}"
-DEPLOY_DOMAIN="${DEPLOY_DOMAIN:-library.rsalehin24.me}"
-DEPLOY_CERTBOT_EMAIL="${DEPLOY_CERTBOT_EMAIL:-rsalehin24@gmail.com}"
-DEPLOY_NGINX_CONF_DIR="${DEPLOY_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
-DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME:-library.salehin24.me.conf}"
-DEPLOY_NGINX_VERSION="${DEPLOY_NGINX_VERSION:-1.29.4}"
-
-case "$DEPLOY_NGINX_CONFIG_NAME" in
-  *.conf) ;;
-  *) DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME}.conf" ;;
-esac
-
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
-BRANCH="${DEPLOY_BRANCH_NAME:-$CURRENT_BRANCH}"
-TARGET="${DEPLOY_USER_NAME}@${DEPLOY_IP}"
-REPO_SSH="${REPO_SSH:-git@github.com:RSalehin24/ebook-scrapping.git}"
-APP_DIR='~/library_app'
-DOMAIN="${DOMAIN:-library.rsalehin24.me}"
-REMOTE_APP_DIR='$HOME/library_app'
-DOMAIN="$DEPLOY_DOMAIN"
-CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL"
-BACKEND_PORT="${BACKEND_PORT:-8000}"
-REMOTE_APP_ABS_DIR="/home/${DEPLOY_USER_NAME}/library_app"
-REMOTE_NGINX_CONFIG_PATH="${DEPLOY_NGINX_CONF_DIR}/${DEPLOY_NGINX_CONFIG_NAME}"
-DEPLOY_ENV_SYNC_MODE="${DEPLOY_ENV_SYNC_MODE:-push}"
-REMOTE_EDITOR="${DEPLOY_REMOTE_EDITOR:-${EDITOR:-nano}}"
-
-require_cmd() {
-  cmd="$1"
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    printf 'Action required: install `%s` on local machine and rerun.\n' "$cmd"
-    exit 1
-  fi
 }
 
 resolve_domain_ips() {
@@ -129,12 +43,7 @@ extract_database_url_host() {
 from urllib.parse import urlparse
 import sys
 
-value = (sys.argv[1] or "").strip()
-if not value:
-    print("")
-    raise SystemExit(0)
-
-parsed = urlparse(value)
+parsed = urlparse((sys.argv[1] or "").strip())
 print(parsed.hostname or "")
 PY
 }
@@ -144,355 +53,341 @@ extract_database_url_user() {
 from urllib.parse import urlparse
 import sys
 
-value = (sys.argv[1] or "").strip()
-if not value:
-    print("")
-    raise SystemExit(0)
-
-parsed = urlparse(value)
+parsed = urlparse((sys.argv[1] or "").strip())
 print(parsed.username or "")
 PY
 }
 
-write_compose_safe_env_copy() {
-  src_file="$1"
-  dst_file="$2"
-
-  python3 - "$src_file" "$dst_file" <<'PY'
-import pathlib
-import re
-import sys
-
-src = pathlib.Path(sys.argv[1])
-dst = pathlib.Path(sys.argv[2])
-
-lines = src.read_text(encoding="utf-8").splitlines(keepends=True)
-out = []
-
-for line in lines:
-    stripped = line.lstrip()
-    if "=" not in line or stripped.startswith("#"):
-        out.append(line)
-        continue
-
-    key, value = line.split("=", 1)
-    value = re.sub(r"(?<!\$)\$(?!\$)", "$$", value)
-    out.append(f"{key}={value}")
-
-dst.write_text("".join(out), encoding="utf-8")
-PY
+require_non_empty_env_key() {
+  local env_file="${1:?env file is required}"
+  local key_name="${2:?env key is required}"
+  local value
+  value="$(grep "^${key_name}=" "${env_file}" | tail -n 1 | cut -d '=' -f2- || true)"
+  [[ -n "${value}" ]] || die "Action required: ${key_name} must be set in ${env_file}"
 }
 
 validate_local_database_env() {
-  local_env_file="$1"
+  local env_file="${1:?env file is required}"
+  local database_url database_host database_user postgres_user
 
-  if [ ! -f "$local_env_file" ]; then
-    printf 'Action required: missing env file %s\n' "$local_env_file"
-    exit 1
-  fi
+  [[ -f "${env_file}" ]] || die "Action required: missing env file ${env_file}"
+  database_url="$(grep '^DATABASE_URL=' "${env_file}" | tail -n 1 | cut -d '=' -f2- || true)"
+  [[ -n "${database_url}" ]] || die "Action required: DATABASE_URL is missing in ${env_file}"
 
-  database_url="$(grep '^DATABASE_URL=' "$local_env_file" | tail -n 1 | cut -d '=' -f2- || true)"
-  if [ -z "$database_url" ]; then
-    printf 'Action required: DATABASE_URL is missing in %s\n' "$local_env_file"
-    exit 1
-  fi
+  database_host="$(extract_database_url_host "${database_url}")"
+  [[ "${database_host}" == "postgres" ]] || die "Action required: DATABASE_URL host must be postgres for docker-compose networking. Found: ${database_host:-<empty>}"
 
-  database_host="$(extract_database_url_host "$database_url")"
-  if [ "$database_host" != 'postgres' ]; then
-    printf 'Action required: DATABASE_URL host must be `postgres` for docker-compose internal networking.\n'
-    printf 'Found host: %s\n' "${database_host:-<empty>}"
-    printf 'DATABASE_URL: %s\n' "$database_url"
-    exit 1
-  fi
-
-  database_user="$(extract_database_url_user "$database_url")"
-  postgres_user="$(grep '^POSTGRES_USER=' "$local_env_file" | tail -n 1 | cut -d '=' -f2- || true)"
-  if [ -n "$postgres_user" ] && [ -n "$database_user" ] && [ "$database_user" != "$postgres_user" ]; then
-    printf 'Action required: DATABASE_URL username and POSTGRES_USER do not match in %s\n' "$local_env_file"
-    printf 'DATABASE_URL username: %s\n' "$database_user"
-    printf 'POSTGRES_USER: %s\n' "$postgres_user"
-    exit 1
+  database_user="$(extract_database_url_user "${database_url}")"
+  postgres_user="$(grep '^POSTGRES_USER=' "${env_file}" | tail -n 1 | cut -d '=' -f2- || true)"
+  if [[ -n "${postgres_user}" && -n "${database_user}" && "${database_user}" != "${postgres_user}" ]]; then
+    die "Action required: DATABASE_URL username (${database_user}) and POSTGRES_USER (${postgres_user}) must match in ${env_file}"
   fi
 }
 
-require_cmd ssh
-require_cmd scp
-require_cmd python3
-require_cmd git
-
-validate_local_database_env "$LOCAL_PRODUCTION_ENV_FILE"
-
-printf '\n[1/8] Running preflight checks...\n'
-
-resolved_ips="$(resolve_domain_ips "$DOMAIN")"
-if [ -z "$resolved_ips" ] || ! printf '%s\n' "$resolved_ips" | grep -Fxq "$DEPLOY_IP"; then
-  printf 'Action required: DNS A record mismatch for %s.\n' "$DOMAIN"
-  printf 'Expected IP: %s\n' "$DEPLOY_IP"
-  printf 'Resolved IPs:\n%s\n' "${resolved_ips:-<none>}"
-  printf 'Update DNS and rerun: bash scripts/deploy.sh\n'
-  exit 1
-fi
-
-if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "echo connected" >/dev/null 2>&1; then
-  printf 'Action required: SSH key access to %s is not working.\n' "$TARGET"
-  printf 'Fix SSH auth (or host reachability) and rerun: bash scripts/deploy.sh\n'
-  exit 1
-fi
-
-if ! ssh -o BatchMode=yes "$TARGET" "sudo -n true" >/dev/null 2>&1; then
-  printf 'Action required: passwordless sudo is required for fully automated deploy on %s.\n' "$TARGET"
-  printf 'Grant NOPASSWD sudo for this user, then rerun: bash scripts/deploy.sh\n'
-  exit 1
-fi
-
-if ! ssh "$TARGET" "command -v docker >/dev/null 2>&1"; then
-  printf 'Action required: Docker is not installed on %s.\n' "$TARGET"
-  printf 'Install Docker, then rerun: bash scripts/deploy.sh\n'
-  exit 1
-fi
-
-if ! ssh "$TARGET" "docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1"; then
-  printf 'Action required: Docker Compose is not available on %s.\n' "$TARGET"
-  printf 'Install docker compose plugin or docker-compose binary, then rerun: bash scripts/deploy.sh\n'
-  exit 1
-fi
-
-if [ -f "$SCRIPT_DIR/switch-app.sh" ]; then
-  scp "$SCRIPT_DIR/switch-app.sh" "$TARGET:~/switch-app.sh" >/dev/null
-  ssh "$TARGET" "chmod +x ~/switch-app.sh"
-fi
-
-remote_has_env_before='no'
-if ssh "$TARGET" "test -f '$REMOTE_APP_ABS_DIR/.env'" >/dev/null 2>&1; then
-  remote_has_env_before='yes'
-fi
-
-printf '\n[2/8] Syncing code on %s...\n' "$TARGET"
-ssh -A "$TARGET" REPO_SSH="$REPO_SSH" BRANCH="$BRANCH" APP_DIR="$REMOTE_APP_DIR" DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" BACKEND_PORT="$BACKEND_PORT" 'bash -s' <<'EOF'
-set -eu
+sync_remote_repository() {
+  print_info "[2/8] Syncing repository on ${TARGET}"
+  ssh -A "${TARGET}" \
+    REPO_SSH="${REPO_SSH}" \
+    BRANCH="${BRANCH}" \
+    APP_DIR="${REMOTE_APP_DIR}" \
+    DOMAIN="${DOMAIN}" \
+    BACKEND_PORT="${BACKEND_PORT}" \
+    'bash -s' <<'EOF'
+set -euo pipefail
 
 set_default_env() {
-  key="$1"
-  value="$2"
-  file="$3"
+  local key="$1"
+  local value="$2"
+  local file="$3"
 
-  if grep -q "^${key}=" "$file"; then
-    current_value=$(grep "^${key}=" "$file" | head -n 1 | cut -d '=' -f2-)
-    if [ -z "$current_value" ]; then
-      sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+  if grep -q "^${key}=" "${file}"; then
+    local current_value
+    current_value="$(grep "^${key}=" "${file}" | head -n 1 | cut -d '=' -f2-)"
+    if [[ -z "${current_value}" ]]; then
+      sed -i "s|^${key}=.*|${key}=${value}|" "${file}"
     fi
   else
-    printf '\n%s=%s\n' "$key" "$value" >> "$file"
+    printf '\n%s=%s\n' "${key}" "${value}" >>"${file}"
   fi
 }
 
-mkdir -p "$APP_DIR"
-if [ -d "$APP_DIR/.git" ]; then
-  cd "$APP_DIR"
-  git fetch origin "$BRANCH"
-  if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-    git checkout "$BRANCH"
+mkdir -p "${APP_DIR}"
+if [[ -d "${APP_DIR}/.git" ]]; then
+  cd "${APP_DIR}"
+  git fetch origin "${BRANCH}"
+  if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+    git checkout "${BRANCH}"
   else
-    git checkout -B "$BRANCH" "origin/$BRANCH"
+    git checkout -B "${BRANCH}" "origin/${BRANCH}"
   fi
-  git reset --hard "origin/$BRANCH"
+  git reset --hard "origin/${BRANCH}"
 else
-  rm -rf "$APP_DIR"
-  git clone "$REPO_SSH" "$APP_DIR"
-  cd "$APP_DIR"
-  git checkout -B "$BRANCH" "origin/$BRANCH"
+  rm -rf "${APP_DIR}"
+  git clone "${REPO_SSH}" "${APP_DIR}"
+  cd "${APP_DIR}"
+  git checkout -B "${BRANCH}" "origin/${BRANCH}"
 fi
 
-if [ ! -f .env ]; then
-  cp .env.example .env
-fi
-
+python3 scripts/env_tools.py scaffold .env.example .env
 set_default_env PUBLIC_BASE_URL "https://${DOMAIN}" .env
 set_default_env VITE_API_BASE_URL "/api" .env
-set_default_env BACKEND_PORT "$BACKEND_PORT" .env
+set_default_env BACKEND_PORT "${BACKEND_PORT}" .env
 set_default_env HOST_STATIC_DIR "./storage/staticfiles" .env
 set_default_env HOST_MEDIA_DIR "./storage/media" .env
 
-detected_dns="$(awk '/^nameserver / && $2 !~ /^127\./ {print $2; exit}' /run/systemd/resolve/resolv.conf 2>/dev/null || true)"
-if [ -z "$detected_dns" ]; then
-  detected_dns="169.254.169.253"
-fi
-set_default_env CONTAINER_DNS "$detected_dns" .env
-set_default_env CONTAINER_DNS_FALLBACK "8.8.8.8" .env
-
 mkdir -p storage/staticfiles storage/media
-
-printf '\nRemote ready at %s\n' "$APP_DIR"
-printf 'Branch: %s\n' "$BRANCH"
-printf 'Remote .env defaults ensured (existing values preserved)\n'
+printf 'Remote repository ready at %s\n' "${APP_DIR}"
 EOF
+}
 
-printf '\n[3/8] Syncing local workspace to %s...\n' "$TARGET"
-sync_remote_env='preserve'
-case "$DEPLOY_ENV_SYNC_MODE" in
-  push|preserve)
-    sync_remote_env="$DEPLOY_ENV_SYNC_MODE"
-    ;;
-  prompt)
-    if [ -t 0 ]; then
-      printf 'Remote .env sync mode [P]reserve/[U]push local (default P): '
-      read -r env_sync_choice || true
-      case "${env_sync_choice:-}" in
-        U|u|push|PUSH) sync_remote_env='push' ;;
-        *) sync_remote_env='preserve' ;;
-      esac
-    fi
-    ;;
-  *)
-    printf 'Action required: invalid DEPLOY_ENV_SYNC_MODE=%s (allowed: preserve|push|prompt)\n' "$DEPLOY_ENV_SYNC_MODE"
-    exit 1
-    ;;
-esac
+sync_workspace_files() {
+  print_info "[3/8] Syncing workspace content to ${TARGET}"
+  (
+    cd "${REPO_ROOT}"
+    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata -czf - \
+      --exclude='.git' \
+      --exclude='.env' \
+      --exclude='.env.production' \
+      --exclude='.env.test' \
+      --exclude='scripts/.env' \
+      --exclude='.DS_Store' \
+      --exclude='venv' \
+      --exclude='.venv' \
+      --exclude='frontend/node_modules' \
+      --exclude='frontend/dist' \
+      --exclude='frontend/test-results' \
+      --exclude='frontend/test-artifacts' \
+      --exclude='storage' \
+      --exclude='backend/storage' \
+      --exclude='backend/staticfiles' \
+      --exclude='backend/outputs' \
+      --exclude='backend/celerybeat-schedule' \
+      --exclude='backend/__pycache__' \
+      --exclude='backend/apps/*/__pycache__' \
+      --exclude='backend/tests/__pycache__' \
+      --exclude='test-artifacts' \
+      --exclude='*.pyc' \
+      .
+  ) | ssh "${TARGET}" "tar --warning=no-unknown-keyword --no-same-owner --no-same-permissions -xzf - -C '${REMOTE_APP_ABS_DIR}'"
+}
 
-if [ "$sync_remote_env" = 'push' ]; then
-  if [ ! -f "$LOCAL_PRODUCTION_ENV_FILE" ]; then
-    printf 'Action required: local %s not found, cannot push env to remote.\n' "$LOCAL_PRODUCTION_ENV_FILE"
-    exit 1
+sync_remote_env_file() {
+  local sync_mode="${1:?sync mode is required}"
+
+  print_info "Preparing remote environment file"
+  if [[ "${sync_mode}" == "preserve" ]]; then
+    print_info "Preserving remote .env values"
+    return 0
   fi
-  printf 'Applying local %s to remote .env\n' "$LOCAL_PRODUCTION_ENV_FILE"
-  compose_safe_env_tmp="$(mktemp)"
-  trap 'rm -f "$compose_safe_env_tmp"' EXIT INT TERM
-  write_compose_safe_env_copy "$LOCAL_PRODUCTION_ENV_FILE" "$compose_safe_env_tmp"
-  scp "$compose_safe_env_tmp" "$TARGET:$REMOTE_APP_ABS_DIR/.env" >/dev/null
-  rm -f "$compose_safe_env_tmp"
-  trap - EXIT INT TERM
-else
-  printf 'Preserving remote .env (no overwrite)\n'
-fi
 
-if ! ssh "$TARGET" "test -f '$REMOTE_APP_ABS_DIR/.env'" >/dev/null 2>&1; then
-  printf 'Action required: remote .env is missing at %s/.env\n' "$REMOTE_APP_ABS_DIR"
+  [[ -f "${LOCAL_ENV_FILE}" ]] || die "Action required: local env file not found: ${LOCAL_ENV_FILE}"
+
+  scp "${LOCAL_ENV_FILE}" "${TARGET}:${REMOTE_APP_ABS_DIR}/.env.sync" >/dev/null
+  ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && python3 scripts/env_tools.py merge .env .env.sync .env.merged --non-empty-only && mv .env.merged .env && rm -f .env.sync"
+  print_info "Merged non-empty values from $(basename "${LOCAL_ENV_FILE}") into remote .env"
+}
+
+ensure_remote_docker() {
+  local needs_install
+
+  needs_install="$(
+    ssh "${TARGET}" "if ! command -v docker >/dev/null 2>&1; then echo yes; elif [ -n '${DEPLOY_DOCKER_VERSION}' ] && ! docker --version | grep -Fq '${DEPLOY_DOCKER_VERSION}'; then echo yes; else echo no; fi"
+  )"
+
+  if [[ "${needs_install}" == "yes" ]]; then
+    print_info "[4/8] Installing or upgrading Docker on ${TARGET}"
+    ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && sudo bash scripts/install-docker.sh '${DEPLOY_DOCKER_VERSION}'"
+  else
+    print_info "[4/8] Docker already satisfies deployment requirements"
+  fi
+}
+
+build_frontend_dist() {
+  print_info "[5/8] Building frontend bundle on ${TARGET}"
+  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && docker run --rm -v \"\$PWD/frontend:/app\" -w /app node:22-alpine sh -lc 'npm ci && npm run build'"
+}
+
+start_remote_stack() {
+  print_info "[6/8] Starting application services on ${TARGET}"
+  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && BACKEND_PORT='${BACKEND_PORT}' bash -s" <<'EOF'
+set -euo pipefail
+
+if docker compose version >/dev/null 2>&1; then
+  compose_cmd=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  compose_cmd=(docker-compose)
+else
+  echo "Docker Compose is not available after Docker setup." >&2
   exit 1
 fi
 
-if [ -t 0 ]; then
-  edit_remote_env='no'
-  if [ "$sync_remote_env" = 'push' ]; then
-    printf 'Remote .env was updated from local .env.production. Edit remote .env now? [y/N]: '
-    read -r edit_env_choice || true
-    case "${edit_env_choice:-}" in
-      Y|y|yes|YES) edit_remote_env='yes' ;;
-      *) edit_remote_env='no' ;;
-    esac
-  elif [ "$remote_has_env_before" = 'yes' ]; then
-    printf 'Remote .env already exists. Edit remote .env now? [y/N]: '
-    read -r edit_env_choice || true
-    case "${edit_env_choice:-}" in
-      Y|y|yes|YES) edit_remote_env='yes' ;;
-      *) edit_remote_env='no' ;;
-    esac
-  else
-    printf 'Remote .env was created from .env.example. Input values now by editing remote .env? [Y/n]: '
-    read -r edit_env_choice || true
-    case "${edit_env_choice:-}" in
-      N|n|no|NO) edit_remote_env='no' ;;
-      *) edit_remote_env='yes' ;;
-    esac
-  fi
+"${compose_cmd[@]}" down --remove-orphans || true
+"${compose_cmd[@]}" up -d --build --force-recreate
 
-  if [ "$edit_remote_env" = 'yes' ]; then
-    printf 'Opening remote .env using %s\n' "$REMOTE_EDITOR"
-    ssh -t "$TARGET" "cd '$REMOTE_APP_ABS_DIR' && $REMOTE_EDITOR .env"
-  fi
-else
-  printf 'Non-interactive session: skipped remote .env edit prompt.\n'
-fi
-
-(cd "$REPO_ROOT" && COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata -czf - \
-  --exclude='.git' \
-  --exclude='.env' \
-  --exclude='.env.production' \
-  --exclude='scripts/.env' \
-  --exclude='.DS_Store' \
-  --exclude='venv' \
-  --exclude='.venv' \
-  --exclude='frontend/node_modules' \
-  --exclude='frontend/dist' \
-  --exclude='storage' \
-  --exclude='backend/storage' \
-  --exclude='backend/staticfiles' \
-  --exclude='backend/outputs' \
-  --exclude='backend/celerybeat-schedule' \
-  --exclude='backend/__pycache__' \
-  --exclude='backend/apps/*/__pycache__' \
-  --exclude='backend/tests/__pycache__' \
-  --exclude='*.pyc' \
-  .) | ssh "$TARGET" "tar --warning=no-unknown-keyword --no-same-owner --no-same-permissions -xzf - -C '$REMOTE_APP_ABS_DIR'"
-
-printf '\n[4/8] Building frontend dist on %s...\n' "$TARGET"
-ssh -t "$TARGET" "cd $APP_DIR && \
-  docker run --rm -v \"\$PWD/frontend:/app\" -w /app node:22-alpine sh -lc 'npm ci && npm run build'"
-
-printf '\n[5/8] Starting app stack on %s...\n' "$TARGET"
-ssh -t "$TARGET" "cd $APP_DIR && BACKEND_PORT='$BACKEND_PORT' sh -s" <<'EOF'
-set -eu
-
-if docker compose version >/dev/null 2>&1; then
-  COMPOSE_CMD='docker compose'
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE_CMD='docker-compose'
-else
-  echo 'Docker Compose not found. Install docker compose plugin or docker-compose binary.'
-  exit 127
-fi
-
-$COMPOSE_CMD down --remove-orphans || true
-$COMPOSE_CMD up -d --build --force-recreate
-
-if ! $COMPOSE_CMD exec -T worker python - <<'PY'
+if ! "${compose_cmd[@]}" exec -T worker python - <<'PY'
 import socket
 
 socket.getaddrinfo('ebanglalibrary.com', 443)
 print('ok')
 PY
 then
-  echo "Action required: worker container DNS cannot resolve ebanglalibrary.com"
-  echo "Check server resolver/network egress and rerun: bash scripts/deploy.sh"
-  $COMPOSE_CMD logs --tail=60 worker
+  echo "Worker container could not resolve ebanglalibrary.com" >&2
+  "${compose_cmd[@]}" logs --tail=60 worker
   exit 1
 fi
 
-published_port=''
-attempt=0
-while [ "$attempt" -lt 15 ]; do
-  published_port="$($COMPOSE_CMD port backend 8000 2>/dev/null || true)"
-  if [ "$published_port" = "127.0.0.1:${BACKEND_PORT}" ]; then
+expected_port="127.0.0.1:${BACKEND_PORT}"
+published_port=""
+for _ in $(seq 1 15); do
+  published_port="$("${compose_cmd[@]}" port backend 8000 2>/dev/null || true)"
+  if [[ "${published_port}" == "${expected_port}" ]]; then
     break
   fi
-  attempt=$((attempt + 1))
   sleep 2
 done
 
-if [ "$published_port" != "127.0.0.1:${BACKEND_PORT}" ]; then
-  echo "Action required: backend port binding mismatch. Expected 127.0.0.1:${BACKEND_PORT}, got '${published_port:-<none>}'"
-  echo "Compose resolved backend ports:"
-  $COMPOSE_CMD config | sed -n '/backend:/,/^[^[:space:]]/p' | sed -n '/ports:/,/^[^[:space:]]/p' || true
-  $COMPOSE_CMD ps
+if [[ "${published_port}" != "${expected_port}" ]]; then
+  echo "Backend port binding mismatch: expected ${expected_port}, got ${published_port:-<none>}" >&2
+  "${compose_cmd[@]}" ps
   exit 1
 fi
 EOF
+}
 
-printf '\n[6/8] Configuring host nginx + certbot on %s...\n' "$TARGET"
-ssh -t "$TARGET" "cd $APP_DIR && sudo sh scripts/setup-host-nginx.sh '$DOMAIN' '$CERTBOT_EMAIL' '$REMOTE_APP_ABS_DIR' '$BACKEND_PORT' '$DEPLOY_NGINX_CONFIG_NAME' '$DEPLOY_NGINX_CONF_DIR' '$DEPLOY_NGINX_VERSION'"
+configure_remote_nginx() {
+  print_info "[7/8] Configuring host nginx and certbot on ${TARGET}"
+  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && sudo bash scripts/setup-host-nginx.sh '${DOMAIN}' '${CERTBOT_EMAIL}' '${REMOTE_APP_ABS_DIR}' '${BACKEND_PORT}' '${DEPLOY_NGINX_CONFIG_NAME}' '${DEPLOY_NGINX_CONF_DIR}' '${DEPLOY_NGINX_VERSION}'"
+}
 
-printf '\n[7/8] Verifying nginx loaded config path...\n'
-if ! ssh "$TARGET" "sudo nginx -T 2>/dev/null | grep -Fq '$REMOTE_NGINX_CONFIG_PATH'"; then
-  printf 'Action required: nginx did not load expected config file %s\n' "$REMOTE_NGINX_CONFIG_PATH"
-  printf 'Check include directives and conf directory, then rerun: bash scripts/deploy.sh\n'
-  exit 1
+verify_deployment() {
+  local remote_nginx_config_path="${DEPLOY_NGINX_CONF_DIR}/${DEPLOY_NGINX_CONFIG_NAME}"
+
+  print_info "[8/8] Verifying nginx configuration and HTTPS reachability"
+  ssh "${TARGET}" "sudo nginx -T 2>/dev/null | grep -Fq '${remote_nginx_config_path}'" || die "Expected nginx config was not loaded: ${remote_nginx_config_path}"
+  ssh "${TARGET}" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://${DOMAIN} >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://${DOMAIN}; else exit 127; fi" || die "HTTPS verification failed for https://${DOMAIN}"
+  print_info "Deployment verification passed for https://${DOMAIN}"
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
 fi
-printf 'OK: nginx loaded config file %s\n' "$REMOTE_NGINX_CONFIG_PATH"
 
-printf '\n[8/8] Verifying HTTPS endpoint...\n'
-if ! ssh "$TARGET" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://$DOMAIN >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://$DOMAIN; else exit 127; fi"; then
-  printf 'Action required: HTTPS verification failed for https://%s\n' "$DOMAIN"
-  printf 'If curl/wget is missing on server, install one and rerun.\n'
-  printf 'Check remote logs: sudo nginx -t && sudo systemctl status nginx --no-pager && sudo journalctl -u nginx -n 100 --no-pager\n'
-  exit 1
+ensure_env_file "${REPO_ROOT}/scripts/.env.example" "${REPO_ROOT}/scripts/.env"
+load_env_if_present "${REPO_ROOT}/scripts/.env"
+
+ENV_NAME="${DEPLOY_ENV_NAME:-production}"
+LOCAL_ENV_FILE=""
+SYNC_MODE="${DEPLOY_ENV_SYNC_MODE:-push}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env-name)
+      ENV_NAME="${2:?--env-name requires a value}"
+      shift 2
+      ;;
+    --env-file)
+      LOCAL_ENV_FILE="${2:?--env-file requires a value}"
+      shift 2
+      ;;
+    --sync-mode)
+      SYNC_MODE="${2:?--sync-mode requires a value}"
+      shift 2
+      ;;
+    *)
+      usage
+      die "Unsupported argument: $1"
+      ;;
+  esac
+done
+
+if [[ -z "${LOCAL_ENV_FILE}" ]]; then
+  LOCAL_ENV_FILE="${REPO_ROOT}/.env.${ENV_NAME}"
 fi
-printf 'OK: HTTPS endpoint reachable at https://%s\n' "$DOMAIN"
+
+local_env_created="no"
+if [[ ! -f "${LOCAL_ENV_FILE}" ]]; then
+  ensure_env_file "${REPO_ROOT}/.env.example" "${LOCAL_ENV_FILE}"
+  local_env_created="yes"
+fi
+
+DEPLOY_USER_NAME="${DEPLOY_USER_NAME:-ubuntu}"
+DEPLOY_IP="${DEPLOY_IP:-}"
+DEPLOY_DOMAIN="${DEPLOY_DOMAIN:-}"
+DEPLOY_CERTBOT_EMAIL="${DEPLOY_CERTBOT_EMAIL:-}"
+DEPLOY_NGINX_CONF_DIR="${DEPLOY_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
+DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME:-${DEPLOY_DOMAIN}.conf}"
+DEPLOY_NGINX_VERSION="${DEPLOY_NGINX_VERSION:-1.29.4}"
+DEPLOY_DOCKER_VERSION="${DEPLOY_DOCKER_VERSION:-}"
+DEPLOY_REMOTE_EDITOR="${DEPLOY_REMOTE_EDITOR:-${EDITOR:-nano}}"
+BACKEND_PORT="${BACKEND_PORT:-8000}"
+REPO_SSH="${REPO_SSH:-git@github.com:RSalehin24/ebook-scrapping.git}"
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
+BRANCH="${DEPLOY_BRANCH_NAME:-${CURRENT_BRANCH}}"
+TARGET="${DEPLOY_USER_NAME}@${DEPLOY_IP}"
+DOMAIN="${DEPLOY_DOMAIN}"
+CERTBOT_EMAIL="${DEPLOY_CERTBOT_EMAIL}"
+REMOTE_APP_DIR='~/library_app'
+REMOTE_APP_ABS_DIR="${DEPLOY_REMOTE_APP_DIR:-/home/${DEPLOY_USER_NAME}/library_app}"
+
+case "${DEPLOY_NGINX_CONFIG_NAME}" in
+  *.conf) ;;
+  *) DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME}.conf" ;;
+esac
+
+require_cmd ssh
+require_cmd scp
+require_cmd git
+require_cmd python3
+
+[[ -n "${DEPLOY_IP}" ]] || die "DEPLOY_IP must be set in scripts/.env"
+[[ -n "${DEPLOY_DOMAIN}" ]] || die "DEPLOY_DOMAIN must be set in scripts/.env"
+[[ -n "${DEPLOY_CERTBOT_EMAIL}" ]] || die "DEPLOY_CERTBOT_EMAIL must be set in scripts/.env"
+
+if [[ "${local_env_created}" == "yes" ]]; then
+  choice="$(timed_prompt "Prepared ${LOCAL_ENV_FILE}. Edit it now? [y/N] (auto-continue in 5s): " 5 "n")"
+  if [[ "${choice}" =~ ^[Yy]$ ]]; then
+    "${EDITOR:-nano}" "${LOCAL_ENV_FILE}"
+  fi
+fi
+
+validate_local_database_env "${LOCAL_ENV_FILE}"
+require_non_empty_env_key "${LOCAL_ENV_FILE}" "DJANGO_SECRET_KEY"
+require_non_empty_env_key "${LOCAL_ENV_FILE}" "SUPER_ADMIN_EMAIL"
+require_non_empty_env_key "${LOCAL_ENV_FILE}" "SUPER_ADMIN_PASSWORD"
+
+print_info "[1/8] Running deployment preflight checks"
+resolved_ips="$(resolve_domain_ips "${DOMAIN}")"
+if [[ -z "${resolved_ips}" || "$(printf '%s\n' "${resolved_ips}" | grep -Fx "${DEPLOY_IP}" || true)" == "" ]]; then
+  die "DNS A record mismatch for ${DOMAIN}. Expected ${DEPLOY_IP}. Resolved: ${resolved_ips:-<none>}"
+fi
+
+ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "echo connected" >/dev/null 2>&1 || die "SSH key access to ${TARGET} is not working."
+ssh -o BatchMode=yes "${TARGET}" "sudo -n true" >/dev/null 2>&1 || die "Passwordless sudo is required for fully automated deployment on ${TARGET}."
+
+sync_remote_repository
+sync_workspace_files
+
+case "${SYNC_MODE}" in
+  push|preserve) ;;
+  prompt)
+    SYNC_MODE="$(timed_prompt "Remote env sync mode [push/preserve] (default preserve, auto-continue in 5s): " 5 "preserve")"
+    [[ "${SYNC_MODE}" == "push" || "${SYNC_MODE}" == "preserve" ]] || SYNC_MODE="preserve"
+    ;;
+  *)
+    die "Unsupported sync mode: ${SYNC_MODE}"
+    ;;
+esac
+
+sync_remote_env_file "${SYNC_MODE}"
+
+remote_env_choice="$(timed_prompt "Edit remote .env now? [y/N] (auto-continue in 5s): " 5 "n")"
+if [[ "${remote_env_choice}" =~ ^[Yy]$ ]]; then
+  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && ${DEPLOY_REMOTE_EDITOR} .env"
+fi
+
+ensure_remote_docker
+build_frontend_dist
+start_remote_stack
+configure_remote_nginx
+verify_deployment

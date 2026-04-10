@@ -7,7 +7,6 @@ from django.db.models import Q
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 
-from apps.access.models import PermissionScope, PreviewAccessSession
 from apps.catalog.models import (
     Book,
     BookCategory,
@@ -25,7 +24,6 @@ from apps.catalog.services import (
     replace_book_relations,
 )
 from apps.common.models import AuditLog, LifecycleState, ReviewState
-from apps.common.permissions import user_has_scope
 from apps.common.text import normalize_catalog_text
 from apps.ingestion.models import (
     BookSubmission,
@@ -76,6 +74,17 @@ from apps.ingestion.services.submissions_support.persistence import (
     persist_scraped_book as _persist_scraped_book,
     sync_metadata_relations as _sync_metadata_relations,
 )
+from apps.ingestion.services.submissions_support.preview import (
+    can_manage_processing_records,
+    ensure_preview_session,
+)
+from apps.ingestion.services.submissions_support.sync import (
+    build_retry_payload,
+    primary_source_url_for_book,
+    root_submission,
+    sync_deduplicated_submissions as _sync_deduplicated_submissions,
+    sync_submission_from_canonical as _sync_submission_from_canonical,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,35 +116,6 @@ RETRY_PAYLOAD_RESET_KEYS = (
     "existing_book_source",
     "linked_book_slug",
 )
-
-
-def can_manage_processing_records(user):
-    return bool(user.is_staff or user_has_scope(user, [PermissionScope.PROCESSING_MANAGE]))
-
-
-def ensure_preview_session(user, book, submission=None, allow_guest=False):
-    if not user and not allow_guest:
-        return None
-
-    filters = {
-        "book": book,
-        "expires_at__gt": timezone.now(),
-    }
-    if user:
-        filters["user"] = user
-    else:
-        filters["user__isnull"] = True
-        if submission is not None:
-            filters["source_submission"] = submission
-
-    existing_session = PreviewAccessSession.objects.filter(**filters).order_by("-created_at").first()
-    if existing_session:
-        return existing_session
-    return PreviewAccessSession.objects.create(
-        user=user if user else None,
-        book=book,
-        source_submission=submission,
-    )
 
 
 def record_job_log(job, level, message, details=None):
@@ -262,26 +242,6 @@ def capture_source_page_metadata(source_url):
     return metadata
 
 
-def primary_source_url_for_book(book):
-    source = book.source_urls.order_by("-is_primary", "-created_at").first()
-    return source.normalized_source_url if source else ""
-
-
-def root_submission(submission):
-    return submission.canonical_submission or submission
-
-
-def build_retry_payload(raw_payload, actor, previous_status, previous_error_message):
-    next_payload = dict(raw_payload or {})
-    next_payload["requeued"] = True
-    next_payload["requeued_at"] = timezone.now().isoformat()
-    next_payload["requeue_requested_by"] = str(actor.id)
-    next_payload["requeue_reason"] = previous_error_message or f"Retry requested from status: {previous_status}."
-    for key in RETRY_PAYLOAD_RESET_KEYS:
-        next_payload.pop(key, None)
-    return next_payload
-
-
 def retry_submission_record(submission, actor):
     target_submission = root_submission(submission)
     can_manage_processing = can_manage_processing_records(actor)
@@ -311,6 +271,7 @@ def retry_submission_record(submission, actor):
         actor,
         previous_status,
         previous_error_message,
+        RETRY_PAYLOAD_RESET_KEYS,
     )
     if next_payload != (target_submission.raw_payload or {}):
         target_submission.raw_payload = next_payload
@@ -359,56 +320,22 @@ def retry_submission_records(submissions, actor):
 
 
 def sync_submission_from_canonical(submission, canonical_submission):
-    canonical_submission = root_submission(canonical_submission)
-    if submission.pk == canonical_submission.pk:
-        return submission
-
-    update_fields = []
-    field_names = (
-        "resolved_url",
-        "resolution_status",
-        "resolution_confidence",
-        "status",
-        "review_state",
-        "linked_book",
-        "duplicate_of_book",
-        "error_message",
+    return _sync_submission_from_canonical(
+        submission,
+        canonical_submission,
+        ensure_preview_session_callback=ensure_preview_session,
+        root_submission_callback=root_submission,
+        shared_payload_keys=SUBMISSION_PAYLOAD_KEYS_TO_SHARE,
+        submission_status=SubmissionStatus,
     )
-    for field_name in field_names:
-        canonical_value = getattr(canonical_submission, field_name)
-        if getattr(submission, field_name) != canonical_value:
-            setattr(submission, field_name, canonical_value)
-            update_fields.append(field_name)
-
-    if submission.canonical_submission_id != canonical_submission.id:
-        submission.canonical_submission = canonical_submission
-        update_fields.append("canonical_submission")
-
-    next_payload = {
-        **submission.raw_payload,
-        "deduplicated": True,
-        "canonical_submission_id": str(canonical_submission.id),
-    }
-    for key in SUBMISSION_PAYLOAD_KEYS_TO_SHARE:
-        if key in canonical_submission.raw_payload:
-            next_payload[key] = canonical_submission.raw_payload[key]
-    if submission.raw_payload != next_payload:
-        submission.raw_payload = next_payload
-        update_fields.append("raw_payload")
-
-    if update_fields:
-        submission.save(update_fields=[*update_fields, "updated_at"])
-
-    if submission.status == SubmissionStatus.READY and submission.linked_book_id and submission.submitter_id:
-        ensure_preview_session(submission.submitter, submission.linked_book, submission=submission)
-
-    return submission
 
 
 def sync_deduplicated_submissions(submission):
-    submission = root_submission(submission)
-    for dependent_submission in submission.deduplicated_submissions.select_related("submitter", "linked_book"):
-        sync_submission_from_canonical(dependent_submission, submission)
+    return _sync_deduplicated_submissions(
+        submission,
+        root_submission_callback=root_submission,
+        sync_submission_from_canonical_callback=sync_submission_from_canonical,
+    )
 
 
 def find_reusable_submission(*, normalized_input="", resolved_url="", exclude_submission_id=None):

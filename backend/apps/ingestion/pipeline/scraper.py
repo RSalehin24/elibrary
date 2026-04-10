@@ -1,286 +1,30 @@
-from copy import deepcopy
-import requests
-from requests.adapters import HTTPAdapter
-from urllib.parse import urljoin, urlparse, urlunparse
-from urllib3.util.retry import Retry
-import time
 import json
 import re
 import os
 import shutil
-import unicodedata
+from copy import deepcopy
 from pathlib import Path
+from urllib.parse import urljoin, urlparse, urlunparse
+
 from bs4 import BeautifulSoup, Tag
 
 from apps.ingestion.services.normalization import extract_main_content_segments
 from apps.common.text import clean_display_text
+from .scraper_support.network import (
+    ALLOWED_SOURCE_HOSTS,
+    clean_buttons,
+    create_session_with_retries,
+    get_soup,
+    normalize_source_url,
+)
+from .scraper_support.text import (
+    extract_core_title,
+    normalize_bengali_numbers,
+    normalize_text,
+    texts_are_similar,
+)
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/144.0.0.0 Safari/537.36"
-    )
-}
-
-ALLOWED_SOURCE_HOSTS = {"ebanglalibrary.com", "www.ebanglalibrary.com"}
 INLINE_TOC_PATTERNS = ("সূচীপত্র", "সুচিপত্র", "table of contents", "contents")
-
-
-def normalize_source_url(url):
-    """Normalize externally supplied ebanglalibrary book URLs."""
-    parsed = urlparse(url.strip())
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("Book URL must start with http:// or https://")
-    if parsed.netloc.lower() not in ALLOWED_SOURCE_HOSTS:
-        raise ValueError("Only ebanglalibrary.com book URLs are allowed")
-    if not parsed.path.startswith("/books/"):
-        raise ValueError("Only direct ebanglalibrary book URLs are supported")
-
-    normalized_path = parsed.path.rstrip("/") + "/"
-    return urlunparse(("https", "www.ebanglalibrary.com", normalized_path, "", "", ""))
-
-def create_session_with_retries(retries=3, backoff_factor=1):
-    """Create a requests session with automatic retry logic."""
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=retries,
-        backoff_factor=backoff_factor,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"]
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
-
-def get_soup(url, max_retries=3):
-    """Fetch URL and return BeautifulSoup object with retry logic."""
-    session = create_session_with_retries(retries=max_retries)
-    
-    for attempt in range(max_retries):
-        try:
-            response = session.get(url, headers=HEADERS, timeout=30)
-            if response.status_code == 200:
-                return BeautifulSoup(response.text, "html.parser")
-            print(f"Failed to fetch {url} ({response.status_code})")
-            return None
-        except requests.exceptions.SSLError as e:
-            print(f"SSL Error (attempt {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 5
-                print(f"Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
-        except requests.exceptions.RequestException as e:
-            print(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 3
-                print(f"Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
-    
-    print(f"Failed to fetch {url} after {max_retries} attempts")
-    return None
-
-def clean_buttons(soup):
-    for button in soup.find_all("button"):
-        button.decompose()
-    return soup
-
-def normalize_text(text):
-    """
-    Normalize text for comparison by removing all symbols and punctuation.
-    Only keeps letters, numbers, combining marks, and spaces for matching.
-    This allows matching text regardless of punctuation differences.
-    """
-    if not text:
-        return ""
-    
-    # Unicode normalization - handles invisible characters and different Unicode representations
-    text = unicodedata.normalize('NFKC', text)
-    
-    # Convert to lowercase
-    text = text.lower()
-
-    normalized = []
-    for char in text:
-        if char.isspace():
-            normalized.append(" ")
-            continue
-        category = unicodedata.category(char)
-        if category.startswith(("L", "N", "M")):
-            normalized.append(char)
-
-    text = "".join(normalized)
-    return re.sub(r'\s+', ' ', text).strip()
-
-def normalize_bengali_numbers(text):
-    """
-    Convert Bengali word numbers to digit format and vice versa for comparison.
-    Returns a list of possible normalized versions.
-    """
-    if not text:
-        return [""]
-    
-    # Bengali word to digit mappings
-    word_to_digit = {
-        'প্রথম': '১ম', 'প্রথম': '1ম',
-        'দ্বিতীয়': '২য়', 'দ্বিতীয়': '2য়',
-        'তৃতীয়': '৩য়', 'তৃতীয়': '3য়',
-        'চতুর্থ': '৪র্থ', 'চতুর্থ': '4র্থ',
-        'পঞ্চম': '৫ম', 'পঞ্চম': '5ম',
-        'ষষ্ঠ': '৬ষ্ঠ', 'ষষ্ঠ': '6ষ্ঠ',
-        'সপ্তম': '৭ম', 'সপ্তম': '7ম',
-        'অষ্টম': '৮ম', 'অষ্টম': '8ম',
-        'নবম': '৯ম', 'নবম': '9ম',
-        'দশম': '১০ম', 'দশম': '10ম',
-    }
-    
-    # Bengali digit to English digit mappings
-    bengali_to_english = {
-        '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
-        '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9'
-    }
-    
-    normalized = normalize_text(text)
-    versions = [normalized]
-    
-    # Create version with English digits
-    english_version = normalized
-    for bn, en in bengali_to_english.items():
-        english_version = english_version.replace(bn, en)
-    if english_version != normalized:
-        versions.append(english_version)
-    
-    # Create versions with word numbers replaced
-    for word, digit in word_to_digit.items():
-        word_norm = normalize_text(word)
-        digit_norm = normalize_text(digit)
-        if word_norm in normalized:
-            versions.append(normalized.replace(word_norm, digit_norm))
-    
-    return versions
-
-def extract_core_title(text):
-    """
-    Extract the core title by removing common prefixes/suffixes like author info.
-    Common patterns:
-    - "Title – Author"
-    - "Title। লেখক- Author"
-    - "Title - লেখক : Author"
-    """
-    if not text:
-        return ""
-    
-    normalized = normalize_text(text)
-    
-    # Common words that indicate author/translator info follows
-    author_indicators = [
-        'লখক', 'অনবদক', 'সমপদক', 'রপনতর', 'মল',  # normalized forms
-        'অনবদ', 'রচন', 'সকলন'
-    ]
-    
-    # Split by common separators and take the first meaningful part
-    # after normalization these become spaces
-    parts = normalized.split()
-    
-    # Find where author info starts
-    core_parts = []
-    for i, part in enumerate(parts):
-        is_author_indicator = any(ind in part for ind in author_indicators)
-        if is_author_indicator and i > 0:
-            # Found author indicator, stop here
-            break
-        core_parts.append(part)
-    
-    return ' '.join(core_parts)
-
-def texts_are_similar(text1, text2, debug=False):
-    """
-    Check if two texts are similar enough to be considered duplicates.
-    Uses normalized comparison that ignores all punctuation and symbols.
-    Also handles cases where one text has extra words like 'লেখক' (author).
-    Handles Bengali number variations (প্রথম vs ১ম).
-    """
-    norm1 = normalize_text(text1)
-    norm2 = normalize_text(text2)
-    
-    if debug:
-        print(f"  Comparing:")
-        print(f"    Original 1: '{text1}'")
-        print(f"    Original 2: '{text2}'")
-        print(f"    Normalized 1: '{norm1}'")
-        print(f"    Normalized 2: '{norm2}'")
-    
-    # Exact match after normalization
-    if norm1 == norm2:
-        if debug:
-            print(f"    Result: EXACT MATCH")
-        return True
-    
-    # Check if one contains the other (for cases where one might have extra info)
-    # But only if they're reasonably long to avoid false positives
-    if len(norm1) > 10 and len(norm2) > 10:
-        if norm1 in norm2 or norm2 in norm1:
-            if debug:
-                print(f"    Result: SUBSTRING MATCH")
-            return True
-    
-    # Extract core titles (without author info) and compare
-    core1 = extract_core_title(text1)
-    core2 = extract_core_title(text2)
-    
-    if core1 and core2 and len(core1) > 5 and len(core2) > 5:
-        if core1 == core2:
-            if debug:
-                print(f"    Result: CORE TITLE MATCH ('{core1}' == '{core2}')")
-            return True
-        if core1 in core2 or core2 in core1:
-            if debug:
-                print(f"    Result: CORE TITLE SUBSTRING MATCH")
-            return True
-    
-    # Check with Bengali number normalization
-    versions1 = normalize_bengali_numbers(text1)
-    versions2 = normalize_bengali_numbers(text2)
-    
-    for v1 in versions1:
-        for v2 in versions2:
-            if v1 == v2:
-                if debug:
-                    print(f"    Result: NUMBER-NORMALIZED MATCH")
-                return True
-            if len(v1) > 10 and len(v2) > 10:
-                if v1 in v2 or v2 in v1:
-                    if debug:
-                        print(f"    Result: NUMBER-NORMALIZED SUBSTRING MATCH")
-                    return True
-    
-    # Special handling: Remove common prefix words like 'লখক' (lekkhok = author)
-    # that might appear in one version but not the other
-    common_prefixes = ['লখক', 'অনবদক', 'সমপদক', 'মল']  # author, translator, editor, original
-    
-    for prefix in common_prefixes:
-        # Try removing the prefix from norm1
-        if prefix in norm1:
-            norm1_without = norm1.replace(prefix, '').strip()
-            norm1_without = re.sub(r'\s+', ' ', norm1_without)
-            if norm1_without == norm2 or (len(norm1_without) > 10 and norm1_without in norm2):
-                if debug:
-                    print(f"    Result: MATCH (after removing '{prefix}' from text1)")
-                return True
-        
-        # Try removing the prefix from norm2
-        if prefix in norm2:
-            norm2_without = norm2.replace(prefix, '').strip()
-            norm2_without = re.sub(r'\s+', ' ', norm2_without)
-            if norm2_without == norm1 or (len(norm2_without) > 10 and norm2_without in norm1):
-                if debug:
-                    print(f"    Result: MATCH (after removing '{prefix}' from text2)")
-                return True
-    
-    if debug:
-        print(f"    Result: NO MATCH")
-    return False
 
 def remove_redundant_headers(html_content, title, debug=False):
     """

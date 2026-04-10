@@ -3,806 +3,88 @@ import { apiFetch } from "../api/client";
 import BookRouteLink from "../components/BookRouteLink";
 import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
 import ConfirmationDialog from "../components/ConfirmationDialog";
-import EmptyState from "../components/EmptyState";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProcessingJobReviewCard from "../components/ProcessingJobReviewCard";
 import StatusPill from "../components/StatusPill";
+import {
+  ALL_LOAD_SCOPES,
+  LOAD_SCOPE_AUTOMATION,
+  LOAD_SCOPE_CATALOG_BROWSE,
+  LOAD_SCOPE_CATALOG_OVERVIEW,
+  LOAD_SCOPE_INCOMPLETE_BROWSE,
+  LOAD_SCOPE_INCOMPLETE_OVERVIEW,
+  LOAD_SCOPE_JOB_REVIEWS,
+  LOAD_SCOPE_JOBS,
+  LOAD_SCOPE_REVIEWS,
+  LOAD_SCOPE_RUNS,
+  LOAD_SCOPE_SUBMISSIONS,
+  SOURCE_TAB,
+  defaultCatalogFilters,
+  defaultCatalogPagination,
+  defaultCatalogStatusFilters,
+  defaultCatalogSummary,
+  defaultIncompleteFilters,
+  defaultIncompleteSummary,
+  defaultJobFilters,
+  defaultReviewFilters,
+  defaultRemovedFilters,
+  defaultRunFilters,
+  defaultSubmissionFilters,
+} from "../features/processing/constants";
+import {
+  catalogFilterFields,
+  jobFilterFields,
+  reviewFilterFields,
+  removedFilterFields,
+  runFilterFields,
+  submissionFilterFields,
+} from "../features/processing/filterFields";
+import {
+  automationFormFromSettings,
+  buildJobsParams,
+  buildReviewParams,
+  buildRunParams,
+  buildSubmissionParams,
+  canCreateCatalogEntry,
+  cutoffForPeriod,
+  filterCatalogEntriesByControls,
+  filterJobsByControls,
+  getCatalogEntryActivityAt,
+  getCatalogPageLabel,
+  getJobActivityAt,
+  getRequeueReasonText,
+  getRequestPrimaryText,
+  getRunActivityAt,
+  getSubmissionActivityAt,
+  getUniqueSubmissionIds,
+  isActiveStatus,
+  isCatalogSyncActive,
+  isDefaultCatalogBrowseRequest,
+  isDefaultJobRequest,
+  isResumableJob,
+  jobTypeLabel,
+  normalizeTimeInput,
+  runModeLabel,
+  runSummaryLabel,
+  runTypeLabel,
+  selectedActionLabel,
+  summarizeResponse,
+  toggleSelectedId,
+  toggleVisibleSelection,
+} from "../features/processing/helpers";
+import {
+  BookLinkCell,
+  CatalogRefreshIcon,
+  CatalogStopIcon,
+  QueueTableCard,
+  RequestValue,
+  renderProcessingCardLoader,
+} from "../features/processing/components/ProcessingScaffold";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 import { formatBookDateTime } from "../utils/bookPresentation";
 import { hasCapability } from "../utils/capabilities";
 import { toQueryString } from "../utils/query";
-
-const USER_TAB = "user";
-const SOURCE_TAB = "source";
-const AUTOMATION_TAB = "automation";
-const ALL_TAB = "all";
-const INCOMPLETE_TAB = "incomplete";
-
-const LOAD_SCOPE_SUBMISSIONS = "submissions";
-const LOAD_SCOPE_JOBS = "jobs";
-const LOAD_SCOPE_JOB_REVIEWS = "jobReviews";
-const LOAD_SCOPE_REVIEWS = "reviews";
-const LOAD_SCOPE_CATALOG_BROWSE = "catalogBrowse";
-const LOAD_SCOPE_CATALOG_OVERVIEW = "catalogOverview";
-const LOAD_SCOPE_RUNS = "runs";
-const LOAD_SCOPE_AUTOMATION = "automation";
-const LOAD_SCOPE_INCOMPLETE_BROWSE = "incompleteBrowse";
-const LOAD_SCOPE_INCOMPLETE_OVERVIEW = "incompleteOverview";
-
-const ALL_LOAD_SCOPES = [
-  LOAD_SCOPE_SUBMISSIONS,
-  LOAD_SCOPE_JOBS,
-  LOAD_SCOPE_JOB_REVIEWS,
-  LOAD_SCOPE_REVIEWS,
-  LOAD_SCOPE_CATALOG_BROWSE,
-  LOAD_SCOPE_CATALOG_OVERVIEW,
-  LOAD_SCOPE_RUNS,
-  LOAD_SCOPE_AUTOMATION,
-  LOAD_SCOPE_INCOMPLETE_BROWSE,
-  LOAD_SCOPE_INCOMPLETE_OVERVIEW,
-];
-
-const defaultSubmissionFilters = {
-  q: "",
-  status: "",
-  review_state: "",
-  resolution_status: "",
-  input_type: "",
-};
-
-const defaultJobFilters = {
-  q: "",
-  status: "",
-  job_type: "",
-};
-
-const defaultCatalogFilters = {
-  q: "",
-  status: "",
-  sort: "status_recent",
-  page: 1,
-  limit: 60,
-};
-
-const defaultCatalogStatusFilters = {
-  q: "",
-};
-
-const defaultCatalogPagination = {
-  page: 1,
-  limit: 60,
-  total_count: 0,
-  page_count: 1,
-  has_previous: false,
-  has_next: false,
-};
-
-const catalogOverviewLimit = 180;
-
-const defaultRunFilters = {
-  q: "",
-  status: "",
-  mode: "",
-};
-
-const defaultReviewFilters = {
-  q: "",
-  status: "",
-};
-
-const defaultIncompleteFilters = {
-  q: "",
-  status: "",
-};
-
-const defaultRemovedFilters = {
-  q: "",
-  range: "week",
-};
-
-const defaultCatalogSummary = {
-  total: 0,
-  new: 0,
-  queued: 0,
-  processing: 0,
-  stopped: 0,
-  requeued: 0,
-  unfinished: 0,
-  failed: 0,
-  ready: 0,
-  deleted: 0,
-};
-
-const defaultIncompleteSummary = {
-  total_incomplete_books: 0,
-  removed_from_unfinished: 0,
-  still_in_unfinished: 0,
-  missing_in_catalog: 0,
-  queued: 0,
-  processing: 0,
-  failed: 0,
-  stopped: 0,
-  requeued: 0,
-};
-
-const submissionFilterFields = [
-  {
-    key: "status",
-    label: "Status",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "pending_resolution", label: "Resolving" },
-      { value: "queued", label: "Queued" },
-      { value: "processing", label: "Processing" },
-      { value: "needs_review", label: "Needs review" },
-      { value: "ready", label: "Ready" },
-      { value: "failed", label: "Failed" },
-      { value: "stopped", label: "Stopped" },
-      { value: "duplicate", label: "Duplicate" },
-    ],
-  },
-  {
-    key: "review_state",
-    label: "Review",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "pending", label: "Pending" },
-      { value: "needs_review", label: "Needs review" },
-      { value: "approved", label: "Approved" },
-      { value: "rejected", label: "Rejected" },
-    ],
-  },
-  {
-    key: "resolution_status",
-    label: "Match",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "resolved", label: "Resolved" },
-      { value: "exact_match", label: "Exact match" },
-      { value: "ambiguous", label: "Ambiguous" },
-      { value: "invalid", label: "Invalid" },
-      { value: "unresolved", label: "Unresolved" },
-    ],
-  },
-  {
-    key: "input_type",
-    label: "Input",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "url", label: "URL" },
-      { value: "title", label: "Title" },
-      { value: "csv", label: "CSV" },
-    ],
-  },
-];
-
-const jobFilterFields = [
-  {
-    key: "status",
-    label: "Status",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "queued", label: "Queued" },
-      { value: "processing", label: "Processing" },
-      { value: "needs_review", label: "Needs review" },
-      { value: "ready", label: "Ready" },
-      { value: "failed", label: "Failed" },
-      { value: "stopped", label: "Stopped" },
-      { value: "succeeded", label: "Complete" },
-    ],
-  },
-  {
-    key: "job_type",
-    label: "Step",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "ingestion", label: "Create" },
-      { value: "resolution", label: "Match" },
-      { value: "reprocess", label: "Regenerate" },
-      { value: "catalog_refresh", label: "Catalog refresh" },
-      { value: "curation", label: "Curation run" },
-    ],
-  },
-];
-
-const catalogFilterFields = [
-  {
-    key: "status",
-    label: "Status",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "new", label: "New" },
-      { value: "processing", label: "Processing" },
-      { value: "stopped", label: "Stopped" },
-      { value: "requeued", label: "Requeued" },
-      { value: "failed", label: "Failed" },
-      { value: "unfinished", label: "Unfinished" },
-      { value: "ready", label: "Ready" },
-      { value: "deleted", label: "Deleted" },
-    ],
-  },
-];
-
-const runFilterFields = [
-  {
-    key: "status",
-    label: "Status",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "queued", label: "Queued" },
-      { value: "processing", label: "Processing" },
-      { value: "failed", label: "Failed" },
-      { value: "stopped", label: "Stopped" },
-      { value: "succeeded", label: "Complete" },
-    ],
-  },
-  {
-    key: "mode",
-    label: "Mode",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "pending", label: "New + unfinished" },
-      { value: "all", label: "All tracked" },
-    ],
-  },
-];
-
-const reviewFilterFields = [
-  {
-    key: "status",
-    label: "Status",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "pending", label: "Pending" },
-      { value: "confirmed", label: "Confirmed" },
-      { value: "dismissed", label: "Dismissed" },
-      { value: "merged", label: "Merged" },
-    ],
-  },
-];
-
-const incompleteFilterFields = [
-  {
-    key: "status",
-    label: "Status",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "removed", label: "Removed from unfinished" },
-      { value: "still", label: "Still in unfinished" },
-      { value: "missing", label: "Missing in catalog" },
-    ],
-  },
-];
-
-const removedFilterFields = [
-  {
-    key: "range",
-    label: "Range",
-    type: "select",
-    options: [
-      { value: "day", label: "Past day" },
-      { value: "week", label: "Past week" },
-      { value: "month", label: "Past month" },
-      { value: "year", label: "Past year" },
-    ],
-  },
-];
-
-function normalizeTimeInput(value) {
-  return (value || "02:00:00").slice(0, 5);
-}
-
-function automationFormFromSettings(settings) {
-  return {
-    enabled: Boolean(settings?.enabled),
-    daily_run_time: normalizeTimeInput(settings?.daily_run_time),
-    frequency: settings?.frequency || "daily",
-    mode: settings?.mode || "pending",
-    refresh_max_pages: String(settings?.refresh_max_pages || 80),
-  };
-}
-
-function getOriginForTab(tab) {
-  if (tab === SOURCE_TAB) {
-    return "curation";
-  }
-  if (tab === INCOMPLETE_TAB) {
-    return "curation";
-  }
-  if (tab === AUTOMATION_TAB) {
-    return "automation";
-  }
-  if (tab === USER_TAB) {
-    return "user";
-  }
-  return "";
-}
-
-function normalizeStatusForApi(value) {
-  return value === "stopped" ? "cancelled" : value;
-}
-
-function cutoffForPeriod(period) {
-  const now = new Date();
-  if (period === "day") {
-    return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  }
-  if (period === "week") {
-    return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  }
-  if (period === "month") {
-    return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-  }
-  return new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
-}
-
-function isActiveStatus(value) {
-  return ["queued", "processing"].includes(value);
-}
-
-function isResumableJob(job) {
-  if (!job) {
-    return false;
-  }
-  if (job.status === "stopped") {
-    return true;
-  }
-  return job.status === "queued" && !job.task_id;
-}
-
-function isCatalogSyncActive(value) {
-  return ["queued", "processing"].includes(value);
-}
-
-function buildJobsParams(filters, tab) {
-  const params = {
-    q: filters.q,
-    job_type: filters.job_type,
-    limit: 60,
-  };
-  if (filters.status) {
-    const normalizedStatus = normalizeStatusForApi(filters.status);
-    if (
-      ["succeeded", "queued", "processing", "failed", "cancelled"].includes(
-        normalizedStatus,
-      )
-    ) {
-      params.status = normalizedStatus;
-    } else if (
-      ["needs_review", "ready", "duplicate"].includes(normalizedStatus)
-    ) {
-      params.submission_status = normalizedStatus;
-    }
-  }
-  const origin = getOriginForTab(tab);
-  if (origin) {
-    params.origin = origin;
-  }
-  return params;
-}
-
-function isDefaultJobRequest(filters) {
-  return (
-    String(filters?.q || "") === defaultJobFilters.q &&
-    String(filters?.status || "") === defaultJobFilters.status &&
-    String(filters?.job_type || "") === defaultJobFilters.job_type
-  );
-}
-
-function buildSubmissionParams(filters, tab) {
-  const params = { ...filters, limit: 60 };
-  if (params.status) {
-    params.status = normalizeStatusForApi(params.status);
-  }
-  const origin = getOriginForTab(tab);
-  if (origin) {
-    params.origin = origin;
-  }
-  return params;
-}
-
-function buildReviewParams(filters, tab) {
-  const params = { ...filters, limit: 40 };
-  const origin = getOriginForTab(tab);
-  if (origin) {
-    params.origin = origin;
-  }
-  return params;
-}
-
-function buildRunParams(filters, tab) {
-  const params = { ...filters, limit: 20 };
-  if (params.status) {
-    params.status = normalizeStatusForApi(params.status);
-  }
-  if (tab === AUTOMATION_TAB) {
-    params.trigger = "scheduled";
-  }
-  return params;
-}
-
-function safeDecode(value) {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function toggleSelectedId(currentIds, id) {
-  return currentIds.includes(id)
-    ? currentIds.filter((currentId) => currentId !== id)
-    : [...currentIds, id];
-}
-
-function toggleVisibleSelection(currentIds, visibleIds, allSelected) {
-  const nextIds = new Set(currentIds);
-  if (allSelected) {
-    visibleIds.forEach((id) => nextIds.delete(id));
-  } else {
-    visibleIds.forEach((id) => nextIds.add(id));
-  }
-  return Array.from(nextIds);
-}
-
-function selectedActionLabel(label, count) {
-  return count ? `${label} (${count})` : label;
-}
-
-function getUniqueSubmissionIds(jobRows, selectedJobIdSet = null) {
-  return Array.from(
-    new Set(
-      (jobRows || [])
-        .filter(
-          (job) =>
-            job.submission_id &&
-            (!selectedJobIdSet || selectedJobIdSet.has(job.id)),
-        )
-        .map((job) => job.submission_id),
-    ),
-  );
-}
-
-function isUrlValue(value) {
-  return (value || "").trim().startsWith("http");
-}
-
-function getRequestPrimaryText(value) {
-  const trimmed = (value || "").trim();
-  if (!trimmed) {
-    return "-";
-  }
-  if (!isUrlValue(trimmed)) {
-    return trimmed;
-  }
-
-  try {
-    const url = new URL(trimmed);
-    const path = safeDecode(url.pathname).replace(/^\/+|\/+$/g, "");
-    const label = path
-      .replace(/^books\//, "")
-      .replace(/-/g, " ")
-      .trim();
-    return label || safeDecode(trimmed);
-  } catch {
-    return safeDecode(trimmed);
-  }
-}
-
-function getRequestSecondaryText(value) {
-  const trimmed = (value || "").trim();
-  if (!trimmed || !isUrlValue(trimmed)) {
-    return "";
-  }
-
-  try {
-    const url = new URL(trimmed);
-    return `${url.hostname.replace(/^www\./, "")}${safeDecode(url.pathname)}`;
-  } catch {
-    return safeDecode(trimmed);
-  }
-}
-
-function jobTypeLabel(jobType) {
-  if (jobType === "ingestion") {
-    return "Create";
-  }
-  if (jobType === "resolution") {
-    return "Match";
-  }
-  if (jobType === "reprocess") {
-    return "Regenerate";
-  }
-  return jobType;
-}
-
-function runTypeLabel(run) {
-  return run.trigger === "scheduled" ? "Scheduled" : "Manual";
-}
-
-function runModeLabel(mode) {
-  return mode === "all" ? "All tracked" : "New + unfinished";
-}
-
-function runSummaryLabel(run) {
-  const summary = run.summary || {};
-  return [
-    `${summary.queued_creates || 0} create`,
-    `${summary.queued_updates || 0} update`,
-    `${summary.skipped_ready || 0} ready`,
-  ].join(" · ");
-}
-
-function summarizeResponse(payload, labels) {
-  const parts = Object.entries(labels)
-    .map(([key, label]) => {
-      const value = payload?.[key];
-      return typeof value === "number" && value ? `${value} ${label}` : "";
-    })
-    .filter(Boolean);
-
-  return parts.join(" · ");
-}
-
-function getSubmissionActivityAt(submission) {
-  return (
-    submission.latest_job?.finished_at ||
-    submission.latest_job?.started_at ||
-    submission.latest_job?.updated_at ||
-    submission.updated_at ||
-    submission.created_at
-  );
-}
-
-function getJobActivityAt(job) {
-  return job.finished_at || job.started_at || job.updated_at || job.created_at;
-}
-
-function getRunActivityAt(run) {
-  return run.finished_at || run.started_at || run.updated_at || run.created_at;
-}
-
-function getRequeueReasonText(job) {
-  return (
-    job.requeue_reason ||
-    job.last_error ||
-    "No failure details were recorded for this requeue."
-  );
-}
-
-function filterJobsByControls(jobRows, filters) {
-  const query = String(filters.q || "")
-    .trim()
-    .toLowerCase();
-  return jobRows.filter((job) => {
-    if (filters.status && job.status !== filters.status) {
-      return false;
-    }
-    if (filters.job_type && job.job_type !== filters.job_type) {
-      return false;
-    }
-    if (!query) {
-      return true;
-    }
-    const requestText = getRequestPrimaryText(job.submission_input)
-      .toLowerCase()
-      .trim();
-    const errorText = String(job.last_error || "").toLowerCase();
-    return requestText.includes(query) || errorText.includes(query);
-  });
-}
-
-function filterCatalogEntriesByControls(entryRows, filters) {
-  const query = String(filters.q || "")
-    .trim()
-    .toLowerCase();
-  if (!query) {
-    return entryRows;
-  }
-  return entryRows.filter((entry) => {
-    const searchText = [
-      entry.title,
-      entry.author_line,
-      entry.categories,
-      entry.local_book_title,
-      entry.latest_job_error,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return searchText.includes(query);
-  });
-}
-
-function getCatalogEntryActivityAt(entry) {
-  return entry.activity_at || entry.updated_at || entry.last_seen_at;
-}
-
-function getCatalogPageLabel(pagination) {
-  const currentPage = pagination?.page || 1;
-  const pageCount = pagination?.page_count || 1;
-  return `Page ${currentPage} / ${pageCount}`;
-}
-
-function isDefaultCatalogBrowseRequest(filters) {
-  return (
-    String(filters?.q || "") === defaultCatalogFilters.q &&
-    String(filters?.status || "") === defaultCatalogFilters.status &&
-    String(filters?.sort || defaultCatalogFilters.sort) ===
-      defaultCatalogFilters.sort &&
-    Number(filters?.page || defaultCatalogFilters.page) ===
-      defaultCatalogFilters.page &&
-    Number(filters?.limit || defaultCatalogFilters.limit) ===
-      defaultCatalogFilters.limit
-  );
-}
-
-function canCreateCatalogEntry(entry) {
-  return [
-    "new",
-    "failed",
-    "stopped",
-    "requeued",
-    "unfinished",
-    "deleted",
-  ].includes(entry.curation_status);
-}
-
-function RequestValue({ value, error }) {
-  const primary = getRequestPrimaryText(value);
-  const secondary = getRequestSecondaryText(value);
-
-  return (
-    <div className="table-cell-stack table-request-cell">
-      <strong>{primary}</strong>
-      {secondary ? <span className="table-note">{secondary}</span> : null}
-      {error ? <span className="processing-row-error">{error}</span> : null}
-    </div>
-  );
-}
-
-function BookLinkCell({ submission }) {
-  if (submission.linked_book_deleted) {
-    return (
-      <span className="table-note">
-        {submission.linked_book?.title || "Deleted record"}
-      </span>
-    );
-  }
-
-  if (!submission.linked_book_slug) {
-    return <span className="table-note">-</span>;
-  }
-
-  return (
-    <BookRouteLink slug={submission.linked_book_slug} className="meta-link">
-      {submission.linked_book?.title || submission.linked_book_slug}
-    </BookRouteLink>
-  );
-}
-
-function CatalogRefreshIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path
-        d="M20 5v5h-5M4 19v-5h5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M20 10a8 8 0 0 0-13.66-5.66L4 6.5M4 14a8 8 0 0 0 13.66 5.66L20 17.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CatalogStopIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <rect
-        x="6.5"
-        y="6.5"
-        width="11"
-        height="11"
-        rx="2.5"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-function renderProcessingCardLoader(label) {
-  const screenReaderLabel = label || "Loading";
-  return (
-    <div
-      className="processing-inline-loader"
-      role="status"
-      aria-live="polite"
-      aria-label={screenReaderLabel}
-    >
-      <LoadingSpinner size={16} />
-      <span>Loading...</span>
-    </div>
-  );
-}
-
-function QueueTableCard({
-  title,
-  count,
-  headerAside,
-  toolbar,
-  actions,
-  children,
-  emptyTitle,
-  cardClassName = "",
-  loading = false,
-  loadingLabel = "",
-}) {
-  const titleBlock = (
-    <div className="section-title-block">
-      <h2>{title}</h2>
-    </div>
-  );
-  const countPill =
-    count !== undefined && count !== null ? (
-      <span className="processing-card-count">
-        {loading ? <LoadingSpinner size={14} /> : count}
-      </span>
-    ) : null;
-  const shellContent = loading
-    ? renderProcessingCardLoader(
-        loadingLabel || `Loading ${title.toLowerCase()}`,
-      )
-    : children || <EmptyState title={emptyTitle} />;
-
-  return (
-    <section
-      className={`detail-card processing-card processing-list-card ${cardClassName}`.trim()}
-    >
-      <div className="processing-card-head">
-        {headerAside ? (
-          <div className="processing-card-head-meta">
-            {titleBlock}
-            {countPill}
-          </div>
-        ) : (
-          titleBlock
-        )}
-        {headerAside ? null : countPill}
-        {headerAside ? (
-          <div className="processing-card-head-aside">{headerAside}</div>
-        ) : null}
-      </div>
-      {toolbar ? (
-        <div className="processing-card-toolbar">{toolbar}</div>
-      ) : null}
-      {actions ? <div className="processing-bulk-bar">{actions}</div> : null}
-      <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>
-        {shellContent}
-      </div>
-    </section>
-  );
-}
 
 export default function ProcessingCatalogBooksPage() {
   const { user } = useSession();

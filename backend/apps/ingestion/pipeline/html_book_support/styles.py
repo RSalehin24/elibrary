@@ -1,0 +1,388 @@
+def generate_css():
+    """Generate comprehensive CSS for the HTML book."""
+    return """
+      /* Base Styles */
+      body {
+        font-family: 'Kalpurush', 'SolaimanLipi', Arial, sans-serif;
+        line-height: 1.8;
+        margin: 0;
+        padding: 20px;
+        background-color: #f5f5f5;
+        color: #333;
+      }
+
+      /* Container */
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+        background-color: white;
+        padding: 40px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      }
+
+      /* Header Section */
+      .book-header {
+        text-align: center;
+        margin-bottom: 40px;
+        padding-bottom: 30px;
+        border-bottom: 3px solid #3498db;
+      }
+
+      h1 {
+        font-size: 2.5em;
+        color: #2c3e50;
+        margin-bottom: 10px;
+      }
+
+      .author {
+        font-size: 1.5em;
+        color: #7f8c8d;
+        margin: 10px 0;
+      }
+
+      .series {
+        font-size: 1.2em;
+        color: #95a5a6;
+        margin: 5px 0;
+      }
+
+      .book-type {
+        font-size: 1em;
+        color: #bdc3c7;
+        margin: 5px 0;
+      }
+
+      /* Cover Image */
+      .cover-image {
+        max-width: 400px;
+        height: auto;
+        margin: 20px auto;
+        display: block;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        border-radius: 5px;
+      }
+
+      .cover-placeholder-card {
+        max-width: 400px;
+        min-height: 520px;
+        margin: 20px auto;
+        padding: 28px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-radius: 16px;
+        background:
+          radial-gradient(circle at 18% 12%, rgba(238, 211, 121, 0.35), transparent 34%),
+          radial-gradient(circle at 100% 100%, rgba(15, 75, 56, 0.22), transparent 42%),
+          linear-gradient(145deg, #f9f2df 0%, #e6f1eb 100%);
+        box-shadow: 0 10px 24px rgba(0,0,0,0.14);
+        color: #0b3d2e;
+        text-align: left;
+      }
+
+      .cover-placeholder-kicker {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.72);
+        font-size: 0.72em;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .cover-placeholder-title {
+        font-size: 2.1em;
+        line-height: 1.2;
+        margin: 24px 0 12px;
+        color: #17392f;
+      }
+
+      .cover-placeholder-author {
+        font-size: 1.1em;
+        margin: 0;
+        color: rgba(11, 61, 46, 0.78);
+      }
+
+      /* Book Info Section */
+      .book-info-section {
+        background-color: #e8f4f8;
+        padding: 30px;
+        margin: 40px 0;
+        border-radius: 8px;
+        border-left: 5px solid #3498db;
+        text-align: center;
+      }
+
+      .book-info-title {
+        font-size: 1.8em;
+        color: #2c3e50;
+        margin-bottom: 20px;
+        font-weight: bold;
+      }
+
+      .book-info-content {
+        font-size: 1.1em;
+        color: #555;
+        line-height: 1.8;
+      }
+
+      .book-info-content p {
+        margin: 8px 0;
+      }
+
+      /* Dedication Section */
+      .dedication-section {
+        background-color: #fef9e7;
+        padding: 30px;
+        margin: 40px 0;
+        border-radius: 8px;
+        border-left: 5px solid #f39c12;
+        text-align: center;
+      }
+
+      .dedication-title {
+        font-size: 1.8em;
+        color: #d68910;
+        margin-bottom: 20px;
+        font-weight: bold;
+      }
+
+      .dedication-content {
+        font-size: 1.2em;
+        color: #555;
+        line-height: 1.8;
+      }
+
+      .dedication-content p {
+        margin: 10px 0;
+      }
+
+      .dedication-content strong {
+        font-size: 1.1em;
+        color: #d68910;
+      }
+
+      .front-section {
+        background-color: #eef4f1;
+        padding: 24px;
+        margin: 32px 0;
+        border-radius: 8px;
+        border-left: 5px solid #0b3d2e;
+      }
+
+      .front-section-title {
+        font-size: 1.6em;
+        color: #0b3d2e;
+        margin-bottom: 14px;
+        font-weight: bold;
+      }
+
+      .front-section-content p {
+        margin: 10px 0;
+      }
+
+      /* Table of Contents */
+      .toc-section {
+        background-color: #ecf0f1;
+        padding: 30px;
+        margin: 40px 0;
+        border-radius: 8px;
+      }
+
+      .toc-title {
+        font-size: 2em;
+        color: #2c3e50;
+        text-align: center;
+        margin-bottom: 20px;
+        border-bottom: 2px solid #3498db;
+        padding-bottom: 10px;
+      }
+
+      .toc-list {
+        list-style-type: none;
+        padding-left: 0;
+      }
+
+      .toc-lesson {
+        margin: 15px 0;
+        padding: 10px;
+        background-color: white;
+        border-radius: 5px;
+      }
+
+      .toc-lesson strong {
+        font-size: 1.2em;
+        color: #34495e;
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .toc-topics {
+        list-style-type: none;
+        padding-left: 20px;
+        margin-top: 8px;
+      }
+
+      .toc-topic {
+        margin: 6px 0;
+        padding: 5px 0;
+      }
+
+      .toc-topic a {
+        color: #3498db;
+        text-decoration: none;
+        transition: color 0.3s;
+      }
+
+      .toc-topic a:hover {
+        color: #2980b9;
+        text-decoration: underline;
+      }
+
+      .toc-standalone {
+        margin: 10px 0;
+        padding: 10px;
+        background-color: white;
+        border-radius: 5px;
+      }
+
+      .toc-standalone a {
+        color: #2c3e50;
+        text-decoration: none;
+        font-weight: 500;
+        font-size: 1.1em;
+        transition: color 0.3s;
+      }
+
+      .toc-standalone a:hover {
+        color: #3498db;
+        text-decoration: underline;
+      }
+
+      /* Content Sections */
+      .lesson-divider {
+        border: none;
+        border-top: 2px solid #e0e0e0;
+        margin: 40px 0 30px 0;
+      }
+
+      .lesson-section,
+      .standalone-lesson {
+        margin-bottom: 40px;
+      }
+
+      .lesson-header {
+        font-size: 2em;
+        color: #2c3e50;
+        margin-top: 30px;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #3498db;
+      }
+
+      .topic-section {
+        margin: 30px 0;
+        padding-left: 20px;
+        border-left: 3px solid #e0e0e0;
+      }
+
+      .topic-header {
+        font-size: 1.5em;
+        color: #34495e;
+        margin-top: 20px;
+        margin-bottom: 15px;
+        padding-left: 15px;
+      }
+
+      .topic-content,
+      .lesson-content {
+        line-height: 1.8;
+        color: #2c3e50;
+        padding: 15px;
+        background-color: #fafafa;
+        border-radius: 5px;
+      }
+
+      /* Content Typography */
+      .topic-content p,
+      .lesson-content p {
+        margin: 15px 0;
+      }
+
+      .topic-content img,
+      .lesson-content img {
+        max-width: 100%;
+        height: auto;
+        margin: 20px 0;
+        border-radius: 5px;
+      }
+
+      .topic-content ul,
+      .lesson-content ul {
+        margin: 15px 0;
+        padding-left: 30px;
+      }
+
+      .topic-content li,
+      .lesson-content li {
+        margin: 8px 0;
+      }
+
+      /* Responsive Design */
+      @media (max-width: 768px) {
+        body {
+          padding: 10px;
+        }
+
+        .container {
+          padding: 20px;
+        }
+
+        h1 {
+          font-size: 2em;
+        }
+
+        .author {
+          font-size: 1.2em;
+        }
+
+        .lesson-header {
+          font-size: 1.5em;
+        }
+
+        .topic-header {
+          font-size: 1.2em;
+        }
+
+        .topic-section {
+          padding-left: 10px;
+        }
+      }
+
+      /* Print Styles */
+      @media print {
+        body {
+          background-color: white;
+          padding: 0;
+        }
+
+        .container {
+          box-shadow: none;
+        }
+
+        .toc-section {
+          background-color: white;
+          border: 1px solid #ccc;
+        }
+
+        .dedication-section {
+          background-color: white;
+          border: 1px solid #f39c12;
+        }
+
+        .lesson-divider {
+          page-break-before: always;
+        }
+      }
+"""

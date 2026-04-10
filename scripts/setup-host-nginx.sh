@@ -1,9 +1,9 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
-set -eu
+set -euo pipefail
 
-if [ "$(id -u)" -ne 0 ]; then
-  echo "Run as root (use sudo)"
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Run as root (use sudo)." >&2
   exit 1
 fi
 
@@ -15,64 +15,69 @@ CONFIG_NAME="${5:-$DOMAIN}"
 NGINX_CONF_DIR="${6:-/etc/nginx/conf.d}"
 REQUIRED_NGINX_VERSION="${7:-1.29.4}"
 
-if [ -z "$DOMAIN" ] || [ -z "$CERTBOT_EMAIL" ]; then
+usage() {
   cat <<'EOF'
 Usage:
-  sudo sh scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
-
-Example:
-  sudo sh scripts/setup-host-nginx.sh library.rsalehin24.me admin@example.com /home/ubuntu/library_app 8000 library.salehin24.me.conf /etc/nginx/conf.d 1.29.4
+  sudo bash scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
 EOF
+}
+
+if [[ -z "${DOMAIN}" || -z "${CERTBOT_EMAIL}" ]]; then
+  usage
   exit 1
 fi
 
-if ! command -v nginx >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y nginx
-fi
+print_step() {
+  printf '[setup-host-nginx] %s\n' "$*"
+}
 
-if ! command -v certbot >/dev/null 2>&1; then
+ensure_nginx() {
+  local current_version=""
+  if command -v nginx >/dev/null 2>&1; then
+    current_version="$(nginx -v 2>&1 | sed -E 's#^nginx version: nginx/##')"
+  fi
+
+  if [[ -z "${current_version}" || ( -n "${REQUIRED_NGINX_VERSION}" && "${current_version}" != "${REQUIRED_NGINX_VERSION}" ) ]]; then
+    print_step "Installing nginx ${REQUIRED_NGINX_VERSION:-latest}"
+    bash scripts/install-nginx.sh "${REQUIRED_NGINX_VERSION}"
+  fi
+}
+
+ensure_certbot() {
+  if command -v certbot >/dev/null 2>&1; then
+    return
+  fi
+
+  print_step "Installing certbot"
+  export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y certbot python3-certbot-nginx
-fi
+}
 
-NGINX_VERSION="$(nginx -v 2>&1 | sed -E 's#^nginx version: nginx/##')"
-if [ -n "$REQUIRED_NGINX_VERSION" ] && [ "$NGINX_VERSION" != "$REQUIRED_NGINX_VERSION" ]; then
-  echo "Expected nginx/$REQUIRED_NGINX_VERSION but found nginx/$NGINX_VERSION"
-  echo "Set required_nginx_version argument to your installed version if this is intentional."
-  exit 1
-fi
+ensure_permissions() {
+  mkdir -p "${APP_DIR}/storage/staticfiles" "${APP_DIR}/storage/media" /var/www/certbot "${NGINX_CONF_DIR}"
 
-mkdir -p "$APP_DIR/storage/staticfiles" "$APP_DIR/storage/media"
-mkdir -p /var/www/certbot
-mkdir -p "$NGINX_CONF_DIR"
+  local app_owner_home app_owner_parent
+  app_owner_home="$(dirname "${APP_DIR}")"
+  app_owner_parent="$(dirname "${app_owner_home}")"
 
-APP_OWNER_HOME="$(dirname "$APP_DIR")"
-APP_OWNER_PARENT="$(dirname "$APP_OWNER_HOME")"
+  chmod o+x "${app_owner_parent}" "${app_owner_home}"
+  chmod o+rx "${APP_DIR}"
 
-chmod o+x "$APP_OWNER_PARENT"
-chmod o+x "$APP_OWNER_HOME"
-chmod o+rx "$APP_DIR"
+  if [[ -d "${APP_DIR}/frontend/dist" ]]; then
+    chmod -R o+rX "${APP_DIR}/frontend/dist"
+  fi
 
-if [ -d "$APP_DIR/frontend/dist" ]; then
-  chmod -R o+rX "$APP_DIR/frontend/dist"
-fi
+  chmod -R o+rX "${APP_DIR}/storage/staticfiles" "${APP_DIR}/storage/media"
+}
 
-chmod -R o+rX "$APP_DIR/storage/staticfiles" "$APP_DIR/storage/media"
-
-case "$CONFIG_NAME" in
-  *.conf) ;;
-  *) CONFIG_NAME="${CONFIG_NAME}.conf" ;;
-esac
-
-CONFIG_PATH="$NGINX_CONF_DIR/$CONFIG_NAME"
-
-cat > "$CONFIG_PATH" <<EOF
+write_http_config() {
+  cat >"${CONFIG_PATH}" <<EOF
 server {
   listen 80;
-  server_name $DOMAIN;
+  server_name ${DOMAIN};
 
-  root $APP_DIR/frontend/dist;
+  root ${APP_DIR}/frontend/dist;
   index index.html;
 
   client_max_body_size 64m;
@@ -82,7 +87,7 @@ server {
   }
 
   location /api/ {
-    proxy_pass http://127.0.0.1:$BACKEND_PORT;
+    proxy_pass http://127.0.0.1:${BACKEND_PORT};
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -92,7 +97,7 @@ server {
   }
 
   location /admin/ {
-    proxy_pass http://127.0.0.1:$BACKEND_PORT;
+    proxy_pass http://127.0.0.1:${BACKEND_PORT};
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -102,13 +107,13 @@ server {
   }
 
   location /static/ {
-    alias $APP_DIR/storage/staticfiles/;
+    alias ${APP_DIR}/storage/staticfiles/;
     expires 7d;
     add_header Cache-Control "public, max-age=604800";
   }
 
   location /media/ {
-    alias $APP_DIR/storage/media/;
+    alias ${APP_DIR}/storage/media/;
     expires 1h;
     add_header Cache-Control "public, max-age=3600";
   }
@@ -118,23 +123,13 @@ server {
   }
 }
 EOF
+}
 
-nginx -t
-systemctl enable nginx
-systemctl reload nginx
-
-if ! nginx -T 2>/dev/null | grep -q "server_name ${DOMAIN};"; then
-  echo "Nginx config loaded but server_name ${DOMAIN} was not detected."
-  echo "Check include rules and conf path: ${CONFIG_PATH}"
-  exit 1
-fi
-
-certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive --agree-tos --no-eff-email -m "$CERTBOT_EMAIL"
-
-cat > "$CONFIG_PATH" <<EOF
+write_https_config() {
+  cat >"${CONFIG_PATH}" <<EOF
 server {
   listen 80;
-  server_name $DOMAIN;
+  server_name ${DOMAIN};
 
   location /.well-known/acme-challenge/ {
     root /var/www/certbot;
@@ -147,16 +142,16 @@ server {
 
 server {
   listen 443 ssl;
-  server_name $DOMAIN;
+  server_name ${DOMAIN};
 
-  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+  ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
   ssl_protocols TLSv1.2 TLSv1.3;
   ssl_session_timeout 1d;
   ssl_session_cache shared:SSL:10m;
   ssl_prefer_server_ciphers off;
 
-  root $APP_DIR/frontend/dist;
+  root ${APP_DIR}/frontend/dist;
   index index.html;
 
   client_max_body_size 64m;
@@ -166,7 +161,7 @@ server {
   }
 
   location /api/ {
-    proxy_pass http://127.0.0.1:$BACKEND_PORT;
+    proxy_pass http://127.0.0.1:${BACKEND_PORT};
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -176,7 +171,7 @@ server {
   }
 
   location /admin/ {
-    proxy_pass http://127.0.0.1:$BACKEND_PORT;
+    proxy_pass http://127.0.0.1:${BACKEND_PORT};
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -186,13 +181,13 @@ server {
   }
 
   location /static/ {
-    alias $APP_DIR/storage/staticfiles/;
+    alias ${APP_DIR}/storage/staticfiles/;
     expires 7d;
     add_header Cache-Control "public, max-age=604800";
   }
 
   location /media/ {
-    alias $APP_DIR/storage/media/;
+    alias ${APP_DIR}/storage/media/;
     expires 1h;
     add_header Cache-Control "public, max-age=3600";
   }
@@ -202,29 +197,70 @@ server {
   }
 }
 EOF
+}
 
-nginx -t
-systemctl reload nginx
+ensure_certificate() {
+  if certbot certificates 2>/dev/null | grep -Fq "Domains: ${DOMAIN}"; then
+    print_step "Existing certificate found for ${DOMAIN}"
+    return
+  fi
 
-mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'
-#!/bin/sh
+  print_step "Requesting new certificate for ${DOMAIN}"
+  certbot certonly \
+    --webroot \
+    -w /var/www/certbot \
+    -d "${DOMAIN}" \
+    --non-interactive \
+    --agree-tos \
+    --no-eff-email \
+    -m "${CERTBOT_EMAIL}"
+}
+
+ensure_renew_hook() {
+  mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+  cat >/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'
+#!/usr/bin/env bash
 systemctl reload nginx
 EOF
-chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+  chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
-if systemctl list-unit-files | grep -q '^certbot.timer'; then
-  systemctl enable certbot.timer
-  systemctl start certbot.timer
-else
-  cat > /etc/cron.d/certbot-renew <<'EOF'
+  if systemctl list-unit-files | grep -q '^certbot.timer'; then
+    systemctl enable certbot.timer
+    systemctl start certbot.timer
+  else
+    cat >/etc/cron.d/certbot-renew <<'EOF'
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 0 */12 * * * root certbot renew --quiet
 EOF
-fi
+  fi
+}
 
+case "${CONFIG_NAME}" in
+  *.conf) ;;
+  *) CONFIG_NAME="${CONFIG_NAME}.conf" ;;
+esac
+CONFIG_PATH="${NGINX_CONF_DIR}/${CONFIG_NAME}"
+
+ensure_nginx
+ensure_certbot
+ensure_permissions
+
+print_step "Writing HTTP bootstrap config"
+write_http_config
+nginx -t
+systemctl enable nginx
+systemctl reload nginx
+
+print_step "Ensuring certificate"
+ensure_certificate
+
+print_step "Writing HTTPS config"
+write_https_config
+nginx -t
+systemctl reload nginx
+
+ensure_renew_hook
 systemctl reload nginx
 nginx -v
-
-echo "Host nginx + certbot configured for $DOMAIN (auto-renew enabled)"
+print_step "Host nginx and certbot configured for ${DOMAIN}"

@@ -1,52 +1,19 @@
 # Frontend
 
-This folder is a standalone React/Vite deployment unit.
+This folder contains the React/Vite application and the Playwright browser suite.
 
-## Environment
+## Local Development
 
-Start from:
+Use the repo-level guide in [docs/local-development.md](../docs/local-development.md). The preferred workflow now runs the frontend through the Docker development overlay with Vite hot reload.
 
-```bash
-cp .env.example .env
-```
+## Runtime Notes
 
-Important variables:
+- App code: `frontend/src/`
+- Browser tests: `frontend/tests/e2e/`
+- Vite config: `frontend/vite.config.js`
 
-- `VITE_API_BASE_URL`
+## Container Targets
 
-For the unified Docker stack in this repo, keep:
-
-```bash
-VITE_API_BASE_URL=/api
-```
-
-## Local Run
-
-```bash
-npm install
-npm run dev
-```
-
-## Production Build
-
-```bash
-npm run build
-```
-
-## Docker Build / Deploy
-
-This folder can now be deployed directly as its own build context:
-
-```bash
-docker build -t bangla-library-frontend .
-```
-
-The Dockerfile assumes this folder is the build root.
-
-For the full stack used both locally and on the server, use the root-level Docker Compose setup instead:
-
-```bash
-docker-compose up -d --build
-```
-
-That build copies the frontend production bundle into Nginx so the browser stays on one origin and only Nginx is public.
+- `frontend/Dockerfile` `dev` target: Vite dev server
+- `frontend/Dockerfile` `build` target: production bundle build
+- `frontend/Dockerfile` `runtime` target: standalone static Nginx image

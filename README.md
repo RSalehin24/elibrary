@@ -1,34 +1,33 @@
 # Bangla Library Platform
 
-Monorepo for a production-ready Bangla ebook pipeline.
+Monorepo for the Bangla ebook platform.
 
-- Backend: Django + Celery (`backend/`)
-- Frontend: React + Vite (`frontend/`)
-- Runtime services: Postgres, Redis, backend, worker, beat via Docker Compose
-- Edge/proxy on server: host Nginx + Certbot (outside Docker)
+## Stack
 
-## Current Architecture
+- Backend: Django + Celery in [backend](backend)
+- Frontend: React + Vite in [frontend](frontend)
+- Infrastructure: Docker Compose for local/runtime services, host Nginx + Certbot for remote edge delivery
 
-- `docker-compose.yml` runs app services only (`backend`, `worker`, `beat`, `postgres`, `redis`)
-- Backend binds to `127.0.0.1:${BACKEND_PORT}:8000`
-- Host Nginx serves `frontend/dist`, proxies `/api/` and `/admin/` to backend, and serves `/static/` + `/media/`
-- Celery worker handles ingestion/catalog jobs; beat handles scheduled automation
+## Primary Workflows
 
-## Reliability Notes (Latest)
+- Local development: [docs/local-development.md](docs/local-development.md)
+- Deployment automation: [docs/deployment.md](docs/deployment.md)
+- Log viewing: [docs/log-viewing.md](docs/log-viewing.md)
 
-- Catalog source fetch now has in-app DNS fallback logic in ingestion resolution:
-  - host fallback (`www.ebanglalibrary.com` and `ebanglalibrary.com`)
-  - DNS resolver fallback and direct-IP HTTPS fallback path
-- Docker DNS still supports configurable resolvers with primary + fallback env values
+## Core Scripts
 
-## Quick Start
+- `scripts/generate-env.sh`: scaffold local, production, test, backend, frontend, or deploy env files
+- `scripts/dev.sh`: start or stop the local watch-enabled development stack
+- `scripts/verify.sh`: run backend tests, frontend build, and Playwright suite, optionally repeated
+- `scripts/deploy.sh`: automated remote deployment with env sync, Docker checks, and nginx setup
+- `logs/show-logs.sh`: local or remote frontend/backend log streaming
 
-Use the runbook in [RUN.md](RUN.md) for exact Local and Remote steps.
+## Architecture Notes
 
-## Important Paths
+- Production/runtime compose stays focused on backend services: `backend`, `worker`, `beat`, `postgres`, `redis`
+- Local development adds a Vite frontend plus auto-reloading backend/Celery via [docker-compose.dev.yml](docker-compose.dev.yml)
+- Host Nginx serves `frontend/dist`, proxies `/api/` and `/admin/`, and exposes static/media from `storage/`
 
-- Backend app code: `backend/apps/`
-- Ingestion resolution logic: `backend/apps/ingestion/services/resolution.py`
-- Ingestion docs: `docs/ebanglalibrary-url-metadata.md`
-- Deploy automation: `scripts/deploy.sh`
-- Host Nginx automation: `scripts/setup-host-nginx.sh`
+## Supporting Docs
+
+- Source metadata notes: [docs/ebanglalibrary-url-metadata.md](docs/ebanglalibrary-url-metadata.md)

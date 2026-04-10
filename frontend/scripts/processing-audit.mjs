@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const repoRoot = "/Users/rsalehin24/Documents/ebook-scrapping";
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
 const frontendRoot = path.join(repoRoot, "frontend");
 const artifactsDir = path.join(repoRoot, "test-artifacts");
 const reportPath = path.join(artifactsDir, "processing-audit-report.json");
