@@ -27,6 +27,8 @@ deploy/scripts/generate-env.sh host
 deploy/scripts/deploy.sh
 ```
 
+On the first successful deployment to a remote app directory, `deploy/scripts/deploy.sh` prints the configured super admin email and password once so you can record them for later access.
+
 ## Related Docs
 
 - Full deployment guide: [docs/operations/deployment.md](../docs/operations/deployment.md)

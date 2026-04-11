@@ -55,6 +55,48 @@ load_env_if_present() {
   fi
 }
 
+read_env_value_from_file() {
+  local env_file="${1:?env file is required}"
+  local key_name="${2:?env key is required}"
+  local value=""
+
+  if [[ -f "${env_file}" ]]; then
+    value="$(grep "^${key_name}=" "${env_file}" | tail -n 1 | cut -d '=' -f2- || true)"
+  fi
+
+  printf '%s' "${value}"
+}
+
+effective_env_value() {
+  local key_name="${1:?env key is required}"
+  local default_value="${2:-}"
+  local current_value="${!key_name:-}"
+
+  if [[ -n "${current_value}" ]]; then
+    printf '%s' "${current_value}"
+    return 0
+  fi
+
+  printf '%s' "${default_value}"
+}
+
+print_super_admin_credentials() {
+  local email="${1:?email is required}"
+  local password="${2:?password is required}"
+  local heading="${3:-Super admin credentials}"
+  local note="${4:-}"
+
+  cat <<EOF
+${heading}
+Email: ${email}
+Password: ${password}
+EOF
+
+  if [[ -n "${note}" ]]; then
+    printf '%s\n' "${note}"
+  fi
+}
+
 ensure_env_file() {
   local template_file="${1:?template file is required}"
   local target_file="${2:?target file is required}"

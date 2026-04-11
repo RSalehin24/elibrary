@@ -12,6 +12,7 @@ HOST_ENV_FILE="${REPO_ROOT}/deploy/env/.host.env"
 APP_ENV_TEMPLATE="${REPO_ROOT}/deploy/env/app.env.example"
 REMOTE_APP_ENV_REL="deploy/env/.app.env"
 DEPLOY_COMPOSE_REL="deploy/compose/docker-compose.yml"
+REMOTE_SUPER_ADMIN_NOTICE_MARKER="deploy/env/.superadmin_credentials_noted"
 
 usage() {
   cat <<'EOF'
@@ -23,6 +24,9 @@ Examples:
   deploy/scripts/generate-env.sh host
   deploy/scripts/deploy.sh
   deploy/scripts/deploy.sh --env-name test --sync-mode preserve
+
+On the first successful deployment to a remote app directory, the configured
+super admin email and password are printed once so you can record them.
 EOF
 }
 
@@ -288,6 +292,9 @@ load_env_if_present "${HOST_ENV_FILE}"
 ENV_NAME="${DEPLOY_ENV_NAME:-production}"
 LOCAL_ENV_FILE=""
 SYNC_MODE="${DEPLOY_ENV_SYNC_MODE:-push}"
+SHOW_REMOTE_SUPER_ADMIN_NOTICE="no"
+LOCAL_SUPER_ADMIN_EMAIL=""
+LOCAL_SUPER_ADMIN_PASSWORD=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -366,6 +373,9 @@ require_non_empty_env_key "${LOCAL_ENV_FILE}" "DJANGO_SECRET_KEY"
 require_non_empty_env_key "${LOCAL_ENV_FILE}" "SUPER_ADMIN_EMAIL"
 require_non_empty_env_key "${LOCAL_ENV_FILE}" "SUPER_ADMIN_PASSWORD"
 
+LOCAL_SUPER_ADMIN_EMAIL="$(read_env_value_from_file "${LOCAL_ENV_FILE}" "SUPER_ADMIN_EMAIL")"
+LOCAL_SUPER_ADMIN_PASSWORD="$(read_env_value_from_file "${LOCAL_ENV_FILE}" "SUPER_ADMIN_PASSWORD")"
+
 print_info "[1/8] Running deployment preflight checks"
 resolved_ips="$(resolve_domain_ips "${DOMAIN}")"
 if [[ -z "${resolved_ips}" || "$(printf '%s\n' "${resolved_ips}" | grep -Fx "${DEPLOY_IP}" || true)" == "" ]]; then
@@ -377,6 +387,12 @@ ssh -o BatchMode=yes "${TARGET}" "sudo -n true" >/dev/null 2>&1 || die "Password
 
 sync_remote_repository
 sync_workspace_files
+
+if ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && test -f '${REMOTE_SUPER_ADMIN_NOTICE_MARKER}'" >/dev/null 2>&1; then
+  SHOW_REMOTE_SUPER_ADMIN_NOTICE="no"
+else
+  SHOW_REMOTE_SUPER_ADMIN_NOTICE="yes"
+fi
 
 case "${SYNC_MODE}" in
   push|preserve) ;;
@@ -400,3 +416,12 @@ ensure_remote_docker
 start_remote_stack
 configure_remote_nginx
 verify_deployment
+
+if [[ "${SHOW_REMOTE_SUPER_ADMIN_NOTICE}" == "yes" ]]; then
+  print_super_admin_credentials \
+    "${LOCAL_SUPER_ADMIN_EMAIL}" \
+    "${LOCAL_SUPER_ADMIN_PASSWORD}" \
+    "First remote deployment super admin credentials" \
+    "Note these credentials down carefully for future usage. This deployment script will not show them again for this remote target."
+  ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && touch '${REMOTE_SUPER_ADMIN_NOTICE_MARKER}'"
+fi

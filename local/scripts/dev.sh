@@ -21,6 +21,8 @@ Examples:
   local/scripts/dev.sh up
   local/scripts/dev.sh logs backend
   local/scripts/dev.sh down
+
+Every non-help run prints the effective local super admin email and password.
 EOF
 }
 
@@ -32,10 +34,21 @@ fi
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"
 
+SUPER_ADMIN_EMAIL_EFFECTIVE="$(effective_env_value SUPER_ADMIN_EMAIL "admin@example.com")"
+SUPER_ADMIN_PASSWORD_EFFECTIVE="$(effective_env_value SUPER_ADMIN_PASSWORD "changeme")"
+
+if [[ "${command_name}" != "-h" && "${command_name}" != "--help" && "${command_name}" != "help" ]]; then
+  print_super_admin_credentials \
+    "${SUPER_ADMIN_EMAIL_EFFECTIVE}" \
+    "${SUPER_ADMIN_PASSWORD_EFFECTIVE}" \
+    "Local super admin credentials" \
+    "Keep these credentials available for local access and browser testing."
+fi
+
 case "${command_name}" in
   up)
     print_info "Starting local development stack with watching enabled."
-    compose "${COMPOSE_ARGS[@]}" up -d --build "${DEFAULT_SERVICES[@]}" "$@"
+    compose "${COMPOSE_ARGS[@]}" up --build "${DEFAULT_SERVICES[@]}" "$@"
     cat <<EOF
 Local development stack is running.
 

@@ -17,6 +17,8 @@ This folder contains the local Docker development stack, local env templates, ru
 - Generate the local env file: `local/scripts/generate-env.sh local`
 - Show script usage: `local/scripts/dev.sh --help`
 
+Every non-help run of `local/scripts/dev.sh` prints the effective super admin email and password used by the local stack.
+
 ## Runtime Model
 
 The default local stack starts:

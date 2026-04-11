@@ -66,6 +66,8 @@ Default production deployment:
 deploy/scripts/deploy.sh
 ```
 
+On the first successful deployment to a given remote app directory, the script prints the configured super admin email and password once and tells you to note them down. Later deploy runs do not show those credentials again.
+
 Deploy using a different env file name:
 
 ```bash
