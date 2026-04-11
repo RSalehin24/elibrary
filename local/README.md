@@ -18,6 +18,7 @@ This folder contains the local Docker development stack, local env templates, ru
 - Show script usage: `local/scripts/dev.sh --help`
 
 Every non-help run of `local/scripts/dev.sh` prints the effective super admin email and password used by the local stack.
+Compose commands derive `local/env/.compose.env` automatically so secret values containing `$` are passed literally.
 
 ## Runtime Model
 
@@ -25,6 +26,7 @@ The default local stack starts:
 
 - `postgres`
 - `redis`
+- one-shot `backend-init` bootstrap for migrations and super admin seeding
 - `backend` with Django autoreload
 - `worker` with Python file watching
 - `beat` with Python file watching

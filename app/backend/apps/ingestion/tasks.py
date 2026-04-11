@@ -1,8 +1,18 @@
+import logging
+
 from celery import shared_task
+from django.db import OperationalError, ProgrammingError
 
 from apps.ingestion.models import ProcessingJob
 from apps.ingestion.services.curation import process_catalog_curation_run, process_source_catalog_refresh, run_due_catalog_automation
 from apps.ingestion.services.submissions import process_submission_job
+
+logger = logging.getLogger(__name__)
+
+CATALOG_AUTOMATION_SCHEMA_TABLES = (
+    "ingestion_catalogautomationsettings",
+    "ingestion_catalogcurationrun",
+)
 
 
 def serialize_processing_job_result(result):
@@ -34,6 +44,18 @@ def serialize_source_catalog_refresh_result(result):
     }
 
 
+def catalog_automation_schema_not_ready(exc):
+    message = str(exc).lower()
+    table_missing = (
+        "no such table" in message
+        or "undefinedtable" in message
+        or ("relation" in message and "does not exist" in message)
+    )
+    if not table_missing:
+        return False
+    return any(table_name in message for table_name in CATALOG_AUTOMATION_SCHEMA_TABLES)
+
+
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_jitter=True, max_retries=3)
 def process_submission_task(self, job_id):
     result = process_submission_job(job_id, retry_count=self.request.retries, task_id=self.request.id)
@@ -53,4 +75,14 @@ def refresh_source_catalog_task(self):
 
 @shared_task
 def run_catalog_automation_schedule_task():
-    return run_due_catalog_automation()
+    try:
+        return run_due_catalog_automation()
+    except (OperationalError, ProgrammingError) as exc:
+        if not catalog_automation_schema_not_ready(exc):
+            raise
+
+        logger.warning(
+            "Catalog automation scheduler skipped because the database schema is not ready yet: %s",
+            exc,
+        )
+        return {"ran": False, "reason": "schema_not_ready"}

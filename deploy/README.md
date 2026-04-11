@@ -29,6 +29,9 @@ deploy/scripts/deploy.sh
 
 On the first successful deployment to a remote app directory, `deploy/scripts/deploy.sh` prints the configured super admin email and password once so you can record them for later access.
 
+The deployed compose stack now includes a one-shot `backend-init` bootstrap service so migrations and super admin seeding complete before `backend`, `worker`, and `beat` start.
+Compose also uses a generated `deploy/env/.app.compose.env` file so secrets containing `$` are passed literally.
+
 ## Related Docs
 
 - Full deployment guide: [docs/operations/deployment.md](../docs/operations/deployment.md)

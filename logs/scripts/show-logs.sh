@@ -50,7 +50,7 @@ stream_remote_compose_logs() {
   printf -v compose_services_arg '%q ' "${compose_services[@]}"
   prepare_log_file "${output_file}"
 
-  ssh "${remote_target}" "cd '${remote_app_dir}' && if docker compose version >/dev/null 2>&1; then docker compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f ${compose_services_arg}; else docker-compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f ${compose_services_arg}; fi" 2>&1 | tee -a "${output_file}"
+  ssh "${remote_target}" "cd '${remote_app_dir}' && python3 automation/lib/env_tools.py compose-render deploy/env/.app.env deploy/env/.app.compose.env && if docker compose version >/dev/null 2>&1; then docker compose --env-file deploy/env/.app.compose.env -f deploy/compose/docker-compose.yml logs -f ${compose_services_arg}; else docker-compose --env-file deploy/env/.app.compose.env -f deploy/compose/docker-compose.yml logs -f ${compose_services_arg}; fi" 2>&1 | tee -a "${output_file}"
 }
 
 case "${target_scope}" in

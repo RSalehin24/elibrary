@@ -3,10 +3,12 @@
 .env.local
 .env.*.local
 local/env/.env
+local/env/.compose.env
 deploy/env/.host.env
 deploy/env/.production.env
 deploy/env/.test.env
 deploy/env/.app.env
+deploy/env/.app.compose.env
 local/runtime/*
 !local/runtime/.gitkeep
 !local/runtime/celery/

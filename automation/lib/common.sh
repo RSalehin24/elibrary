@@ -48,10 +48,24 @@ require_cmd() {
 load_env_if_present() {
   local env_file="${1:?env file is required}"
   if [[ -f "${env_file}" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "${env_file}"
-    set +a
+    require_cmd python3
+    eval "$(
+      python3 - "${env_file}" <<'PY'
+import shlex
+import sys
+from pathlib import Path
+
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    stripped = raw_line.lstrip()
+    if not raw_line or stripped.startswith("#") or "=" not in raw_line:
+        continue
+    key, value = raw_line.split("=", 1)
+    key = key.strip()
+    if not key:
+        continue
+    print(f"export {key}={shlex.quote(value)}")
+PY
+    )"
   fi
 }
 
@@ -104,6 +118,15 @@ ensure_env_file() {
   require_cmd python3
   mkdir -p "$(dirname -- "${target_file}")"
   python3 "${REPO_ROOT}/automation/lib/env_tools.py" scaffold "${template_file}" "${target_file}"
+}
+
+prepare_compose_env_file() {
+  local source_file="${1:?source env file is required}"
+  local target_file="${2:?target env file is required}"
+
+  require_cmd python3
+  mkdir -p "$(dirname -- "${target_file}")"
+  python3 "${REPO_ROOT}/automation/lib/env_tools.py" compose-render "${source_file}" "${target_file}"
 }
 
 resolve_compose_cmd() {

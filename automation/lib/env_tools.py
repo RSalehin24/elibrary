@@ -38,6 +38,21 @@ def render_env_lines(lines: Iterable[EnvLine]) -> str:
     return "\n".join(rendered_lines) + "\n"
 
 
+def compose_safe_env_value(value: str) -> str:
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+        return value
+    return "'" + value.replace("'", "\\'") + "'"
+
+
+def render_compose_env_lines(lines: Iterable[EnvLine]) -> str:
+    rendered_lines = (
+        line.raw if line.key is None else f"{line.key}={compose_safe_env_value(line.value or '') if line.value else ''}"
+        for line in lines
+    )
+    return "\n".join(rendered_lines) + "\n"
+
+
 def scaffold_env(template_path: Path, target_path: Path) -> None:
     template_lines = parse_env_file(template_path)
     target_lines = parse_env_file(target_path)
@@ -97,6 +112,11 @@ def merge_env(base_path: Path, overrides_path: Path, output_path: Path, *, non_e
     output_path.write_text(render_env_lines(base_lines), encoding="utf-8")
 
 
+def render_compose_env(source_path: Path, output_path: Path) -> None:
+    source_lines = parse_env_file(source_path)
+    output_path.write_text(render_compose_env_lines(source_lines), encoding="utf-8")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Utilities for repo env files.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -117,6 +137,13 @@ def build_parser() -> argparse.ArgumentParser:
     merge_parser.add_argument("output_file")
     merge_parser.add_argument("--non-empty-only", action="store_true")
 
+    compose_parser = subparsers.add_parser(
+        "compose-render",
+        help="Render a Compose-safe env file with literal values.",
+    )
+    compose_parser.add_argument("source_file")
+    compose_parser.add_argument("output_file")
+
     return parser
 
 
@@ -134,6 +161,13 @@ def main() -> int:
             Path(args.override_file),
             Path(args.output_file),
             non_empty_only=args.non_empty_only,
+        )
+        return 0
+
+    if args.command == "compose-render":
+        render_compose_env(
+            Path(args.source_file),
+            Path(args.output_file),
         )
         return 0
 

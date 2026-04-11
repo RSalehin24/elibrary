@@ -1,4 +1,5 @@
 import pytest
+from django.db import ProgrammingError
 
 from apps.accounts.models import User
 from apps.ingestion.models import (
@@ -11,6 +12,7 @@ from apps.ingestion.models import (
     SubmissionOrigin,
     SubmissionStatus,
 )
+from apps.ingestion.tasks import run_catalog_automation_schedule_task
 
 
 @pytest.mark.django_db
@@ -111,3 +113,26 @@ def test_processing_activity_endpoint_reports_shared_manager_activity(client):
         "runs",
         "catalog_refresh",
     }
+
+
+@pytest.mark.django_db
+def test_catalog_automation_schedule_task_skips_when_schema_is_not_ready(monkeypatch):
+    def fail_due_schedule():
+        raise ProgrammingError('relation "ingestion_catalogautomationsettings" does not exist')
+
+    monkeypatch.setattr("apps.ingestion.tasks.run_due_catalog_automation", fail_due_schedule)
+
+    result = run_catalog_automation_schedule_task()
+
+    assert result == {"ran": False, "reason": "schema_not_ready"}
+
+
+@pytest.mark.django_db
+def test_catalog_automation_schedule_task_reraises_unrelated_database_errors(monkeypatch):
+    def fail_due_schedule():
+        raise ProgrammingError("column ingestion_catalogautomationsettings.mode does not exist")
+
+    monkeypatch.setattr("apps.ingestion.tasks.run_due_catalog_automation", fail_due_schedule)
+
+    with pytest.raises(ProgrammingError, match="column ingestion_catalogautomationsettings.mode does not exist"):
+        run_catalog_automation_schedule_task()

@@ -25,6 +25,7 @@ local/scripts/generate-env.sh local
 ```
 
 The local stack reads `local/env/.env`. Update values there as needed.
+Compose commands derive a local `local/env/.compose.env` file automatically so secret values containing `$` are passed to Docker Compose literally.
 
 The effective super admin email and password are printed by `local/scripts/dev.sh` on every non-help run. If the env file leaves either value blank, the local Docker Compose defaults are `admin@example.com` and `changeme`.
 
@@ -38,6 +39,7 @@ This starts:
 
 - `postgres`
 - `redis`
+- one-shot `backend-init` bootstrap for migrations and super admin seeding
 - `backend` with Django autoreload
 - `worker` with Python file watching
 - `beat` with Python file watching

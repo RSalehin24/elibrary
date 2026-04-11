@@ -42,6 +42,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-bangla_library}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bangla_library}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -49,8 +55,34 @@ services:
 
   redis:
     image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     volumes:
       - redis_data:/data
+    networks:
+      - internal
+
+  backend-init:
+    build:
+      context: ../..
+      dockerfile: local/docker/backend.Dockerfile
+    environment:
+      <<: *app_environment
+    command: >
+      sh -c "python manage.py migrate &&
+      python manage.py seed_superadmin"
+    volumes:
+      - ../../app/backend:/app
+      - ../../logs:/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - internal
 
@@ -73,8 +105,12 @@ services:
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
     networks:
       - public
       - internal
@@ -100,8 +136,12 @@ services:
       - ../../logs:/logs
       - ../../local/runtime:/runtime
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
     networks:
       - public
       - internal
@@ -126,8 +166,12 @@ services:
       - ../../logs:/logs
       - ../../local/runtime:/runtime
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
     networks:
       - internal
 

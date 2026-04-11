@@ -226,7 +226,9 @@ else
   exit 1
 fi
 
-compose_args=(--env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml)
+python3 automation/lib/env_tools.py compose-render deploy/env/.app.env deploy/env/.app.compose.env
+
+compose_args=(--env-file deploy/env/.app.compose.env -f deploy/compose/docker-compose.yml)
 
 "${compose_cmd[@]}" "${compose_args[@]}" down --remove-orphans || true
 "${compose_cmd[@]}" "${compose_args[@]}" up -d --build --force-recreate

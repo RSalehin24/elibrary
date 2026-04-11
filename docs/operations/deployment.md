@@ -86,13 +86,15 @@ deploy/scripts/deploy.sh --sync-mode prompt
 
 - The script merges only non-empty keys from the selected local env file into remote `deploy/env/.app.env`.
 - Existing remote keys remain untouched unless the local env file provides a non-empty replacement.
+- Docker Compose is driven from a generated `deploy/env/.app.compose.env`, so secret values containing `$` are preserved literally without manual escaping.
 - When a local or remote env file needs attention, the script offers a 5-second edit window and continues if you do nothing.
 - Docker is installed automatically when missing, or upgraded when `DEPLOY_DOCKER_VERSION` is set and the remote version does not match.
 - Host Nginx config is written automatically and Nginx is installed or upgraded when `DEPLOY_NGINX_VERSION` is set and the remote version does not match.
 
 ## Remote Runtime Model
 
-- Docker Compose runs `frontend`, `backend`, `worker`, `beat`, `postgres`, and `redis`.
+- Docker Compose runs `frontend`, `backend`, `worker`, `beat`, `postgres`, `redis`, and a one-shot `backend-init` bootstrap service.
+- `backend-init` applies migrations and seeds the super admin before `backend`, `worker`, and `beat` start.
 - Host Nginx proxies `/` to the frontend container and `/api/` plus `/admin/` to the backend container port bound on localhost.
 - Static and media files are served from `app/backend/storage/` on the remote host.
 - Workspace sync excludes local runtime files, local env files, gitignored logs, virtualenvs, and other generated artifacts.
