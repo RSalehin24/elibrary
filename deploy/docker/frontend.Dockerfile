@@ -5,10 +5,10 @@ WORKDIR /app
 ARG VITE_API_BASE_URL=/api
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
-COPY frontend/package.json frontend/package-lock.json* /app/
+COPY app/frontend/package.json app/frontend/package-lock.json* /app/
 RUN npm ci
 
-COPY frontend /app
+COPY app/frontend /app
 RUN npm run build
 
 FROM nginx:1.27-alpine

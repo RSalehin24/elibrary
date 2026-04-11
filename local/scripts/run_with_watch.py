@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
   return parser
 
 
+def run_command(command: list[str], cwd: str) -> int:
+  completed = subprocess.run(command, cwd=cwd, check=False)
+  return completed.returncode
+
+
 def main() -> int:
   parser = build_parser()
   args = parser.parse_args()
@@ -45,13 +50,10 @@ def main() -> int:
 
   watch_dirs = args.watch_dirs or [args.cwd]
 
-  def run_command() -> int:
-    completed = subprocess.run(command, cwd=args.cwd, check=False)
-    return completed.returncode
-
   run_process(
     *watch_dirs,
     target=run_command,
+    args=(command, args.cwd),
     watch_filter=PythonFilter(),
   )
   return 0

@@ -2,7 +2,7 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-COPY frontend/package.json frontend/package-lock.json* /app/
+COPY app/frontend/package.json app/frontend/package-lock.json* /app/
 RUN npm ci
 
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

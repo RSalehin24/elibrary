@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/.." >/dev/null 2>&1 && pwd)/tooling/shell/common.sh"
+source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/.." >/dev/null 2>&1 && pwd)/automation/lib/common.sh"
 REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
 
@@ -31,16 +31,21 @@ fi
 case "${target_scope}" in
   local)
     ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${REPO_ROOT}/local/env/.env"
-    log_file="${REPO_ROOT}/logs/local/${service_name}.log"
-    prepare_log_file "${log_file}"
-
     if [[ "${service_name}" == "frontend" ]]; then
-      compose --env-file "${REPO_ROOT}/local/env/.env" -f "${REPO_ROOT}/local/compose/docker-compose.yml" logs -f frontend 2>&1 | tee -a "${log_file}"
+      log_file="${REPO_ROOT}/logs/local/frontend/frontend.log"
+      prepare_log_file "${log_file}"
+      tail -n 200 -F "${log_file}"
       exit 0
     fi
 
     if [[ "${service_name}" == "backend" ]]; then
-      compose --env-file "${REPO_ROOT}/local/env/.env" -f "${REPO_ROOT}/local/compose/docker-compose.yml" logs -f backend worker beat 2>&1 | tee -a "${log_file}"
+      prepare_log_file "${REPO_ROOT}/logs/local/backend/backend.log"
+      prepare_log_file "${REPO_ROOT}/logs/local/celery/worker.log"
+      prepare_log_file "${REPO_ROOT}/logs/local/celery/beat.log"
+      tail -n 200 -F \
+        "${REPO_ROOT}/logs/local/backend/backend.log" \
+        "${REPO_ROOT}/logs/local/celery/worker.log" \
+        "${REPO_ROOT}/logs/local/celery/beat.log"
       exit 0
     fi
 
@@ -54,7 +59,7 @@ case "${target_scope}" in
     remote_app_dir="${DEPLOY_REMOTE_APP_DIR:-/home/${remote_user}/library_app}"
     [[ -n "${remote_host}" ]] || die "DEPLOY_IP must be set in deploy/env/.host.env for remote logs."
     remote_target="${remote_user}@${remote_host}"
-    log_file="${REPO_ROOT}/logs/remote/${service_name}.log"
+    log_file="${REPO_ROOT}/logs/remote/${service_name}/${service_name}.log"
     prepare_log_file "${log_file}"
 
     if [[ "${service_name}" == "frontend" ]]; then

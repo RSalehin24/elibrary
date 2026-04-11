@@ -4,10 +4,14 @@ Use [logs/show-logs.sh](../../logs/show-logs.sh) for both local and deployed env
 
 Captured log files are written to:
 
-- `logs/local/*.log`
-- `logs/remote/*.log`
+- `logs/local/frontend/frontend.log`
+- `logs/local/backend/backend.log`
+- `logs/local/celery/worker.log`
+- `logs/local/celery/beat.log`
+- `logs/remote/frontend/frontend.log`
+- `logs/remote/backend/backend.log`
 
-Those generated log files are gitignored, while `logs/local/.gitkeep` and `logs/remote/.gitkeep` keep the folders in the repository.
+Those generated log files are gitignored, while the `.gitkeep` files inside `logs/local/**` and `logs/remote/**` keep the folder structure in the repository.
 
 ## Local Logs
 
@@ -23,7 +27,7 @@ Backend service logs:
 logs/show-logs.sh backend
 ```
 
-For the backend group, the script tails:
+For the backend group, the script tails the files inside `logs/local/`:
 
 - `backend`
 - `worker`
@@ -45,8 +49,8 @@ logs/show-logs.sh frontend remote
 
 Remote log behavior:
 
-- `backend remote` tails Docker Compose logs for `backend`, `worker`, and `beat`
-- `frontend remote` tails host Nginx access and error logs
+- `backend remote` streams remote Docker Compose logs and writes them to `logs/remote/backend/backend.log`
+- `frontend remote` streams remote Nginx access/error logs and writes them to `logs/remote/frontend/frontend.log`
 
 ## Deploy Settings Used For Remote Logs
 

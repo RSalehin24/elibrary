@@ -3,15 +3,17 @@
 ## Prerequisites
 
 - Docker with the Compose plugin, or `docker-compose`
-- Python virtualenv available at `.venv/` for local verification runs
 - Node/npm available locally for frontend build and Playwright verification
 
 ## Folder Layout
 
+- `app/`: backend and frontend application code
 - `local/compose/`: watch-enabled local Docker Compose stack
 - `local/docker/`: local Dockerfiles for backend and frontend
 - `local/env/`: local env template and generated local env file
-- `local/scripts/`: local run, env generation, verification, and watch helpers
+- `local/runtime/`: runtime files created by local services, such as the Celery beat schedule
+- `local/scripts/`: local run, env generation, seeding, verification, and watch helpers
+- `tests/`: root-level backend and frontend automated tests
 
 ## Environment Setup
 
@@ -51,13 +53,14 @@ Books, uploads, and static assets are stored only under the repo `storage/` dire
 local/scripts/dev.sh ps
 local/scripts/dev.sh logs frontend
 local/scripts/dev.sh logs backend
+local/scripts/seed-e2e-data.sh
 local/scripts/dev.sh restart backend
 local/scripts/dev.sh down
 ```
 
 ## Verification
 
-Run the full verification pass:
+Run the full verification pass against the real Dockerized application:
 
 ```bash
 local/scripts/verify.sh
@@ -68,3 +71,17 @@ Repeat it multiple times when you want extra confidence:
 ```bash
 local/scripts/verify.sh --repeat 3
 ```
+
+`local/scripts/verify.sh`:
+
+- starts or refreshes the live local stack through `local/scripts/dev.sh up`
+- waits for the frontend and backend to become healthy
+- reseeds deterministic browser data through `local/scripts/seed-e2e-data.sh`
+- runs backend `pytest` inside the backend container
+- runs the frontend production build inside the frontend container
+- runs Playwright against the live app on `http://127.0.0.1:5173`
+
+The Playwright config and live browser stories live under:
+
+- `tests/frontend/playwright.config.js`
+- `tests/frontend/e2e/`

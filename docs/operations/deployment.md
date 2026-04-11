@@ -21,6 +21,8 @@ It performs these steps:
 - `deploy/docker/`: production Dockerfiles and Nginx container config
 - `deploy/env/`: deployment env templates and generated env files
 - `deploy/scripts/`: remote deployment and host bootstrap scripts
+- `app/`: application code synchronized to the remote host
+- `automation/`: shared env and shell helpers reused by local and deploy workflows
 
 ## Prepare Env Files
 
@@ -89,3 +91,4 @@ deploy/scripts/deploy.sh --sync-mode prompt
 - Docker Compose runs `frontend`, `backend`, `worker`, `beat`, `postgres`, and `redis`.
 - Host Nginx proxies `/` to the frontend container and `/api/` plus `/admin/` to the backend container port bound on localhost.
 - Static and media files are served from the repo `storage/` directory on the remote host.
+- Workspace sync excludes local runtime files, local env files, gitignored logs, virtualenvs, and other generated artifacts.

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/../.." >/dev/null 2>&1 && pwd)/tooling/shell/common.sh"
+source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/../.." >/dev/null 2>&1 && pwd)/automation/lib/common.sh"
 REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
 
@@ -133,7 +133,7 @@ else
 fi
 
 mkdir -p deploy/env logs/local logs/remote storage/staticfiles storage/media storage/media/scraped-books
-python3 tooling/env_tools.py scaffold deploy/env/app.env.example deploy/env/.app.env
+python3 automation/lib/env_tools.py scaffold deploy/env/app.env.example deploy/env/.app.env
 set_default_env PUBLIC_BASE_URL "https://${DOMAIN}" deploy/env/.app.env
 set_default_env PUBLIC_API_ORIGIN "https://${DOMAIN}" deploy/env/.app.env
 set_default_env FRONTEND_BASE_URL "https://${DOMAIN}" deploy/env/.app.env
@@ -155,18 +155,17 @@ sync_workspace_files() {
       --exclude='.DS_Store' \
       --exclude='venv' \
       --exclude='.venv' \
-      --exclude='frontend/node_modules' \
-      --exclude='frontend/dist' \
-      --exclude='frontend/test-results' \
-      --exclude='frontend/test-artifacts' \
+      --exclude='app/frontend/node_modules' \
+      --exclude='app/frontend/dist' \
+      --exclude='app/frontend/test-results' \
+      --exclude='app/frontend/test-artifacts' \
       --exclude='storage' \
-      --exclude='backend/staticfiles' \
-      --exclude='backend/celerybeat-schedule' \
-      --exclude='backend/__pycache__' \
-      --exclude='backend/apps/*/__pycache__' \
-      --exclude='backend/tests/__pycache__' \
-      --exclude='logs/local/*.log' \
-      --exclude='logs/remote/*.log' \
+      --exclude='app/backend/staticfiles' \
+      --exclude='app/backend/celerybeat-schedule' \
+      --exclude='app/backend/__pycache__' \
+      --exclude='app/backend/apps/*/__pycache__' \
+      --exclude='tests/backend/__pycache__' \
+      --exclude='logs/**/*.log' \
       --exclude='test-artifacts' \
       --exclude='local/env/.env' \
       --exclude='deploy/env/.host.env' \
@@ -190,7 +189,7 @@ sync_remote_env_file() {
   [[ -f "${LOCAL_ENV_FILE}" ]] || die "Action required: local env file not found: ${LOCAL_ENV_FILE}"
 
   scp "${LOCAL_ENV_FILE}" "${TARGET}:${REMOTE_APP_ABS_DIR}/deploy/env/.env.sync" >/dev/null
-  ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && python3 tooling/env_tools.py merge ${REMOTE_APP_ENV_REL} deploy/env/.env.sync deploy/env/.app.env.merged --non-empty-only && mv deploy/env/.app.env.merged ${REMOTE_APP_ENV_REL} && rm -f deploy/env/.env.sync"
+  ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && python3 automation/lib/env_tools.py merge ${REMOTE_APP_ENV_REL} deploy/env/.env.sync deploy/env/.app.env.merged --non-empty-only && mv deploy/env/.app.env.merged ${REMOTE_APP_ENV_REL} && rm -f deploy/env/.env.sync"
   print_info "Merged non-empty values from $(basename "${LOCAL_ENV_FILE}") into ${REMOTE_APP_ENV_REL}"
 }
 

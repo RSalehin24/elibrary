@@ -61,11 +61,16 @@ services:
     environment:
       <<: *app_environment
     command: >
-      sh -c "python manage.py migrate &&
+      sh -c "mkdir -p /logs/local/backend &&
+      python manage.py migrate &&
       python manage.py seed_superadmin &&
-      exec python manage.py runserver 0.0.0.0:8000"
+      python manage.py runserver 0.0.0.0:8000 2>&1 | tee -a /logs/local/backend/backend.log"
     volumes:
-      - ../../backend:/app
+      - ../../app/backend:/app
+      - ../../tests:/workspace/tests:ro
+      - ../../pytest.ini:/workspace/pytest.ini:ro
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
       - ../../storage:/storage
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
@@ -84,14 +89,18 @@ services:
       <<: *app_environment
       CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-2}
     command: >
+      sh -c "mkdir -p /logs/local/celery &&
       python /opt/bangla-library/run_with_watch.py
       --watch-dir /app/apps
       --watch-dir /app/config
       --cwd /app
       --
       celery -A config worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+      2>&1 | tee -a /logs/local/celery/worker.log"
     volumes:
-      - ../../backend:/app
+      - ../../app/backend:/app
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
       - ../../storage:/storage
     depends_on:
       - postgres
@@ -107,14 +116,18 @@ services:
     environment:
       <<: *app_environment
     command: >
+      sh -c "mkdir -p /logs/local/celery &&
       python /opt/bangla-library/run_with_watch.py
       --watch-dir /app/apps
       --watch-dir /app/config
       --cwd /app
       --
-      celery -A config beat --loglevel=info
+      celery -A config beat --loglevel=info --schedule=/runtime/celery/celerybeat-schedule
+      2>&1 | tee -a /logs/local/celery/beat.log"
     volumes:
-      - ../../backend:/app
+      - ../../app/backend:/app
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
       - ../../storage:/storage
     depends_on:
       - postgres
@@ -129,9 +142,13 @@ services:
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
       VITE_DEV_PROXY_TARGET: http://backend:8000
-    command: npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-5173}
+    command: >
+      sh -c "mkdir -p /logs/local/frontend &&
+      npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-5173}
+      2>&1 | tee -a /logs/local/frontend/frontend.log"
     volumes:
-      - ../../frontend:/app
+      - ../../app/frontend:/app
+      - ../../logs:/logs
       - frontend_node_modules:/app/node_modules
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"

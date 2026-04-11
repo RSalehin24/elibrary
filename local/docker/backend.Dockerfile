@@ -7,13 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY backend/requirements.txt /tmp/requirements.txt
-COPY backend/requirements-dev.txt /tmp/requirements-dev.txt
+COPY app/backend/requirements.txt /tmp/requirements.txt
+COPY app/backend/requirements-dev.txt /tmp/requirements-dev.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/requirements.txt \
     && python -m pip install -r /tmp/requirements-dev.txt
 
-COPY backend /app
+COPY app/backend /app
 COPY local/scripts/run_with_watch.py /opt/bangla-library/run_with_watch.py
 
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
