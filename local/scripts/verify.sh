@@ -66,7 +66,14 @@ wait_for_url() {
 
 run_backend_tests() {
   compose "${COMPOSE_ARGS[@]}" exec -T backend sh -lc \
-    "cd /app && PYTHONPATH=/app DJANGO_SETTINGS_MODULE=config.settings pytest /workspace/tests/backend -q"
+    "cd /app && PYTHONPATH=/app DJANGO_SETTINGS_MODULE=config.settings pytest -c /workspace/tests/pytest.ini -o cache_dir=/tmp/pytest-cache /workspace/tests/backend -q"
+}
+
+run_frontend_unit_tests() {
+  (
+    cd "${REPO_ROOT}/app/frontend"
+    npm run test:unit
+  )
 }
 
 run_frontend_build() {
@@ -99,6 +106,9 @@ for run_index in $(seq 1 "${repeat_count}"); do
 
   print_info "Verification run ${run_index}/${repeat_count}: backend tests"
   run_backend_tests
+
+  print_info "Verification run ${run_index}/${repeat_count}: frontend unit tests"
+  run_frontend_unit_tests
 
   print_info "Verification run ${run_index}/${repeat_count}: frontend build"
   run_frontend_build

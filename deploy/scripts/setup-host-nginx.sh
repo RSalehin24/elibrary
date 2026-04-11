@@ -56,7 +56,7 @@ ensure_certbot() {
 }
 
 ensure_permissions() {
-  mkdir -p "${APP_DIR}/storage/staticfiles" "${APP_DIR}/storage/media" /var/www/certbot "${NGINX_CONF_DIR}"
+  mkdir -p "${APP_DIR}/app/backend/storage/staticfiles" "${APP_DIR}/app/backend/storage/media" /var/www/certbot "${NGINX_CONF_DIR}"
 
   local app_owner_home app_owner_parent
   app_owner_home="$(dirname "${APP_DIR}")"
@@ -65,7 +65,7 @@ ensure_permissions() {
   chmod o+x "${app_owner_parent}" "${app_owner_home}"
   chmod o+rx "${APP_DIR}"
 
-  chmod -R o+rX "${APP_DIR}/storage/staticfiles" "${APP_DIR}/storage/media"
+  chmod -R o+rX "${APP_DIR}/app/backend/storage/staticfiles" "${APP_DIR}/app/backend/storage/media"
 }
 
 write_http_config() {
@@ -101,13 +101,13 @@ server {
   }
 
   location /static/ {
-    alias ${APP_DIR}/storage/staticfiles/;
+    alias ${APP_DIR}/app/backend/storage/staticfiles/;
     expires 7d;
     add_header Cache-Control "public, max-age=604800";
   }
 
   location /media/ {
-    alias ${APP_DIR}/storage/media/;
+    alias ${APP_DIR}/app/backend/storage/media/;
     expires 1h;
     add_header Cache-Control "public, max-age=3600";
   }
@@ -177,13 +177,13 @@ server {
   }
 
   location /static/ {
-    alias ${APP_DIR}/storage/staticfiles/;
+    alias ${APP_DIR}/app/backend/storage/staticfiles/;
     expires 7d;
     add_header Cache-Control "public, max-age=604800";
   }
 
   location /media/ {
-    alias ${APP_DIR}/storage/media/;
+    alias ${APP_DIR}/app/backend/storage/media/;
     expires 1h;
     add_header Cache-Control "public, max-age=3600";
   }

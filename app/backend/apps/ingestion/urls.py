@@ -9,6 +9,7 @@ from apps.ingestion.views import (
     CatalogCurationRunStopView,
     DuplicateReviewListView,
     DuplicateReviewResolveView,
+    ProcessingActivityView,
     ProcessingJobBulkDeleteView,
     ProcessingJobBulkResumeView,
     ProcessingJobBulkStopView,
@@ -38,6 +39,7 @@ from apps.ingestion.views import (
 
 
 urlpatterns = [
+    path("activity/", ProcessingActivityView.as_view(), name="ingestion-processing-activity"),
     path("submissions/", SubmissionListCreateView.as_view(), name="ingestion-submission-list"),
     path("submissions/status/", SubmissionBulkStatusView.as_view(), name="ingestion-submission-bulk-status"),
     path("submissions/bulk-delete/", SubmissionBulkDeleteView.as_view(), name="ingestion-submission-bulk-delete"),

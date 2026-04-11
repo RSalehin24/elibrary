@@ -10,7 +10,9 @@ Use the repo-level guide in [docs/operations/local-development.md](../../docs/op
 
 - App code: `app/backend/apps/`
 - Django config: `app/backend/config/`
+- Runtime storage: `app/backend/storage/`
 - Tests: `tests/backend/`
+- Pytest config: `tests/pytest.ini`
 - Local watch helper: [run_with_watch.py](../../local/scripts/run_with_watch.py)
 
 ## Container Targets

@@ -8,6 +8,63 @@ test.describe("Processing Pages", () => {
     await loginAsSuperAdmin(page);
   });
 
+  test("processing header spinner clears once the shared activity endpoint reports idle", async ({
+    page,
+  }) => {
+    await page.route("**/api/ingestion/activity/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          can_manage_processing: true,
+          has_visible_activity: false,
+          active_scopes: [],
+        }),
+      });
+    });
+
+    const processingPage = new ProcessingPageModel(page);
+
+    await processingPage.goto("/processing-my-requests", "My Requests");
+
+    await expect(
+      processingPage.rowInCard("Requests", seedData.submissions.alpha),
+    ).toBeVisible();
+    await expect(processingPage.headerSpinner("My Requests")).toHaveCount(0);
+  });
+
+  test("processing header spinner stays visible across processing pages while shared activity is active", async ({
+    page,
+  }) => {
+    await page.route("**/api/ingestion/activity/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          can_manage_processing: true,
+          has_visible_activity: true,
+          active_scopes: ["jobs", "runs"],
+        }),
+      });
+    });
+
+    const processingPage = new ProcessingPageModel(page);
+
+    await processingPage.goto("/processing-my-requests", "My Requests");
+
+    await expect(
+      processingPage.rowInCard("Requests", seedData.submissions.alpha),
+    ).toBeVisible();
+    await expect(processingPage.headerSpinner("My Requests")).toBeVisible();
+
+    await processingPage.goto("/processing-all-activity", "All Activity");
+
+    await expect(
+      processingPage.rowInCard("All Requests", seedData.submissions.alpha),
+    ).toBeVisible();
+    await expect(processingPage.headerSpinner("All Activity")).toBeVisible();
+  });
+
   test("my requests submission search refreshes only the request list", async ({
     page,
   }) => {

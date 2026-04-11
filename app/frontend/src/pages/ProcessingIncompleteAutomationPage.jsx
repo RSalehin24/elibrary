@@ -81,6 +81,7 @@ import {
   RequestValue,
   renderProcessingCardLoader,
 } from "../features/processing/components/ProcessingScaffold";
+import { useProcessingActivity } from "../features/processing/ProcessingActivityProvider";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 import { formatBookDateTime } from "../utils/bookPresentation";
@@ -90,6 +91,7 @@ import { toQueryString } from "../utils/query";
 export default function ProcessingIncompleteAutomationPage() {
   const { user } = useSession();
   const toast = useToast();
+  const { busy: processingActivityBusy } = useProcessingActivity();
   const canManageProcessing = hasCapability(user, "processing:manage");
   const activeTab = INCOMPLETE_TAB;
   const [jobs, setJobs] = useState([]);
@@ -3896,7 +3898,9 @@ export default function ProcessingIncompleteAutomationPage() {
           <div className="section-title-block">
             <h1>Incomplete Automation</h1>
           </div>
-          {loading ? <LoadingSpinner size={18} /> : null}
+          {loading || processingActivityBusy ? (
+            <LoadingSpinner size={18} />
+          ) : null}
         </div>
         {error ? (
           <div className="page-state page-state-error">{error}</div>

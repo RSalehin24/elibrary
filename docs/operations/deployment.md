@@ -90,5 +90,5 @@ deploy/scripts/deploy.sh --sync-mode prompt
 
 - Docker Compose runs `frontend`, `backend`, `worker`, `beat`, `postgres`, and `redis`.
 - Host Nginx proxies `/` to the frontend container and `/api/` plus `/admin/` to the backend container port bound on localhost.
-- Static and media files are served from the repo `storage/` directory on the remote host.
+- Static and media files are served from `app/backend/storage/` on the remote host.
 - Workspace sync excludes local runtime files, local env files, gitignored logs, virtualenvs, and other generated artifacts.

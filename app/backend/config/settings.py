@@ -194,7 +194,7 @@ REST_FRAMEWORK = {
 }
 
 STATIC_URL = "/static/"
-RUNTIME_STORAGE_DIR = Path(env("RUNTIME_STORAGE_DIR", str(BASE_DIR.parent.parent / "storage")))
+RUNTIME_STORAGE_DIR = Path(env("RUNTIME_STORAGE_DIR", str(BASE_DIR / "storage")))
 STATIC_ROOT = Path(env("STATIC_ROOT", str(RUNTIME_STORAGE_DIR / "staticfiles")))
 STATICFILES_DIRS = [BASE_DIR / "static"]
 MEDIA_URL = "/media/"

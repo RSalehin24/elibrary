@@ -7,8 +7,15 @@
 | Authentication and session behavior | `pytest` | `tests/backend/auth/` |
 | Access grants, reader access, and permission logic | `pytest` | `tests/backend/access/` |
 | Catalog metadata and manual-book workflows | `pytest` | `tests/backend/catalog_management/` |
-| Ingestion pipeline, curation, queue logic, and processing | `pytest` | `tests/backend/ingestion/` |
+| Ingestion pipeline, curation, queue logic, processing activity summaries, and processing-state regressions | `pytest` | `tests/backend/ingestion/` |
 | Shared/common behavior and legacy pipeline compatibility | `pytest` | `tests/backend/test_common.py`, `tests/backend/test_legacy_pipeline.py` |
+
+## Frontend Unit Coverage
+
+| Feature Area | Coverage Layer | Main Location |
+| --- | --- | --- |
+| Processing activity payload normalization and polling rules | `node --test` | `tests/frontend/unit/activityTracker.test.js` |
+| Request text formatting and job-filter helpers | `node --test` | `tests/frontend/unit/requestHelpers.test.js` |
 
 ## Live Browser Coverage
 
@@ -26,6 +33,8 @@
 | Reuse an existing source URL and launch the live reader | Playwright against Dockerized app | `tests/frontend/e2e/create-books.spec.js` |
 | Reuse an existing source URL and start a protected download | Playwright against Dockerized app | `tests/frontend/e2e/create-books.spec.js` |
 | Create a manual book from the browser and find it again | Playwright against Dockerized app | `tests/frontend/e2e/manual-books.spec.js` |
+| Show no stale processing header spinner when shared activity is idle | Playwright against Dockerized app | `tests/frontend/e2e/processing-pages.spec.js` |
+| Keep the processing header spinner visible while activity remains active across processing routes | Playwright against Dockerized app | `tests/frontend/e2e/processing-pages.spec.js` |
 | Search live processing requests | Playwright against Dockerized app | `tests/frontend/e2e/processing-pages.spec.js` |
 | Search live source catalog entries | Playwright against Dockerized app | `tests/frontend/e2e/processing-pages.spec.js` |
 | Save automation settings and confirm they persist after reload | Playwright against Dockerized app | `tests/frontend/e2e/processing-pages.spec.js` |
@@ -37,4 +46,4 @@
 - Live browser tests use the real local Docker stack started by `local/scripts/dev.sh up`.
 - Deterministic browser data is reset by `local/scripts/seed-e2e-data.sh`.
 - Seeded records are intentionally prefixed with `E2E ` or use the `@e2e.local` domain so they are easy to identify and clean between runs.
-- The full repo verifier is `local/scripts/verify.sh`, which runs backend pytest in Docker, the frontend production build in Docker, and the live Playwright suite against the local stack.
+- The full repo verifier is `local/scripts/verify.sh` or `local/scripts/test-all.sh`, which runs backend pytest in Docker, frontend unit tests, the frontend production build, and the live Playwright suite against the local stack.

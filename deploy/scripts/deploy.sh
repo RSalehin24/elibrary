@@ -132,7 +132,7 @@ else
   git checkout -B "${BRANCH}" "origin/${BRANCH}"
 fi
 
-mkdir -p deploy/env logs/local logs/remote storage/staticfiles storage/media storage/media/scraped-books
+mkdir -p deploy/env logs/local logs/remote app/backend/storage/staticfiles app/backend/storage/media app/backend/storage/media/scraped-books
 python3 automation/lib/env_tools.py scaffold deploy/env/app.env.example deploy/env/.app.env
 set_default_env PUBLIC_BASE_URL "https://${DOMAIN}" deploy/env/.app.env
 set_default_env PUBLIC_API_ORIGIN "https://${DOMAIN}" deploy/env/.app.env
@@ -140,7 +140,7 @@ set_default_env FRONTEND_BASE_URL "https://${DOMAIN}" deploy/env/.app.env
 set_default_env VITE_API_BASE_URL "/api" deploy/env/.app.env
 set_default_env BACKEND_PORT "${BACKEND_PORT}" deploy/env/.app.env
 set_default_env FRONTEND_PORT "${FRONTEND_PORT}" deploy/env/.app.env
-set_default_env RUNTIME_STORAGE_DIR "/storage" deploy/env/.app.env
+set_default_env RUNTIME_STORAGE_DIR "/app/storage" deploy/env/.app.env
 
 printf 'Remote repository ready at %s\n' "${APP_DIR}"
 EOF
@@ -159,7 +159,7 @@ sync_workspace_files() {
       --exclude='app/frontend/dist' \
       --exclude='app/frontend/test-results' \
       --exclude='app/frontend/test-artifacts' \
-      --exclude='storage' \
+      --exclude='app/backend/storage' \
       --exclude='app/backend/staticfiles' \
       --exclude='app/backend/celerybeat-schedule' \
       --exclude='app/backend/__pycache__' \

@@ -1,6 +1,7 @@
 from apps.ingestion.services.curation import create_catalog_curation_run
 from apps.ingestion.services.submissions import create_submission_records, queue_submission
 
+from .activity import ProcessingActivityView
 from .catalog_entries import (
     SourceCatalogEntryBulkDeleteView,
     SourceCatalogEntryCreateBooksView,
@@ -51,6 +52,7 @@ __all__ = [
     "DuplicateReviewResolveView",
     "IncompleteCatalogCheckCreateBooksView",
     "IncompleteCatalogCheckListView",
+    "ProcessingActivityView",
     "ProcessingJobBulkDeleteView",
     "ProcessingJobBulkResumeView",
     "ProcessingJobBulkStopView",

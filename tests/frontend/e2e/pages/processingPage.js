@@ -16,6 +16,20 @@ export class ProcessingPageModel {
     ).toBeVisible({ timeout: 15_000 });
   }
 
+  pageHeader(heading) {
+    return this.page.locator("section.detail-card", {
+      has: this.page.getByRole("heading", {
+        name: heading,
+        exact: true,
+        level: 1,
+      }),
+    });
+  }
+
+  headerSpinner(heading) {
+    return this.pageHeader(heading).locator(".panel-header .loading-spinner");
+  }
+
   card(title) {
     return this.page.locator("section.processing-card", {
       has: this.page.getByRole("heading", { name: title, exact: true }),

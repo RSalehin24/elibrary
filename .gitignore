@@ -10,6 +10,7 @@ deploy/env/.app.env
 local/runtime/*
 !local/runtime/.gitkeep
 !local/runtime/celery/
+local/runtime/celery/*
 !local/runtime/celery/.gitkeep
 .idea/
 .pytest_cache/
@@ -54,7 +55,7 @@ LOCAL_PASSWORDS.md
 .Spotlight-V100
 .Trashes
 
-storage/
+app/backend/storage/
 test-artifacts/
 logs/**/*.log
 !logs/**/.gitkeep

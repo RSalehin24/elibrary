@@ -15,7 +15,7 @@ Monorepo for the Bangla ebook platform.
 - `local/`: local Compose, Dockerfiles, env templates, and developer scripts
 - `deploy/`: deployment Compose, Dockerfiles, env templates, and remote automation scripts
 - `logs/`: local and remote log streaming plus captured log files
-- `storage/`: the only runtime storage location for static files, uploads, generated books, and scraped exports
+- `app/backend/storage/`: the runtime storage location for static files, uploads, generated books, and scraped exports
 - `automation/`: shared shell and env helpers used by local, deploy, and log automation
 - `tests/TEST_MATRIX.md`: feature-to-test coverage map for backend and live browser suites
 
@@ -30,6 +30,10 @@ Monorepo for the Bangla ebook platform.
 - `local/scripts/generate-env.sh all`
 - `local/scripts/dev.sh up`
 - `local/scripts/seed-e2e-data.sh`
+- `local/scripts/test-all.sh`
+- `local/scripts/test-backend.sh`
+- `local/scripts/test-frontend-unit.sh`
+- `local/scripts/test-e2e.sh`
 - `local/scripts/verify.sh --repeat 3`
 - `deploy/scripts/deploy.sh`
 - `logs/show-logs.sh backend remote`
@@ -38,10 +42,11 @@ Monorepo for the Bangla ebook platform.
 
 - Local development runs `postgres`, `redis`, `backend`, `worker`, `beat`, and `frontend` from [local/compose/docker-compose.yml](local/compose/docker-compose.yml).
 - Deployment runs the same core services plus the Dockerized frontend from [deploy/compose/docker-compose.yml](deploy/compose/docker-compose.yml).
-- Books are stored only under `storage/`, with generated titles in `storage/media/generated/` and scraped export folders in `storage/media/scraped-books/`.
+- Books are stored only under `app/backend/storage/`, with generated titles in `app/backend/storage/media/generated/` and scraped export folders in `app/backend/storage/media/scraped-books/`.
 - Automated tests live under [tests/backend](tests/backend) and [tests/frontend](tests/frontend).
-- `local/scripts/verify.sh` uses the live Docker stack, reseeds deterministic E2E records, runs backend tests in the backend container, builds the frontend in the frontend container, and executes Playwright against the live app.
-- `tests/TEST_MATRIX.md` maps the current backend coverage and the 17 live browser stories that run against the local Dockerized application.
+- Backend pytest config lives at [tests/pytest.ini](tests/pytest.ini).
+- `local/scripts/verify.sh` and `local/scripts/test-all.sh` use the live Docker stack, reseed deterministic E2E records, run backend tests in the backend container, run frontend unit tests, build the frontend, and execute Playwright against the live app.
+- `tests/TEST_MATRIX.md` maps the current backend coverage, frontend unit coverage, and the 19 live browser stories that run against the local Dockerized application.
 
 ## Supporting Docs
 

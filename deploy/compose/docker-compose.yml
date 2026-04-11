@@ -33,7 +33,7 @@ x-app-environment: &app_environment
   CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-1}
   SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
   CSRF_COOKIE_SAMESITE: ${CSRF_COOKIE_SAMESITE:-Lax}
-  RUNTIME_STORAGE_DIR: ${RUNTIME_STORAGE_DIR:-/storage}
+  RUNTIME_STORAGE_DIR: ${RUNTIME_STORAGE_DIR:-/app/storage}
 
 services:
   postgres:
@@ -68,7 +68,7 @@ services:
       python manage.py seed_superadmin &&
       exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-2} --timeout ${GUNICORN_TIMEOUT:-120} --access-logfile - --error-logfile -"
     volumes:
-      - ../../storage:/storage
+      - ../../app/backend/storage:/app/storage
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     healthcheck:
@@ -102,7 +102,7 @@ services:
       CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-2}
     command: celery -A config worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
     volumes:
-      - ../../storage:/storage
+      - ../../app/backend/storage:/app/storage
     depends_on:
       - postgres
       - redis
@@ -121,7 +121,7 @@ services:
       <<: *app_environment
     command: celery -A config beat --loglevel=info
     volumes:
-      - ../../storage:/storage
+      - ../../app/backend/storage:/app/storage
     depends_on:
       - postgres
       - redis

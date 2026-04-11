@@ -33,7 +33,7 @@ x-app-environment: &app_environment
   CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-0}
   SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
   CSRF_COOKIE_SAMESITE: ${CSRF_COOKIE_SAMESITE:-Lax}
-  RUNTIME_STORAGE_DIR: ${RUNTIME_STORAGE_DIR:-/storage}
+  RUNTIME_STORAGE_DIR: ${RUNTIME_STORAGE_DIR:-/app/storage}
 
 services:
   postgres:
@@ -68,10 +68,8 @@ services:
     volumes:
       - ../../app/backend:/app
       - ../../tests:/workspace/tests:ro
-      - ../../pytest.ini:/workspace/pytest.ini:ro
       - ../../logs:/logs
       - ../../local/runtime:/runtime
-      - ../../storage:/storage
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     depends_on:
@@ -101,7 +99,6 @@ services:
       - ../../app/backend:/app
       - ../../logs:/logs
       - ../../local/runtime:/runtime
-      - ../../storage:/storage
     depends_on:
       - postgres
       - redis
@@ -128,7 +125,6 @@ services:
       - ../../app/backend:/app
       - ../../logs:/logs
       - ../../local/runtime:/runtime
-      - ../../storage:/storage
     depends_on:
       - postgres
       - redis

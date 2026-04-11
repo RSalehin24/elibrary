@@ -45,7 +45,7 @@ Default URLs:
 - Frontend: `http://127.0.0.1:5173`
 - Backend API: `http://127.0.0.1:8000`
 
-Books, uploads, and static assets are stored only under the repo `storage/` directory.
+Books, uploads, and static assets are stored only under `app/backend/storage/`.
 
 ## Common Commands
 
@@ -54,6 +54,10 @@ local/scripts/dev.sh ps
 local/scripts/dev.sh logs frontend
 local/scripts/dev.sh logs backend
 local/scripts/seed-e2e-data.sh
+local/scripts/test-all.sh
+local/scripts/test-backend.sh
+local/scripts/test-frontend-unit.sh
+local/scripts/test-e2e.sh
 local/scripts/dev.sh restart backend
 local/scripts/dev.sh down
 ```
@@ -77,7 +81,8 @@ local/scripts/verify.sh --repeat 3
 - starts or refreshes the live local stack through `local/scripts/dev.sh up`
 - waits for the frontend and backend to become healthy
 - reseeds deterministic browser data through `local/scripts/seed-e2e-data.sh`
-- runs backend `pytest` inside the backend container
+- runs backend `pytest` inside the backend container using `tests/pytest.ini`
+- runs frontend unit tests from `tests/frontend/unit/`
 - runs the frontend production build inside the frontend container
 - runs Playwright against the live app on `http://127.0.0.1:5173`
 
@@ -85,3 +90,10 @@ The Playwright config and live browser stories live under:
 
 - `tests/frontend/playwright.config.js`
 - `tests/frontend/e2e/`
+
+The separate test entrypoints are:
+
+- `local/scripts/test-backend.sh`
+- `local/scripts/test-frontend-unit.sh`
+- `cd app/frontend && npm run build`
+- `local/scripts/test-e2e.sh`
