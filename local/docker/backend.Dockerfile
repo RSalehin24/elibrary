@@ -14,6 +14,5 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/requirements-dev.txt
 
 COPY app/backend /app
-COPY local/scripts/run_with_watch.py /opt/bangla-library/run_with_watch.py
 
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

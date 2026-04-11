@@ -17,6 +17,8 @@ Those generated log files are gitignored, while the `.gitkeep` files inside `log
 
 ## Local Logs
 
+When the local stack is started through `local/scripts/dev.sh up` or `./run_local.sh`, Docker Compose watch is already active. Compose watch sync and rebuild messages appear in the attached `local/scripts/dev.sh up` session. The local logs below are the quickest way to confirm the resulting app reload and restart behavior after editing source files.
+
 Frontend dev server logs:
 
 ```bash
@@ -41,6 +43,12 @@ For the backend group, the script tails these files inside `logs/local/`:
 - `backend`
 - `worker`
 - `beat`
+
+Use those local logs to confirm watch results:
+
+- `frontend` shows Vite dev-server and hot reload output after Compose syncs files under `app/frontend`
+- `backend` shows Django autoreload output after Compose syncs files under `app/backend`
+- `worker` and `beat` show container restarts triggered by Compose watch updates to `app/backend/apps` or `app/backend/config`
 
 ## Remote Logs
 

@@ -4,7 +4,7 @@ This folder contains the Django API, Celery worker and beat entrypoints, and the
 
 ## Local Development
 
-Use the repo-level guide in [docs/operations/local-development.md](../../docs/operations/local-development.md). The default local workflow runs the backend through the watch-enabled Docker development stack.
+Use the repo-level guide in [docs/operations/local-development.md](../../docs/operations/local-development.md). The default local workflow runs the backend through the Docker Compose watch-enabled development stack.
 
 ## Runtime Notes
 
@@ -13,7 +13,6 @@ Use the repo-level guide in [docs/operations/local-development.md](../../docs/op
 - Runtime storage: `app/backend/storage/`
 - Tests: `tests/backend/`
 - Pytest config: `tests/pytest.ini`
-- Local watch helper: [run_with_watch.py](../../local/scripts/run_with_watch.py)
 
 ## Container Targets
 

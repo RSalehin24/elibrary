@@ -8,17 +8,35 @@ This folder contains the local Docker development stack, local env templates, ru
 - `local/docker/`: local backend/frontend Dockerfiles
 - `local/env/`: local env template and generated local env file
 - `local/runtime/`: local runtime scratch files such as the Celery beat schedule
-- `local/scripts/`: local stack control, env generation, and watch helpers
+- `local/scripts/`: local stack control and env generation helpers
 
 ## Primary Entry Points
 
-- Start the local stack: `local/scripts/dev.sh up`
+- Start the local stack with Docker Compose watch: `local/scripts/dev.sh up`
 - Stop the local stack: `local/scripts/dev.sh down`
 - Generate the local env file: `local/scripts/generate-env.sh local`
 - Show script usage: `local/scripts/dev.sh --help`
 
 Every non-help run of `local/scripts/dev.sh` prints the effective super admin email and password used by the local stack.
 Compose commands derive `local/env/.compose.env` automatically so secret values containing `$` are passed literally.
+
+## Docker Compose Watch
+
+Starting local development through either of these entry points runs Docker Compose with `--watch`:
+
+- `local/scripts/dev.sh up`
+- `./run_local.sh`
+
+The watch rules are defined in `local/compose/docker-compose.yml`. If your Compose CLI shows interactive watch shortcuts while attached, watch is already enabled for the standard local workflow.
+
+Default watch behavior:
+
+- `backend` syncs `app/backend/` into the container and Django autoreload applies code changes
+- `worker` syncs `app/backend/apps/` and `app/backend/config/`, then restarts the container when those files change
+- `beat` syncs `app/backend/apps/` and `app/backend/config/`, then restarts the container when those files change
+- `frontend` syncs `app/frontend/` into the container and Vite hot reload applies UI changes
+- `backend`, `worker`, and `beat` rebuild when `app/backend/requirements.txt` or `app/backend/requirements-dev.txt` changes
+- `frontend` rebuilds when `app/frontend/package.json` or `app/frontend/package-lock.json` changes
 
 ## Runtime Model
 
@@ -27,10 +45,10 @@ The default local stack starts:
 - `postgres`
 - `redis`
 - one-shot `backend-init` bootstrap for migrations and super admin seeding
-- `backend` with Django autoreload
-- `worker` with Python file watching
-- `beat` with Python file watching
-- `frontend` with Vite hot reload
+- `backend` with Docker Compose sync plus Django autoreload
+- `worker` with Docker Compose sync-and-restart rules
+- `beat` with Docker Compose sync-and-restart rules
+- `frontend` with Docker Compose sync plus Vite hot reload
 
 ## Related Docs
 

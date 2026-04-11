@@ -2,17 +2,17 @@
 
 ## Prerequisites
 
-- Docker with the Compose plugin, or `docker-compose`
+- Docker Compose with `up --watch` support
 - Node/npm available locally for frontend build and Playwright verification
 
 ## Folder Layout
 
 - `app/`: backend and frontend application code
-- `local/compose/`: watch-enabled local Docker Compose stack
+- `local/compose/`: local Docker Compose stack with `develop.watch` rules
 - `local/docker/`: local Dockerfiles for backend and frontend
 - `local/env/`: local env template and generated local env file
 - `local/runtime/`: runtime files created by local services, such as the Celery beat schedule
-- `local/scripts/`: local stack, env generation, and watch helpers
+- `local/scripts/`: local stack and env generation helpers
 - `tests/`: root-level backend and frontend automated tests
 - `tests/scripts/`: test runners and deterministic E2E data helpers
 
@@ -35,15 +35,30 @@ The effective super admin email and password are printed by `local/scripts/dev.s
 local/scripts/dev.sh up
 ```
 
+`local/scripts/dev.sh up` is the supported way to start local development with Docker Compose watch enabled. `./run_local.sh` is a thin wrapper around the same command.
+
+The script runs the local stack through `docker compose up --build --watch` or `docker-compose up --build --watch`, depending on what is available on your machine. The watch rules live in `local/compose/docker-compose.yml`.
+
+If your Compose CLI shows interactive watch shortcuts while attached, watch is already enabled for this workflow. You do not need to press `w` separately when starting the stack through `local/scripts/dev.sh up`.
+
 This starts:
 
 - `postgres`
 - `redis`
 - one-shot `backend-init` bootstrap for migrations and super admin seeding
-- `backend` with Django autoreload
-- `worker` with Python file watching
-- `beat` with Python file watching
-- `frontend` with Vite hot reload
+- `backend` with Compose sync and Django autoreload
+- `worker` with Compose sync-and-restart
+- `beat` with Compose sync-and-restart
+- `frontend` with Compose sync and Vite hot reload
+
+Watch behavior:
+
+- `backend` syncs `app/backend/` into `/app`, and Django's built-in autoreloader applies backend code changes
+- `worker` syncs `app/backend/apps/` and `app/backend/config/` into `/app`, then restarts when those Python files change
+- `beat` syncs `app/backend/apps/` and `app/backend/config/` into `/app`, then restarts when those Python files change
+- `frontend` syncs `app/frontend/` into `/app`, and Vite hot reload applies UI changes
+- `backend`, `worker`, and `beat` rebuild when `app/backend/requirements.txt` or `app/backend/requirements-dev.txt` changes
+- `frontend` rebuilds when `app/frontend/package.json` or `app/frontend/package-lock.json` changes
 
 Default URLs:
 
@@ -68,6 +83,17 @@ local/scripts/dev.sh down
 ```
 
 Each repo-facing helper in `local/scripts/` and `tests/scripts/` supports `-h` or `--help` for usage details without starting the stack or a test run.
+
+## Confirm Watch Behavior
+
+Start the stack with `local/scripts/dev.sh up`, then use these commands while editing source files:
+
+```bash
+local/scripts/dev.sh logs backend
+logs/scripts/show-logs.sh frontend
+```
+
+The attached `local/scripts/dev.sh up` session shows Docker Compose watch events such as syncs and rebuilds. `local/scripts/dev.sh logs backend` follows the grouped Docker Compose logs for `backend`, `worker`, and `beat`, which lets you confirm Django reloads and Celery restarts after Compose watch updates. `logs/scripts/show-logs.sh frontend` tails the Vite dev server log so you can confirm frontend hot reload behavior after frontend syncs.
 
 ## Verification
 

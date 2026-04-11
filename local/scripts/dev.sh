@@ -49,8 +49,8 @@ fi
 
 case "${command_name}" in
   up)
-    print_info "Starting local development stack with watching enabled."
-    compose "${COMPOSE_ARGS[@]}" up --build "${DEFAULT_SERVICES[@]}" "$@"
+    print_info "Starting local development stack with Docker Compose watch enabled."
+    compose "${COMPOSE_ARGS[@]}" up --build --watch "${DEFAULT_SERVICES[@]}" "$@"
     cat <<EOF
 Local development stack is running.
 
