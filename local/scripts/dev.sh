@@ -8,8 +8,7 @@ REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
 
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
-COMPOSE_ENV_FILE="${REPO_ROOT}/local/env/.compose.env"
-COMPOSE_ARGS=(--env-file "${COMPOSE_ENV_FILE}" -f "${REPO_ROOT}/local/compose/docker-compose.yml")
+COMPOSE_ARGS=(-f "${REPO_ROOT}/local/compose/docker-compose.yml")
 DEFAULT_SERVICES=(postgres redis backend worker beat frontend)
 
 usage() {
@@ -34,7 +33,6 @@ fi
 
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"
-prepare_compose_env_file "${APP_ENV_FILE}" "${COMPOSE_ENV_FILE}"
 
 SUPER_ADMIN_EMAIL_EFFECTIVE="$(effective_env_value SUPER_ADMIN_EMAIL "admin@example.com")"
 SUPER_ADMIN_PASSWORD_EFFECTIVE="$(effective_env_value SUPER_ADMIN_PASSWORD "changeme")"

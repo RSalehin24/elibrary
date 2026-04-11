@@ -1,11 +1,11 @@
+import shlex
 from pathlib import Path
 
-from automation.lib.env_tools import render_compose_env
+from automation.lib.env_tools import parse_env_file, render_shell_exports
 
 
-def test_render_compose_env_quotes_values_for_literal_compose_use(tmp_path):
+def test_render_shell_exports_preserves_literal_shell_values(tmp_path):
     source_path = tmp_path / ".env"
-    output_path = tmp_path / ".compose.env"
     source_path.write_text(
         "\n".join(
             [
@@ -20,25 +20,22 @@ def test_render_compose_env_quotes_values_for_literal_compose_use(tmp_path):
         encoding="utf-8",
     )
 
-    render_compose_env(source_path, output_path)
+    rendered = render_shell_exports(parse_env_file(source_path))
 
-    assert output_path.read_text(encoding="utf-8") == "\n".join(
+    assert rendered == "\n".join(
         [
-            "# comment",
-            "DJANGO_SECRET_KEY='abc$g8$r'",
-            "BACKEND_PORT='8000'",
-            "EMPTY_VALUE=",
-            "ALREADY_QUOTED='leave-me-alone'",
-            "",
+            f"export DJANGO_SECRET_KEY={shlex.quote('abc$g8$r')}",
+            f"export BACKEND_PORT={shlex.quote('8000')}",
+            f"export EMPTY_VALUE={shlex.quote('')}",
+            f"export ALREADY_QUOTED={shlex.quote(\"'leave-me-alone'\")}",
         ]
     )
 
 
-def test_render_compose_env_escapes_single_quotes(tmp_path):
+def test_render_shell_exports_escapes_single_quotes(tmp_path):
     source_path = tmp_path / ".env"
-    output_path = tmp_path / ".compose.env"
     source_path.write_text("SECRET=it's-private\n", encoding="utf-8")
 
-    render_compose_env(source_path, output_path)
+    rendered = render_shell_exports(parse_env_file(source_path))
 
-    assert output_path.read_text(encoding="utf-8") == "SECRET='it\\'s-private'\n"
+    assert rendered == f"export SECRET={shlex.quote(\"it's-private\")}"

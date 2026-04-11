@@ -12,13 +12,13 @@ This folder contains the local Docker development stack, local env templates, ru
 
 ## Primary Entry Points
 
-- Start the local stack with Docker Compose watch: `local/scripts/dev.sh up`
-- Stop the local stack: `local/scripts/dev.sh down`
-- Generate the local env file: `local/scripts/generate-env.sh local`
-- Show script usage: `local/scripts/dev.sh --help`
+- `local/scripts/dev.sh up` : Start the local stack with Docker Compose watch
+- `local/scripts/dev.sh down` : Stop the local stack
+- `local/scripts/generate-env.sh local` : Generate the local env file
+- `local/scripts/dev.sh --help` : Show script usage
 
 Every non-help run of `local/scripts/dev.sh` prints the effective super admin email and password used by the local stack.
-Compose commands derive `local/env/.compose.env` automatically so secret values containing `$` are passed literally.
+Compose commands load `local/env/.env` directly into the shell environment before invoking Docker Compose, so secret values containing `$` are passed literally without generating a second env file.
 
 ## Docker Compose Watch
 

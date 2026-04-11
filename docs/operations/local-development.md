@@ -25,7 +25,7 @@ local/scripts/generate-env.sh local
 ```
 
 The local stack reads `local/env/.env`. Update values there as needed.
-Compose commands derive a local `local/env/.compose.env` file automatically so secret values containing `$` are passed to Docker Compose literally.
+Compose commands load `local/env/.env` directly into the shell environment before invoking Docker Compose, so secret values containing `$` are passed literally without generating a second env file.
 
 The effective super admin email and password are printed by `local/scripts/dev.sh` on every non-help run. If the env file leaves either value blank, the local Docker Compose defaults are `admin@example.com` and `changeme`.
 

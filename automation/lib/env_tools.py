@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -33,21 +34,6 @@ def parse_env_file(path: Path) -> list[EnvLine]:
 def render_env_lines(lines: Iterable[EnvLine]) -> str:
     rendered_lines = (
         line.raw if line.key is None else f"{line.key}={line.value}"
-        for line in lines
-    )
-    return "\n".join(rendered_lines) + "\n"
-
-
-def compose_safe_env_value(value: str) -> str:
-    stripped = value.strip()
-    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
-        return value
-    return "'" + value.replace("'", "\\'") + "'"
-
-
-def render_compose_env_lines(lines: Iterable[EnvLine]) -> str:
-    rendered_lines = (
-        line.raw if line.key is None else f"{line.key}={compose_safe_env_value(line.value or '') if line.value else ''}"
         for line in lines
     )
     return "\n".join(rendered_lines) + "\n"
@@ -112,9 +98,13 @@ def merge_env(base_path: Path, overrides_path: Path, output_path: Path, *, non_e
     output_path.write_text(render_env_lines(base_lines), encoding="utf-8")
 
 
-def render_compose_env(source_path: Path, output_path: Path) -> None:
-    source_lines = parse_env_file(source_path)
-    output_path.write_text(render_compose_env_lines(source_lines), encoding="utf-8")
+def render_shell_exports(lines: Iterable[EnvLine]) -> str:
+    rendered_lines = (
+        f"export {line.key}={shlex.quote(line.value or '')}"
+        for line in lines
+        if line.key is not None
+    )
+    return "\n".join(rendered_lines)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -137,12 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     merge_parser.add_argument("output_file")
     merge_parser.add_argument("--non-empty-only", action="store_true")
 
-    compose_parser = subparsers.add_parser(
-        "compose-render",
-        help="Render a Compose-safe env file with literal values.",
+    shell_export_parser = subparsers.add_parser(
+        "shell-export",
+        help="Render shell export lines from an env file.",
     )
-    compose_parser.add_argument("source_file")
-    compose_parser.add_argument("output_file")
+    shell_export_parser.add_argument("source_file")
 
     return parser
 
@@ -164,11 +153,8 @@ def main() -> int:
         )
         return 0
 
-    if args.command == "compose-render":
-        render_compose_env(
-            Path(args.source_file),
-            Path(args.output_file),
-        )
+    if args.command == "shell-export":
+        print(render_shell_exports(parse_env_file(Path(args.source_file))))
         return 0
 
     parser.error(f"Unsupported command: {args.command}")

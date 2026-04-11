@@ -217,6 +217,8 @@ start_remote_stack() {
   ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && BACKEND_PORT='${BACKEND_PORT}' FRONTEND_PORT='${FRONTEND_PORT}' bash -s" <<'EOF'
 set -euo pipefail
 
+source automation/lib/common.sh
+
 if docker compose version >/dev/null 2>&1; then
   compose_cmd=(docker compose)
 elif command -v docker-compose >/dev/null 2>&1; then
@@ -226,9 +228,10 @@ else
   exit 1
 fi
 
-python3 automation/lib/env_tools.py compose-render deploy/env/.app.env deploy/env/.app.compose.env
+rm -f deploy/env/.app.compose.env
+load_env_if_present deploy/env/.app.env
 
-compose_args=(--env-file deploy/env/.app.compose.env -f deploy/compose/docker-compose.yml)
+compose_args=(-f deploy/compose/docker-compose.yml)
 
 "${compose_cmd[@]}" "${compose_args[@]}" down --remove-orphans || true
 "${compose_cmd[@]}" "${compose_args[@]}" up -d --build --force-recreate

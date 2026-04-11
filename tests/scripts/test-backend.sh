@@ -35,13 +35,11 @@ if [[ "${1:-}" == "--" ]]; then
 fi
 
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
-COMPOSE_ENV_FILE="${REPO_ROOT}/local/env/.compose.env"
 COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
-COMPOSE_ARGS=(--env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}")
+COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
 
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"
-prepare_compose_env_file "${APP_ENV_FILE}" "${COMPOSE_ENV_FILE}"
 
 BACKEND_SESSION_URL="http://127.0.0.1:${BACKEND_PORT:-8000}/api/auth/session/"
 

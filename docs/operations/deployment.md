@@ -86,7 +86,7 @@ deploy/scripts/deploy.sh --sync-mode prompt
 
 - The script merges only non-empty keys from the selected local env file into remote `deploy/env/.app.env`.
 - Existing remote keys remain untouched unless the local env file provides a non-empty replacement.
-- Docker Compose is driven from a generated `deploy/env/.app.compose.env`, so secret values containing `$` are preserved literally without manual escaping.
+- Deployment commands load `deploy/env/.app.env` directly into the shell environment before invoking Docker Compose, so secret values containing `$` are preserved literally without generating a second env file.
 - When a local or remote env file needs attention, the script offers a 5-second edit window and continues if you do nothing.
 - Docker is installed automatically when missing, or upgraded when `DEPLOY_DOCKER_VERSION` is set and the remote version does not match.
 - Host Nginx config is written automatically and Nginx is installed or upgraded when `DEPLOY_NGINX_VERSION` is set and the remote version does not match.
