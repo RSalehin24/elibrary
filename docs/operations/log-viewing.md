@@ -1,6 +1,6 @@
 # Log Viewing
 
-Use [logs/show-logs.sh](../../logs/show-logs.sh) for both local and deployed environments.
+Use [logs/scripts/show-logs.sh](../../logs/scripts/show-logs.sh) for both local and deployed environments.
 
 Captured log files are written to:
 
@@ -20,20 +20,20 @@ Those generated log files are gitignored, while the `.gitkeep` files inside `log
 Frontend dev server logs:
 
 ```bash
-logs/show-logs.sh frontend
+logs/scripts/show-logs.sh frontend
 ```
 
 Backend service logs:
 
 ```bash
-logs/show-logs.sh backend
+logs/scripts/show-logs.sh backend
 ```
 
 Individual Celery logs:
 
 ```bash
-logs/show-logs.sh worker
-logs/show-logs.sh beat
+logs/scripts/show-logs.sh worker
+logs/scripts/show-logs.sh beat
 ```
 
 For the backend group, the script tails these files inside `logs/local/`:
@@ -47,25 +47,25 @@ For the backend group, the script tails these files inside `logs/local/`:
 Remote backend logs:
 
 ```bash
-logs/show-logs.sh backend remote
+logs/scripts/show-logs.sh backend remote
 ```
 
 Remote worker logs:
 
 ```bash
-logs/show-logs.sh worker remote
+logs/scripts/show-logs.sh worker remote
 ```
 
 Remote beat logs:
 
 ```bash
-logs/show-logs.sh beat remote
+logs/scripts/show-logs.sh beat remote
 ```
 
 Remote frontend logs:
 
 ```bash
-logs/show-logs.sh frontend remote
+logs/scripts/show-logs.sh frontend remote
 ```
 
 Remote log behavior:

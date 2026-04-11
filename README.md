@@ -36,9 +36,9 @@ Monorepo for the Bangla ebook platform.
 - `tests/scripts/test-e2e.sh`
 - `tests/scripts/verify.sh --repeat 3`
 - `deploy/scripts/deploy.sh`
-- `logs/show-logs.sh backend remote`
-- `logs/show-logs.sh worker remote`
-- `logs/show-logs.sh beat remote`
+- `logs/scripts/show-logs.sh backend remote`
+- `logs/scripts/show-logs.sh worker remote`
+- `logs/scripts/show-logs.sh beat remote`
 
 ## Runtime Notes
 

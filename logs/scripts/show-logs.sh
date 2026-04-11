@@ -3,21 +3,21 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/.." >/dev/null 2>&1 && pwd)/automation/lib/common.sh"
+source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/../.." >/dev/null 2>&1 && pwd)/automation/lib/common.sh"
 REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
 
 usage() {
   cat <<'EOF'
 Usage:
-  logs/show-logs.sh <frontend|backend|worker|beat> [local|remote]
+  logs/scripts/show-logs.sh <frontend|backend|worker|beat> [local|remote]
 
 Examples:
-  logs/show-logs.sh frontend
-  logs/show-logs.sh backend local
-  logs/show-logs.sh backend remote
-  logs/show-logs.sh worker remote
-  logs/show-logs.sh beat remote
+  logs/scripts/show-logs.sh frontend
+  logs/scripts/show-logs.sh backend local
+  logs/scripts/show-logs.sh backend remote
+  logs/scripts/show-logs.sh worker remote
+  logs/scripts/show-logs.sh beat remote
 EOF
 }
 
