@@ -199,10 +199,11 @@ REST_FRAMEWORK = {
 }
 
 STATIC_URL = "/static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+RUNTIME_STORAGE_DIR = Path(env("RUNTIME_STORAGE_DIR", str(BASE_DIR.parent / "storage")))
+STATIC_ROOT = Path(env("STATIC_ROOT", str(RUNTIME_STORAGE_DIR / "staticfiles")))
 STATICFILES_DIRS = [BASE_DIR / "static"]
 MEDIA_URL = "/media/"
-MEDIA_ROOT = Path(env("MEDIA_ROOT", str(BASE_DIR / "storage" / "media")))
+MEDIA_ROOT = Path(env("MEDIA_ROOT", str(RUNTIME_STORAGE_DIR / "media")))
 
 public_urls_use_https = any(origin.startswith("https://") for origin in {FRONTEND_BASE_URL, PUBLIC_API_ORIGIN})
 

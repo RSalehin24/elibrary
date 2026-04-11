@@ -43,10 +43,15 @@ test.describe("Book Detail Page", () => {
     await expect(bookPage.htmlPreviewButton()).toBeDisabled();
     await expect(bookPage.epubButton()).toBeEnabled();
 
+    const expectedEpubUrl = new URL(
+      "/api/assets/mock-book/book.epub",
+      page.url(),
+    ).toString();
+
     await bookPage.epubButton().click();
     await expect
       .poll(async () => readOpenedUrls(page))
-      .toContain("http://127.0.0.1:5173/api/assets/mock-book/book.epub");
+      .toContain(expectedEpubUrl);
 
     await bookPage.fillMetadataTitle("Preview Lock Safe Title");
     await bookPage.saveMetadata();

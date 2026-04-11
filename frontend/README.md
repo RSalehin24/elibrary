@@ -4,7 +4,7 @@ This folder contains the React/Vite application and the Playwright browser suite
 
 ## Local Development
 
-Use the repo-level guide in [docs/local-development.md](../docs/local-development.md). The preferred workflow now runs the frontend through the Docker development overlay with Vite hot reload.
+Use the repo-level guide in [docs/operations/local-development.md](../docs/operations/local-development.md). The preferred workflow runs the frontend through the Docker development overlay with Vite hot reload.
 
 ## Runtime Notes
 
@@ -14,6 +14,5 @@ Use the repo-level guide in [docs/local-development.md](../docs/local-developmen
 
 ## Container Targets
 
-- `frontend/Dockerfile` `dev` target: Vite dev server
-- `frontend/Dockerfile` `build` target: production bundle build
-- `frontend/Dockerfile` `runtime` target: standalone static Nginx image
+- [local/docker/frontend.Dockerfile](../local/docker/frontend.Dockerfile): local Vite development image
+- [deploy/docker/frontend.Dockerfile](../deploy/docker/frontend.Dockerfile): production build and Nginx runtime image

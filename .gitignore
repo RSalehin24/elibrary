@@ -1,13 +1,17 @@
 .DS_Store
 .env
-.env.production
 .env.local
 .env.*.local
-scripts/.env
+local/env/.env
+deploy/env/.host.env
+deploy/env/.production.env
+deploy/env/.test.env
+deploy/env/.app.env
 .idea/
 .pytest_cache/
 .ruff_cache/
 .venv/
+venv/
 .vscode/
 __pycache__/
 *.egg-info/
@@ -24,8 +28,6 @@ celery_worker.log
 backend/.coverage
 backend/htmlcov/
 backend/staticfiles/
-backend/storage/
-backend/outputs/
 
 # Node / React
 frontend/dist/
@@ -49,3 +51,7 @@ LOCAL_PASSWORDS.md
 
 storage/
 test-artifacts/
+logs/local/*.log
+logs/remote/*.log
+!logs/local/.gitkeep
+!logs/remote/.gitkeep

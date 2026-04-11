@@ -467,7 +467,7 @@ def sanitize_folder_name(name):
     return name
 
 def create_output_folder(book_title):
-    base_folder = Path(__file__).resolve().parents[3] / "outputs"
+    base_folder = Path(__file__).resolve().parents[4] / "storage" / "media" / "scraped-books"
     if not base_folder.exists():
         base_folder.mkdir(parents=True, exist_ok=True)
         print(f"Created base folder: {base_folder}")

@@ -3,11 +3,9 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-REPO_ROOT="$(cd -- "$(dirname -- "${SCRIPT_PATH}")/.." >/dev/null 2>&1 && pwd)"
+source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/.." >/dev/null 2>&1 && pwd)/tooling/shell/common.sh"
+REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
-
-# shellcheck source=../scripts/lib/common.sh
-source "${REPO_ROOT}/scripts/lib/common.sh"
 
 usage() {
   cat <<'EOF'
@@ -23,6 +21,7 @@ EOF
 
 service_name="${1:-}"
 target_scope="${2:-local}"
+log_file=""
 
 if [[ -z "${service_name}" || "${service_name}" == "-h" || "${service_name}" == "--help" ]]; then
   usage
@@ -31,13 +30,17 @@ fi
 
 case "${target_scope}" in
   local)
+    ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${REPO_ROOT}/local/env/.env"
+    log_file="${REPO_ROOT}/logs/local/${service_name}.log"
+    prepare_log_file "${log_file}"
+
     if [[ "${service_name}" == "frontend" ]]; then
-      compose -f "${REPO_ROOT}/docker-compose.yml" -f "${REPO_ROOT}/docker-compose.dev.yml" logs -f frontend
+      compose --env-file "${REPO_ROOT}/local/env/.env" -f "${REPO_ROOT}/local/compose/docker-compose.yml" logs -f frontend 2>&1 | tee -a "${log_file}"
       exit 0
     fi
 
     if [[ "${service_name}" == "backend" ]]; then
-      compose -f "${REPO_ROOT}/docker-compose.yml" -f "${REPO_ROOT}/docker-compose.dev.yml" logs -f backend worker beat
+      compose --env-file "${REPO_ROOT}/local/env/.env" -f "${REPO_ROOT}/local/compose/docker-compose.yml" logs -f backend worker beat 2>&1 | tee -a "${log_file}"
       exit 0
     fi
 
@@ -45,20 +48,22 @@ case "${target_scope}" in
     die "Unsupported local log target: ${service_name}"
     ;;
   remote)
-    load_env_if_present "${REPO_ROOT}/scripts/.env"
+    load_env_if_present "${REPO_ROOT}/deploy/env/.host.env"
     remote_user="${DEPLOY_USER_NAME:-ubuntu}"
     remote_host="${DEPLOY_IP:-}"
     remote_app_dir="${DEPLOY_REMOTE_APP_DIR:-/home/${remote_user}/library_app}"
-    [[ -n "${remote_host}" ]] || die "DEPLOY_IP must be set in scripts/.env for remote logs."
+    [[ -n "${remote_host}" ]] || die "DEPLOY_IP must be set in deploy/env/.host.env for remote logs."
     remote_target="${remote_user}@${remote_host}"
+    log_file="${REPO_ROOT}/logs/remote/${service_name}.log"
+    prepare_log_file "${log_file}"
 
     if [[ "${service_name}" == "frontend" ]]; then
-      ssh -t "${remote_target}" "sudo tail -n 200 -f /var/log/nginx/access.log /var/log/nginx/error.log"
+      ssh "${remote_target}" "sudo tail -n 200 -f /var/log/nginx/access.log /var/log/nginx/error.log" 2>&1 | tee -a "${log_file}"
       exit 0
     fi
 
     if [[ "${service_name}" == "backend" ]]; then
-      ssh -t "${remote_target}" "cd '${remote_app_dir}' && if docker compose version >/dev/null 2>&1; then docker compose logs -f backend worker beat; else docker-compose logs -f backend worker beat; fi"
+      ssh "${remote_target}" "cd '${remote_app_dir}' && if docker compose version >/dev/null 2>&1; then docker compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f backend worker beat; else docker-compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f backend worker beat; fi" 2>&1 | tee -a "${log_file}"
       exit 0
     fi
 

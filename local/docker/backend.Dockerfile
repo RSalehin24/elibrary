@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore
+
+WORKDIR /app
+
+COPY backend/requirements.txt /tmp/requirements.txt
+COPY backend/requirements-dev.txt /tmp/requirements-dev.txt
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r /tmp/requirements.txt \
+    && python -m pip install -r /tmp/requirements-dev.txt
+
+COPY backend /app
+COPY local/scripts/run_with_watch.py /opt/bangla-library/run_with_watch.py
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

@@ -3,11 +3,9 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-REPO_ROOT="$(cd -- "$(dirname -- "${SCRIPT_PATH}")/.." >/dev/null 2>&1 && pwd)"
+source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/../.." >/dev/null 2>&1 && pwd)/tooling/shell/common.sh"
+REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
-
-# shellcheck source=./lib/common.sh
-source "${REPO_ROOT}/scripts/lib/common.sh"
 
 repeat_count=1
 
@@ -20,7 +18,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<'EOF'
 Usage:
-  scripts/verify.sh [--repeat N]
+  local/scripts/verify.sh [--repeat N]
 
 Runs backend tests, frontend build, and browser tests.
 EOF
@@ -37,7 +35,7 @@ require_cmd curl
 
 pytest_bin="${REPO_ROOT}/.venv/bin/pytest"
 if [[ ! -x "${pytest_bin}" ]]; then
-  die "Missing ${pytest_bin}. Create the repo virtualenv before running scripts/verify.sh."
+  die "Missing ${pytest_bin}. Create the repo virtualenv before running local/scripts/verify.sh."
 fi
 
 wait_for_url() {

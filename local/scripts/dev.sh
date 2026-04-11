@@ -3,25 +3,24 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-REPO_ROOT="$(cd -- "$(dirname -- "${SCRIPT_PATH}")/.." >/dev/null 2>&1 && pwd)"
+source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/../.." >/dev/null 2>&1 && pwd)/tooling/shell/common.sh"
+REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
 
-# shellcheck source=./lib/common.sh
-source "${REPO_ROOT}/scripts/lib/common.sh"
-
-COMPOSE_ARGS=(-f "${REPO_ROOT}/docker-compose.yml" -f "${REPO_ROOT}/docker-compose.dev.yml")
+APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
+COMPOSE_ARGS=(--env-file "${APP_ENV_FILE}" -f "${REPO_ROOT}/local/compose/docker-compose.yml")
 DEFAULT_SERVICES=(postgres redis backend worker beat frontend)
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/dev.sh [up|down|restart|logs|ps] [service...]
+  local/scripts/dev.sh [up|down|restart|logs|ps] [service...]
 
 Examples:
-  scripts/dev.sh
-  scripts/dev.sh up
-  scripts/dev.sh logs backend
-  scripts/dev.sh down
+  local/scripts/dev.sh
+  local/scripts/dev.sh up
+  local/scripts/dev.sh logs backend
+  local/scripts/dev.sh down
 EOF
 }
 
@@ -30,8 +29,8 @@ if [[ $# -gt 0 ]]; then
   shift
 fi
 
-ensure_env_file "${REPO_ROOT}/.env.example" "${REPO_ROOT}/.env"
-load_env_if_present "${REPO_ROOT}/.env"
+ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
+load_env_if_present "${APP_ENV_FILE}"
 
 case "${command_name}" in
   up)
@@ -44,9 +43,9 @@ Frontend: http://127.0.0.1:${FRONTEND_PORT:-5173}
 Backend:  http://127.0.0.1:${BACKEND_PORT:-8000}
 
 Use:
-  scripts/dev.sh logs frontend
-  scripts/dev.sh logs backend
-  scripts/dev.sh down
+  local/scripts/dev.sh logs frontend
+  local/scripts/dev.sh logs backend
+  local/scripts/dev.sh down
 EOF
     ;;
   down)

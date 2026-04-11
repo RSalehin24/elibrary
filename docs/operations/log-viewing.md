@@ -1,6 +1,13 @@
 # Log Viewing
 
-Use [logs/show-logs.sh](../logs/show-logs.sh) for both local and deployed environments.
+Use [logs/show-logs.sh](../../logs/show-logs.sh) for both local and deployed environments.
+
+Captured log files are written to:
+
+- `logs/local/*.log`
+- `logs/remote/*.log`
+
+Those generated log files are gitignored, while `logs/local/.gitkeep` and `logs/remote/.gitkeep` keep the folders in the repository.
 
 ## Local Logs
 
@@ -43,7 +50,7 @@ Remote log behavior:
 
 ## Deploy Settings Used For Remote Logs
 
-Remote log streaming uses `scripts/.env`, especially:
+Remote log streaming uses `deploy/env/.host.env`, especially:
 
 - `DEPLOY_USER_NAME`
 - `DEPLOY_IP`

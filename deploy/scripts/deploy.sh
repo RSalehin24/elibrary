@@ -3,23 +3,26 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" >/dev/null 2>&1 && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+source "$(cd -- "$(dirname -- "${SCRIPT_PATH}")/../.." >/dev/null 2>&1 && pwd)/tooling/shell/common.sh"
+REPO_ROOT="$(repo_root_from "${SCRIPT_PATH}")"
 export REPO_ROOT
 
-# shellcheck source=./lib/common.sh
-source "${REPO_ROOT}/scripts/lib/common.sh"
+HOST_ENV_TEMPLATE="${REPO_ROOT}/deploy/env/host.env.example"
+HOST_ENV_FILE="${REPO_ROOT}/deploy/env/.host.env"
+APP_ENV_TEMPLATE="${REPO_ROOT}/deploy/env/app.env.example"
+REMOTE_APP_ENV_REL="deploy/env/.app.env"
+DEPLOY_COMPOSE_REL="deploy/compose/docker-compose.yml"
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/deploy.sh [--env-name production|test] [--env-file /path/to/file] [--sync-mode push|preserve|prompt]
+  deploy/scripts/deploy.sh [--env-name production|test] [--env-file /path/to/file] [--sync-mode push|preserve|prompt]
 
 Examples:
-  scripts/generate-env.sh production
-  scripts/generate-env.sh deploy
-  scripts/deploy.sh
-  scripts/deploy.sh --env-name test --sync-mode preserve
+  local/scripts/generate-env.sh production
+  local/scripts/generate-env.sh host
+  deploy/scripts/deploy.sh
+  deploy/scripts/deploy.sh --env-name test --sync-mode preserve
 EOF
 }
 
@@ -75,7 +78,7 @@ validate_local_database_env() {
   [[ -n "${database_url}" ]] || die "Action required: DATABASE_URL is missing in ${env_file}"
 
   database_host="$(extract_database_url_host "${database_url}")"
-  [[ "${database_host}" == "postgres" ]] || die "Action required: DATABASE_URL host must be postgres for docker-compose networking. Found: ${database_host:-<empty>}"
+  [[ "${database_host}" == "postgres" ]] || die "Action required: DATABASE_URL host must be postgres for docker networking. Found: ${database_host:-<empty>}"
 
   database_user="$(extract_database_url_user "${database_url}")"
   postgres_user="$(grep '^POSTGRES_USER=' "${env_file}" | tail -n 1 | cut -d '=' -f2- || true)"
@@ -92,6 +95,7 @@ sync_remote_repository() {
     APP_DIR="${REMOTE_APP_DIR}" \
     DOMAIN="${DOMAIN}" \
     BACKEND_PORT="${BACKEND_PORT}" \
+    FRONTEND_PORT="${FRONTEND_PORT}" \
     'bash -s' <<'EOF'
 set -euo pipefail
 
@@ -128,14 +132,16 @@ else
   git checkout -B "${BRANCH}" "origin/${BRANCH}"
 fi
 
-python3 scripts/env_tools.py scaffold .env.example .env
-set_default_env PUBLIC_BASE_URL "https://${DOMAIN}" .env
-set_default_env VITE_API_BASE_URL "/api" .env
-set_default_env BACKEND_PORT "${BACKEND_PORT}" .env
-set_default_env HOST_STATIC_DIR "./storage/staticfiles" .env
-set_default_env HOST_MEDIA_DIR "./storage/media" .env
+mkdir -p deploy/env logs/local logs/remote storage/staticfiles storage/media storage/media/scraped-books
+python3 tooling/env_tools.py scaffold deploy/env/app.env.example deploy/env/.app.env
+set_default_env PUBLIC_BASE_URL "https://${DOMAIN}" deploy/env/.app.env
+set_default_env PUBLIC_API_ORIGIN "https://${DOMAIN}" deploy/env/.app.env
+set_default_env FRONTEND_BASE_URL "https://${DOMAIN}" deploy/env/.app.env
+set_default_env VITE_API_BASE_URL "/api" deploy/env/.app.env
+set_default_env BACKEND_PORT "${BACKEND_PORT}" deploy/env/.app.env
+set_default_env FRONTEND_PORT "${FRONTEND_PORT}" deploy/env/.app.env
+set_default_env RUNTIME_STORAGE_DIR "/storage" deploy/env/.app.env
 
-mkdir -p storage/staticfiles storage/media
 printf 'Remote repository ready at %s\n' "${APP_DIR}"
 EOF
 }
@@ -146,10 +152,6 @@ sync_workspace_files() {
     cd "${REPO_ROOT}"
     COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata -czf - \
       --exclude='.git' \
-      --exclude='.env' \
-      --exclude='.env.production' \
-      --exclude='.env.test' \
-      --exclude='scripts/.env' \
       --exclude='.DS_Store' \
       --exclude='venv' \
       --exclude='.venv' \
@@ -158,14 +160,19 @@ sync_workspace_files() {
       --exclude='frontend/test-results' \
       --exclude='frontend/test-artifacts' \
       --exclude='storage' \
-      --exclude='backend/storage' \
       --exclude='backend/staticfiles' \
-      --exclude='backend/outputs' \
       --exclude='backend/celerybeat-schedule' \
       --exclude='backend/__pycache__' \
       --exclude='backend/apps/*/__pycache__' \
       --exclude='backend/tests/__pycache__' \
+      --exclude='logs/local/*.log' \
+      --exclude='logs/remote/*.log' \
       --exclude='test-artifacts' \
+      --exclude='local/env/.env' \
+      --exclude='deploy/env/.host.env' \
+      --exclude='deploy/env/.production.env' \
+      --exclude='deploy/env/.test.env' \
+      --exclude='deploy/env/.app.env' \
       --exclude='*.pyc' \
       .
   ) | ssh "${TARGET}" "tar --warning=no-unknown-keyword --no-same-owner --no-same-permissions -xzf - -C '${REMOTE_APP_ABS_DIR}'"
@@ -174,17 +181,17 @@ sync_workspace_files() {
 sync_remote_env_file() {
   local sync_mode="${1:?sync mode is required}"
 
-  print_info "Preparing remote environment file"
+  print_info "[4/8] Syncing application env to ${TARGET}"
   if [[ "${sync_mode}" == "preserve" ]]; then
-    print_info "Preserving remote .env values"
+    print_info "Preserving remote ${REMOTE_APP_ENV_REL} values"
     return 0
   fi
 
   [[ -f "${LOCAL_ENV_FILE}" ]] || die "Action required: local env file not found: ${LOCAL_ENV_FILE}"
 
-  scp "${LOCAL_ENV_FILE}" "${TARGET}:${REMOTE_APP_ABS_DIR}/.env.sync" >/dev/null
-  ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && python3 scripts/env_tools.py merge .env .env.sync .env.merged --non-empty-only && mv .env.merged .env && rm -f .env.sync"
-  print_info "Merged non-empty values from $(basename "${LOCAL_ENV_FILE}") into remote .env"
+  scp "${LOCAL_ENV_FILE}" "${TARGET}:${REMOTE_APP_ABS_DIR}/deploy/env/.env.sync" >/dev/null
+  ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && python3 tooling/env_tools.py merge ${REMOTE_APP_ENV_REL} deploy/env/.env.sync deploy/env/.app.env.merged --non-empty-only && mv deploy/env/.app.env.merged ${REMOTE_APP_ENV_REL} && rm -f deploy/env/.env.sync"
+  print_info "Merged non-empty values from $(basename "${LOCAL_ENV_FILE}") into ${REMOTE_APP_ENV_REL}"
 }
 
 ensure_remote_docker() {
@@ -195,21 +202,16 @@ ensure_remote_docker() {
   )"
 
   if [[ "${needs_install}" == "yes" ]]; then
-    print_info "[4/8] Installing or upgrading Docker on ${TARGET}"
-    ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && sudo bash scripts/install-docker.sh '${DEPLOY_DOCKER_VERSION}'"
+    print_info "[5/8] Installing or upgrading Docker on ${TARGET}"
+    ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && sudo bash deploy/scripts/install-docker.sh '${DEPLOY_DOCKER_VERSION}'"
   else
-    print_info "[4/8] Docker already satisfies deployment requirements"
+    print_info "[5/8] Docker already satisfies deployment requirements"
   fi
 }
 
-build_frontend_dist() {
-  print_info "[5/8] Building frontend bundle on ${TARGET}"
-  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && docker run --rm -v \"\$PWD/frontend:/app\" -w /app node:22-alpine sh -lc 'npm ci && npm run build'"
-}
-
 start_remote_stack() {
-  print_info "[6/8] Starting application services on ${TARGET}"
-  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && BACKEND_PORT='${BACKEND_PORT}' bash -s" <<'EOF'
+  print_info "[6/8] Starting dockerized frontend and backend on ${TARGET}"
+  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && BACKEND_PORT='${BACKEND_PORT}' FRONTEND_PORT='${FRONTEND_PORT}' bash -s" <<'EOF'
 set -euo pipefail
 
 if docker compose version >/dev/null 2>&1; then
@@ -221,10 +223,12 @@ else
   exit 1
 fi
 
-"${compose_cmd[@]}" down --remove-orphans || true
-"${compose_cmd[@]}" up -d --build --force-recreate
+compose_args=(--env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml)
 
-if ! "${compose_cmd[@]}" exec -T worker python - <<'PY'
+"${compose_cmd[@]}" "${compose_args[@]}" down --remove-orphans || true
+"${compose_cmd[@]}" "${compose_args[@]}" up -d --build --force-recreate
+
+if ! "${compose_cmd[@]}" "${compose_args[@]}" exec -T worker python - <<'PY'
 import socket
 
 socket.getaddrinfo('ebanglalibrary.com', 443)
@@ -232,31 +236,37 @@ print('ok')
 PY
 then
   echo "Worker container could not resolve ebanglalibrary.com" >&2
-  "${compose_cmd[@]}" logs --tail=60 worker
+  "${compose_cmd[@]}" "${compose_args[@]}" logs --tail=60 worker
   exit 1
 fi
 
-expected_port="127.0.0.1:${BACKEND_PORT}"
-published_port=""
-for _ in $(seq 1 15); do
-  published_port="$("${compose_cmd[@]}" port backend 8000 2>/dev/null || true)"
-  if [[ "${published_port}" == "${expected_port}" ]]; then
-    break
-  fi
-  sleep 2
-done
+check_published_port() {
+  local service="$1"
+  local container_port="$2"
+  local expected="127.0.0.1:$3"
+  local published=""
 
-if [[ "${published_port}" != "${expected_port}" ]]; then
-  echo "Backend port binding mismatch: expected ${expected_port}, got ${published_port:-<none>}" >&2
-  "${compose_cmd[@]}" ps
-  exit 1
-fi
+  for _ in $(seq 1 20); do
+    published="$("${compose_cmd[@]}" "${compose_args[@]}" port "${service}" "${container_port}" 2>/dev/null || true)"
+    if [[ "${published}" == "${expected}" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Port binding mismatch for ${service}: expected ${expected}, got ${published:-<none>}" >&2
+  "${compose_cmd[@]}" "${compose_args[@]}" ps
+  return 1
+}
+
+check_published_port backend 8000 "${BACKEND_PORT}"
+check_published_port frontend 80 "${FRONTEND_PORT}"
 EOF
 }
 
 configure_remote_nginx() {
   print_info "[7/8] Configuring host nginx and certbot on ${TARGET}"
-  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && sudo bash scripts/setup-host-nginx.sh '${DOMAIN}' '${CERTBOT_EMAIL}' '${REMOTE_APP_ABS_DIR}' '${BACKEND_PORT}' '${DEPLOY_NGINX_CONFIG_NAME}' '${DEPLOY_NGINX_CONF_DIR}' '${DEPLOY_NGINX_VERSION}'"
+  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && sudo bash deploy/scripts/setup-host-nginx.sh '${DOMAIN}' '${CERTBOT_EMAIL}' '${REMOTE_APP_ABS_DIR}' '${BACKEND_PORT}' '${FRONTEND_PORT}' '${DEPLOY_NGINX_CONFIG_NAME}' '${DEPLOY_NGINX_CONF_DIR}' '${DEPLOY_NGINX_VERSION}'"
 }
 
 verify_deployment() {
@@ -264,7 +274,7 @@ verify_deployment() {
 
   print_info "[8/8] Verifying nginx configuration and HTTPS reachability"
   ssh "${TARGET}" "sudo nginx -T 2>/dev/null | grep -Fq '${remote_nginx_config_path}'" || die "Expected nginx config was not loaded: ${remote_nginx_config_path}"
-  ssh "${TARGET}" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://${DOMAIN} >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://${DOMAIN}; else exit 127; fi" || die "HTTPS verification failed for https://${DOMAIN}"
+  ssh "${TARGET}" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://${DOMAIN}/ >/dev/null && curl -fsSI --max-time 20 https://${DOMAIN}/api/csrf/ >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://${DOMAIN}/ && wget -q --spider --timeout=20 https://${DOMAIN}/api/csrf/; else exit 127; fi" || die "HTTPS verification failed for https://${DOMAIN}"
   print_info "Deployment verification passed for https://${DOMAIN}"
 }
 
@@ -273,8 +283,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-ensure_env_file "${REPO_ROOT}/scripts/.env.example" "${REPO_ROOT}/scripts/.env"
-load_env_if_present "${REPO_ROOT}/scripts/.env"
+ensure_env_file "${HOST_ENV_TEMPLATE}" "${HOST_ENV_FILE}"
+load_env_if_present "${HOST_ENV_FILE}"
 
 ENV_NAME="${DEPLOY_ENV_NAME:-production}"
 LOCAL_ENV_FILE=""
@@ -302,12 +312,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "${LOCAL_ENV_FILE}" ]]; then
-  LOCAL_ENV_FILE="${REPO_ROOT}/.env.${ENV_NAME}"
+  LOCAL_ENV_FILE="${REPO_ROOT}/deploy/env/.${ENV_NAME}.env"
 fi
 
 local_env_created="no"
 if [[ ! -f "${LOCAL_ENV_FILE}" ]]; then
-  ensure_env_file "${REPO_ROOT}/.env.example" "${LOCAL_ENV_FILE}"
+  ensure_env_file "${APP_ENV_TEMPLATE}" "${LOCAL_ENV_FILE}"
   local_env_created="yes"
 fi
 
@@ -321,6 +331,7 @@ DEPLOY_NGINX_VERSION="${DEPLOY_NGINX_VERSION:-1.29.4}"
 DEPLOY_DOCKER_VERSION="${DEPLOY_DOCKER_VERSION:-}"
 DEPLOY_REMOTE_EDITOR="${DEPLOY_REMOTE_EDITOR:-${EDITOR:-nano}}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
+FRONTEND_PORT="${FRONTEND_PORT:-4173}"
 REPO_SSH="${REPO_SSH:-git@github.com:RSalehin24/ebook-scrapping.git}"
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main')"
 BRANCH="${DEPLOY_BRANCH_NAME:-${CURRENT_BRANCH}}"
@@ -340,9 +351,9 @@ require_cmd scp
 require_cmd git
 require_cmd python3
 
-[[ -n "${DEPLOY_IP}" ]] || die "DEPLOY_IP must be set in scripts/.env"
-[[ -n "${DEPLOY_DOMAIN}" ]] || die "DEPLOY_DOMAIN must be set in scripts/.env"
-[[ -n "${DEPLOY_CERTBOT_EMAIL}" ]] || die "DEPLOY_CERTBOT_EMAIL must be set in scripts/.env"
+[[ -n "${DEPLOY_IP}" ]] || die "DEPLOY_IP must be set in deploy/env/.host.env"
+[[ -n "${DEPLOY_DOMAIN}" ]] || die "DEPLOY_DOMAIN must be set in deploy/env/.host.env"
+[[ -n "${DEPLOY_CERTBOT_EMAIL}" ]] || die "DEPLOY_CERTBOT_EMAIL must be set in deploy/env/.host.env"
 
 if [[ "${local_env_created}" == "yes" ]]; then
   choice="$(timed_prompt "Prepared ${LOCAL_ENV_FILE}. Edit it now? [y/N] (auto-continue in 5s): " 5 "n")"
@@ -381,13 +392,12 @@ esac
 
 sync_remote_env_file "${SYNC_MODE}"
 
-remote_env_choice="$(timed_prompt "Edit remote .env now? [y/N] (auto-continue in 5s): " 5 "n")"
+remote_env_choice="$(timed_prompt "Edit remote deploy/env/.app.env now? [y/N] (auto-continue in 5s): " 5 "n")"
 if [[ "${remote_env_choice}" =~ ^[Yy]$ ]]; then
-  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && ${DEPLOY_REMOTE_EDITOR} .env"
+  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && ${DEPLOY_REMOTE_EDITOR} ${REMOTE_APP_ENV_REL}"
 fi
 
 ensure_remote_docker
-build_frontend_dist
 start_remote_stack
 configure_remote_nginx
 verify_deployment

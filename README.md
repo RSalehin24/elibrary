@@ -6,28 +6,36 @@ Monorepo for the Bangla ebook platform.
 
 - Backend: Django + Celery in [backend](backend)
 - Frontend: React + Vite in [frontend](frontend)
-- Infrastructure: Docker Compose for local/runtime services, host Nginx + Certbot for remote edge delivery
+- Infrastructure: Docker Compose for local and deployed services, host Nginx + Certbot for the remote edge
+
+## Repository Layout
+
+- `local/`: local Compose, Dockerfiles, env templates, and developer scripts
+- `deploy/`: deployment Compose, Dockerfiles, env templates, and remote automation scripts
+- `logs/`: local and remote log streaming plus captured log files
+- `storage/`: the only runtime storage location for static files, uploads, generated books, and scraped exports
+- `tooling/`: shared shell and env helpers used by both local and deploy workflows
 
 ## Primary Workflows
 
-- Local development: [docs/local-development.md](docs/local-development.md)
-- Deployment automation: [docs/deployment.md](docs/deployment.md)
-- Log viewing: [docs/log-viewing.md](docs/log-viewing.md)
+- Local development: [docs/operations/local-development.md](docs/operations/local-development.md)
+- Deployment automation: [docs/operations/deployment.md](docs/operations/deployment.md)
+- Log viewing: [docs/operations/log-viewing.md](docs/operations/log-viewing.md)
 
-## Core Scripts
+## Key Commands
 
-- `scripts/generate-env.sh`: scaffold local, production, test, backend, frontend, or deploy env files
-- `scripts/dev.sh`: start or stop the local watch-enabled development stack
-- `scripts/verify.sh`: run backend tests, frontend build, and Playwright suite, optionally repeated
-- `scripts/deploy.sh`: automated remote deployment with env sync, Docker checks, and nginx setup
-- `logs/show-logs.sh`: local or remote frontend/backend log streaming
+- `local/scripts/generate-env.sh all`
+- `local/scripts/dev.sh up`
+- `local/scripts/verify.sh --repeat 3`
+- `deploy/scripts/deploy.sh`
+- `logs/show-logs.sh backend remote`
 
-## Architecture Notes
+## Runtime Notes
 
-- Production/runtime compose stays focused on backend services: `backend`, `worker`, `beat`, `postgres`, `redis`
-- Local development adds a Vite frontend plus auto-reloading backend/Celery via [docker-compose.dev.yml](docker-compose.dev.yml)
-- Host Nginx serves `frontend/dist`, proxies `/api/` and `/admin/`, and exposes static/media from `storage/`
+- Local development runs `postgres`, `redis`, `backend`, `worker`, `beat`, and `frontend` from [local/compose/docker-compose.yml](local/compose/docker-compose.yml).
+- Deployment runs the same core services plus the Dockerized frontend from [deploy/compose/docker-compose.yml](deploy/compose/docker-compose.yml).
+- Books are stored only under `storage/`, with generated titles in `storage/media/generated/` and scraped export folders in `storage/media/scraped-books/`.
 
 ## Supporting Docs
 
-- Source metadata notes: [docs/ebanglalibrary-url-metadata.md](docs/ebanglalibrary-url-metadata.md)
+- Source metadata notes: [docs/ingestion/source-site-metadata.md](docs/ingestion/source-site-metadata.md)

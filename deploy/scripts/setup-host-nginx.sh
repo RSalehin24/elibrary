@@ -11,14 +11,15 @@ DOMAIN="${1:-}"
 CERTBOT_EMAIL="${2:-}"
 APP_DIR="${3:-$HOME/library_app}"
 BACKEND_PORT="${4:-8000}"
-CONFIG_NAME="${5:-$DOMAIN}"
-NGINX_CONF_DIR="${6:-/etc/nginx/conf.d}"
-REQUIRED_NGINX_VERSION="${7:-1.29.4}"
+FRONTEND_PORT="${5:-4173}"
+CONFIG_NAME="${6:-$DOMAIN}"
+NGINX_CONF_DIR="${7:-/etc/nginx/conf.d}"
+REQUIRED_NGINX_VERSION="${8:-1.29.4}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  sudo bash scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
+  sudo bash deploy/scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [frontend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
 EOF
 }
 
@@ -39,7 +40,7 @@ ensure_nginx() {
 
   if [[ -z "${current_version}" || ( -n "${REQUIRED_NGINX_VERSION}" && "${current_version}" != "${REQUIRED_NGINX_VERSION}" ) ]]; then
     print_step "Installing nginx ${REQUIRED_NGINX_VERSION:-latest}"
-    bash scripts/install-nginx.sh "${REQUIRED_NGINX_VERSION}"
+    bash deploy/scripts/install-nginx.sh "${REQUIRED_NGINX_VERSION}"
   fi
 }
 
@@ -64,10 +65,6 @@ ensure_permissions() {
   chmod o+x "${app_owner_parent}" "${app_owner_home}"
   chmod o+rx "${APP_DIR}"
 
-  if [[ -d "${APP_DIR}/frontend/dist" ]]; then
-    chmod -R o+rX "${APP_DIR}/frontend/dist"
-  fi
-
   chmod -R o+rX "${APP_DIR}/storage/staticfiles" "${APP_DIR}/storage/media"
 }
 
@@ -76,9 +73,6 @@ write_http_config() {
 server {
   listen 80;
   server_name ${DOMAIN};
-
-  root ${APP_DIR}/frontend/dist;
-  index index.html;
 
   client_max_body_size 64m;
 
@@ -119,7 +113,12 @@ server {
   }
 
   location / {
-    try_files \$uri \$uri/ /index.html;
+    proxy_pass http://127.0.0.1:${FRONTEND_PORT};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
   }
 }
 EOF
@@ -151,9 +150,6 @@ server {
   ssl_session_cache shared:SSL:10m;
   ssl_prefer_server_ciphers off;
 
-  root ${APP_DIR}/frontend/dist;
-  index index.html;
-
   client_max_body_size 64m;
 
   location /.well-known/acme-challenge/ {
@@ -193,7 +189,12 @@ server {
   }
 
   location / {
-    try_files \$uri \$uri/ /index.html;
+    proxy_pass http://127.0.0.1:${FRONTEND_PORT};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
   }
 }
 EOF

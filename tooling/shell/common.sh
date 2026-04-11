@@ -9,10 +9,18 @@ set -euo pipefail
 
 repo_root_from() {
   local source_path="${1:?source path is required}"
-  (
-    cd -- "$(dirname -- "${source_path}")/../.." >/dev/null 2>&1
-    pwd
-  )
+  local search_dir
+  search_dir="$(cd -- "$(dirname -- "${source_path}")" >/dev/null 2>&1 && pwd)"
+
+  while [[ "${search_dir}" != "/" ]]; do
+    if [[ -d "${search_dir}/.git" || -f "${search_dir}/AGENTS.md" ]]; then
+      printf '%s\n' "${search_dir}"
+      return 0
+    fi
+    search_dir="$(dirname -- "${search_dir}")"
+  done
+
+  return 1
 }
 
 print_info() {
@@ -52,7 +60,8 @@ ensure_env_file() {
   local target_file="${2:?target file is required}"
 
   require_cmd python3
-  python3 "${REPO_ROOT}/scripts/env_tools.py" scaffold "${template_file}" "${target_file}"
+  mkdir -p "$(dirname -- "${target_file}")"
+  python3 "${REPO_ROOT}/tooling/env_tools.py" scaffold "${template_file}" "${target_file}"
 }
 
 resolve_compose_cmd() {
@@ -77,6 +86,12 @@ compose() {
   else
     docker-compose "$@"
   fi
+}
+
+prepare_log_file() {
+  local log_file="${1:?log file is required}"
+  mkdir -p "$(dirname -- "${log_file}")"
+  touch "${log_file}"
 }
 
 timed_prompt() {
