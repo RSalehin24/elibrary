@@ -4,9 +4,6 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
-import sys
-
-from watchfiles import PythonFilter, run_process
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +44,14 @@ def main() -> int:
 
   if not command:
     parser.error("A command is required after --.")
+
+  try:
+    from watchfiles import PythonFilter, run_process
+  except ModuleNotFoundError:
+    parser.error(
+      "Missing dependency 'watchfiles'. Install backend development dependencies "
+      "before using this helper.",
+    )
 
   watch_dirs = args.watch_dirs or [args.cwd]
 

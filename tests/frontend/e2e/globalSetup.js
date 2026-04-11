@@ -81,7 +81,7 @@ export default async function globalSetup() {
   await Promise.all([waitForUrl(frontend), waitForUrl(backendSessionUrl)]);
 
   if (process.env.PLAYWRIGHT_SKIP_E2E_SEED !== "1") {
-    execFileSync(path.join(repoRoot, "local/scripts/seed-e2e-data.sh"), {
+    execFileSync(path.join(repoRoot, "tests/scripts/seed-e2e-data.sh"), {
       cwd: repoRoot,
       stdio: "inherit",
     });

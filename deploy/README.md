@@ -1,0 +1,33 @@
+# Deployment Assets
+
+This folder contains the production deployment definition, deploy-time env templates, and the remote automation scripts.
+
+## Folder Layout
+
+- `deploy/compose/`: production Docker Compose definition
+- `deploy/docker/`: production backend/frontend container images and Nginx container config
+- `deploy/env/`: deploy env templates plus generated local deploy env files
+- `deploy/scripts/`: deploy orchestration and host bootstrap scripts
+
+## Primary Entry Points
+
+- Main deploy script: `deploy/scripts/deploy.sh`
+- Deploy env scaffolding: `deploy/scripts/generate-env.sh`
+- Host Docker install: `deploy/scripts/install-docker.sh`
+- Host Nginx install: `deploy/scripts/install-nginx.sh`
+- Host Nginx/Certbot setup: `deploy/scripts/setup-host-nginx.sh`
+
+All repo-facing helpers in `deploy/scripts/` support `-h` or `--help`.
+
+## Common Workflow
+
+```bash
+deploy/scripts/generate-env.sh production
+deploy/scripts/generate-env.sh host
+deploy/scripts/deploy.sh
+```
+
+## Related Docs
+
+- Full deployment guide: [docs/operations/deployment.md](../docs/operations/deployment.md)
+- Remote log viewing: [docs/operations/log-viewing.md](../docs/operations/log-viewing.md)

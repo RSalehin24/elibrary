@@ -10,6 +10,8 @@ Captured log files are written to:
 - `logs/local/celery/beat.log`
 - `logs/remote/frontend/frontend.log`
 - `logs/remote/backend/backend.log`
+- `logs/remote/celery/worker.log`
+- `logs/remote/celery/beat.log`
 
 Those generated log files are gitignored, while the `.gitkeep` files inside `logs/local/**` and `logs/remote/**` keep the folder structure in the repository.
 
@@ -27,7 +29,14 @@ Backend service logs:
 logs/show-logs.sh backend
 ```
 
-For the backend group, the script tails the files inside `logs/local/`:
+Individual Celery logs:
+
+```bash
+logs/show-logs.sh worker
+logs/show-logs.sh beat
+```
+
+For the backend group, the script tails these files inside `logs/local/`:
 
 - `backend`
 - `worker`
@@ -41,6 +50,18 @@ Remote backend logs:
 logs/show-logs.sh backend remote
 ```
 
+Remote worker logs:
+
+```bash
+logs/show-logs.sh worker remote
+```
+
+Remote beat logs:
+
+```bash
+logs/show-logs.sh beat remote
+```
+
 Remote frontend logs:
 
 ```bash
@@ -49,8 +70,12 @@ logs/show-logs.sh frontend remote
 
 Remote log behavior:
 
-- `backend remote` streams remote Docker Compose logs and writes them to `logs/remote/backend/backend.log`
+- `backend remote` streams the remote `backend`, `worker`, and `beat` Docker Compose logs together and writes them to `logs/remote/backend/backend.log`
+- `worker remote` streams only the remote Celery worker logs and writes them to `logs/remote/celery/worker.log`
+- `beat remote` streams only the remote Celery beat logs and writes them to `logs/remote/celery/beat.log`
 - `frontend remote` streams remote Nginx access/error logs and writes them to `logs/remote/frontend/frontend.log`
+
+Every repo-facing script also supports `-h` or `--help` to print usage without running the underlying action.
 
 ## Deploy Settings Used For Remote Logs
 

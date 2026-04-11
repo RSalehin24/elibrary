@@ -29,14 +29,16 @@ Monorepo for the Bangla ebook platform.
 
 - `local/scripts/generate-env.sh all`
 - `local/scripts/dev.sh up`
-- `local/scripts/seed-e2e-data.sh`
-- `local/scripts/test-all.sh`
-- `local/scripts/test-backend.sh`
-- `local/scripts/test-frontend-unit.sh`
-- `local/scripts/test-e2e.sh`
-- `local/scripts/verify.sh --repeat 3`
+- `tests/scripts/seed-e2e-data.sh`
+- `tests/scripts/test-all.sh`
+- `tests/scripts/test-backend.sh`
+- `tests/scripts/test-frontend-unit.sh`
+- `tests/scripts/test-e2e.sh`
+- `tests/scripts/verify.sh --repeat 3`
 - `deploy/scripts/deploy.sh`
 - `logs/show-logs.sh backend remote`
+- `logs/show-logs.sh worker remote`
+- `logs/show-logs.sh beat remote`
 
 ## Runtime Notes
 
@@ -45,8 +47,9 @@ Monorepo for the Bangla ebook platform.
 - Books are stored only under `app/backend/storage/`, with generated titles in `app/backend/storage/media/generated/` and scraped export folders in `app/backend/storage/media/scraped-books/`.
 - Automated tests live under [tests/backend](tests/backend) and [tests/frontend](tests/frontend).
 - Backend pytest config lives at [tests/pytest.ini](tests/pytest.ini).
-- `local/scripts/verify.sh` and `local/scripts/test-all.sh` use the live Docker stack, reseed deterministic E2E records, run backend tests in the backend container, run frontend unit tests, build the frontend, and execute Playwright against the live app.
+- `tests/scripts/verify.sh` and `tests/scripts/test-all.sh` use the live Docker stack, reseed deterministic E2E records, run backend tests in the backend container, run frontend unit tests, build the frontend, and execute Playwright against the live app.
 - `tests/TEST_MATRIX.md` maps the current backend coverage, frontend unit coverage, and the 19 live browser stories that run against the local Dockerized application.
+- Repo-facing scripts under `local/scripts/`, `deploy/scripts/`, `tests/scripts/`, and `logs/` support `-h` or `--help` for usage details without starting work.
 
 ## Supporting Docs
 

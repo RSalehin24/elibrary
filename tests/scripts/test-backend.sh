@@ -9,6 +9,31 @@ export REPO_ROOT
 
 require_cmd curl
 
+usage() {
+  cat <<'EOF'
+Usage:
+  tests/scripts/test-backend.sh [pytest path or args...]
+  tests/scripts/test-backend.sh -- [pytest args starting with -]
+
+Examples:
+  tests/scripts/test-backend.sh
+  tests/scripts/test-backend.sh tests/backend/test_common.py
+  tests/scripts/test-backend.sh -- -k access
+
+Starts the local Docker stack if needed, waits for the backend, and runs the
+backend pytest suite inside the backend container.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
 COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
 COMPOSE_ARGS=(--env-file "${APP_ENV_FILE}" -f "${COMPOSE_FILE}")

@@ -2,6 +2,25 @@
 
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage:
+  sudo bash deploy/scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [frontend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
+
+Examples:
+  sudo bash deploy/scripts/setup-host-nginx.sh example.com ops@example.com
+  sudo bash deploy/scripts/setup-host-nginx.sh example.com ops@example.com /home/ubuntu/library_app 8000 4173
+
+Installs or upgrades Nginx and Certbot as needed, writes the host Nginx config,
+requests the certificate if missing, and enables automatic renew reload hooks.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root (use sudo)." >&2
   exit 1
@@ -15,13 +34,6 @@ FRONTEND_PORT="${5:-4173}"
 CONFIG_NAME="${6:-$DOMAIN}"
 NGINX_CONF_DIR="${7:-/etc/nginx/conf.d}"
 REQUIRED_NGINX_VERSION="${8:-1.29.4}"
-
-usage() {
-  cat <<'EOF'
-Usage:
-  sudo bash deploy/scripts/setup-host-nginx.sh <domain> <certbot_email> [app_dir] [backend_port] [frontend_port] [config_name] [nginx_conf_dir] [required_nginx_version]
-EOF
-}
 
 if [[ -z "${DOMAIN}" || -z "${CERTBOT_EMAIL}" ]]; then
   usage

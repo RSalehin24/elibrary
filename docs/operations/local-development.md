@@ -12,8 +12,9 @@
 - `local/docker/`: local Dockerfiles for backend and frontend
 - `local/env/`: local env template and generated local env file
 - `local/runtime/`: runtime files created by local services, such as the Celery beat schedule
-- `local/scripts/`: local run, env generation, seeding, verification, and watch helpers
+- `local/scripts/`: local stack, env generation, and watch helpers
 - `tests/`: root-level backend and frontend automated tests
+- `tests/scripts/`: test runners and deterministic E2E data helpers
 
 ## Environment Setup
 
@@ -53,34 +54,36 @@ Books, uploads, and static assets are stored only under `app/backend/storage/`.
 local/scripts/dev.sh ps
 local/scripts/dev.sh logs frontend
 local/scripts/dev.sh logs backend
-local/scripts/seed-e2e-data.sh
-local/scripts/test-all.sh
-local/scripts/test-backend.sh
-local/scripts/test-frontend-unit.sh
-local/scripts/test-e2e.sh
+tests/scripts/seed-e2e-data.sh
+tests/scripts/test-all.sh
+tests/scripts/test-backend.sh
+tests/scripts/test-frontend-unit.sh
+tests/scripts/test-e2e.sh
 local/scripts/dev.sh restart backend
 local/scripts/dev.sh down
 ```
+
+Each repo-facing helper in `local/scripts/` and `tests/scripts/` supports `-h` or `--help` for usage details without starting the stack or a test run.
 
 ## Verification
 
 Run the full verification pass against the real Dockerized application:
 
 ```bash
-local/scripts/verify.sh
+tests/scripts/verify.sh
 ```
 
 Repeat it multiple times when you want extra confidence:
 
 ```bash
-local/scripts/verify.sh --repeat 3
+tests/scripts/verify.sh --repeat 3
 ```
 
-`local/scripts/verify.sh`:
+`tests/scripts/verify.sh`:
 
 - starts or refreshes the live local stack through `local/scripts/dev.sh up`
 - waits for the frontend and backend to become healthy
-- reseeds deterministic browser data through `local/scripts/seed-e2e-data.sh`
+- reseeds deterministic browser data through `tests/scripts/seed-e2e-data.sh`
 - runs backend `pytest` inside the backend container using `tests/pytest.ini`
 - runs frontend unit tests from `tests/frontend/unit/`
 - runs the frontend production build inside the frontend container
@@ -93,7 +96,7 @@ The Playwright config and live browser stories live under:
 
 The separate test entrypoints are:
 
-- `local/scripts/test-backend.sh`
-- `local/scripts/test-frontend-unit.sh`
+- `tests/scripts/test-backend.sh`
+- `tests/scripts/test-frontend-unit.sh`
 - `cd app/frontend && npm run build`
-- `local/scripts/test-e2e.sh`
+- `tests/scripts/test-e2e.sh`

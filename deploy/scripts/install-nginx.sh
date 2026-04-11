@@ -2,6 +2,25 @@
 
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage:
+  sudo bash deploy/scripts/install-nginx.sh [required_version]
+
+Examples:
+  sudo bash deploy/scripts/install-nginx.sh
+  sudo bash deploy/scripts/install-nginx.sh 1.29.4
+
+Installs or upgrades Nginx from nginx.org packages on an Ubuntu-style host. When
+a version is provided, the script resolves the matching apt package version.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root (use sudo)." >&2
   exit 1

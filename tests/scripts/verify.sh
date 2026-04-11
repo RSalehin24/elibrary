@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<'EOF'
 Usage:
-  local/scripts/verify.sh [--repeat N]
+  tests/scripts/verify.sh [--repeat N]
 
 Runs the real Dockerized stack, seeds deterministic browser data, executes
 backend tests inside the backend container, builds the frontend inside the
@@ -102,7 +102,7 @@ for run_index in $(seq 1 "${repeat_count}"); do
   wait_for_url "${BACKEND_SESSION_URL}" 120 || die "Backend did not become ready at ${BACKEND_SESSION_URL}"
 
   print_info "Verification run ${run_index}/${repeat_count}: seeding live browser data"
-  "${REPO_ROOT}/local/scripts/seed-e2e-data.sh"
+  "${REPO_ROOT}/tests/scripts/seed-e2e-data.sh"
 
   print_info "Verification run ${run_index}/${repeat_count}: backend tests"
   run_backend_tests

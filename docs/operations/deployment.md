@@ -29,10 +29,12 @@ It performs these steps:
 Generate or extend the needed env files:
 
 ```bash
-local/scripts/generate-env.sh production
-local/scripts/generate-env.sh test
-local/scripts/generate-env.sh host
+deploy/scripts/generate-env.sh production
+deploy/scripts/generate-env.sh test
+deploy/scripts/generate-env.sh host
 ```
+
+Every repo-facing helper in `deploy/scripts/` supports `-h` or `--help` for usage details without starting a deployment or host change.
 
 Files involved:
 

@@ -10,6 +10,31 @@ export REPO_ROOT
 require_cmd curl
 require_cmd npm
 
+usage() {
+  cat <<'EOF'
+Usage:
+  tests/scripts/test-e2e.sh [Playwright args...]
+  tests/scripts/test-e2e.sh -- [Playwright args starting with -]
+
+Examples:
+  tests/scripts/test-e2e.sh
+  tests/scripts/test-e2e.sh processing-pages.spec.js
+  tests/scripts/test-e2e.sh -- --workers=1
+
+Starts the local Docker stack if needed, reseeds deterministic browser data,
+and runs the live Playwright suite against the local application.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"
@@ -44,7 +69,7 @@ wait_for_url "${FRONTEND_URL}" 120 || die "Frontend did not become ready at ${FR
 wait_for_url "${BACKEND_SESSION_URL}" 120 || die "Backend did not become ready at ${BACKEND_SESSION_URL}"
 
 print_info "Seeding deterministic browser data"
-"${REPO_ROOT}/local/scripts/seed-e2e-data.sh"
+"${REPO_ROOT}/tests/scripts/seed-e2e-data.sh"
 
 print_info "Running Playwright browser suite"
 (

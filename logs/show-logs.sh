@@ -10,12 +10,14 @@ export REPO_ROOT
 usage() {
   cat <<'EOF'
 Usage:
-  logs/show-logs.sh <frontend|backend> [local|remote]
+  logs/show-logs.sh <frontend|backend|worker|beat> [local|remote]
 
 Examples:
   logs/show-logs.sh frontend
   logs/show-logs.sh backend local
   logs/show-logs.sh backend remote
+  logs/show-logs.sh worker remote
+  logs/show-logs.sh beat remote
 EOF
 }
 
@@ -28,29 +30,57 @@ if [[ -z "${service_name}" || "${service_name}" == "-h" || "${service_name}" == 
   exit 0
 fi
 
+tail_local_logs() {
+  local files=("$@")
+  local file_path
+
+  for file_path in "${files[@]}"; do
+    prepare_log_file "${file_path}"
+  done
+
+  tail -n 200 -F "${files[@]}"
+}
+
+stream_remote_compose_logs() {
+  local output_file="${1:?output file is required}"
+  shift
+
+  local compose_services=("$@")
+  local compose_services_arg
+  printf -v compose_services_arg '%q ' "${compose_services[@]}"
+  prepare_log_file "${output_file}"
+
+  ssh "${remote_target}" "cd '${remote_app_dir}' && if docker compose version >/dev/null 2>&1; then docker compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f ${compose_services_arg}; else docker-compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f ${compose_services_arg}; fi" 2>&1 | tee -a "${output_file}"
+}
+
 case "${target_scope}" in
   local)
     ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${REPO_ROOT}/local/env/.env"
     if [[ "${service_name}" == "frontend" ]]; then
-      log_file="${REPO_ROOT}/logs/local/frontend/frontend.log"
-      prepare_log_file "${log_file}"
-      tail -n 200 -F "${log_file}"
+      tail_local_logs "${REPO_ROOT}/logs/local/frontend/frontend.log"
       exit 0
     fi
 
     if [[ "${service_name}" == "backend" ]]; then
-      prepare_log_file "${REPO_ROOT}/logs/local/backend/backend.log"
-      prepare_log_file "${REPO_ROOT}/logs/local/celery/worker.log"
-      prepare_log_file "${REPO_ROOT}/logs/local/celery/beat.log"
-      tail -n 200 -F \
+      tail_local_logs \
         "${REPO_ROOT}/logs/local/backend/backend.log" \
         "${REPO_ROOT}/logs/local/celery/worker.log" \
         "${REPO_ROOT}/logs/local/celery/beat.log"
       exit 0
     fi
 
+    if [[ "${service_name}" == "worker" ]]; then
+      tail_local_logs "${REPO_ROOT}/logs/local/celery/worker.log"
+      exit 0
+    fi
+
+    if [[ "${service_name}" == "beat" ]]; then
+      tail_local_logs "${REPO_ROOT}/logs/local/celery/beat.log"
+      exit 0
+    fi
+
     usage
-    die "Unsupported local log target: ${service_name}"
+    die "Unsupported local log target: ${service_name}. Choose frontend, backend, worker, or beat."
     ;;
   remote)
     load_env_if_present "${REPO_ROOT}/deploy/env/.host.env"
@@ -68,12 +98,22 @@ case "${target_scope}" in
     fi
 
     if [[ "${service_name}" == "backend" ]]; then
-      ssh "${remote_target}" "cd '${remote_app_dir}' && if docker compose version >/dev/null 2>&1; then docker compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f backend worker beat; else docker-compose --env-file deploy/env/.app.env -f deploy/compose/docker-compose.yml logs -f backend worker beat; fi" 2>&1 | tee -a "${log_file}"
+      stream_remote_compose_logs "${log_file}" backend worker beat
+      exit 0
+    fi
+
+    if [[ "${service_name}" == "worker" ]]; then
+      stream_remote_compose_logs "${REPO_ROOT}/logs/remote/celery/worker.log" worker
+      exit 0
+    fi
+
+    if [[ "${service_name}" == "beat" ]]; then
+      stream_remote_compose_logs "${REPO_ROOT}/logs/remote/celery/beat.log" beat
       exit 0
     fi
 
     usage
-    die "Unsupported remote log target: ${service_name}"
+    die "Unsupported remote log target: ${service_name}. Choose frontend, backend, worker, or beat."
     ;;
   *)
     usage

@@ -44,6 +44,6 @@
 ## Runtime Data Strategy
 
 - Live browser tests use the real local Docker stack started by `local/scripts/dev.sh up`.
-- Deterministic browser data is reset by `local/scripts/seed-e2e-data.sh`.
+- Deterministic browser data is reset by `tests/scripts/seed-e2e-data.sh`.
 - Seeded records are intentionally prefixed with `E2E ` or use the `@e2e.local` domain so they are easy to identify and clean between runs.
-- The full repo verifier is `local/scripts/verify.sh` or `local/scripts/test-all.sh`, which runs backend pytest in Docker, frontend unit tests, the frontend production build, and the live Playwright suite against the local stack.
+- The full repo verifier is `tests/scripts/verify.sh` or `tests/scripts/test-all.sh`, which runs backend pytest in Docker, frontend unit tests, the frontend production build, and the live Playwright suite against the local stack.

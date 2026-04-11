@@ -19,8 +19,8 @@ Usage:
   deploy/scripts/deploy.sh [--env-name production|test] [--env-file /path/to/file] [--sync-mode push|preserve|prompt]
 
 Examples:
-  local/scripts/generate-env.sh production
-  local/scripts/generate-env.sh host
+  deploy/scripts/generate-env.sh production
+  deploy/scripts/generate-env.sh host
   deploy/scripts/deploy.sh
   deploy/scripts/deploy.sh --env-name test --sync-mode preserve
 EOF
