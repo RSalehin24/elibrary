@@ -17,7 +17,7 @@ Monorepo for the Bangla ebook platform.
 - `logs/`: local and remote log streaming plus captured log files
 - `app/backend/storage/`: the runtime storage location for static files, uploads, generated books, and scraped exports
 - `automation/`: shared shell and env helpers used by local, deploy, and log automation
-- `tests/TEST_MATRIX.md`: feature-to-test coverage map for backend and live browser suites
+- `tests/README.md`: test suite overview, coverage map, and script guide
 
 ## Primary Workflows
 
@@ -48,7 +48,7 @@ Monorepo for the Bangla ebook platform.
 - Automated tests live under [tests/backend](tests/backend) and [tests/frontend](tests/frontend).
 - Backend pytest config lives at [tests/pytest.ini](tests/pytest.ini).
 - `tests/scripts/verify.sh` and `tests/scripts/test-all.sh` use the live Docker stack, reseed deterministic E2E records, run backend tests in the backend container, run frontend unit tests, build the frontend, and execute Playwright against the live app.
-- `tests/TEST_MATRIX.md` maps the current backend coverage, frontend unit coverage, and the 19 live browser stories that run against the local Dockerized application.
+- [tests/README.md](tests/README.md) maps the current backend coverage, frontend unit coverage, and the 19 live browser stories that run against the local Dockerized application.
 - Repo-facing scripts under `local/scripts/`, `deploy/scripts/`, `tests/scripts/`, and `logs/` support `-h` or `--help` for usage details without starting work.
 
 ## Supporting Docs
