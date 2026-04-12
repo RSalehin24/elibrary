@@ -1,8 +1,5 @@
 export function cutoffForPeriod(period) {
   const now = new Date();
-  if (period === "day") {
-    return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  }
   if (period === "week") {
     return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   }
@@ -53,9 +50,5 @@ export function getCatalogEntryActivityAt(entry) {
 }
 
 export function getRequeueReasonText(job) {
-  return (
-    job.requeue_reason ||
-    job.last_error ||
-    "No failure details were recorded for this requeue."
-  );
+  return job.last_error || "No failure details were recorded.";
 }

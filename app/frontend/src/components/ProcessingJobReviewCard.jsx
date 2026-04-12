@@ -1,22 +1,7 @@
 import EmptyState from "./EmptyState";
-import LoadingSpinner from "./LoadingSpinner";
+import ProcessingCardSkeleton from "./ProcessingCardSkeleton";
 import StatusPill from "./StatusPill";
 import { formatBookDateTime } from "../utils/bookPresentation";
-
-function renderProcessingCardLoader(label) {
-  const screenReaderLabel = label || "Loading";
-  return (
-    <div
-      className="processing-inline-loader"
-      role="status"
-      aria-live="polite"
-      aria-label={screenReaderLabel}
-    >
-      <LoadingSpinner size={16} />
-      <span>Loading...</span>
-    </div>
-  );
-}
 
 export default function ProcessingJobReviewCard({
   visible,
@@ -27,6 +12,7 @@ export default function ProcessingJobReviewCard({
   loadingLabel = "",
   headerAside,
   toolbar,
+  actions,
   jobs,
   selectedJobIdSet,
   allSelected,
@@ -34,21 +20,25 @@ export default function ProcessingJobReviewCard({
   onToggleAll,
   onToggleJob,
   selectedSubmissionIds,
-  submissionIds,
   actionKey,
   bulkActionKey,
   creationActionsDisabled,
   onCreate,
   selectedActionLabel,
+  showCreateActions = true,
+  createSelectedLabel = "Create selected",
   activeJobId,
   onActiveJobChange,
   showStatusColumn = false,
+  showDetailPanel = true,
   layoutClassName = "processing-requeue-layout",
   tableWrapClassName = "processing-requeue-table-wrap",
   detailTitle,
   detailRegionAriaLabel,
   emptySelectionMessage,
   renderDetailBody,
+  errorColumnLabel = "",
+  renderErrorCell = null,
   getRequestPrimaryText,
   jobTypeLabel,
   getJobActivityAt,
@@ -60,12 +50,15 @@ export default function ProcessingJobReviewCard({
     return null;
   }
 
-  const activeJob =
-    jobs.find((job) => job.id === activeJobId) || jobs[0] || null;
+  const activeJob = showDetailPanel
+    ? jobs.find((job) => job.id === activeJobId) || jobs[0] || null
+    : null;
   const shellContent = loading ? (
-    renderProcessingCardLoader(loadingLabel || `Loading ${title.toLowerCase()}`)
+    <ProcessingCardSkeleton
+      label={loadingLabel || `Loading ${title.toLowerCase()}`}
+    />
   ) : jobs.length ? (
-    <div className={layoutClassName}>
+    <div className={showDetailPanel ? layoutClassName : undefined}>
       <div className={tableWrapClassName}>
         <table className="simple-table processing-table">
           <thead>
@@ -87,11 +80,15 @@ export default function ProcessingJobReviewCard({
               ) : null}
               <th className="processing-col-type">Step</th>
               <th className="processing-col-time">Updated</th>
+              {errorColumnLabel ? (
+                <th className="processing-col-error">{errorColumnLabel}</th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
             {jobs.map((job) => {
-              const isActive = activeJob?.id === job.id;
+              const isActive = showDetailPanel && activeJob?.id === job.id;
+              const requestText = getRequestPrimaryText(job.submission_input);
 
               return (
                 <tr key={job.id} className={isActive ? "is-active-row" : ""}>
@@ -105,13 +102,17 @@ export default function ProcessingJobReviewCard({
                     />
                   </td>
                   <td className="processing-col-request processing-incomplete-col-book">
-                    <button
-                      type="button"
-                      className="ghost-button processing-requeue-select"
-                      onClick={() => onActiveJobChange(job.id)}
-                    >
-                      {getRequestPrimaryText(job.submission_input)}
-                    </button>
+                    {showDetailPanel ? (
+                      <button
+                        type="button"
+                        className="ghost-button processing-requeue-select"
+                        onClick={() => onActiveJobChange(job.id)}
+                      >
+                        {requestText}
+                      </button>
+                    ) : (
+                      requestText
+                    )}
                   </td>
                   {showStatusColumn ? (
                     <td>
@@ -120,6 +121,11 @@ export default function ProcessingJobReviewCard({
                   ) : null}
                   <td>{jobTypeLabel(job.job_type)}</td>
                   <td>{formatBookDateTime(getJobActivityAt(job))}</td>
+                  {errorColumnLabel ? (
+                    <td className="processing-col-error">
+                      {renderErrorCell ? renderErrorCell(job) : null}
+                    </td>
+                  ) : null}
                 </tr>
               );
             })}
@@ -127,25 +133,27 @@ export default function ProcessingJobReviewCard({
         </table>
       </div>
 
-      <aside className="processing-requeue-error-panel">
-        <h3>{detailTitle}</h3>
-        {activeJob ? (
-          <>
-            <p className="table-note">
-              {getRequestPrimaryText(activeJob.submission_input)}
-            </p>
-            <div
-              className="processing-requeue-error-scroll"
-              role="region"
-              aria-label={detailRegionAriaLabel}
-            >
-              {renderDetailBody(activeJob)}
-            </div>
-          </>
-        ) : (
-          <p className="table-note">{emptySelectionMessage}</p>
-        )}
-      </aside>
+      {showDetailPanel ? (
+        <aside className="processing-requeue-error-panel">
+          {detailTitle ? <h3>{detailTitle}</h3> : null}
+          {activeJob ? (
+            <>
+              <p className="table-note">
+                {getRequestPrimaryText(activeJob.submission_input)}
+              </p>
+              <div
+                className="processing-requeue-error-scroll"
+                role="region"
+                aria-label={detailRegionAriaLabel}
+              >
+                {renderDetailBody(activeJob)}
+              </div>
+            </>
+          ) : (
+            <p className="table-note">{emptySelectionMessage}</p>
+          )}
+        </aside>
+      ) : null}
     </div>
   ) : (
     <EmptyState title={emptyTitle} />
@@ -174,39 +182,31 @@ export default function ProcessingJobReviewCard({
       {toolbar ? (
         <div className="processing-card-toolbar">{toolbar}</div>
       ) : null}
-      <div className="processing-bulk-bar">
-        <div className="processing-card-actions processing-card-actions-grouped">
-          <div className="processing-card-action-row">
-            <button
-              type="button"
-              className="ghost-button"
-              disabled={
-                !selectedSubmissionIds.length ||
-                bulkActionKey === actionKey ||
-                creationActionsDisabled
-              }
-              onClick={() => onCreate(selectedSubmissionIds, actionKey)}
-            >
-              {selectedActionLabel(
-                "Create selected",
-                selectedSubmissionIds.length,
-              )}
-            </button>
-            <button
-              type="button"
-              className="ghost-button"
-              disabled={
-                !submissionIds.length ||
-                bulkActionKey === actionKey ||
-                creationActionsDisabled
-              }
-              onClick={() => onCreate(submissionIds, actionKey)}
-            >
-              Create all
-            </button>
+      {actions ? (
+        <div className="processing-bulk-bar">{actions}</div>
+      ) : showCreateActions ? (
+        <div className="processing-bulk-bar">
+          <div className="processing-card-actions processing-card-actions-grouped">
+            <div className="processing-card-action-row">
+              <button
+                type="button"
+                className="ghost-button"
+                disabled={
+                  !selectedSubmissionIds.length ||
+                  bulkActionKey === actionKey ||
+                  creationActionsDisabled
+                }
+                onClick={() => onCreate(selectedSubmissionIds, actionKey)}
+              >
+                {selectedActionLabel(
+                  createSelectedLabel,
+                  selectedSubmissionIds.length,
+                )}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
       <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>
         {shellContent}
       </div>

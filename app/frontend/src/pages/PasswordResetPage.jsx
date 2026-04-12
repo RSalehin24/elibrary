@@ -1,14 +1,18 @@
 import { useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { authApi } from "../api/client";
+import EmailInputFeedback from "../components/EmailInputFeedback";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { useToast } from "../hooks/useToast";
+import { getEmailValidationState } from "../utils/email";
 
 export default function PasswordResetPage() {
   const [params] = useSearchParams();
   const toast = useToast();
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const { normalizedEmail, hasEmailInput, emailLooksValid } =
+    getEmailValidationState(email);
 
   const uid = params.get("uid") || "";
   const token = params.get("token") || "";
@@ -26,10 +30,13 @@ export default function PasswordResetPage() {
     if (submitting) {
       return;
     }
+    if (!event.currentTarget.reportValidity() || !emailLooksValid) {
+      return;
+    }
 
     try {
       setSubmitting(true);
-      const response = await authApi.passwordReset({ email });
+      const response = await authApi.passwordReset({ email: normalizedEmail });
       toast.success(response?.detail || "Reset email has been sent.");
     } catch (error) {
       toast.error(error.message);
@@ -50,15 +57,29 @@ export default function PasswordResetPage() {
               aria-label="Email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
+              inputMode="email"
               autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
               placeholder="you@example.com"
+              required
+              aria-describedby={
+                hasEmailInput ? "password-reset-email-feedback" : undefined
+              }
+              aria-invalid={
+                hasEmailInput && !emailLooksValid ? "true" : undefined
+              }
+            />
+            <EmailInputFeedback
+              id="password-reset-email-feedback"
+              email={email}
             />
           </label>
           <div className="inline-pills login-actions">
             <button
               type="submit"
               className="primary-button"
-              disabled={!email.trim() || submitting}
+              disabled={!hasEmailInput || !emailLooksValid || submitting}
             >
               <span className="button-label">
                 {submitting ? <LoadingSpinner size={16} /> : null}

@@ -60,6 +60,64 @@ from apps.catalog.services import find_existing_book_by_source_url
 
 
 @pytest.mark.django_db
+def test_duplicate_review_list_defaults_to_pending_reviews(client):
+    admin = User.objects.create_superuser(
+        email="duplicate-list-admin@example.com",
+        password="strong-password-123",
+    )
+    existing_book = Book.objects.create(
+        title="ডুপ্লিকেট তালিকা বই",
+        state="ready",
+        review_state="approved",
+    )
+    pending_submission = BookSubmission.objects.create(
+        submitter=admin,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/pending-duplicate/",
+        normalized_input=normalize_text(
+            "https://www.ebanglalibrary.com/books/pending-duplicate/",
+        ),
+        resolved_url="https://www.ebanglalibrary.com/books/pending-duplicate/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.DUPLICATE,
+    )
+    dismissed_submission = BookSubmission.objects.create(
+        submitter=admin,
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/dismissed-duplicate/",
+        normalized_input=normalize_text(
+            "https://www.ebanglalibrary.com/books/dismissed-duplicate/",
+        ),
+        resolved_url="https://www.ebanglalibrary.com/books/dismissed-duplicate/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    pending_review = DuplicateReview.objects.create(
+        submission=pending_submission,
+        existing_book=existing_book,
+        status=DuplicateReviewStatus.PENDING,
+    )
+    dismissed_review = DuplicateReview.objects.create(
+        submission=dismissed_submission,
+        existing_book=existing_book,
+        status=DuplicateReviewStatus.DISMISSED,
+    )
+    client.force_login(admin)
+
+    response = client.get("/api/ingestion/duplicate-reviews/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [entry["id"] for entry in payload] == [str(pending_review.id)]
+
+    filtered_response = client.get("/api/ingestion/duplicate-reviews/?status=dismissed")
+
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert [entry["id"] for entry in filtered_payload] == [str(dismissed_review.id)]
+
+
+@pytest.mark.django_db
 def test_duplicate_review_keep_new_queues_recreate_for_deleted_existing_book(client, settings, monkeypatch):
     settings.CELERY_TASK_ALWAYS_EAGER = False
     admin = User.objects.create_superuser(email="deleted-review-admin@example.com", password="strong-password-123")

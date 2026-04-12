@@ -36,6 +36,44 @@ export class ProcessingPageModel {
     });
   }
 
+  cardHead(title) {
+    return this.card(title).locator(".processing-card-head");
+  }
+
+  cardCountPill(title) {
+    return this.card(title).locator(".processing-card-count");
+  }
+
+  cardSearchInput(title) {
+    return this.card(title).locator('input[type="search"]').first();
+  }
+
+  cardResultCount(title) {
+    return this.card(title).locator(".catalog-result-count").first();
+  }
+
+  cardFilterButton(title) {
+    return this.card(title)
+      .getByRole("button", { name: /^Filters/ })
+      .first();
+  }
+
+  cardFilterDrawer(title) {
+    return this.card(title).locator(".catalog-filter-drawer").first();
+  }
+
+  cardOpenFilterDrawer(title) {
+    return this.card(title).locator(".catalog-filter-drawer.is-open").first();
+  }
+
+  tableRows(title) {
+    return this.card(title).locator("tbody tr");
+  }
+
+  collapsibleStack() {
+    return this.page.locator(".processing-collapsible-stack");
+  }
+
   rowInCard(title, pattern) {
     return this.card(title)
       .getByRole("row")
@@ -43,12 +81,43 @@ export class ProcessingPageModel {
       .first();
   }
 
+  rowActionButton(title, rowPattern, buttonName) {
+    return this.rowInCard(title, rowPattern).getByRole("button", {
+      name: buttonName,
+    });
+  }
+
   async searchCard(title, query) {
     const card = this.card(title);
     const input = card.locator('input[type="search"]').first();
     await expect(input).toBeVisible();
     await input.fill(query);
-    await input.press("Enter");
+    await input.evaluate((node) => node.form?.requestSubmit());
+    return card;
+  }
+
+  async openCardFilters(title) {
+    const button = this.cardFilterButton(title);
+    await expect(button).toBeVisible();
+    await button.click();
+    return this.card(title);
+  }
+
+  async toggleCard(title) {
+    const card = this.card(title);
+    const button = card.getByRole("button", { name: /Expand|Collapse/ }).first();
+    await expect(button).toBeVisible();
+    await button.click();
+    return card;
+  }
+
+  async expandCard(title) {
+    const card = this.card(title);
+    const expandButton = card.getByRole("button", { name: "Expand" }).first();
+    if (await expandButton.count()) {
+      await expect(expandButton).toBeVisible();
+      await expandButton.click();
+    }
     return card;
   }
 
@@ -106,5 +175,11 @@ export class ProcessingPageModel {
     await this.card("Incomplete Catalog")
       .getByRole("button", { name: "Reprocess selected" })
       .click();
+  }
+
+  async confirmDialog(confirmLabel = "Delete") {
+    const dialog = this.page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: confirmLabel }).click();
   }
 }

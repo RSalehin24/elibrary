@@ -1,4 +1,5 @@
 import {
+  useCallback,
   createContext,
   useContext,
   useEffect,
@@ -21,6 +22,7 @@ export function ProcessingActivityProvider({ children }) {
   const location = useLocation();
   const { authenticated, loading: sessionLoading } = useSession();
   const requestIdRef = useRef(0);
+  const persistentPageStateRef = useRef({});
   const [state, setState] = useState({
     loading: false,
     loaded: false,
@@ -28,6 +30,7 @@ export function ProcessingActivityProvider({ children }) {
     hasVisibleActivity: false,
     activeScopes: [],
   });
+  const [, setPersistentPageStateVersion] = useState(0);
 
   useEffect(() => {
     if (
@@ -85,12 +88,38 @@ export function ProcessingActivityProvider({ children }) {
     };
   }, [authenticated, location.pathname, sessionLoading, state.loaded]);
 
+  const setPersistentPageState = useCallback((pageKey, field, nextValue) => {
+    if (!pageKey || !field) {
+      return;
+    }
+
+    const currentPageState = persistentPageStateRef.current[pageKey] || {};
+    const previousValue = currentPageState[field];
+    const resolvedValue =
+      typeof nextValue === "function" ? nextValue(previousValue) : nextValue;
+
+    if (Object.is(previousValue, resolvedValue)) {
+      return;
+    }
+
+    persistentPageStateRef.current = {
+      ...persistentPageStateRef.current,
+      [pageKey]: {
+        ...currentPageState,
+        [field]: resolvedValue,
+      },
+    };
+    setPersistentPageStateVersion((current) => current + 1);
+  }, []);
+
   const value = useMemo(
     () => ({
       ...state,
       busy: state.loading || state.hasVisibleActivity,
+      persistentPageState: persistentPageStateRef.current,
+      setPersistentPageState,
     }),
-    [state],
+    [setPersistentPageState, state],
   );
 
   return (
@@ -108,4 +137,24 @@ export function useProcessingActivity() {
     );
   }
   return context;
+}
+
+export function usePersistentProcessingPageState(
+  pageKey,
+  field,
+  initialValue,
+) {
+  const { persistentPageState, setPersistentPageState } = useProcessingActivity();
+  const pageState = persistentPageState?.[pageKey] || {};
+  const value =
+    Object.hasOwn(pageState, field) ? pageState[field] : initialValue;
+
+  const setValue = useCallback(
+    (nextValue) => {
+      setPersistentPageState(pageKey, field, nextValue);
+    },
+    [field, pageKey, setPersistentPageState],
+  );
+
+  return [value, setValue];
 }

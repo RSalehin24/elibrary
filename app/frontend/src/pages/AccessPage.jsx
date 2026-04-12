@@ -62,6 +62,7 @@ export default function AccessPage() {
       <PageLoader
         label="Loading users and access"
         detail="Fetching accounts, permissions, and reference data."
+        variant="management"
       />
     );
   }
@@ -94,7 +95,7 @@ export default function AccessPage() {
           <AccessUsersTableCard
             currentUserId={user?.id}
             filteredManagedUsers={accessUsers.filteredManagedUsers}
-            formatAccountAccess={accessUsers.formatAccountAccess}
+            getAccountAccessLabels={accessUsers.getAccountAccessLabels}
             onClearSearch={accessUsers.clearUsersSearch}
             onDeleteUser={accessUsers.requestDeleteUser}
             onEditUser={accessUsers.startEditing}

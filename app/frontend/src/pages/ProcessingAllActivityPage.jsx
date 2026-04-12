@@ -33,6 +33,7 @@ import {
 } from "../features/processing/constants";
 import {
   jobFilterFields,
+  readySubmissionFilterFields,
   reviewFilterFields,
   removedFilterFields,
   runFilterFields,
@@ -46,10 +47,12 @@ import {
   buildSubmissionOverviewSummary,
   buildSubmissionParams,
   cutoffForPeriod,
+  filterCurrentFailedJobs,
   filterJobsByControls,
   getJobActivityAt,
   getRequeueReasonText,
   getRequestPrimaryText,
+  getSubmissionDisplayStatus,
   getRunActivityAt,
   getSubmissionActivityAt,
   getUniqueSubmissionIds,
@@ -60,6 +63,8 @@ import {
   isResumableJob,
   jobTypeLabel,
   normalizeTimeInput,
+  orderExpandableCards,
+  partitionSubmissionsForCards,
   runModeLabel,
   runSummaryLabel,
   runTypeLabel,
@@ -70,21 +75,24 @@ import {
 } from "../features/processing/helpers";
 import {
   BookLinkCell,
+  InlineErrorCell,
+  ProcessingErrorDisclosure,
   QueueTableCard,
   RequestValue,
   renderProcessingCardLoader,
 } from "../features/processing/components/ProcessingScaffold";
-import { useProcessingActivity } from "../features/processing/ProcessingActivityProvider";
+import {
+  usePersistentProcessingPageState,
+} from "../features/processing/ProcessingActivityProvider";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 import { formatBookDateTime } from "../utils/bookPresentation";
 import { hasCapability } from "../utils/capabilities";
 import { toQueryString } from "../utils/query";
 
-export default function ProcessingAllActivityPage() {
+export default function ProcessingAllActivityPage({ view = "failed" }) {
   const { user } = useSession();
   const toast = useToast();
-  const { busy: processingActivityBusy } = useProcessingActivity();
   const canManageProcessing = hasCapability(user, "processing:manage");
   const activeTab = ALL_TAB;
   const [jobs, setJobs] = useState([]);
@@ -112,8 +120,8 @@ export default function ProcessingAllActivityPage() {
   const [removedFilters, setRemovedFilters] = useState(defaultRemovedFilters);
   const [requeueFilters, setRequeueFilters] = useState(defaultJobFilters);
   const [failedFilters, setFailedFilters] = useState(defaultJobFilters);
-  const [submissionFiltersExpanded, setSubmissionFiltersExpanded] =
-    useState(false);
+  const [activeSubmissionFilterDrawer, setActiveSubmissionFilterDrawer] =
+    useState("");
   const [jobFiltersExpanded, setJobFiltersExpanded] = useState(false);
   const [catalogFiltersExpanded, setCatalogFiltersExpanded] = useState(false);
   const [runFiltersExpanded, setRunFiltersExpanded] = useState(false);
@@ -167,17 +175,43 @@ export default function ProcessingAllActivityPage() {
   const [creatingCatalog, setCreatingCatalog] = useState(false);
   const [catalogActionMode, setCatalogActionMode] = useState("");
   const [savingAutomation, setSavingAutomation] = useState(false);
-  const [busyActionId, setBusyActionId] = useState("");
-  const [busyRunId, setBusyRunId] = useState("");
-  const [busyDeleteId, setBusyDeleteId] = useState("");
+  const [busyActionId, setBusyActionId] = usePersistentProcessingPageState(
+    "processing-all-activity",
+    "busyActionId",
+    "",
+  );
+  const [busyRunId, setBusyRunId] = usePersistentProcessingPageState(
+    "processing-all-activity",
+    "busyRunId",
+    "",
+  );
+  const [busyDeleteId, setBusyDeleteId] = usePersistentProcessingPageState(
+    "processing-all-activity",
+    "busyDeleteId",
+    "",
+  );
   const [activeRequeueJobId, setActiveRequeueJobId] = useState("");
-  const [activeFailedJobId, setActiveFailedJobId] = useState("");
-  const [activeFailedJobLogs, setActiveFailedJobLogs] = useState([]);
-  const [loadingFailedLogs, setLoadingFailedLogs] = useState(false);
-  const [bulkActionKey, setBulkActionKey] = useState("");
+  const [bulkActionKey, setBulkActionKey] = usePersistentProcessingPageState(
+    "processing-all-activity",
+    "bulkActionKey",
+    "",
+  );
   const [confirmState, setConfirmState] = useState(null);
-  const [confirmLoading, setConfirmLoading] = useState(false);
-  const [stoppingCatalogSync, setStoppingCatalogSync] = useState(false);
+  const [confirmLoading, setConfirmLoading] = usePersistentProcessingPageState(
+    "processing-all-activity",
+    "confirmLoading",
+    false,
+  );
+  const [queuedCardExpanded, setQueuedCardExpanded] = useState(false);
+  const [stoppedCardExpanded, setStoppedCardExpanded] = useState(false);
+  const [deletedCardExpanded, setDeletedCardExpanded] = useState(false);
+  const [expandedCardPriorityKey, setExpandedCardPriorityKey] = useState("");
+  const [stoppingCatalogSync, setStoppingCatalogSync] =
+    usePersistentProcessingPageState(
+      "processing-all-activity",
+      "stoppingCatalogSync",
+      false,
+    );
   const [catalogSyncDismissed, setCatalogSyncDismissed] = useState(false);
 
   const defaultScopes = useMemo(
@@ -635,6 +669,16 @@ export default function ProcessingAllActivityPage() {
     await load({ preserveAutomationForm: true, ...options });
   }
 
+  function toggleCollapsibleCard(cardKey, setter) {
+    setter((current) => {
+      const nextExpanded = !current;
+      setExpandedCardPriorityKey((activeKey) =>
+        nextExpanded ? cardKey : activeKey === cardKey ? "" : activeKey,
+      );
+      return nextExpanded;
+    });
+  }
+
   async function retrySubmission(submissionId) {
     if (creationActionsDisabled) {
       return;
@@ -685,9 +729,7 @@ export default function ProcessingAllActivityPage() {
         body: { decision },
       });
       toast.success(
-        decision === "confirm_existing"
-          ? "Existing book kept."
-          : "New book queued.",
+        decision === "same_book" ? "Marked as same book." : "New book queued.",
       );
       await reloadCurrent();
     } catch (nextError) {
@@ -714,9 +756,9 @@ export default function ProcessingAllActivityPage() {
         resolvedCount += 1;
       }
       toast.success(
-        decision === "confirm_existing"
-          ? `${resolvedCount} duplicate checks kept existing book.`
-          : `${resolvedCount} duplicate checks queued as new.`,
+        decision === "same_book"
+          ? `${resolvedCount} duplication requests marked as same book.`
+          : `${resolvedCount} duplication requests queued as new books.`,
       );
       await reloadCurrent();
     } catch (nextError) {
@@ -1053,6 +1095,32 @@ export default function ProcessingAllActivityPage() {
     () => buildSubmissionOverviewSummary(submissions),
     [submissions],
   );
+  const failedJobs = useMemo(
+    () => filterCurrentFailedJobs(jobReviewRows),
+    [jobReviewRows],
+  );
+  const failedSubmissionIdSet = useMemo(
+    () => new Set(failedJobs.map((job) => job.submission_id).filter(Boolean)),
+    [failedJobs],
+  );
+  const duplicateSubmissionIdSet = useMemo(
+    () =>
+      new Set(duplicateReviews.map((review) => review.submission?.id).filter(Boolean)),
+    [duplicateReviews],
+  );
+  const submissionCardGroups = useMemo(
+    () =>
+      partitionSubmissionsForCards(
+        submissions,
+        failedSubmissionIdSet,
+        view === "duplicate" ? duplicateSubmissionIdSet : null,
+      ),
+    [submissions, failedSubmissionIdSet, duplicateSubmissionIdSet, view],
+  );
+  const readySubmissions = submissionCardGroups.ready;
+  const queuedSubmissions = submissionCardGroups.queued;
+  const stoppedSubmissions = submissionCardGroups.stopped;
+  const deletedSubmissions = submissionCardGroups.deleted;
 
   const selectedJobIdSet = useMemo(
     () => new Set(selectedJobIds),
@@ -1065,6 +1133,10 @@ export default function ProcessingAllActivityPage() {
   ).length;
   const allJobsSelected =
     jobs.length > 0 && selectedJobCountOnPage === jobs.length;
+  const processingJobs = useMemo(
+    () => jobs.filter((job) => job.status === "processing"),
+    [jobs],
+  );
 
   const selectedCatalogIdSet = useMemo(
     () => new Set(selectedCatalogEntryIds),
@@ -1104,27 +1176,6 @@ export default function ProcessingAllActivityPage() {
   const allRunsSelected =
     curationRuns.length > 0 && selectedRunCountOnPage === curationRuns.length;
 
-  const submissionResumeIds = submissions
-    .map((submission) => submission.latest_job)
-    .filter((job) => isResumableJob(job))
-    .map((job) => job.id);
-  const submissionStopIds = submissions
-    .map((submission) => submission.latest_job)
-    .filter((job) => job && isActiveStatus(job.status))
-    .map((job) => job.id);
-  const jobResumeIds = jobs
-    .filter((job) => isResumableJob(job))
-    .map((job) => job.id);
-  const jobStopIds = jobs
-    .filter((job) => isActiveStatus(job.status))
-    .map((job) => job.id);
-  const runStopIds = curationRuns
-    .filter((run) => isActiveStatus(run.status))
-    .map((run) => run.id);
-  const failedJobs = useMemo(
-    () => jobReviewRows.filter((job) => job.status === "failed"),
-    [jobReviewRows],
-  );
   const requeuedJobs = useMemo(
     () =>
       jobReviewRows.filter(
@@ -1179,7 +1230,6 @@ export default function ProcessingAllActivityPage() {
     filteredFailedJobs,
     selectedFailedJobIdSet,
   );
-  const failedSubmissionIds = getUniqueSubmissionIds(filteredFailedJobs);
 
   const selectedDuplicateReviewIdSet = useMemo(
     () => new Set(selectedDuplicateReviewIds),
@@ -1230,22 +1280,6 @@ export default function ProcessingAllActivityPage() {
         .includes(query);
     });
   }, [incompleteOverviewEntries, removedFilters]);
-  const selectedSubmissionResumeIds = submissions
-    .filter((submission) => selectedSubmissionIdSet.has(submission.id))
-    .map((submission) => submission.latest_job)
-    .filter((job) => isResumableJob(job))
-    .map((job) => job.id);
-  const selectedSubmissionStopIds = submissions
-    .filter((submission) => selectedSubmissionIdSet.has(submission.id))
-    .map((submission) => submission.latest_job)
-    .filter((job) => job && isActiveStatus(job.status))
-    .map((job) => job.id);
-  const selectedJobResumeIds = jobs
-    .filter((job) => selectedJobIdSet.has(job.id) && isResumableJob(job))
-    .map((job) => job.id);
-  const selectedJobStopIds = jobs
-    .filter((job) => selectedJobIdSet.has(job.id) && isActiveStatus(job.status))
-    .map((job) => job.id);
   const selectedRunStopIds = curationRuns
     .filter((run) => selectedRunIdSet.has(run.id) && isActiveStatus(run.status))
     .map((run) => run.id);
@@ -1292,44 +1326,6 @@ export default function ProcessingAllActivityPage() {
   }, [activeRequeueJobId, requeuedJobs]);
 
   useEffect(() => {
-    if (!failedJobs.length) {
-      setActiveFailedJobId("");
-      setActiveFailedJobLogs([]);
-      return;
-    }
-
-    const exists = failedJobs.some((job) => job.id === activeFailedJobId);
-    if (!exists) {
-      setActiveFailedJobId(failedJobs[0].id);
-    }
-  }, [activeFailedJobId, failedJobs]);
-
-  useEffect(() => {
-    if (!activeFailedJobId) {
-      setActiveFailedJobLogs([]);
-      return;
-    }
-
-    let cancelled = false;
-    setLoadingFailedLogs(true);
-    apiFetch(`/ingestion/jobs/${activeFailedJobId}/logs/`)
-      .then((payload) => {
-        if (!cancelled) {
-          setActiveFailedJobLogs(payload || []);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingFailedLogs(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeFailedJobId]);
-
-  useEffect(() => {
     if (!filteredRequeuedJobs.length) {
       setActiveRequeueJobId("");
       return;
@@ -1342,21 +1338,6 @@ export default function ProcessingAllActivityPage() {
       setActiveRequeueJobId(filteredRequeuedJobs[0].id);
     }
   }, [activeRequeueJobId, filteredRequeuedJobs]);
-
-  useEffect(() => {
-    if (!filteredFailedJobs.length) {
-      setActiveFailedJobId("");
-      setActiveFailedJobLogs([]);
-      return;
-    }
-
-    const exists = filteredFailedJobs.some(
-      (job) => job.id === activeFailedJobId,
-    );
-    if (!exists) {
-      setActiveFailedJobId(filteredFailedJobs[0].id);
-    }
-  }, [activeFailedJobId, filteredFailedJobs]);
 
   function renderCardHeaderSearch({
     filters,
@@ -1394,21 +1375,24 @@ export default function ProcessingAllActivityPage() {
   }
 
   function renderAllActivityOverviewCard() {
+    const primaryLabel =
+      view === "duplicate" ? "Deplicate Requests" : "Failed Requests";
     const countPill = (
-      <span className="processing-card-count">
-        {submissionsLoading ? (
-          <LoadingSpinner size={14} />
-        ) : (
-          submissionOverview.total
-        )}
-      </span>
+      submissionsLoading ? (
+        <span
+          className="processing-card-count processing-card-count-skeleton"
+          aria-hidden="true"
+        />
+      ) : (
+        <span className="processing-card-count">{submissionOverview.total}</span>
+      )
     );
 
     return (
       <section className="detail-card processing-card processing-summary-card">
         <div className="processing-card-head">
           <div className="section-title-block">
-            <h2>All Activity Overview</h2>
+            <h2>{primaryLabel} Overview</h2>
           </div>
           {countPill}
         </div>
@@ -1417,14 +1401,13 @@ export default function ProcessingAllActivityPage() {
         ) : (
           <div className="processing-summary-bar processing-summary-bar--catalog">
             {[
-              ["Resolving", submissionOverview.pending_resolution],
-              ["Queued", submissionOverview.queued],
-              ["Processing", submissionOverview.processing],
-              ["Needs Review", submissionOverview.needs_review],
-              ["Ready", submissionOverview.ready],
-              ["Failed", submissionOverview.failed],
-              ["Stopped", submissionOverview.stopped],
-              ["Duplicate", submissionOverview.duplicate],
+              ["Failed", failedJobs.length],
+              ["Duplicate", duplicateReviews.length],
+              ["Processing", processingJobs.length],
+              ["Ready", readySubmissions.length],
+              ["Stopped", stoppedSubmissions.length],
+              ["Queued", queuedSubmissions.length],
+              ["Deleted", deletedSubmissions.length],
             ].map(([label, value]) => (
               <article key={label} className="processing-summary-stat">
                 <span className="fact-label">{label}</span>
@@ -1437,252 +1420,281 @@ export default function ProcessingAllActivityPage() {
     );
   }
 
-  function renderSubmissionsCard(title, cardClassName = "") {
+  function setSubmissionCardFiltersExpanded(drawerId, nextValueOrUpdater) {
+    setActiveSubmissionFilterDrawer((currentDrawerId) => {
+      const nextExpanded =
+        typeof nextValueOrUpdater === "function"
+          ? Boolean(nextValueOrUpdater(currentDrawerId === drawerId))
+          : Boolean(nextValueOrUpdater);
+
+      if (nextExpanded) {
+        return drawerId;
+      }
+
+      return currentDrawerId === drawerId ? "" : currentDrawerId;
+    });
+  }
+
+  function renderSubmissionsCard(title, cardClassName = "", options = {}) {
+    const {
+      rows = submissions,
+      showControls = true,
+      emptyTitle = "No requests",
+      actionMode = "default",
+      collapsible = false,
+      collapsed = false,
+      onToggleCollapsed = null,
+    } = options;
+    const rowIdsOnPage = rows.map((submission) => submission.id);
+    const visibleSelectedIds = rowIdsOnPage.filter((id) =>
+      selectedSubmissionIdSet.has(id),
+    );
+    const selectedCountOnPage = visibleSelectedIds.length;
+    const allRowsSelected =
+      rows.length > 0 && selectedCountOnPage === rowIdsOnPage.length;
+    const selectedResumeIds = rows
+      .filter((submission) => selectedSubmissionIdSet.has(submission.id))
+      .map((submission) => submission.latest_job)
+      .filter((job) => isResumableJob(job))
+      .map((job) => job.id);
+    const selectedStopIds = rows
+      .filter((submission) => selectedSubmissionIdSet.has(submission.id))
+      .map((submission) => submission.latest_job)
+      .filter((job) => job && isActiveStatus(job.status))
+      .map((job) => job.id);
+    const selectedRetryIds = rows
+      .filter((submission) => selectedSubmissionIdSet.has(submission.id))
+      .map((submission) => submission.id);
+    const showResumeActions =
+      actionMode === "default" || actionMode === "stopped";
+    const showRetryActions = actionMode === "deleted";
+    const showStopActions = actionMode === "default";
+    const showDeleteActions = true;
+    const hasBulkActions =
+      showControls &&
+      (showResumeActions || showRetryActions || showStopActions || showDeleteActions);
+    const submissionCardFilterFields =
+      actionMode === "ready"
+        ? readySubmissionFilterFields
+        : submissionFilterFields;
+    const submissionFilterDrawerId =
+      `${activeTab}-${title.toLowerCase().replace(/\s+/g, "-")}-submission-filters`;
+    const submissionCardFiltersExpanded =
+      activeSubmissionFilterDrawer === submissionFilterDrawerId;
+
     return (
       <QueueTableCard
         title={title}
-        emptyTitle="No requests"
+        count={rows.length}
+        emptyTitle={emptyTitle}
         cardClassName={cardClassName}
         loading={submissionsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
-        headerAside={renderCardHeaderSearch({
-          filters: submissionFilters,
-          setFilters: setSubmissionFilters,
-          fields: submissionFilterFields,
-          defaultFilters: defaultSubmissionFilters,
-          filtersExpanded: submissionFiltersExpanded,
-          setFiltersExpanded: setSubmissionFiltersExpanded,
-          searchPlaceholder: "Search requests",
-          resultCount: submissions.length,
-          resultCountLoading: submissionsLoading,
-          drawerId: `${activeTab}-submission-filters`,
-          onSubmit: (event, nextFilters) => {
-            event.preventDefault();
-            setSubmissionFilters(nextFilters);
-            reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
-              nextSubmissionFilters: nextFilters,
-            }).catch(() => {});
-          },
-          onSearchClear: (nextFilters) => {
-            setSubmissionFilters(nextFilters);
-            reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
-              nextSubmissionFilters: nextFilters,
-            }).catch(() => {});
-          },
-          buttonsDisabled: sourceTabButtonsDisabled,
-        })}
+        headerAside={
+          showControls
+            ? renderCardHeaderSearch({
+                filters: submissionFilters,
+                setFilters: setSubmissionFilters,
+                fields: submissionCardFilterFields,
+                defaultFilters: defaultSubmissionFilters,
+                filtersExpanded: submissionCardFiltersExpanded,
+                setFiltersExpanded: (nextValueOrUpdater) =>
+                  setSubmissionCardFiltersExpanded(
+                    submissionFilterDrawerId,
+                    nextValueOrUpdater,
+                  ),
+                searchPlaceholder: "Search requests",
+                resultCount: rows.length,
+                resultCountLoading: submissionsLoading,
+                drawerId: submissionFilterDrawerId,
+                onSubmit: (event, nextFilters) => {
+                  event.preventDefault();
+                  setSubmissionFilters(nextFilters);
+                  reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+                    nextSubmissionFilters: nextFilters,
+                  }).catch(() => {});
+                },
+                onSearchClear: (nextFilters) => {
+                  setSubmissionFilters(nextFilters);
+                  reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+                    nextSubmissionFilters: nextFilters,
+                  }).catch(() => {});
+                },
+                buttonsDisabled: sourceTabButtonsDisabled,
+              })
+            : null
+        }
         toolbar={
-          <CatalogToolbar
-            filters={submissionFilters}
-            setFilters={setSubmissionFilters}
-            fields={submissionFilterFields}
-            defaultFilters={defaultSubmissionFilters}
-            filtersExpanded={submissionFiltersExpanded}
-            setFiltersExpanded={setSubmissionFiltersExpanded}
-            onSubmit={(event) => {
-              event.preventDefault();
-              reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
-                nextSubmissionFilters: submissionFilters,
-              }).catch(() => {});
-            }}
-            onReset={() =>
-              resetWithLoad(
-                defaultSubmissionFilters,
-                setSubmissionFilters,
-                "nextSubmissionFilters",
-                [LOAD_SCOPE_SUBMISSIONS],
-              )
-            }
-            searchPlaceholder="Search requests"
-            resultCount={submissions.length}
-            showSearchRow={false}
-            inline
-            drawerId={`${activeTab}-submission-filters`}
-            buttonsDisabled={sourceTabButtonsDisabled}
-            buttonsLoading={submissionsLoading}
-          />
+          showControls ? (
+            <CatalogToolbar
+              filters={submissionFilters}
+              setFilters={setSubmissionFilters}
+              fields={submissionCardFilterFields}
+              defaultFilters={defaultSubmissionFilters}
+              filtersExpanded={submissionCardFiltersExpanded}
+              setFiltersExpanded={(nextValueOrUpdater) =>
+                setSubmissionCardFiltersExpanded(
+                  submissionFilterDrawerId,
+                  nextValueOrUpdater,
+                )
+              }
+              onSubmit={(event) => {
+                event.preventDefault();
+                reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+                  nextSubmissionFilters: submissionFilters,
+                }).catch(() => {});
+              }}
+              onReset={() =>
+                resetWithLoad(
+                  defaultSubmissionFilters,
+                  setSubmissionFilters,
+                  "nextSubmissionFilters",
+                  [LOAD_SCOPE_SUBMISSIONS],
+                )
+              }
+              searchPlaceholder="Search requests"
+              resultCount={rows.length}
+              showSearchRow={false}
+              inline
+              drawerId={submissionFilterDrawerId}
+              buttonsDisabled={sourceTabButtonsDisabled}
+              buttonsLoading={submissionsLoading}
+            />
+          ) : null
         }
         actions={
-          <div className="processing-card-actions processing-card-actions-grouped">
+          hasBulkActions ? (
+            <div className="processing-card-actions processing-card-actions-grouped">
             <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !selectedSubmissionResumeIds.length ||
-                  bulkActionKey === "submissions:resume" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "submissions:resume",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-resume/", {
-                        method: "POST",
-                        body: { ids: selectedSubmissionResumeIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        resumed_count: "started",
-                        skipped_invalid: "skipped",
-                      }) || "Requests started.",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "submissions:resume" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  {selectedActionLabel(
-                    "Resume selected",
-                    selectedSubmissionResumeIds.length,
-                  )}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !selectedSubmissionStopIds.length ||
-                  bulkActionKey === "submissions:stop" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "submissions:stop",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-stop/", {
-                        method: "POST",
-                        body: { ids: selectedSubmissionStopIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        stopped_count: "stopped",
-                        skipped_complete: "done",
-                      }) || "Requests stopped.",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "submissions:stop" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  {selectedActionLabel(
-                    "Stop selected",
-                    selectedSubmissionStopIds.length,
-                  )}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !selectedSubmissionCount ||
-                  bulkActionKey === "submissions:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "submission-bulk",
-                    selectedSubmissionIds,
-                    "Delete selected requests",
-                    "This will remove the selected requests in this list.",
-                  )
-                }
-              >
-                {selectedActionLabel(
-                  "Delete selected",
-                  selectedSubmissionCount,
-                )}
-              </button>
-            </div>
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !submissionResumeIds.length ||
-                  bulkActionKey === "submissions:resume" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "submissions:resume",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-resume/", {
-                        method: "POST",
-                        body: { ids: submissionResumeIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        resumed_count: "started",
-                        skipped_invalid: "skipped",
-                      }) || "Requests started.",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "submissions:resume" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Resume all
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !submissionStopIds.length ||
-                  bulkActionKey === "submissions:stop" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "submissions:stop",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-stop/", {
-                        method: "POST",
-                        body: { ids: submissionStopIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        stopped_count: "stopped",
-                        skipped_complete: "done",
-                      }) || "Requests stopped.",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "submissions:stop" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Stop all
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !submissions.length ||
-                  bulkActionKey === "submissions:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "submission-bulk",
-                    submissions.map((submission) => submission.id),
-                    "Delete requests",
-                    "This will remove every visible request in this list.",
-                  )
-                }
-              >
-                Delete all
-              </button>
+              {showResumeActions ? (
+                <button
+                  type="button"
+                    className="ghost-button"
+                    disabled={
+                      !selectedResumeIds.length ||
+                      bulkActionKey === "submissions:resume" ||
+                      creationActionsDisabled
+                    }
+                    onClick={() =>
+                      runBulkAction(
+                        "submissions:resume",
+                        () =>
+                          apiFetch("/ingestion/jobs/bulk-resume/", {
+                            method: "POST",
+                            body: { ids: selectedResumeIds },
+                          }),
+                        (payload) =>
+                          summarizeResponse(payload, {
+                            resumed_count: "started",
+                            skipped_invalid: "skipped",
+                          }) || "Requests started.",
+                      )
+                    }
+                  >
+                    <span className="button-label">
+                      {bulkActionKey === "submissions:resume" ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {selectedActionLabel(
+                        "Resume selected",
+                        selectedResumeIds.length,
+                      )}
+                    </span>
+                  </button>
+                ) : null}
+                {showRetryActions ? (
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={
+                      !selectedRetryIds.length ||
+                      bulkActionKey === "submissions:retry" ||
+                      creationActionsDisabled
+                    }
+                    onClick={() =>
+                      retrySubmissionsBulk(
+                        selectedRetryIds,
+                        "submissions:retry",
+                      )
+                    }
+                  >
+                    <span className="button-label">
+                      {bulkActionKey === "submissions:retry" ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {selectedActionLabel(
+                        "Add selected to queue",
+                        selectedRetryIds.length,
+                      )}
+                    </span>
+                  </button>
+                ) : null}
+                {showStopActions ? (
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={
+                      !selectedStopIds.length ||
+                      bulkActionKey === "submissions:stop" ||
+                      sourceTabButtonsDisabled
+                    }
+                    onClick={() =>
+                      runBulkAction(
+                        "submissions:stop",
+                        () =>
+                          apiFetch("/ingestion/jobs/bulk-stop/", {
+                            method: "POST",
+                            body: { ids: selectedStopIds },
+                          }),
+                        (payload) =>
+                          summarizeResponse(payload, {
+                            stopped_count: "stopped",
+                            skipped_complete: "done",
+                          }) || "Requests stopped.",
+                      )
+                    }
+                  >
+                    <span className="button-label">
+                      {bulkActionKey === "submissions:stop" ? (
+                        <LoadingSpinner size={14} />
+                      ) : null}
+                      {selectedActionLabel(
+                        "Stop selected",
+                        selectedStopIds.length,
+                      )}
+                    </span>
+                  </button>
+                ) : null}
+                {showDeleteActions ? (
+                  <button
+                    type="button"
+                    className="ghost-button danger-button processing-inline-danger"
+                    disabled={
+                      !selectedCountOnPage ||
+                      bulkActionKey === "submissions:delete" ||
+                      sourceTabButtonsDisabled
+                    }
+                    onClick={() =>
+                      openDeleteDialog(
+                        "submission-bulk",
+                        visibleSelectedIds,
+                        "Delete selected requests",
+                        "This will remove the selected requests in this list.",
+                      )
+                    }
+                  >
+                  {selectedActionLabel("Delete selected", selectedCountOnPage)}
+                </button>
+              ) : null}
             </div>
           </div>
-        }
+        ) : null
+      }
+        collapsible={collapsible}
+        collapsed={collapsed}
+        onToggleCollapsed={onToggleCollapsed}
       >
-        {submissions.length ? (
+        {rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
@@ -1690,18 +1702,18 @@ export default function ProcessingAllActivityPage() {
                   <input
                     type="checkbox"
                     className="processing-checkbox"
-                    checked={allSubmissionsSelected}
+                    checked={allRowsSelected}
                     onChange={() =>
                       setSelectedSubmissionIds((current) =>
                         toggleVisibleSelection(
                           current,
-                          submissionIdsOnPage,
-                          allSubmissionsSelected,
+                          rowIdsOnPage,
+                          allRowsSelected,
                         ),
                       )
                     }
                     aria-label={
-                      allSubmissionsSelected
+                      allRowsSelected
                         ? "Clear visible request selections"
                         : "Select all visible requests"
                     }
@@ -1715,8 +1727,12 @@ export default function ProcessingAllActivityPage() {
               </tr>
             </thead>
             <tbody>
-              {submissions.map((submission) => {
+              {rows.map((submission) => {
                 const latestJob = submission.latest_job || null;
+                const displayStatus = getSubmissionDisplayStatus(
+                  submission,
+                  failedSubmissionIdSet,
+                );
                 const isBusy =
                   busyActionId === submission.id ||
                   busyActionId === latestJob?.id;
@@ -1749,7 +1765,7 @@ export default function ProcessingAllActivityPage() {
                       />
                     </td>
                     <td>
-                      <StatusPill value={submission.status} />
+                      <StatusPill value={displayStatus || submission.status} />
                     </td>
                     <td>
                       <BookLinkCell submission={submission} />
@@ -1804,8 +1820,16 @@ export default function ProcessingAllActivityPage() {
                           >
                             {isBusy ? "Stopping..." : "Stop"}
                           </button>
+                        ) : submission.status === "deleted" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => retrySubmission(submission.id)}
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Queueing..." : "Add Again to Queue"}
+                          </button>
                         ) : [
-                            "deleted",
                             "failed",
                             "stopped",
                             "needs_review",
@@ -1817,7 +1841,7 @@ export default function ProcessingAllActivityPage() {
                             onClick={() => retrySubmission(submission.id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Queueing..." : "Retry"}
+                            {isBusy ? "Queueing..." : "Resume"}
                           </button>
                         ) : (
                           <span className="table-note">-</span>
@@ -1851,11 +1875,31 @@ export default function ProcessingAllActivityPage() {
     );
   }
 
-  function renderJobsCard(title, cardClassName = "") {
+  function renderJobsCard(title, cardClassName = "", options = {}) {
+    const {
+      rows = jobs,
+      emptyTitle = "No book creation",
+    } = options;
+    const rowIdsOnPage = rows.map((job) => job.id);
+    const selectedRowResumeIds = rows
+      .filter((job) => selectedJobIdSet.has(job.id) && isResumableJob(job))
+      .map((job) => job.id);
+    const selectedRowStopIds = rows
+      .filter((job) => selectedJobIdSet.has(job.id) && isActiveStatus(job.status))
+      .map((job) => job.id);
+    const selectedRowIds = rows
+      .filter((job) => selectedJobIdSet.has(job.id))
+      .map((job) => job.id);
+    const selectedCountOnPage = rowIdsOnPage.filter((id) =>
+      selectedJobIdSet.has(id),
+    ).length;
+    const allRowsSelected =
+      rows.length > 0 && selectedCountOnPage === rowIdsOnPage.length;
     return (
       <QueueTableCard
         title={title}
-        emptyTitle="No book creation"
+        count={rows.length}
+        emptyTitle={emptyTitle}
         cardClassName={cardClassName}
         loading={jobsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
@@ -1867,7 +1911,7 @@ export default function ProcessingAllActivityPage() {
           filtersExpanded: jobFiltersExpanded,
           setFiltersExpanded: setJobFiltersExpanded,
           searchPlaceholder: "Search book creation",
-          resultCount: jobs.length,
+          resultCount: rows.length,
           resultCountLoading: jobsLoading,
           drawerId: `${activeTab}-job-filters`,
           onSubmit: (event, nextFilters) => {
@@ -1908,7 +1952,7 @@ export default function ProcessingAllActivityPage() {
               )
             }
             searchPlaceholder="Search book creation"
-            resultCount={jobs.length}
+            resultCount={rows.length}
             showSearchRow={false}
             inline
             drawerId={`${activeTab}-job-filters`}
@@ -1923,7 +1967,7 @@ export default function ProcessingAllActivityPage() {
                 type="button"
                 className="ghost-button"
                 disabled={
-                  !selectedJobResumeIds.length ||
+                  !selectedRowResumeIds.length ||
                   bulkActionKey === "jobs:resume" ||
                   creationActionsDisabled
                 }
@@ -1933,7 +1977,7 @@ export default function ProcessingAllActivityPage() {
                     () =>
                       apiFetch("/ingestion/jobs/bulk-resume/", {
                         method: "POST",
-                        body: { ids: selectedJobResumeIds },
+                        body: { ids: selectedRowResumeIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
@@ -1949,7 +1993,7 @@ export default function ProcessingAllActivityPage() {
                   ) : null}
                   {selectedActionLabel(
                     "Resume selected",
-                    selectedJobResumeIds.length,
+                    selectedRowResumeIds.length,
                   )}
                 </span>
               </button>
@@ -1957,7 +2001,7 @@ export default function ProcessingAllActivityPage() {
                 type="button"
                 className="ghost-button"
                 disabled={
-                  !selectedJobStopIds.length ||
+                  !selectedRowStopIds.length ||
                   bulkActionKey === "jobs:stop" ||
                   sourceTabButtonsDisabled
                 }
@@ -1967,7 +2011,7 @@ export default function ProcessingAllActivityPage() {
                     () =>
                       apiFetch("/ingestion/jobs/bulk-stop/", {
                         method: "POST",
-                        body: { ids: selectedJobStopIds },
+                        body: { ids: selectedRowStopIds },
                       }),
                     (payload) =>
                       summarizeResponse(payload, {
@@ -1981,119 +2025,33 @@ export default function ProcessingAllActivityPage() {
                   {bulkActionKey === "jobs:stop" ? (
                     <LoadingSpinner size={14} />
                   ) : null}
-                  {selectedActionLabel(
-                    "Stop selected",
-                    selectedJobStopIds.length,
-                  )}
+                  {selectedActionLabel("Stop selected", selectedRowStopIds.length)}
                 </span>
               </button>
               <button
                 type="button"
                 className="ghost-button danger-button processing-inline-danger"
                 disabled={
-                  !selectedJobCount ||
+                  !selectedRowIds.length ||
                   bulkActionKey === "jobs:delete" ||
                   sourceTabButtonsDisabled
                 }
                 onClick={() =>
                   openDeleteDialog(
                     "job-bulk",
-                    selectedJobIds,
+                    selectedRowIds,
                     "Delete selected book creation rows",
                     "This will remove the selected book creation rows.",
                   )
                 }
               >
-                {selectedActionLabel("Delete selected", selectedJobCount)}
-              </button>
-            </div>
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !jobResumeIds.length ||
-                  bulkActionKey === "jobs:resume" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "jobs:resume",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-resume/", {
-                        method: "POST",
-                        body: { ids: jobResumeIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        resumed_count: "started",
-                        skipped_invalid: "skipped",
-                      }) || "Book creation started.",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "jobs:resume" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Resume all
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !jobStopIds.length ||
-                  bulkActionKey === "jobs:stop" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "jobs:stop",
-                    () =>
-                      apiFetch("/ingestion/jobs/bulk-stop/", {
-                        method: "POST",
-                        body: { ids: jobStopIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        stopped_count: "stopped",
-                        skipped_complete: "done",
-                      }) || "Book creation stopped.",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "jobs:stop" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Stop all
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !jobs.length ||
-                  bulkActionKey === "jobs:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "job-bulk",
-                    jobs.map((job) => job.id),
-                    "Delete book creation",
-                    "This will remove every visible row in this book creation list.",
-                  )
-                }
-              >
-                Delete all
+                {selectedActionLabel("Delete selected", selectedRowIds.length)}
               </button>
             </div>
           </div>
         }
       >
-        {jobs.length ? (
+        {rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
@@ -2101,18 +2059,18 @@ export default function ProcessingAllActivityPage() {
                   <input
                     type="checkbox"
                     className="processing-checkbox"
-                    checked={allJobsSelected}
+                    checked={allRowsSelected}
                     onChange={() =>
                       setSelectedJobIds((current) =>
                         toggleVisibleSelection(
                           current,
-                          jobIdsOnPage,
-                          allJobsSelected,
+                          rowIdsOnPage,
+                          allRowsSelected,
                         ),
                       )
                     }
                     aria-label={
-                      allJobsSelected
+                      allRowsSelected
                         ? "Clear visible book creation selections"
                         : "Select all visible book creation rows"
                     }
@@ -2126,7 +2084,7 @@ export default function ProcessingAllActivityPage() {
               </tr>
             </thead>
             <tbody>
-              {jobs.map((job) => {
+              {rows.map((job) => {
                 const isBusy = busyActionId === job.id;
                 const isDeleting = busyDeleteId === `job:${job.id}`;
                 const isSelected = selectedJobIdSet.has(job.id);
@@ -2250,7 +2208,7 @@ export default function ProcessingAllActivityPage() {
           defaultFilters: defaultReviewFilters,
           filtersExpanded: reviewFiltersExpanded,
           setFiltersExpanded: setReviewFiltersExpanded,
-          searchPlaceholder: "Search duplicate checks",
+          searchPlaceholder: "Search duplication requests",
           resultCount: duplicateReviews.length,
           resultCountLoading: reviewsLoading,
           drawerId: `${activeTab}-review-filters`,
@@ -2291,7 +2249,7 @@ export default function ProcessingAllActivityPage() {
                 [LOAD_SCOPE_REVIEWS],
               )
             }
-            searchPlaceholder="Search duplicate checks"
+            searchPlaceholder="Search duplication requests"
             resultCount={duplicateReviews.length}
             showSearchRow={false}
             inline
@@ -2308,22 +2266,22 @@ export default function ProcessingAllActivityPage() {
                 className="ghost-button"
                 disabled={
                   !selectedDuplicateConfirmIds.length ||
-                  bulkActionKey === "duplicate:confirm_existing" ||
+                  bulkActionKey === "duplicate:same_book" ||
                   creationActionsDisabled
                 }
                 onClick={() =>
                   resolveDuplicateBulk(
                     selectedDuplicateConfirmIds,
-                    "confirm_existing",
+                    "same_book",
                   )
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "duplicate:confirm_existing" ? (
+                  {bulkActionKey === "duplicate:same_book" ? (
                     <LoadingSpinner size={14} />
                   ) : null}
                   {selectedActionLabel(
-                    "Use existing selected",
+                    "Same Book selected",
                     selectedDuplicateConfirmIds.length,
                   )}
                 </span>
@@ -2333,71 +2291,21 @@ export default function ProcessingAllActivityPage() {
                 className="ghost-button"
                 disabled={
                   !selectedDuplicateDismissIds.length ||
-                  bulkActionKey === "duplicate:dismiss" ||
+                  bulkActionKey === "duplicate:new_book" ||
                   creationActionsDisabled
                 }
                 onClick={() =>
-                  resolveDuplicateBulk(selectedDuplicateDismissIds, "dismiss")
+                  resolveDuplicateBulk(selectedDuplicateDismissIds, "new_book")
                 }
               >
                 <span className="button-label">
-                  {bulkActionKey === "duplicate:dismiss" ? (
+                  {bulkActionKey === "duplicate:new_book" ? (
                     <LoadingSpinner size={14} />
                   ) : null}
                   {selectedActionLabel(
-                    "Keep new selected",
+                    "New Book selected",
                     selectedDuplicateDismissIds.length,
                   )}
-                </span>
-              </button>
-            </div>
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !duplicateReviews.some(
-                    (review) => !review.existing_book_deleted,
-                  ) ||
-                  bulkActionKey === "duplicate:confirm_existing" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  resolveDuplicateBulk(
-                    duplicateReviews
-                      .filter((review) => !review.existing_book_deleted)
-                      .map((review) => review.id),
-                    "confirm_existing",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "duplicate:confirm_existing" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Use existing all
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !duplicateReviews.length ||
-                  bulkActionKey === "duplicate:dismiss" ||
-                  creationActionsDisabled
-                }
-                onClick={() =>
-                  resolveDuplicateBulk(
-                    duplicateReviews.map((review) => review.id),
-                    "dismiss",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "duplicate:dismiss" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Keep new all
                 </span>
               </button>
             </div>
@@ -2425,7 +2333,7 @@ export default function ProcessingAllActivityPage() {
                     aria-label={
                       allDuplicatesSelected
                         ? "Clear visible duplicate selections"
-                        : "Select all visible duplicate checks"
+                        : "Select all visible duplication requests"
                     }
                   />
                 </th>
@@ -2468,25 +2376,25 @@ export default function ProcessingAllActivityPage() {
                           type="button"
                           className="ghost-button"
                           onClick={() =>
-                            resolveDuplicate(review.id, "confirm_existing")
+                            resolveDuplicate(review.id, "same_book")
                           }
                           disabled={
                             busyActionId === review.id ||
                             creationActionsDisabled
                           }
                         >
-                          Use existing
+                          Same Book
                         </button>
                       ) : null}
                       <button
                         type="button"
                         className="ghost-button"
-                        onClick={() => resolveDuplicate(review.id, "dismiss")}
+                        onClick={() => resolveDuplicate(review.id, "new_book")}
                         disabled={
                           busyActionId === review.id || creationActionsDisabled
                         }
                       >
-                        {review.existing_book_deleted ? "Recreate" : "Keep new"}
+                        New Book
                       </button>
                     </div>
                   </td>
@@ -2594,11 +2502,11 @@ export default function ProcessingAllActivityPage() {
     return (
       <ProcessingJobReviewCard
         visible
-        title="Failed Jobs Create Queue"
-        emptyTitle="No failed jobs match these filters"
+        title="Failed Requests"
+        emptyTitle="No failed requests match these filters"
         cardClassName="processing-failed-card"
         loading={jobReviewsLoading}
-        loadingLabel="Loading failed jobs"
+        loadingLabel="Loading failed requests"
         headerAside={renderCardHeaderSearch({
           filters: failedFilters,
           setFilters: setFailedFilters,
@@ -2654,39 +2562,68 @@ export default function ProcessingAllActivityPage() {
           setSelectedFailedJobIds((current) => toggleSelectedId(current, jobId))
         }
         selectedSubmissionIds={selectedFailedSubmissionIds}
-        submissionIds={failedSubmissionIds}
         actionKey="failed:create"
         bulkActionKey={bulkActionKey}
         creationActionsDisabled={creationActionsDisabled}
         onCreate={retrySubmissionsBulk}
         selectedActionLabel={selectedActionLabel}
-        activeJobId={activeFailedJobId}
-        onActiveJobChange={setActiveFailedJobId}
-        layoutClassName="processing-failed-layout"
-        tableWrapClassName="processing-failed-table-wrap"
-        detailTitle="Failure Cause & Log"
-        detailRegionAriaLabel="Failed job error and logs"
-        emptySelectionMessage="No failed job selected."
-        renderDetailBody={(job) => (
-          <>
-            <pre>{job.last_error || "No error message found."}</pre>
-            <hr />
-            {loadingFailedLogs ? (
-              <p className="table-note">Loading logs...</p>
-            ) : activeFailedJobLogs.length ? (
-              <pre>
-                {activeFailedJobLogs
-                  .map(
-                    (entry) =>
-                      `${entry.created_at} [${entry.level}] ${entry.message}`,
+        actions={
+          <div className="processing-card-actions processing-card-actions-grouped">
+            <div className="processing-card-action-row">
+              <button
+                type="button"
+                className="ghost-button"
+                disabled={
+                  !selectedFailedSubmissionIds.length ||
+                  bulkActionKey === "failed:retry" ||
+                  creationActionsDisabled
+                }
+                onClick={() =>
+                  retrySubmissionsBulk(selectedFailedSubmissionIds, "failed:retry")
+                }
+              >
+                <span className="button-label">
+                  {bulkActionKey === "failed:retry" ? (
+                    <LoadingSpinner size={14} />
+                  ) : null}
+                  {selectedActionLabel(
+                    "Retry selected",
+                    selectedFailedSubmissionIds.length,
+                  )}
+                </span>
+              </button>
+            </div>
+            <div className="processing-card-action-row">
+              <button
+                type="button"
+                className="ghost-button danger-button processing-inline-danger"
+                disabled={
+                  !selectedFailedSubmissionIds.length ||
+                  bulkActionKey === "submissions:delete" ||
+                  sourceTabButtonsDisabled
+                }
+                onClick={() =>
+                  openDeleteDialog(
+                    "submission-bulk",
+                    selectedFailedSubmissionIds,
+                    "Delete selected failed requests",
+                    "This will remove the selected failed requests.",
                   )
-                  .join("\n")}
-              </pre>
-            ) : (
-              <p className="table-note">No logs found for this job.</p>
-            )}
-          </>
-        )}
+                }
+              >
+                {selectedActionLabel(
+                  "Delete selected",
+                  selectedFailedSubmissionIds.length,
+                )}
+              </button>
+            </div>
+          </div>
+        }
+        showCreateActions={false}
+        showDetailPanel={false}
+        tableWrapClassName="processing-failed-table-wrap"
+        errorColumnLabel="Errors"
+        renderErrorCell={(job) => <InlineErrorCell message={job.last_error} />}
         getRequestPrimaryText={getRequestPrimaryText}
         jobTypeLabel={jobTypeLabel}
         getJobActivityAt={getJobActivityAt}
@@ -2823,58 +2760,6 @@ export default function ProcessingAllActivityPage() {
                 {selectedActionLabel("Delete selected", selectedRunCount)}
               </button>
             </div>
-            <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !runStopIds.length ||
-                  bulkActionKey === "runs:stop" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  runBulkAction(
-                    "runs:stop",
-                    () =>
-                      apiFetch("/ingestion/catalog/curation-runs/bulk-stop/", {
-                        method: "POST",
-                        body: { ids: runStopIds },
-                      }),
-                    (payload) =>
-                      summarizeResponse(payload, {
-                        stopped_count: "stopped",
-                        skipped_complete: "done",
-                      }) || "Runs stopped.",
-                  )
-                }
-              >
-                <span className="button-label">
-                  {bulkActionKey === "runs:stop" ? (
-                    <LoadingSpinner size={14} />
-                  ) : null}
-                  Stop all
-                </span>
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger-button processing-inline-danger"
-                disabled={
-                  !curationRuns.length ||
-                  bulkActionKey === "runs:delete" ||
-                  sourceTabButtonsDisabled
-                }
-                onClick={() =>
-                  openDeleteDialog(
-                    "run-bulk",
-                    curationRuns.map((run) => run.id),
-                    "Delete runs",
-                    "This will remove every visible run.",
-                  )
-                }
-              >
-                Delete all
-              </button>
-            </div>
           </div>
         }
       >
@@ -2935,11 +2820,7 @@ export default function ProcessingAllActivityPage() {
                         <span className="table-note">
                           {runSummaryLabel(run)}
                         </span>
-                        {run.last_error ? (
-                          <span className="processing-row-error">
-                            {run.last_error}
-                          </span>
-                        ) : null}
+                        <ProcessingErrorDisclosure message={run.last_error} />
                       </div>
                     </td>
                     <td>
@@ -2991,15 +2872,71 @@ export default function ProcessingAllActivityPage() {
   }
 
   function renderAllTab() {
+    const expandableCards = orderExpandableCards(
+      [
+        {
+          key: "stopped",
+          expanded: stoppedCardExpanded,
+          element: renderSubmissionsCard("Stopped", "", {
+            rows: stoppedSubmissions,
+            emptyTitle: "No stopped requests",
+            actionMode: "stopped",
+            collapsible: true,
+            collapsed: !stoppedCardExpanded,
+            onToggleCollapsed: () =>
+              toggleCollapsibleCard("stopped", setStoppedCardExpanded),
+          }),
+        },
+        {
+          key: "queued",
+          expanded: queuedCardExpanded,
+          element: renderSubmissionsCard("Queued", "", {
+            rows: queuedSubmissions,
+            emptyTitle: "No queued requests",
+            actionMode: "queued",
+            collapsible: true,
+            collapsed: !queuedCardExpanded,
+            onToggleCollapsed: () =>
+              toggleCollapsibleCard("queued", setQueuedCardExpanded),
+          }),
+        },
+        {
+          key: "deleted",
+          expanded: deletedCardExpanded,
+          element: renderSubmissionsCard("Deleted", "", {
+            rows: deletedSubmissions,
+            emptyTitle: "No deleted requests",
+            actionMode: "deleted",
+            collapsible: true,
+            collapsed: !deletedCardExpanded,
+            onToggleCollapsed: () =>
+              toggleCollapsibleCard("deleted", setDeletedCardExpanded),
+          }),
+        },
+      ],
+      expandedCardPriorityKey,
+    );
+
     return (
       <div className="processing-section-grid">
         {renderAllActivityOverviewCard()}
-        {renderSubmissionsCard("All Requests")}
-        {renderJobsCard("Book Creation")}
-        {renderRequeueReviewCard()}
-        {renderFailedJobsCard()}
-        {renderRunsCard("Run History")}
-        {renderDuplicateCard("Duplicate Checks")}
+        {view === "duplicate"
+          ? renderDuplicateCard("Deplicate Requests")
+          : renderFailedJobsCard()}
+        {renderJobsCard("Processing", "", {
+          rows: processingJobs,
+          emptyTitle: "No requests are processing",
+        })}
+        {renderSubmissionsCard("Ready", "processing-full-span-card", {
+          rows: readySubmissions,
+          actionMode: "ready",
+          emptyTitle: "No ready requests",
+        })}
+        <div className="processing-collapsible-stack">
+          {expandableCards.map((card) => (
+            <div key={card.key}>{card.element}</div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -3009,13 +2946,12 @@ export default function ProcessingAllActivityPage() {
       className={`page-stack processing-page${globalActionsLocked ? " is-actions-locked" : ""}`}
     >
       <section className="detail-card">
-        <div className="panel-header">
-          <div className="section-title-block">
-            <h1>All Activity</h1>
+        <div className="panel-header processing-page-header">
+          <div className="section-title-block processing-page-title">
+            <h1>
+              {view === "duplicate" ? "Deplicate Requests" : "Failed Requests"}
+            </h1>
           </div>
-          {loading || processingActivityBusy ? (
-            <LoadingSpinner size={18} />
-          ) : null}
         </div>
         {error ? (
           <div className="page-state page-state-error">{error}</div>

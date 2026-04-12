@@ -92,6 +92,7 @@ export default function TwoFactorSetupPage() {
       <PageLoader
         label="Loading session"
         detail="Checking your security requirements."
+        variant="auth"
       />
     );
   }
@@ -111,15 +112,12 @@ export default function TwoFactorSetupPage() {
         <h1>Set up two-factor authentication</h1>
 
         {bootstrapping && !setup.provisioning_uri ? (
-          <div className="page-loader auth-setup-loader">
-            <div className="page-loader-badge">
-              <LoadingSpinner size={24} />
-            </div>
-            <div className="page-loader-copy">
-              <strong>Preparing your setup</strong>
-              <p>Generating your QR code and secret.</p>
-            </div>
-          </div>
+          <PageLoader
+            label="Preparing your setup"
+            detail="Generating your QR code and secret."
+            variant="card"
+            className="auth-setup-loader"
+          />
         ) : null}
 
         {!bootstrapping && !setup.provisioning_uri ? (

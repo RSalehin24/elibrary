@@ -31,15 +31,13 @@ export const ALL_LOAD_SCOPES = [
 export const defaultSubmissionFilters = {
   q: "",
   status: "",
-  review_state: "",
-  resolution_status: "",
-  input_type: "",
+  range: "",
 };
 
 export const defaultJobFilters = {
   q: "",
   status: "",
-  job_type: "",
+  range: "",
 };
 
 export const defaultCatalogFilters = {
@@ -90,7 +88,6 @@ export const defaultCatalogSummary = {
   queued: 0,
   processing: 0,
   stopped: 0,
-  requeued: 0,
   unfinished: 0,
   failed: 0,
   ready: 0,
@@ -106,5 +103,4 @@ export const defaultIncompleteSummary = {
   processing: 0,
   failed: 0,
   stopped: 0,
-  requeued: 0,
 };

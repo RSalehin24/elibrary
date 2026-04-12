@@ -23,7 +23,8 @@
 .skeleton-line,
 .skeleton-pill,
 .skeleton-button,
-.skeleton-panel {
+.skeleton-panel,
+.processing-card-count-skeleton {
   position: relative;
   overflow: hidden;
   background: rgba(210, 221, 216, 0.96);
@@ -33,7 +34,8 @@
 .skeleton-line::after,
 .skeleton-pill::after,
 .skeleton-button::after,
-.skeleton-panel::after {
+.skeleton-panel::after,
+.processing-card-count-skeleton::after {
   content: "";
   position: absolute;
   inset: 0;

@@ -48,6 +48,7 @@ export default function ReaderPage() {
       <PageLoader
         label="Opening reader"
         detail="Preparing your book preview."
+        variant="reader"
       />
     );
   }

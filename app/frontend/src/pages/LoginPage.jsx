@@ -1,43 +1,10 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import EmailInputFeedback from "../components/EmailInputFeedback";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function LoginEmailFeedbackIcon({ valid }) {
-  if (valid) {
-    return (
-      <svg
-        viewBox="0 0 20 20"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M4.5 10.5 8 14l7.5-8.5" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="m6 6 8 8" />
-      <path d="m14 6-8 8" />
-    </svg>
-  );
-}
+import { getEmailValidationState } from "../utils/email";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -47,9 +14,8 @@ export default function LoginPage() {
   const [form, setForm] = useState({ email: "", password: "", otp_token: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const normalizedEmail = form.email.trim();
-  const hasEmailInput = normalizedEmail.length > 0;
-  const emailLooksValid = EMAIL_PATTERN.test(normalizedEmail);
+  const { normalizedEmail, hasEmailInput, emailLooksValid } =
+    getEmailValidationState(form.email);
   const showEmailFeedback = phase === "credentials" && hasEmailInput;
   const credentialsReady =
     hasEmailInput && emailLooksValid && form.password.trim().length > 0;
@@ -133,21 +99,10 @@ export default function LoginPage() {
               }
             />
             {showEmailFeedback ? (
-              <span
+              <EmailInputFeedback
                 id="login-email-feedback"
-                className={`login-email-feedback login-email-feedback-${emailLooksValid ? "valid" : "invalid"}`}
-                role="status"
-                aria-live="polite"
-              >
-                <span className="login-email-feedback-icon" aria-hidden="true">
-                  <LoginEmailFeedbackIcon valid={emailLooksValid} />
-                </span>
-                <span>
-                  {emailLooksValid
-                    ? "Email looks good."
-                    : "Enter a valid email address."}
-                </span>
-              </span>
+                email={form.email}
+              />
             ) : null}
           </label>
           <label>

@@ -143,7 +143,7 @@ class SourceCatalogEntryCreateBooksView(APIView):
                     )
                     summary["queued_creates"] += 1
                     continue
-                if status_value in {"unfinished", "failed", "stopped", "requeued"}:
+                if status_value in {"unfinished", "failed", "stopped"}:
                     _, created = queue_reprocess_book(inspection["local_book"], actor=request.user, origin=SubmissionOrigin.CURATION)
                     if created:
                         summary["queued_updates"] += 1

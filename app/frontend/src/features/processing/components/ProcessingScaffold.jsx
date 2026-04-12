@@ -1,6 +1,6 @@
 import BookRouteLink from "../../../components/BookRouteLink";
 import EmptyState from "../../../components/EmptyState";
-import LoadingSpinner from "../../../components/LoadingSpinner";
+import ProcessingCardSkeleton from "../../../components/ProcessingCardSkeleton";
 import { getRequestPrimaryText, getRequestSecondaryText } from "../helpers";
 
 export function RequestValue({ value, error }) {
@@ -11,7 +11,39 @@ export function RequestValue({ value, error }) {
     <div className="table-cell-stack table-request-cell">
       <strong>{primary}</strong>
       {secondary ? <span className="table-note">{secondary}</span> : null}
-      {error ? <span className="processing-row-error">{error}</span> : null}
+      <ProcessingErrorDisclosure message={error} />
+    </div>
+  );
+}
+
+export function ProcessingErrorDisclosure({
+  message,
+  summary = "View error",
+  className = "processing-row-error",
+  bodyClassName = "processing-row-error-body",
+}) {
+  if (!message) {
+    return null;
+  }
+
+  return (
+    <details className={className}>
+      <summary>{summary}</summary>
+      <div className={bodyClassName}>
+        <pre>{message}</pre>
+      </div>
+    </details>
+  );
+}
+
+export function InlineErrorCell({ message }) {
+  if (!message) {
+    return <span className="table-note">-</span>;
+  }
+
+  return (
+    <div className="processing-inline-error-cell">
+      <pre>{message}</pre>
     </div>
   );
 }
@@ -75,18 +107,7 @@ export function CatalogStopIcon() {
 }
 
 export function renderProcessingCardLoader(label) {
-  const screenReaderLabel = label || "Loading";
-  return (
-    <div
-      className="processing-inline-loader"
-      role="status"
-      aria-live="polite"
-      aria-label={screenReaderLabel}
-    >
-      <LoadingSpinner size={16} />
-      <span>Loading...</span>
-    </div>
-  );
+  return <ProcessingCardSkeleton label={label || "Loading"} />;
 }
 
 export function QueueTableCard({
@@ -100,18 +121,16 @@ export function QueueTableCard({
   cardClassName = "",
   loading = false,
   loadingLabel = "",
+  collapsible = false,
+  collapsed = false,
+  onToggleCollapsed = null,
 }) {
   const titleBlock = (
     <div className="section-title-block">
       <h2>{title}</h2>
     </div>
   );
-  const countPill =
-    count !== undefined && count !== null ? (
-      <span className="processing-card-count">
-        {loading ? <LoadingSpinner size={14} /> : count}
-      </span>
-    ) : null;
+  const showHeaderAside = Boolean(headerAside) && !collapsed;
   const shellContent = loading
     ? renderProcessingCardLoader(
         loadingLabel || `Loading ${title.toLowerCase()}`,
@@ -120,29 +139,39 @@ export function QueueTableCard({
 
   return (
     <section
-      className={`detail-card processing-card processing-list-card ${cardClassName}`.trim()}
+      className={`detail-card processing-card processing-list-card${collapsed ? " is-collapsed" : ""} ${cardClassName}`.trim()}
     >
       <div className="processing-card-head">
-        {headerAside ? (
-          <div className="processing-card-head-meta">
-            {titleBlock}
-            {countPill}
-          </div>
+        {showHeaderAside ? (
+          <div className="processing-card-head-meta">{titleBlock}</div>
         ) : (
           titleBlock
         )}
-        {headerAside ? null : countPill}
-        {headerAside ? (
+        {showHeaderAside ? (
           <div className="processing-card-head-aside">{headerAside}</div>
         ) : null}
+        {collapsible && onToggleCollapsed ? (
+          <button
+            type="button"
+            className="ghost-button processing-card-toggle"
+            onClick={onToggleCollapsed}
+            aria-expanded={collapsed ? "false" : "true"}
+          >
+            {collapsed ? "Expand" : "Collapse"}
+          </button>
+        ) : null}
       </div>
-      {toolbar ? (
+      {!collapsed && toolbar ? (
         <div className="processing-card-toolbar">{toolbar}</div>
       ) : null}
-      {actions ? <div className="processing-bulk-bar">{actions}</div> : null}
-      <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>
-        {shellContent}
-      </div>
+      {!collapsed && actions ? (
+        <div className="processing-bulk-bar">{actions}</div>
+      ) : null}
+      {!collapsed ? (
+        <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>
+          {shellContent}
+        </div>
+      ) : null}
     </section>
   );
 }

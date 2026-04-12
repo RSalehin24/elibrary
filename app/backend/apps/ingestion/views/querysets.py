@@ -42,6 +42,7 @@ def submissions_ordered_queryset(queryset):
                 SubmissionStatus.DUPLICATE,
                 SubmissionStatus.CANCELLED,
                 SubmissionStatus.READY,
+                SubmissionStatus.DELETED,
                 SubmissionStatus.DRAFT,
             ],
         ),

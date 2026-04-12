@@ -173,7 +173,11 @@ export default function PasswordLinkPage({ mode = "reset" }) {
 
   if (loading) {
     return (
-      <PageLoader label="Loading session" detail="Checking account status." />
+      <PageLoader
+        label="Loading session"
+        detail="Checking account status."
+        variant="auth"
+      />
     );
   }
 
@@ -209,7 +213,13 @@ export default function PasswordLinkPage({ mode = "reset" }) {
   }
 
   if (validatingLink) {
-    return <PageLoader label="Checking link" detail="Validating password link." />;
+    return (
+      <PageLoader
+        label="Checking link"
+        detail="Validating password link."
+        variant="auth"
+      />
+    );
   }
 
   if (linkState === "invalid") {

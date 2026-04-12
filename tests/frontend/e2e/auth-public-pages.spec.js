@@ -40,7 +40,7 @@ test.describe("Public Auth Pages", () => {
     await expect(continueButton).toBeEnabled();
   });
 
-  test("reset password page requests a reset email with the entered address", async ({
+  test("reset password page validates email format before requesting a reset email", async ({
     page,
   }) => {
     const authPage = new AuthPageModel(page);
@@ -71,12 +71,23 @@ test.describe("Public Auth Pages", () => {
     });
 
     await authPage.gotoPasswordResetRequest();
+    const resetButton = page.getByRole("button", { name: "Reset Password" });
+
+    await expect(resetButton).toBeDisabled();
+    await authPage.fillPasswordResetRequestEmail("reader");
+    await expect(page.locator(".login-email-feedback-invalid")).toBeVisible();
+    await expect(page.getByText("Enter a valid email address.")).toBeVisible();
+    await expect(resetButton).toBeDisabled();
+
     await expect(
       page.getByText(
         "Enter your email address and we'll send you a secure password reset link.",
       ),
     ).toHaveCount(0);
     await authPage.fillPasswordResetRequestEmail("reader@example.com");
+    await expect(page.locator(".login-email-feedback-valid")).toBeVisible();
+    await expect(page.getByText("Email looks good.")).toBeVisible();
+    await expect(resetButton).toBeEnabled();
     await authPage.submitPasswordResetRequest();
 
     expect(await resetRequestPromise).toEqual({ email: "reader@example.com" });

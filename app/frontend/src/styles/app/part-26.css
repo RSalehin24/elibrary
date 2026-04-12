@@ -53,6 +53,7 @@
   .processing-col-type,
   .processing-col-time,
   .processing-col-book,
+  .processing-col-error,
   .processing-col-action {
     width: auto;
   }

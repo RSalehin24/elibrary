@@ -36,7 +36,9 @@ class ProcessingLogSerializer(serializers.ModelSerializer):
 
 
 class DuplicateReviewDecisionSerializer(serializers.Serializer):
-    decision = serializers.ChoiceField(choices=["confirm_existing", "dismiss"])
+    decision = serializers.ChoiceField(
+        choices=["same_book", "new_book", "confirm_existing", "dismiss"],
+    )
     notes = serializers.CharField(required=False, allow_blank=True)
 
 

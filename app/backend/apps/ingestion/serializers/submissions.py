@@ -22,9 +22,6 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
     target_book_slug = serializers.SerializerMethodField()
     target_book_title = serializers.SerializerMethodField()
     target_book_deleted = serializers.SerializerMethodField()
-    is_requeued = serializers.SerializerMethodField()
-    requeue_reason = serializers.SerializerMethodField()
-
     class Meta:
         model = ProcessingJob
         fields = [
@@ -43,8 +40,6 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
             "target_book_slug",
             "target_book_title",
             "target_book_deleted",
-            "is_requeued",
-            "requeue_reason",
             "last_error",
             "created_at",
             "updated_at",
@@ -81,15 +76,6 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
     def get_target_book_deleted(self, obj):
         book = self.get_raw_target_book(obj)
         return bool(book and book.deleted_at)
-
-    def get_is_requeued(self, obj):
-        raw_payload = obj.submission.raw_payload or {}
-        return bool(obj.job_type == "reprocess" or raw_payload.get("requeued", False))
-
-    def get_requeue_reason(self, obj):
-        raw_payload = obj.submission.raw_payload or {}
-        return "Regeneration requested." if obj.job_type == "reprocess" else raw_payload.get("requeue_reason", "")
-
 
 class SubmissionSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()

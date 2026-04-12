@@ -8,13 +8,8 @@ export const bookPropertiesItems = [
 
 export const processingItems = [
   {
-    to: "/processing-my-requests",
-    label: "My Requests",
-    capabilityRequired: false,
-  },
-  {
     to: "/processing-catalog-books",
-    label: "Catalog Books",
+    label: "Catalog",
     capabilityRequired: true,
   },
   {
@@ -23,13 +18,23 @@ export const processingItems = [
     capabilityRequired: true,
   },
   {
-    to: "/processing-incomplete-check",
-    label: "Incomplete Automation",
+    to: "/processing-my-requests",
+    label: "My Requests",
+    capabilityRequired: false,
+  },
+  {
+    to: "/processing-failed-requests",
+    label: "Failed Requests",
     capabilityRequired: true,
   },
   {
-    to: "/processing-all-activity",
-    label: "All Activity",
+    to: "/processing-duplicate-requests",
+    label: "Deplicate Requests",
+    capabilityRequired: true,
+  },
+  {
+    to: "/processing-incomplete-check",
+    label: "Incomplete Requests",
     capabilityRequired: true,
   },
 ];

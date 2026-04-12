@@ -1,6 +1,7 @@
 export default function AccessUsersTableCard({
   currentUserId,
   filteredManagedUsers,
+  getAccountAccessLabels,
   onClearSearch,
   onDeleteUser,
   onEditUser,
@@ -19,7 +20,6 @@ export default function AccessUsersTableCard({
   usersPage,
   usersPageCount,
   usersRowsPerPage,
-  formatAccountAccess,
 }) {
   return (
     <section className="detail-card" data-testid="access-users-section">
@@ -161,58 +161,81 @@ export default function AccessUsersTableCard({
           </thead>
           <tbody>
             {pagedManagedUsers.length ? (
-              pagedManagedUsers.map((entry) => (
-                <tr key={entry.id}>
-                  <td>{entry.full_name || "-"}</td>
-                  <td>{entry.email}</td>
-                  <td>{entry.is_active ? "Active" : "Disabled"}</td>
-                  <td>
-                    {entry.totp_required
-                      ? "Required"
-                      : entry.totp_enabled
-                        ? "Enabled"
-                        : "Optional"}
-                  </td>
-                  <td>{formatAccountAccess(entry)}</td>
-                  <td>
-                    <div className="table-actions">
-                      {`${entry.id}` === `${currentUserId}` ||
-                      entry.is_superuser ? (
-                        <span className="table-note">Locked</span>
+              pagedManagedUsers.map((entry) => {
+                const accountAccessLabels = getAccountAccessLabels(entry);
+
+                return (
+                  <tr key={entry.id}>
+                    <td>{entry.full_name || "-"}</td>
+                    <td>{entry.email}</td>
+                    <td>{entry.is_active ? "Active" : "Disabled"}</td>
+                    <td>
+                      {entry.totp_required
+                        ? "Required"
+                        : entry.totp_enabled
+                          ? "Enabled"
+                          : "Optional"}
+                    </td>
+                    <td className="access-permission-cell">
+                      {accountAccessLabels.length ? (
+                        <div
+                          className="access-permission-list"
+                          data-testid={`access-user-permissions-${entry.id}`}
+                          aria-label={`Account permissions: ${accountAccessLabels.join(", ")}`}
+                        >
+                          {accountAccessLabels.map((label) => (
+                            <span
+                              key={`${entry.id}-${label}`}
+                              className="access-permission-chip"
+                            >
+                              {label}
+                            </span>
+                          ))}
+                        </div>
                       ) : (
-                        <>
-                          {entry.can_resend_setup_email ? (
+                        <span className="access-permission-empty">-</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        {`${entry.id}` === `${currentUserId}` ||
+                        entry.is_superuser ? (
+                          <span className="table-note">Locked</span>
+                        ) : (
+                          <>
+                            {entry.can_resend_setup_email ? (
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={() => onResendSetupEmail(entry)}
+                                disabled={`${resendingSetupUserId}` === `${entry.id}`}
+                              >
+                                {`${resendingSetupUserId}` === `${entry.id}`
+                                  ? "Sending..."
+                                  : "Resend Email"}
+                              </button>
+                            ) : null}
                             <button
                               type="button"
-                              className="ghost-button"
-                              onClick={() => onResendSetupEmail(entry)}
-                              disabled={`${resendingSetupUserId}` === `${entry.id}`}
+                              className="primary-button"
+                              onClick={() => onEditUser(entry)}
                             >
-                              {`${resendingSetupUserId}` === `${entry.id}`
-                                ? "Sending..."
-                                : "Resend Email"}
+                              Edit
                             </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="primary-button"
-                            onClick={() => onEditUser(entry)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost-button danger-button"
-                            onClick={() => onDeleteUser(entry)}
-                          >
-                            Delete
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))
+                            <button
+                              type="button"
+                              className="ghost-button danger-button"
+                              onClick={() => onDeleteUser(entry)}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td colSpan={6}>

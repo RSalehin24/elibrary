@@ -18,8 +18,53 @@ export function buildSubmissionOverviewSummary(submissionRows) {
       failed: 0,
       stopped: 0,
       duplicate: 0,
+      deleted: 0,
     },
   );
+}
+
+export function orderExpandableCards(cards, prioritizedExpandedKey = "") {
+  const expandedCards = [];
+  const collapsedCards = [];
+
+  (cards || []).forEach((card) => {
+    if (!card) {
+      return;
+    }
+    if (card.expanded) {
+      expandedCards.push(card);
+      return;
+    }
+    collapsedCards.push(card);
+  });
+
+  if (!prioritizedExpandedKey) {
+    return [...expandedCards, ...collapsedCards];
+  }
+
+  const prioritizedIndex = expandedCards.findIndex(
+    (card) => card.key === prioritizedExpandedKey,
+  );
+
+  if (prioritizedIndex === -1) {
+    return [...expandedCards, ...collapsedCards];
+  }
+
+  const [prioritizedCard] = expandedCards.splice(prioritizedIndex, 1);
+  return [prioritizedCard, ...expandedCards, ...collapsedCards];
+}
+
+export function formatRemovedRangeLabel(range) {
+  if (range === "year") {
+    return "Past Year";
+  }
+  if (range === "month") {
+    return "Past Month";
+  }
+  if (range === "day") {
+    return "Past Day";
+  }
+  return "Past Week";
 }
 
 export function summarizeResponse(payload, labels) {

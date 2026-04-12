@@ -10,19 +10,18 @@ export const STATUS_META = {
   approved: { label: "Reviewed", description: "Metadata has been reviewed and approved." },
   rejected: { label: "Needs correction", description: "A reviewer requested changes to this metadata." },
   pending_resolution: {
-    label: "Resolving source",
-    description: "The system is still matching this submission to the right source.",
+    label: "Requests",
+    description: "This request still needs source matching before it can continue.",
   },
   ambiguous: { label: "Needs choice", description: "More than one possible source matched this title." },
   failed: { label: "Failed", description: "Something went wrong and needs attention." },
   cancelled: { label: "Stopped", description: "This task was stopped before it finished." },
   stopped: { label: "Stopped", description: "This task was stopped before it finished." },
-  requeued: { label: "Requeued", description: "This item has been queued again for processing." },
   duplicate: { label: "Duplicate", description: "This request matches an existing book." },
   new: { label: "New", description: "This source has not been created locally yet." },
   unfinished: { label: "Unfinished", description: "This source still needs another processing pass." },
   deleted: { label: "Deleted", description: "This source points to a deleted local book." },
-  succeeded: { label: "Completed", description: "The background job finished successfully." },
+  succeeded: { label: "Ready", description: "The background job finished successfully." },
 };
 
 export function getStatusMeta(value) {
@@ -31,4 +30,3 @@ export function getStatusMeta(value) {
   }
   return STATUS_META[value] || { label: value.replace(/_/g, " "), description: "" };
 }
-

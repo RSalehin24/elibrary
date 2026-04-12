@@ -15,5 +15,10 @@ export function toggleVisibleSelection(currentIds, visibleIds, allSelected) {
 }
 
 export function selectedActionLabel(label, count) {
-  return count ? `${label} (${count})` : label;
+  const normalizedLabel = label
+    .replace(/\bselected\b/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return count ? `${normalizedLabel} (${count})` : normalizedLabel;
 }

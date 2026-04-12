@@ -100,7 +100,6 @@ def inspect_source_catalog_entry(entry, source_map, submission_map=None):
     local_book = book_source.book if book_source and book_source.book_id else None
     latest_submission = submission_map.get(entry.source_url)
     latest_job = local_book.processing_jobs.first() if local_book else latest_processing_job_for_submission(latest_submission)
-    is_requeued = bool(latest_submission and (latest_submission.raw_payload or {}).get("requeued"))
 
     if local_book and local_book.deleted_at:
         status = "deleted"
@@ -112,8 +111,6 @@ def inspect_source_catalog_entry(entry, source_map, submission_map=None):
         status = "stopped"
     elif latest_submission and latest_submission.status == "cancelled":
         status = "stopped"
-    elif is_requeued:
-        status = "requeued"
     elif latest_job and latest_job.status == JobStatus.FAILED:
         status = "failed"
     elif latest_submission and latest_submission.status in {"failed", "needs_review", "duplicate"}:
@@ -192,7 +189,6 @@ def summarize_source_catalog_snapshots(snapshots):
         "new": summary.get("new", 0),
         "queued": queued_count,
         "processing": processing_count,
-        "requeued": summary.get("requeued", 0),
         "stopped": summary.get("stopped", 0),
         "unfinished": summary.get("unfinished", 0),
         "failed": summary.get("failed", 0),
@@ -223,7 +219,6 @@ def build_catalog_curation_run_summary():
         "status_counts": {
             "new": 0,
             "processing": 0,
-            "requeued": 0,
             "stopped": 0,
             "unfinished": 0,
             "failed": 0,
@@ -263,4 +258,3 @@ def submission_origin_for_run(run):
     if run.trigger == CatalogCurationTrigger.SCHEDULED:
         return SubmissionOrigin.AUTOMATION
     return SubmissionOrigin.CURATION
-

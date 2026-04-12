@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import time
+import re
 
 from django.conf import settings
 from django.core.cache import cache
@@ -28,9 +29,15 @@ from apps.common.text import normalize_catalog_text
 from apps.ingestion.models import (
     BookSubmission,
     CatalogAutomationSettings,
+    CatalogCurationMode,
+    CatalogCurationRun,
+    CatalogCurationTrigger,
+    DuplicateReview,
+    DuplicateReviewStatus,
     JobStatus,
     JobType,
     ProcessingJob,
+    ProcessingLog,
     ResolutionStatus,
     SourceCatalogEntry,
     SourceCatalogRefreshState,
@@ -118,6 +125,45 @@ CATALOG_ENTRIES = (
 ACCESS_USER_EMAIL = f"access-manager{E2E_EMAIL_DOMAIN}"
 ACCESS_USER_PASSWORD = "E2E-access-pass-123"
 
+PROCESSING_SUBMISSION_TITLES = {
+    "user_pending": "E2E User Pending Submission",
+    "user_processing": "E2E User Processing Submission",
+    "user_stopped": "E2E User Stopped Submission",
+    "user_deleted": "E2E User Deleted Submission",
+    "user_failed": "E2E User Failed Submission",
+    "automation_pending": "E2E Automation Pending Submission",
+    "automation_ready": "E2E Automation Ready Submission",
+    "automation_processing": "E2E Automation Processing Submission",
+    "automation_queued": "E2E Automation Queued Submission",
+    "automation_stopped": "E2E Automation Stopped Submission",
+    "automation_deleted": "E2E Automation Deleted Submission",
+    "curation_ready": "E2E Curation Ready Submission",
+    "curation_processing": "E2E Curation Processing Submission",
+    "curation_queued": "E2E Curation Queued Submission",
+    "curation_stopped": "E2E Curation Stopped Submission",
+    "curation_deleted": "E2E Curation Deleted Submission",
+    "duplicate_review": "E2E Duplicate Review Submission",
+}
+
+FAILED_LOG_MESSAGE = "Seeded failed job log entry."
+
+SCHEDULED_RUN_ACTIVE_SUMMARY = {
+    "queued_creates": 7,
+    "queued_updates": 1,
+    "skipped_ready": 2,
+}
+
+SCHEDULED_RUN_FAILED_SUMMARY = {
+    "queued_creates": 2,
+    "queued_updates": 3,
+    "skipped_ready": 4,
+}
+
+
+def seed_source_url(label: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+    return f"{E2E_SOURCE_PREFIX}{slug}/"
+
 
 class Command(BaseCommand):
     help = "Reset and seed deterministic local E2E data for real browser tests."
@@ -158,6 +204,7 @@ class Command(BaseCommand):
 
         Book.objects.filter(title__startswith=E2E_TITLE_PREFIX).delete()
         SourceCatalogEntry.objects.filter(source_url__startswith=E2E_SOURCE_PREFIX).delete()
+        CatalogCurationRun.objects.all().delete()
         BookSubmission.objects.filter(
             Q(original_input__startswith=E2E_TITLE_PREFIX)
             | Q(original_input__startswith=E2E_SOURCE_PREFIX)
@@ -274,47 +321,345 @@ class Command(BaseCommand):
             note="Remove me during the live test.",
         )
 
+    def create_submission_record(
+        self,
+        *,
+        submitter: User,
+        title: str,
+        origin: str,
+        status: str,
+        review_state: str = ReviewState.PENDING,
+        linked_book: Book | None = None,
+        input_type: str = SubmissionInputType.TITLE,
+        resolved_url: str | None = None,
+        resolution_status: str = ResolutionStatus.RESOLVED,
+        resolution_confidence: float = 0.95,
+        error_message: str = "",
+    ) -> BookSubmission:
+        return BookSubmission.objects.create(
+            submitter=submitter,
+            input_type=input_type,
+            origin=origin,
+            original_input=title,
+            normalized_input=normalize_catalog_text(title),
+            resolved_url=resolved_url if resolved_url is not None else seed_source_url(title),
+            resolution_status=resolution_status,
+            resolution_confidence=resolution_confidence,
+            status=status,
+            review_state=review_state,
+            linked_book=linked_book,
+            error_message=error_message,
+        )
+
+    def create_processing_job_record(
+        self,
+        *,
+        submission: BookSubmission,
+        book: Book | None = None,
+        status: str,
+        job_type: str = JobType.INGESTION,
+        queue_name: str = "",
+        task_id: str = "",
+        last_error: str = "",
+        cancel_requested: bool = False,
+    ) -> ProcessingJob:
+        return ProcessingJob.objects.create(
+            submission=submission,
+            book=book,
+            job_type=job_type,
+            status=status,
+            queue_name=queue_name,
+            task_id=task_id,
+            cancel_requested=cancel_requested,
+            last_error=last_error,
+        )
+
     def create_submissions(self, admin: User, books: dict[str, Book]):
-        alpha = BookSubmission.objects.create(
+        alpha = self.create_submission_record(
             submitter=admin,
-            input_type=SubmissionInputType.TITLE,
+            title=SUBMISSION_TITLES[0],
             origin=SubmissionOrigin.USER,
-            original_input=SUBMISSION_TITLES[0],
-            normalized_input=normalize_catalog_text(SUBMISSION_TITLES[0]),
-            resolved_url=f"{E2E_SOURCE_PREFIX}alpha-submission/",
-            resolution_status=ResolutionStatus.RESOLVED,
-            resolution_confidence=0.97,
             status=SubmissionStatus.READY,
             review_state=ReviewState.APPROVED,
             linked_book=books["detail"],
+            resolved_url=f"{E2E_SOURCE_PREFIX}alpha-submission/",
+            resolution_confidence=0.97,
         )
-        beta = BookSubmission.objects.create(
+        beta = self.create_submission_record(
             submitter=admin,
-            input_type=SubmissionInputType.TITLE,
+            title=SUBMISSION_TITLES[1],
             origin=SubmissionOrigin.USER,
-            original_input=SUBMISSION_TITLES[1],
-            normalized_input=normalize_catalog_text(SUBMISSION_TITLES[1]),
-            resolved_url=f"{E2E_SOURCE_PREFIX}beta-submission/",
-            resolution_status=ResolutionStatus.RESOLVED,
-            resolution_confidence=0.91,
             status=SubmissionStatus.QUEUED,
             review_state=ReviewState.PENDING,
             linked_book=books["home_primary"],
+            resolved_url=f"{E2E_SOURCE_PREFIX}beta-submission/",
+            resolution_confidence=0.91,
         )
-        ProcessingJob.objects.create(
+        self.create_processing_job_record(
             submission=alpha,
             book=books["detail"],
-            job_type=JobType.INGESTION,
             status=JobStatus.SUCCEEDED,
             queue_name="default",
         )
-        ProcessingJob.objects.create(
+        self.create_processing_job_record(
             submission=beta,
             book=books["home_primary"],
-            job_type=JobType.INGESTION,
             status=JobStatus.QUEUED,
             queue_name="default",
         )
+
+        self.create_submission_record(
+            submitter=admin,
+            title=PROCESSING_SUBMISSION_TITLES["user_pending"],
+            origin=SubmissionOrigin.USER,
+            status=SubmissionStatus.PENDING_RESOLUTION,
+            review_state=ReviewState.PENDING,
+            resolution_status=ResolutionStatus.UNRESOLVED,
+            resolution_confidence=0.0,
+            resolved_url="",
+        )
+
+        user_processing = self.create_submission_record(
+            submitter=admin,
+            title=PROCESSING_SUBMISSION_TITLES["user_processing"],
+            origin=SubmissionOrigin.USER,
+            status=SubmissionStatus.PROCESSING,
+            review_state=ReviewState.PENDING,
+            linked_book=books["home_secondary"],
+            resolved_url=BOOK_DEFINITIONS["home_secondary"].source_url,
+        )
+        self.create_processing_job_record(
+            submission=user_processing,
+            book=books["home_secondary"],
+            status=JobStatus.PROCESSING,
+            queue_name="celery",
+            task_id="seed-user-processing",
+        )
+
+        user_stopped = self.create_submission_record(
+            submitter=admin,
+            title=PROCESSING_SUBMISSION_TITLES["user_stopped"],
+            origin=SubmissionOrigin.USER,
+            status=SubmissionStatus.CANCELLED,
+            review_state=ReviewState.PENDING,
+            resolved_url=BOOK_DEFINITIONS["detail"].source_url,
+            error_message="Stopped by user.",
+        )
+        self.create_processing_job_record(
+            submission=user_stopped,
+            status=JobStatus.CANCELLED,
+            last_error="Stopped by user.",
+        )
+
+        user_deleted = self.create_submission_record(
+            submitter=admin,
+            title=PROCESSING_SUBMISSION_TITLES["user_deleted"],
+            origin=SubmissionOrigin.USER,
+            status=SubmissionStatus.DELETED,
+            review_state=ReviewState.PENDING,
+            resolved_url=BOOK_DEFINITIONS["preview"].source_url,
+        )
+        self.create_processing_job_record(
+            submission=user_deleted,
+            status=JobStatus.CANCELLED,
+            last_error="Deleted by user.",
+        )
+
+        user_failed = self.create_submission_record(
+            submitter=admin,
+            title=PROCESSING_SUBMISSION_TITLES["user_failed"],
+            origin=SubmissionOrigin.USER,
+            status=SubmissionStatus.FAILED,
+            review_state=ReviewState.NEEDS_REVIEW,
+            error_message="Seeded failure for live-browser coverage.",
+        )
+        failed_job = self.create_processing_job_record(
+            submission=user_failed,
+            status=JobStatus.FAILED,
+            last_error="Seeded failure for live-browser coverage.",
+        )
+        ProcessingLog.objects.create(
+            job=failed_job,
+            level="error",
+            message=FAILED_LOG_MESSAGE,
+            details={"seed": "e2e"},
+        )
+
+        duplicate_submission = self.create_submission_record(
+            submitter=admin,
+            title=PROCESSING_SUBMISSION_TITLES["duplicate_review"],
+            origin=SubmissionOrigin.USER,
+            status=SubmissionStatus.DUPLICATE,
+            review_state=ReviewState.NEEDS_REVIEW,
+            linked_book=None,
+            resolved_url=BOOK_DEFINITIONS["preview"].source_url,
+        )
+        DuplicateReview.objects.create(
+            submission=duplicate_submission,
+            existing_book=books["home_secondary"],
+            status=DuplicateReviewStatus.PENDING,
+            notes="Seeded duplicate review for live-browser coverage.",
+        )
+
+        for title, status, review_state, book_key, resolved_book_key, job_status, task_id in (
+            (
+                PROCESSING_SUBMISSION_TITLES["automation_pending"],
+                SubmissionStatus.PENDING_RESOLUTION,
+                ReviewState.PENDING,
+                None,
+                None,
+                "",
+                "",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["automation_ready"],
+                SubmissionStatus.READY,
+                ReviewState.APPROVED,
+                "preview",
+                "preview",
+                JobStatus.SUCCEEDED,
+                "",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["automation_processing"],
+                SubmissionStatus.PROCESSING,
+                ReviewState.PENDING,
+                "preview",
+                "preview",
+                JobStatus.PROCESSING,
+                "seed-automation-processing",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["automation_queued"],
+                SubmissionStatus.QUEUED,
+                ReviewState.PENDING,
+                "preview",
+                "preview",
+                JobStatus.QUEUED,
+                "",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["automation_stopped"],
+                SubmissionStatus.CANCELLED,
+                ReviewState.PENDING,
+                None,
+                "preview",
+                JobStatus.CANCELLED,
+                "",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["automation_deleted"],
+                SubmissionStatus.DELETED,
+                ReviewState.PENDING,
+                None,
+                "preview",
+                JobStatus.CANCELLED,
+                "",
+            ),
+        ):
+            submission = self.create_submission_record(
+                submitter=admin,
+                title=title,
+                origin=SubmissionOrigin.AUTOMATION,
+                status=status,
+                review_state=review_state,
+                linked_book=books[book_key] if book_key else None,
+                resolution_status=(
+                    ResolutionStatus.UNRESOLVED
+                    if status == SubmissionStatus.PENDING_RESOLUTION
+                    else ResolutionStatus.RESOLVED
+                ),
+                resolution_confidence=0.0
+                if status == SubmissionStatus.PENDING_RESOLUTION
+                else 0.9,
+                resolved_url=""
+                if status == SubmissionStatus.PENDING_RESOLUTION
+                else BOOK_DEFINITIONS[resolved_book_key].source_url,
+                error_message="Stopped by user."
+                if status == SubmissionStatus.CANCELLED
+                else "",
+            )
+            if job_status:
+                self.create_processing_job_record(
+                    submission=submission,
+                    book=books[book_key] if book_key else None,
+                    status=job_status,
+                    queue_name="celery" if job_status == JobStatus.PROCESSING else "",
+                    task_id=task_id,
+                    last_error="Stopped by user."
+                    if job_status == JobStatus.CANCELLED
+                    else "",
+                )
+
+        for title, status, review_state, book_key, resolved_book_key, job_status, task_id in (
+            (
+                PROCESSING_SUBMISSION_TITLES["curation_ready"],
+                SubmissionStatus.READY,
+                ReviewState.APPROVED,
+                "access",
+                "access",
+                JobStatus.SUCCEEDED,
+                "",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["curation_processing"],
+                SubmissionStatus.PROCESSING,
+                ReviewState.PENDING,
+                "access",
+                "access",
+                JobStatus.PROCESSING,
+                "seed-curation-processing",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["curation_queued"],
+                SubmissionStatus.QUEUED,
+                ReviewState.PENDING,
+                "access",
+                "access",
+                JobStatus.QUEUED,
+                "",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["curation_stopped"],
+                SubmissionStatus.CANCELLED,
+                ReviewState.PENDING,
+                None,
+                "access",
+                JobStatus.CANCELLED,
+                "",
+            ),
+            (
+                PROCESSING_SUBMISSION_TITLES["curation_deleted"],
+                SubmissionStatus.DELETED,
+                ReviewState.PENDING,
+                None,
+                "access",
+                JobStatus.CANCELLED,
+                "",
+            ),
+        ):
+            submission = self.create_submission_record(
+                submitter=admin,
+                title=title,
+                origin=SubmissionOrigin.CURATION,
+                status=status,
+                review_state=review_state,
+                linked_book=books[book_key] if book_key else None,
+                resolved_url=BOOK_DEFINITIONS[resolved_book_key].source_url,
+                error_message="Stopped by user."
+                if status == SubmissionStatus.CANCELLED
+                else "",
+            )
+            self.create_processing_job_record(
+                submission=submission,
+                book=books[book_key] if book_key else None,
+                status=job_status,
+                queue_name="celery" if job_status == JobStatus.PROCESSING else "",
+                task_id=task_id,
+                last_error="Stopped by user."
+                if job_status == JobStatus.CANCELLED
+                else "",
+            )
 
     def create_catalog_state(self, admin: User):
         CatalogAutomationSettings.objects.update_or_create(
@@ -351,3 +696,23 @@ class Command(BaseCommand):
                     "category": entry["category"],
                 },
             )
+        CatalogCurationRun.objects.create(
+            trigger=CatalogCurationTrigger.SCHEDULED,
+            mode=CatalogCurationMode.PENDING,
+            status=JobStatus.CANCELLED,
+            refresh_catalog=True,
+            refresh_max_pages=12,
+            requested_by=admin,
+            last_error="Seeded scheduled run stopped.",
+            summary=SCHEDULED_RUN_ACTIVE_SUMMARY,
+        )
+        CatalogCurationRun.objects.create(
+            trigger=CatalogCurationTrigger.SCHEDULED,
+            mode=CatalogCurationMode.ALL,
+            status=JobStatus.FAILED,
+            refresh_catalog=True,
+            refresh_max_pages=24,
+            requested_by=admin,
+            last_error="Seeded scheduled automation failure.",
+            summary=SCHEDULED_RUN_FAILED_SUMMARY,
+        )

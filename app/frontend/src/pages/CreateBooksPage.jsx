@@ -367,6 +367,7 @@ export default function CreateBooksPage() {
           <PageLoader
             label="Submitting requests"
             detail="Resolving matches and queueing book creation for this batch."
+            variant="card"
           />
         </section>
       ) : null}

@@ -230,6 +230,7 @@ export default function WriterPage() {
         <PageLoader
           label={`Loading ${activeTab.label}`}
           detail={`Fetching ${contributorLabel} and their related book counts.`}
+          variant="table"
         />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>

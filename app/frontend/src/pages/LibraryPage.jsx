@@ -454,6 +454,7 @@ export default function LibraryPage() {
         <PageLoader
           label="Loading books"
           detail="Fetching the current catalog view and book statuses."
+          variant="table"
         />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>

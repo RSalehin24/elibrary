@@ -240,3 +240,50 @@ def test_submission_action_links_reject_soft_deleted_linked_book(client):
 
     assert response.status_code == 410
     assert response.json()["detail"] == "This book was deleted."
+
+
+@pytest.mark.django_db
+def test_deleting_queued_submission_marks_it_deleted_and_retry_queues_it_again(client, monkeypatch):
+    user = User.objects.create_user(email="deleted-request@example.com", password="strong-password-123")
+    source_url = "https://www.ebanglalibrary.com/books/deleted-request/"
+    submission = BookSubmission.objects.create(
+        submitter=user,
+        input_type="url",
+        original_input=source_url,
+        normalized_input=normalize_text(source_url),
+        resolved_url=source_url,
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.QUEUED,
+        task_id="queued-delete-task",
+        queue_name="celery",
+    )
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.revoke_processing_task",
+        lambda task_id, terminate=False: None,
+    )
+    monkeypatch.setattr("apps.ingestion.services.submissions.dispatch_processing_job", lambda job, force=False: job)
+    client.force_login(user)
+
+    delete_response = client.delete(f"/api/ingestion/submissions/{submission.id}/")
+
+    assert delete_response.status_code == 204
+    submission.refresh_from_db()
+    job.refresh_from_db()
+    assert submission.status == SubmissionStatus.DELETED
+    assert job.status == JobStatus.CANCELLED
+
+    retry_response = client.post(
+        f"/api/ingestion/submissions/{submission.id}/retry/",
+        data=json.dumps({}),
+        content_type="application/json",
+    )
+
+    assert retry_response.status_code == 202
+    submission.refresh_from_db()
+    assert submission.status == SubmissionStatus.QUEUED
+    assert ProcessingJob.objects.filter(submission=submission, status=JobStatus.QUEUED).exists()

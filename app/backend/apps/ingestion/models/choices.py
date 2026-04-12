@@ -26,6 +26,7 @@ class SubmissionStatus(models.TextChoices):
     FAILED = "failed", "Failed"
     CANCELLED = "cancelled", "Cancelled"
     DUPLICATE = "duplicate", "Duplicate candidate"
+    DELETED = "deleted", "Deleted"
 
 
 class JobStatus(models.TextChoices):

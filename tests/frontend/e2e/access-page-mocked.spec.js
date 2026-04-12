@@ -226,6 +226,85 @@ test.describe("Access Page Notifications", () => {
     ).toBeVisible();
   });
 
+  test("create user form validates the email format before submission", async ({
+    page,
+  }) => {
+    let createRequestCount = 0;
+
+    await page.route("**/api/auth/session/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(createSessionPayload()),
+      });
+    });
+    await page.route("**/api/csrf/", async (route) => {
+      await route.fulfill({ status: 204, body: "" });
+    });
+    await page.route("**/api/auth/users/", async (route) => {
+      if (route.request().method() === "POST") {
+        createRequestCount += 1;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: 1,
+            email: "superadmin@example.com",
+            full_name: "Super Admin",
+            is_active: true,
+            is_superuser: true,
+            totp_required: false,
+            global_scopes: ["admin:access"],
+            grant_count: 0,
+            can_resend_setup_email: false,
+          },
+        ]),
+      });
+    });
+    await page.route("**/api/access/grants/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+    });
+    await page.route("**/api/access/references/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          books: [],
+          categories: [],
+          writers: [],
+          account_scopes: [
+            {
+              value: "read:durable",
+              label: "Read durable books",
+            },
+          ],
+          scoped_scopes: [],
+        }),
+      });
+    });
+
+    await page.goto("/access");
+
+    const userForm = page.getByTestId("access-user-form");
+    const createButton = userForm.getByRole("button", { name: "Create User" });
+
+    await userForm.locator('input[placeholder="Full name"]').fill("Direct User");
+    await userForm.locator('input[type="email"]').fill("invalid-email");
+    await page.getByRole("checkbox", { name: "Read durable books" }).check();
+
+    await expect(page.locator(".login-email-feedback-invalid")).toBeVisible();
+    await expect(page.getByText("Enter a valid email address.")).toBeVisible();
+    await expect(createButton).toBeDisabled();
+    expect(createRequestCount).toBe(0);
+  });
+
   test("creating a direct-password user shows a labeled validation notification", async ({
     page,
   }) => {
@@ -310,5 +389,90 @@ test.describe("Access Page Notifications", () => {
     await expect(
       errorToast.getByText("Password: Ensure this field has at least 12 characters."),
     ).toBeVisible();
+  });
+
+  test("users list renders each account permission as a separate chip", async ({
+    page,
+  }) => {
+    await page.route("**/api/auth/session/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(createSessionPayload()),
+      });
+    });
+    await page.route("**/api/csrf/", async (route) => {
+      await route.fulfill({ status: 204, body: "" });
+    });
+    await page.route("**/api/auth/users/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: 1,
+            email: "superadmin@example.com",
+            full_name: "Super Admin",
+            is_active: true,
+            is_superuser: true,
+            totp_required: false,
+            global_scopes: ["admin:access"],
+            grant_count: 0,
+            can_resend_setup_email: false,
+          },
+          {
+            id: 77,
+            email: "permissions@example.com",
+            full_name: "Permission User",
+            is_active: true,
+            is_superuser: false,
+            totp_required: false,
+            global_scopes: ["metadata:edit", "read:durable"],
+            grant_count: 0,
+            can_resend_setup_email: false,
+          },
+        ]),
+      });
+    });
+    await page.route("**/api/access/grants/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+    });
+    await page.route("**/api/access/references/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          books: [],
+          categories: [],
+          writers: [],
+          account_scopes: [
+            {
+              value: "read:durable",
+              label: "Read durable books",
+            },
+            {
+              value: "metadata:edit",
+              label: "Edit metadata",
+            },
+          ],
+          scoped_scopes: [],
+        }),
+      });
+    });
+
+    await page.goto("/access");
+
+    const permissionRow = page.locator("tr", {
+      has: page.getByText("permissions@example.com"),
+    });
+    const chips = permissionRow.locator(".access-permission-chip");
+
+    await expect(chips).toHaveCount(2);
+    await expect(permissionRow.getByText("Edit metadata")).toBeVisible();
+    await expect(permissionRow.getByText("Read durable books")).toBeVisible();
   });
 });

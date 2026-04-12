@@ -106,6 +106,7 @@ SUBMISSION_PAYLOAD_KEYS_TO_SHARE = (
 
 ACTIVE_JOB_STATUSES = (JobStatus.QUEUED, JobStatus.PROCESSING)
 JOB_CANCEL_MESSAGE = "Stopped by user."
+REQUEST_DELETE_MESSAGE = "Deleted by user."
 REQUIRED_GENERATED_ASSET_TYPES = (GeneratedAssetType.HTML, GeneratedAssetType.EPUB)
 GENERATED_ASSET_LABELS = {
     GeneratedAssetType.HTML: "HTML",
@@ -213,6 +214,40 @@ def resume_processing_job(job):
         raise ValueError("This job has a pending stop request.")
     dispatch_processing_job(job, force=True)
     return job
+
+
+def soft_delete_submission_record(submission, message=REQUEST_DELETE_MESSAGE):
+    target_submission = root_submission(submission)
+    active_jobs = list(
+        target_submission.processing_jobs.filter(
+            status__in=ACTIVE_JOB_STATUSES,
+        ).order_by("-created_at")
+    )
+    if any(job.status == JobStatus.PROCESSING for job in active_jobs):
+        raise ValueError("Stop processing before deleting this request.")
+    for job in active_jobs:
+        cancel_processing_job(job, message=message)
+
+    update_fields = []
+    if target_submission.status != SubmissionStatus.DELETED:
+        target_submission.status = SubmissionStatus.DELETED
+        update_fields.append("status")
+    if target_submission.error_message:
+        target_submission.error_message = ""
+        update_fields.append("error_message")
+    if update_fields:
+        target_submission.save(update_fields=[*dict.fromkeys(update_fields), "updated_at"])
+        sync_deduplicated_submissions(target_submission)
+    return target_submission
+
+
+def delete_submission_record(submission):
+    target_submission = root_submission(submission)
+    if target_submission.status == SubmissionStatus.DELETED:
+        target_submission.delete()
+        return "hard_deleted"
+    soft_delete_submission_record(target_submission)
+    return "soft_deleted"
 
 
 def recover_stale_processing_jobs(*, origin="", limit=50):

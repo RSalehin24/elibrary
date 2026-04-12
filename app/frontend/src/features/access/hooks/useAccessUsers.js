@@ -6,11 +6,12 @@ import {
 import { createInitialUserForm } from "../constants";
 import { useManagedUserList } from "./useManagedUserList";
 import {
-  formatAccountAccess,
   formatApiError,
   generateSuggestedPassword,
+  getAccountAccessLabels,
   sortValues,
 } from "../utils";
+import { isValidEmail, normalizeEmail } from "../../../utils/email";
 
 export function useAccessUsers({
   allAccountScopeValues,
@@ -139,6 +140,16 @@ export function useAccessUsers({
     if (submittingUser) {
       return;
     }
+    if (!event.currentTarget.reportValidity()) {
+      return;
+    }
+
+    const normalizedEmail = normalizeEmail(userForm.email);
+
+    if (!isEditingUser && !isValidEmail(normalizedEmail)) {
+      toast.error("Enter a valid email address.");
+      return;
+    }
 
     if (
       !editingUserId &&
@@ -159,7 +170,7 @@ export function useAccessUsers({
       global_scopes: userForm.global_scopes,
     };
     if (!isEditingUser) {
-      payload.email = userForm.email.trim();
+      payload.email = normalizedEmail;
       payload.full_name = userForm.full_name.trim();
       payload.send_invite_email = userForm.send_invite_email;
     }
@@ -250,7 +261,8 @@ export function useAccessUsers({
     deletingUserId,
     editingUserId,
     filteredManagedUsers,
-    formatAccountAccess: (entry) => formatAccountAccess(entry, scopeLabelMap),
+    getAccountAccessLabels: (entry) =>
+      getAccountAccessLabels(entry, scopeLabelMap),
     isEditingUser,
     pagedManagedUsers,
     pendingDeleteUser,

@@ -1,3 +1,15 @@
+const processingRangeField = {
+  key: "range",
+  label: "Range",
+  type: "select",
+  options: [
+    { value: "", label: "Any" },
+    { value: "week", label: "Past Week" },
+    { value: "month", label: "Past Month" },
+    { value: "year", label: "Past Year" },
+  ],
+};
+
 export const submissionFilterFields = [
   {
     key: "status",
@@ -5,53 +17,19 @@ export const submissionFilterFields = [
     type: "select",
     options: [
       { value: "", label: "Any" },
-      { value: "pending_resolution", label: "Resolving" },
       { value: "queued", label: "Queued" },
       { value: "processing", label: "Processing" },
-      { value: "needs_review", label: "Needs review" },
       { value: "ready", label: "Ready" },
       { value: "failed", label: "Failed" },
       { value: "stopped", label: "Stopped" },
       { value: "duplicate", label: "Duplicate" },
+      { value: "deleted", label: "Deleted" },
     ],
   },
-  {
-    key: "review_state",
-    label: "Review",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "pending", label: "Pending" },
-      { value: "needs_review", label: "Needs review" },
-      { value: "approved", label: "Approved" },
-      { value: "rejected", label: "Rejected" },
-    ],
-  },
-  {
-    key: "resolution_status",
-    label: "Match",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "resolved", label: "Resolved" },
-      { value: "exact_match", label: "Exact match" },
-      { value: "ambiguous", label: "Ambiguous" },
-      { value: "invalid", label: "Invalid" },
-      { value: "unresolved", label: "Unresolved" },
-    ],
-  },
-  {
-    key: "input_type",
-    label: "Input",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "url", label: "URL" },
-      { value: "title", label: "Title" },
-      { value: "csv", label: "CSV" },
-    ],
-  },
+  processingRangeField,
 ];
+
+export const readySubmissionFilterFields = [processingRangeField];
 
 export const jobFilterFields = [
   {
@@ -62,26 +40,12 @@ export const jobFilterFields = [
       { value: "", label: "Any" },
       { value: "queued", label: "Queued" },
       { value: "processing", label: "Processing" },
-      { value: "needs_review", label: "Needs review" },
-      { value: "ready", label: "Ready" },
       { value: "failed", label: "Failed" },
       { value: "stopped", label: "Stopped" },
-      { value: "succeeded", label: "Complete" },
+      { value: "succeeded", label: "Ready" },
     ],
   },
-  {
-    key: "job_type",
-    label: "Step",
-    type: "select",
-    options: [
-      { value: "", label: "Any" },
-      { value: "ingestion", label: "Create" },
-      { value: "resolution", label: "Match" },
-      { value: "reprocess", label: "Regenerate" },
-      { value: "catalog_refresh", label: "Catalog refresh" },
-      { value: "curation", label: "Curation run" },
-    ],
-  },
+  processingRangeField,
 ];
 
 export const catalogFilterFields = [
@@ -92,9 +56,9 @@ export const catalogFilterFields = [
     options: [
       { value: "", label: "Any" },
       { value: "new", label: "New" },
+      { value: "queued", label: "Queued" },
       { value: "processing", label: "Processing" },
       { value: "stopped", label: "Stopped" },
-      { value: "requeued", label: "Requeued" },
       { value: "failed", label: "Failed" },
       { value: "unfinished", label: "Unfinished" },
       { value: "ready", label: "Ready" },
@@ -114,7 +78,7 @@ export const runFilterFields = [
       { value: "processing", label: "Processing" },
       { value: "failed", label: "Failed" },
       { value: "stopped", label: "Stopped" },
-      { value: "succeeded", label: "Complete" },
+      { value: "succeeded", label: "Ready" },
     ],
   },
   {

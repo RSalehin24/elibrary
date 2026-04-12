@@ -161,6 +161,7 @@ export default function SeriesPage() {
         <PageLoader
           label="Loading series"
           detail="Fetching series names and related book totals."
+          variant="table"
         />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>

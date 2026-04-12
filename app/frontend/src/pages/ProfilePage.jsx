@@ -61,6 +61,7 @@ export default function ProfilePage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [loading, setLoading] = useState(true);
   const [totpAction, setTotpAction] = useState("");
+  const [totpFeedback, setTotpFeedback] = useState("");
 
   function twoFactorStatusLabel() {
     if (twoFactor.enabled) {
@@ -113,6 +114,7 @@ export default function ProfilePage() {
     setShowNewPassword(false);
     setShowConfirmNewPassword(false);
     setSetupVisible(false);
+    setTotpFeedback("");
     setToken("");
   }
 
@@ -195,13 +197,13 @@ export default function ProfilePage() {
     }
     try {
       setTotpAction("setup");
+      setTotpFeedback("");
       const payload = await authApi.twoFactorSetup();
       setSetup(payload);
       setSetupVisible(true);
       setTwoFactor((current) => ({ ...current, pending_setup: true }));
-      toast.success("Two-factor setup is ready.");
     } catch (error) {
-      toast.error(error.message);
+      setTotpFeedback(error.message || "Could not prepare two-factor setup.");
     } finally {
       setTotpAction("");
     }
@@ -222,6 +224,7 @@ export default function ProfilePage() {
     }
     try {
       setTotpAction("verify");
+      setTotpFeedback("");
       await authApi.twoFactorConfirm({ token });
       setToken("");
       setSetup(emptySetup);
@@ -242,6 +245,7 @@ export default function ProfilePage() {
     }
     try {
       setTotpAction("disable");
+      setTotpFeedback("");
       await authApi.twoFactorDisable();
       setToken("");
       setSetup(emptySetup);
@@ -262,14 +266,14 @@ export default function ProfilePage() {
     }
     try {
       setTotpAction("cancel");
+      setTotpFeedback("");
       await authApi.twoFactorCancel();
       setToken("");
       setSetup(emptySetup);
       setSetupVisible(false);
       await loadProfile({ preserveEditor: true });
-      toast.success("Setup canceled.");
     } catch (error) {
-      toast.error(error.message);
+      setTotpFeedback(error.message || "Could not cancel two-factor setup.");
     } finally {
       setTotpAction("");
     }
@@ -314,6 +318,7 @@ export default function ProfilePage() {
       <PageLoader
         label="Loading profile"
         detail="Fetching your account settings and security status."
+        variant="profile"
       />
     );
   }
@@ -630,6 +635,10 @@ export default function ProfilePage() {
                   </button>
                 ) : null}
               </div>
+
+              {totpFeedback ? (
+                <p className="form-feedback">{totpFeedback}</p>
+              ) : null}
 
               {setupVisible && setup.provisioning_uri ? (
                 <TwoFactorSetupPanel

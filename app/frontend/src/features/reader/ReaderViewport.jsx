@@ -195,6 +195,7 @@ export default function ReaderViewport({
           <PageLoader
             label="Opening reader"
             detail="Loading EPUB reader assets."
+            variant="reader"
           />
         </div>
       ) : null}

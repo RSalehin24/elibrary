@@ -44,9 +44,9 @@ export function isDefaultCatalogBrowseRequest(filters) {
 export function canCreateCatalogEntry(entry) {
   return [
     "new",
+    "queued",
     "failed",
     "stopped",
-    "requeued",
     "unfinished",
     "deleted",
   ].includes(entry.curation_status);

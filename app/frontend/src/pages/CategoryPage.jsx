@@ -163,6 +163,7 @@ export default function CategoryPage() {
         <PageLoader
           label="Loading categories"
           detail="Fetching category counts and related book totals."
+          variant="table"
         />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>

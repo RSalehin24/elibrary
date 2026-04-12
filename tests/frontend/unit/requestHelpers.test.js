@@ -6,6 +6,7 @@ import {
   getRequestPrimaryText,
   getRequestSecondaryText,
 } from "../../../app/frontend/src/features/processing/helpers/request.js";
+import { selectedActionLabel } from "../../../app/frontend/src/features/processing/helpers/selection.js";
 
 test("request helpers present readable labels for source urls", () => {
   assert.equal(
@@ -57,4 +58,10 @@ test("filterJobsByControls matches status, job type, request text, and errors", 
     }).map((job) => job.id),
     ["job-2"],
   );
+});
+
+test("selectedActionLabel removes selected wording and keeps counts", () => {
+  assert.equal(selectedActionLabel("Delete selected", 0), "Delete");
+  assert.equal(selectedActionLabel("Add selected to queue", 2), "Add to queue (2)");
+  assert.equal(selectedActionLabel("Same Book selected", 3), "Same Book (3)");
 });

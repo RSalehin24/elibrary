@@ -35,12 +35,16 @@ export function formatApiError(error, labelMap = {}) {
   return error.message;
 }
 
-export function formatAccountAccess(entry, scopeLabelMap) {
-  const labels = sortValues(
+export function getAccountAccessLabels(entry, scopeLabelMap) {
+  return sortValues(
     (entry.global_scopes || []).map(
       (scope) => scopeLabelMap.get(scope) || scope,
     ),
   );
+}
+
+export function formatAccountAccess(entry, scopeLabelMap) {
+  const labels = getAccountAccessLabels(entry, scopeLabelMap);
   return labels.length ? labels.join(", ") : "-";
 }
 

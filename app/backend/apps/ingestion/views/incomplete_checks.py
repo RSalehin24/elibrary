@@ -68,7 +68,6 @@ class IncompleteCatalogCheckListView(APIView):
             "processing": 0,
             "failed": 0,
             "stopped": 0,
-            "requeued": 0,
         }
 
         for book in books:
@@ -95,9 +94,6 @@ class IncompleteCatalogCheckListView(APIView):
 
             if latest_status in {"queued", "processing", "failed", "cancelled"}:
                 summary["stopped" if latest_status == "cancelled" else latest_status] += 1
-            requeued = book.latest_job_type == "reprocess"
-            if requeued:
-                summary["requeued"] += 1
 
             author_names = [
                 relation.contributor.name
@@ -117,7 +113,6 @@ class IncompleteCatalogCheckListView(APIView):
                     "removed_from_unfinished": removed_from_unfinished,
                     "latest_job_status": "stopped" if latest_status == "cancelled" else latest_status,
                     "latest_job_error": book.latest_job_error or "",
-                    "is_requeued": requeued,
                     "updated_at": book.updated_at,
                 }
             )

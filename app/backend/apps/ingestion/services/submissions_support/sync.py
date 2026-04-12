@@ -1,6 +1,3 @@
-from django.utils import timezone
-
-
 def primary_source_url_for_book(book):
     source = book.source_urls.order_by("-is_primary", "-created_at").first()
     return source.normalized_source_url if source else ""
@@ -12,12 +9,13 @@ def root_submission(submission):
 
 def build_retry_payload(raw_payload, actor, previous_status, previous_error_message, reset_keys):
     next_payload = dict(raw_payload or {})
-    next_payload["requeued"] = True
-    next_payload["requeued_at"] = timezone.now().isoformat()
-    next_payload["requeue_requested_by"] = str(actor.id)
-    next_payload["requeue_reason"] = (
-        previous_error_message or f"Retry requested from status: {previous_status}."
-    )
+    for key in (
+        "requeued",
+        "requeued_at",
+        "requeue_requested_by",
+        "requeue_reason",
+    ):
+        next_payload.pop(key, None)
     for key in reset_keys:
         next_payload.pop(key, None)
     return next_payload

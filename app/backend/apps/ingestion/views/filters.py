@@ -107,11 +107,10 @@ def sort_source_catalog_snapshots(snapshots, sort_key):
         "processing": 0,
         "failed": 1,
         "stopped": 2,
-        "requeued": 3,
-        "unfinished": 4,
-        "new": 5,
-        "ready": 6,
-        "deleted": 7,
+        "unfinished": 3,
+        "new": 4,
+        "ready": 5,
+        "deleted": 6,
     }
     if sort_key == "created_desc":
         snapshots.sort(key=lambda snapshot: (-catalog_snapshot_timestamp(snapshot, "created_at"), snapshot["title"].lower()))

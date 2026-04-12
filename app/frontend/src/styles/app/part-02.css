@@ -80,7 +80,7 @@
 }
 
 .primary-button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.72;
   transform: none;
 }
@@ -88,10 +88,16 @@
 .ghost-button:disabled,
 .asset-link:disabled,
 .icon-button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.68;
   transform: none;
   pointer-events: none;
+}
+
+.primary-button:disabled:has(.loading-spinner),
+.ghost-button:disabled:has(.loading-spinner),
+.icon-button:disabled:has(.loading-spinner) {
+  cursor: wait;
 }
 
 .button-label {

@@ -11,6 +11,7 @@ export default function ProtectedRoute({ children }) {
       <PageLoader
         label="Loading your session"
         detail="Checking sign-in and workspace access."
+        variant="auth"
       />
     );
   }

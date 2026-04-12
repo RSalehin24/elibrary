@@ -22,6 +22,7 @@ from apps.ingestion.serializers import (
 from apps.ingestion.services.submissions import (
     can_manage_processing_records,
     create_submission_records,
+    delete_submission_record,
     ensure_preview_session,
     find_existing_book_by_source_url,
     fulfill_submission_with_existing_book,
@@ -124,9 +125,10 @@ class SubmissionDetailView(generics.RetrieveDestroyAPIView):
         submission = visible_submissions_queryset(request.user).filter(pk=kwargs["pk"]).first()
         if submission is None:
             raise PermissionDenied("You cannot delete this request.")
-        if has_active_root_jobs(submission):
-            return Response({"detail": "Stop processing before deleting this request."}, status=status.HTTP_400_BAD_REQUEST)
-        submission.delete()
+        try:
+            delete_submission_record(submission)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -219,17 +221,31 @@ class SubmissionBulkDeleteView(APIView):
         requested_ids = serializer.validated_data["ids"]
         submissions = list(visible_submissions_queryset(request.user).filter(pk__in=requested_ids))
         deleted_count = 0
+        soft_deleted_count = 0
+        hard_deleted_count = 0
         skipped_active = 0
         skipped_missing = len(requested_ids) - len(submissions)
+        seen_target_ids = set()
         for submission in submissions:
-            if has_active_root_jobs(submission):
+            target_id = str(submission.canonical_submission_id or submission.id)
+            if target_id in seen_target_ids:
+                continue
+            seen_target_ids.add(target_id)
+            try:
+                delete_mode = delete_submission_record(submission)
+            except ValueError:
                 skipped_active += 1
                 continue
-            submission.delete()
             deleted_count += 1
+            if delete_mode == "hard_deleted":
+                hard_deleted_count += 1
+            else:
+                soft_deleted_count += 1
         return Response(
             {
                 "deleted_count": deleted_count,
+                "soft_deleted_count": soft_deleted_count,
+                "hard_deleted_count": hard_deleted_count,
                 "skipped_active": skipped_active,
                 "skipped_missing": skipped_missing,
             }

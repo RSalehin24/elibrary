@@ -10,9 +10,10 @@ import LoginPage from "../../pages/LoginPage";
 import ManualBooksPage from "../../pages/ManualBooksPage";
 import PasswordLinkPage from "../../pages/PasswordLinkPage";
 import PasswordResetPage from "../../pages/PasswordResetPage";
-import ProcessingAllActivityPage from "../../pages/ProcessingAllActivityPage";
 import ProcessingAutomationPage from "../../pages/ProcessingAutomationPage";
 import ProcessingCatalogBooksPage from "../../pages/ProcessingCatalogBooksPage";
+import ProcessingDuplicateRequestsPage from "../../pages/ProcessingDuplicateRequestsPage";
+import ProcessingFailedRequestsPage from "../../pages/ProcessingFailedRequestsPage";
 import ProcessingIncompleteAutomationPage from "../../pages/ProcessingIncompleteAutomationPage";
 import ProcessingMyRequestsPage from "../../pages/ProcessingMyRequestsPage";
 import ProfilePage from "../../pages/ProfilePage";
@@ -40,7 +41,14 @@ const protectedRoutes = [
     element: <ProcessingCatalogBooksPage />,
   },
   { path: "/processing-automation", element: <ProcessingAutomationPage /> },
-  { path: "/processing-all-activity", element: <ProcessingAllActivityPage /> },
+  {
+    path: "/processing-failed-requests",
+    element: <ProcessingFailedRequestsPage />,
+  },
+  {
+    path: "/processing-duplicate-requests",
+    element: <ProcessingDuplicateRequestsPage />,
+  },
   {
     path: "/processing-incomplete-check",
     element: <ProcessingIncompleteAutomationPage />,

@@ -5,6 +5,7 @@ import {
   USER_TAB,
   defaultJobFilters,
 } from "../constants";
+import { cutoffForPeriod } from "./activity";
 
 export function getOriginForTab(tab) {
   if (tab === SOURCE_TAB || tab === INCOMPLETE_TAB) {
@@ -24,13 +25,13 @@ export function normalizeStatusForApi(value) {
 }
 
 export function buildJobsParams(filters, tab) {
+  const { range = "", ...rawFilters } = filters || {};
   const params = {
-    q: filters.q,
-    job_type: filters.job_type,
+    q: rawFilters.q,
     limit: 60,
   };
-  if (filters.status) {
-    const normalizedStatus = normalizeStatusForApi(filters.status);
+  if (rawFilters.status) {
+    const normalizedStatus = normalizeStatusForApi(rawFilters.status);
     if (
       ["succeeded", "queued", "processing", "failed", "cancelled"].includes(
         normalizedStatus,
@@ -43,6 +44,9 @@ export function buildJobsParams(filters, tab) {
       params.submission_status = normalizedStatus;
     }
   }
+  if (range) {
+    params.created_after = cutoffForPeriod(range).toISOString();
+  }
   const origin = getOriginForTab(tab);
   if (origin) {
     params.origin = origin;
@@ -54,14 +58,18 @@ export function isDefaultJobRequest(filters) {
   return (
     String(filters?.q || "") === defaultJobFilters.q &&
     String(filters?.status || "") === defaultJobFilters.status &&
-    String(filters?.job_type || "") === defaultJobFilters.job_type
+    String(filters?.range || "") === defaultJobFilters.range
   );
 }
 
 export function buildSubmissionParams(filters, tab) {
-  const params = { ...filters, limit: 60 };
+  const { range = "", ...rawFilters } = filters || {};
+  const params = { ...rawFilters, limit: 60 };
   if (params.status) {
     params.status = normalizeStatusForApi(params.status);
+  }
+  if (range) {
+    params.created_after = cutoffForPeriod(range).toISOString();
   }
   const origin = getOriginForTab(tab);
   if (origin) {

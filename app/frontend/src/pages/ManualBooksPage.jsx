@@ -589,6 +589,7 @@ export default function ManualBooksPage() {
         <PageLoader
           label="Loading manual books"
           detail="Fetching the physical-book catalog and recent additions."
+          variant="table"
         />
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>

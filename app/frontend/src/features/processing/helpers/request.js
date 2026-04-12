@@ -1,3 +1,5 @@
+import { cutoffForPeriod, getJobActivityAt } from "./activity";
+
 export function safeDecode(value) {
   try {
     return decodeURIComponent(value);
@@ -77,12 +79,20 @@ export function filterJobsByControls(jobRows, filters) {
   const query = String(filters.q || "")
     .trim()
     .toLowerCase();
+  const cutoff = filters.range ? cutoffForPeriod(filters.range) : null;
   return jobRows.filter((job) => {
     if (filters.status && job.status !== filters.status) {
       return false;
     }
-    if (filters.job_type && job.job_type !== filters.job_type) {
-      return false;
+    if (cutoff) {
+      const activityAt = getJobActivityAt(job);
+      if (!activityAt) {
+        return false;
+      }
+      const activityTime = new Date(activityAt);
+      if (Number.isNaN(activityTime.getTime()) || activityTime < cutoff) {
+        return false;
+      }
     }
     if (!query) {
       return true;
@@ -93,4 +103,94 @@ export function filterJobsByControls(jobRows, filters) {
     const errorText = String(job.last_error || "").toLowerCase();
     return requestText.includes(query) || errorText.includes(query);
   });
+}
+
+export function filterCurrentFailedJobs(jobRows) {
+  return (jobRows || []).filter(
+    (job) => job?.status === "failed" && job?.submission_status === "failed",
+  );
+}
+
+export function getSubmissionDisplayStatus(
+  submission,
+  failedSubmissionIdSet = null,
+) {
+  if (!submission) {
+    return "";
+  }
+
+  const latestJobStatus = String(submission.latest_job?.status || "");
+  const submissionStatus = String(submission.status || "");
+
+  if (submissionStatus === "deleted") {
+    return "deleted";
+  }
+
+  if (
+    (submission.id && failedSubmissionIdSet?.has(submission.id)) ||
+    latestJobStatus === "failed" ||
+    submissionStatus === "failed"
+  ) {
+    return "failed";
+  }
+
+  if (latestJobStatus === "stopped" || submissionStatus === "stopped") {
+    return "stopped";
+  }
+
+  if (latestJobStatus === "processing" || submissionStatus === "processing") {
+    return "processing";
+  }
+
+  if (latestJobStatus === "queued" || submissionStatus === "queued") {
+    return "queued";
+  }
+
+  return submissionStatus;
+}
+
+export function partitionSubmissionsForCards(
+  submissionRows,
+  failedSubmissionIdSet = null,
+  excludedSubmissionIdSet = null,
+) {
+  return (submissionRows || []).reduce(
+    (groups, submission) => {
+      if (submission?.id && excludedSubmissionIdSet?.has(submission.id)) {
+        return groups;
+      }
+
+      const displayStatus = getSubmissionDisplayStatus(
+        submission,
+        failedSubmissionIdSet,
+      );
+
+      if (displayStatus === "ready") {
+        groups.ready.push(submission);
+      } else if (displayStatus === "queued") {
+        groups.queued.push(submission);
+      } else if (displayStatus === "stopped") {
+        groups.stopped.push(submission);
+      } else if (displayStatus === "deleted") {
+        groups.deleted.push(submission);
+      } else if (displayStatus === "processing") {
+        groups.processing.push(submission);
+      } else if (displayStatus === "failed") {
+        groups.failed.push(submission);
+      } else if (displayStatus !== "duplicate") {
+        groups.requests.push(submission);
+      }
+
+      return groups;
+    },
+    {
+      requests: [],
+      ready: [],
+      queued: [],
+      stopped: [],
+      deleted: [],
+      processing: [],
+      failed: [],
+    },
+  );
 }

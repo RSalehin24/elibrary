@@ -1,4 +1,6 @@
+import EmailInputFeedback from "../../../components/EmailInputFeedback";
 import LoadingSpinner from "../../../components/LoadingSpinner";
+import { getEmailValidationState } from "../../../utils/email";
 
 export default function AccessUserEditorCard({
   accountScopes,
@@ -18,6 +20,13 @@ export default function AccessUserEditorCard({
   userEditorRef,
   userForm,
 }) {
+  const { hasEmailInput, emailLooksValid } = getEmailValidationState(
+    userForm.email,
+  );
+  const showCreateUserEmailFeedback = !isEditingUser && hasEmailInput;
+  const hasValidCreateUserEmail =
+    isEditingUser || (hasEmailInput && emailLooksValid);
+
   return (
     <section className="detail-card" data-testid="access-user-editor">
       <div ref={userEditorRef} className="access-user-editor-anchor" />
@@ -61,10 +70,31 @@ export default function AccessUserEditorCard({
                 onChange={(event) =>
                   onSetUserForm({ ...userForm, email: event.target.value })
                 }
+                inputMode="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
                 placeholder="Email address"
+                required={!isEditingUser}
                 disabled={isEditingUser}
                 readOnly={isEditingUser}
+                aria-describedby={
+                  showCreateUserEmailFeedback
+                    ? "access-user-email-feedback"
+                    : undefined
+                }
+                aria-invalid={
+                  showCreateUserEmailFeedback && !emailLooksValid
+                    ? "true"
+                    : undefined
+                }
               />
+              {showCreateUserEmailFeedback ? (
+                <EmailInputFeedback
+                  id="access-user-email-feedback"
+                  email={userForm.email}
+                />
+              ) : null}
             </label>
             <label>
               <div className="field-header access-password-header">
@@ -240,7 +270,7 @@ export default function AccessUserEditorCard({
             <button
               type="submit"
               className="primary-button"
-              disabled={submittingUser}
+              disabled={submittingUser || !hasValidCreateUserEmail}
             >
               {submittingUser ? (
                 <span className="button-label">

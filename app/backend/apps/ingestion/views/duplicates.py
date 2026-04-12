@@ -31,6 +31,8 @@ class DuplicateReviewListView(generics.ListAPIView):
         status_filter = self.request.query_params.get("status", "").strip()
         if status_filter:
             queryset = queryset.filter(status=status_filter)
+        else:
+            queryset = queryset.filter(status=DuplicateReviewStatus.PENDING)
         query = self.request.query_params.get("q", "").strip()
         if query:
             queryset = apply_text_search(queryset, query, "submission__original_input", "existing_book__title", "notes")
@@ -45,6 +47,10 @@ class DuplicateReviewResolveView(APIView):
         serializer = DuplicateReviewDecisionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         decision = serializer.validated_data["decision"]
+        if decision == "same_book":
+            decision = "confirm_existing"
+        elif decision == "new_book":
+            decision = "dismiss"
         review.notes = serializer.validated_data.get("notes", "")
 
         if decision == "confirm_existing":
