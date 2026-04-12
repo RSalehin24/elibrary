@@ -20,6 +20,7 @@ export function SessionProvider({ children }) {
         user: payload.user,
         error: "",
       });
+      return payload;
     } catch (error) {
       setSession({
         loading: false,
@@ -27,17 +28,19 @@ export function SessionProvider({ children }) {
         user: null,
         error: error.message,
       });
+      return null;
     }
   }
 
   async function login(body) {
-    await authApi.login(body);
+    const payload = await authApi.login(body);
     await refreshSession();
+    return payload;
   }
 
   async function logout() {
     await authApi.logout();
-    await refreshSession();
+    return refreshSession();
   }
 
   function expireSession(errorMessage = "") {

@@ -1,3 +1,5 @@
+import { payloadFieldMessage } from "../../api/text.js";
+
 export function generateSuggestedPassword(length = 18) {
   const characters =
     "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*";
@@ -25,14 +27,9 @@ export function formatApiError(error, labelMap = {}) {
     typeof error.payload === "object" &&
     !Array.isArray(error.payload)
   ) {
-    for (const [field, value] of Object.entries(error.payload)) {
-      const label = labelMap[field] || field;
-      if (Array.isArray(value) && value.length) {
-        return `${label}: ${value[0]}`;
-      }
-      if (typeof value === "string") {
-        return `${label}: ${value}`;
-      }
+    const fieldMessage = payloadFieldMessage(error.payload, labelMap);
+    if (fieldMessage) {
+      return fieldMessage;
     }
   }
   return error.message;

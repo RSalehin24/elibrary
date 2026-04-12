@@ -19,9 +19,16 @@ export default function ProtectedRoute({ children }) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
-  if (user?.totp_setup_required && location.pathname !== "/profile") {
+  if (
+    user?.totp_setup_required &&
+    location.pathname !== "/two-factor-setup"
+  ) {
     return (
-      <Navigate to="/profile" replace state={{ from: location.pathname }} />
+      <Navigate
+        to="/two-factor-setup"
+        replace
+        state={{ from: location.pathname }}
+      />
     );
   }
 

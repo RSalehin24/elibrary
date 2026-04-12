@@ -54,3 +54,4 @@ Monorepo for the Bangla ebook platform.
 ## Supporting Docs
 
 - Source metadata notes: [docs/ingestion/source-site-metadata.md](docs/ingestion/source-site-metadata.md)
+- Authentication flows: [docs/operations/authentication-flows.md](docs/operations/authentication-flows.md)

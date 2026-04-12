@@ -1,4 +1,9 @@
-from .auth import LoginSerializer, PasswordResetConfirmSerializer, PasswordResetRequestSerializer
+from .auth import (
+    LoginSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetValidateSerializer,
+)
 from .base import ManagedUserSerializer, ProfileSerializer, RegisterSerializer, SessionSerializer, UserSerializer
 from .managed_users import ManagedUserCreateSerializer, ManagedUserUpdateSerializer
 from .profile import ProfileUpdateSerializer
@@ -11,6 +16,7 @@ __all__ = [
     "ManagedUserUpdateSerializer",
     "PasswordResetConfirmSerializer",
     "PasswordResetRequestSerializer",
+    "PasswordResetValidateSerializer",
     "ProfileSerializer",
     "ProfileUpdateSerializer",
     "RegisterSerializer",

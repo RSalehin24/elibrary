@@ -16,6 +16,13 @@ def env_bool(key, default=False):
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_int(key, default=0):
+    value = env(key)
+    if value is None or str(value).strip() == "":
+        return default
+    return int(value)
+
+
 def env_list(key, default=""):
     raw_value = env(key, default)
     if not raw_value:
@@ -67,6 +74,7 @@ DEBUG = env_bool("DJANGO_DEBUG", APP_ENV != "production")
 SECRET_KEY = env("DJANGO_SECRET_KEY", "development-only-insecure-secret-key")
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "http://localhost")
 FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", PUBLIC_BASE_URL).rstrip("/")
+FRONTEND_PORT = env("FRONTEND_PORT", "").strip()
 PUBLIC_API_ORIGIN = env("PUBLIC_API_ORIGIN", PUBLIC_BASE_URL).rstrip("/")
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,backend,nginx")
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")
@@ -87,7 +95,13 @@ if DEBUG:
             append_unique(CSRF_TRUSTED_ORIGINS, origin)
             append_unique(CORS_ALLOWED_ORIGINS, origin)
 
-PASSWORD_RESET_FRONTEND_PATH = env("PASSWORD_RESET_FRONTEND_PATH", "/reset-password")
+PASSWORD_CREATE_FRONTEND_PATH = env(
+    "PASSWORD_CREATE_FRONTEND_PATH", "/create-password"
+)
+PASSWORD_RESET_FRONTEND_PATH = env(
+    "PASSWORD_RESET_FRONTEND_PATH", "/reset-password/confirm"
+)
+PASSWORD_RESET_TIMEOUT = env_int("PASSWORD_RESET_TIMEOUT", 6 * 60 * 60)
 SUPER_ADMIN_EMAIL = env("SUPER_ADMIN_EMAIL", "rsalehin24@gmail.com")
 SUPER_ADMIN_PASSWORD = env("SUPER_ADMIN_PASSWORD", "")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "noreply@banglalibrary.local")

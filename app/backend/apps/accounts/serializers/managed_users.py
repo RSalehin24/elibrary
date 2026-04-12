@@ -2,11 +2,19 @@ from rest_framework import serializers
 
 from apps.accounts.models import User
 
+from .base import PASSWORD_MIN_LENGTH_ERROR_MESSAGES
 from .support import MANAGEABLE_PERMISSION_SCOPES, create_managed_user, sync_global_grants
 
 
 class ManagedUserCreateSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=12, required=False, allow_blank=True, trim_whitespace=False)
+    password = serializers.CharField(
+        write_only=True,
+        min_length=12,
+        required=False,
+        allow_blank=True,
+        trim_whitespace=False,
+        error_messages=PASSWORD_MIN_LENGTH_ERROR_MESSAGES,
+    )
     is_active = serializers.BooleanField(default=True)
     totp_required = serializers.BooleanField(default=False)
     send_invite_email = serializers.BooleanField(default=True, required=False, write_only=True)
@@ -39,7 +47,13 @@ class ManagedUserCreateSerializer(serializers.ModelSerializer):
 
 
 class ManagedUserUpdateSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=12, required=False, allow_blank=False)
+    password = serializers.CharField(
+        write_only=True,
+        min_length=12,
+        required=False,
+        allow_blank=False,
+        error_messages=PASSWORD_MIN_LENGTH_ERROR_MESSAGES,
+    )
     global_scopes = serializers.ListField(
         child=serializers.ChoiceField(choices=[scope.value for scope in MANAGEABLE_PERMISSION_SCOPES]),
         required=False,
@@ -58,11 +72,21 @@ class ManagedUserUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         password = validated_data.pop("password", "")
         global_scopes = validated_data.pop("global_scopes", None)
+        update_fields = []
         for field, value in validated_data.items():
             setattr(instance, field, value)
+            update_fields.append(field)
         if password:
             instance.set_password(password)
-        instance.save()
+            update_fields.append("password")
+        if (
+            instance.email_setup_pending
+            and instance.has_usable_password()
+            and not instance.requires_totp_setup
+        ):
+            instance.email_setup_pending = False
+            update_fields.append("email_setup_pending")
+        instance.save(update_fields=sorted(set(update_fields)) or None)
         if global_scopes is not None:
             sync_global_grants(instance, global_scopes, actor=self.context["request"].user)
         return instance

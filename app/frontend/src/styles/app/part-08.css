@@ -97,6 +97,15 @@
   padding: 18px;
 }
 
+.totp-setup-panel-stacked .panel-header {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.totp-setup-panel-stacked .totp-qr-card {
+  justify-self: center;
+}
+
 .totp-setup-header {
   display: flex;
   justify-content: space-between;

@@ -25,6 +25,7 @@ export function useAccessUsers({
   const [editingUserId, setEditingUserId] = useState(null);
   const [pendingDeleteUser, setPendingDeleteUser] = useState(null);
   const [deletingUserId, setDeletingUserId] = useState(null);
+  const [resendingSetupUserId, setResendingSetupUserId] = useState(null);
   const [submittingUser, setSubmittingUser] = useState(false);
   const [showCreateUserPassword, setShowCreateUserPassword] = useState(false);
   const userEditorRef = useRef(null);
@@ -179,7 +180,7 @@ export function useAccessUsers({
         await authApi.createUser(payload);
         toast.success(
           userForm.send_invite_email
-            ? "User created and invite email sent."
+            ? "User created. Setup email sent."
             : "User created.",
         );
       }
@@ -224,6 +225,23 @@ export function useAccessUsers({
     }
   }
 
+  async function resendSetupEmail(entry) {
+    if (!entry?.id || resendingSetupUserId) {
+      return;
+    }
+
+    try {
+      setResendingSetupUserId(entry.id);
+      await authApi.resendUserSetupEmail(entry.id);
+      toast.success("Setup email sent.");
+      await loadAdminData();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setResendingSetupUserId(null);
+    }
+  }
+
   return {
     clearAccountPermissions,
     clearUsersSearch,
@@ -238,7 +256,9 @@ export function useAccessUsers({
     pendingDeleteUser,
     PROPERTY_TABLE_ROW_OPTIONS,
     requestDeleteUser,
+    resendSetupEmail,
     resetUserForm,
+    resendingSetupUserId,
     selectAllAccountPermissions,
     setPendingDeleteUser,
     setShowCreateUserPassword,

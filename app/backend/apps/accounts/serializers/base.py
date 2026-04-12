@@ -2,6 +2,11 @@ from rest_framework import serializers
 
 from apps.accounts.models import User
 
+PASSWORD_MIN_LENGTH_MESSAGE = "Ensure this field has at least 12 characters."
+PASSWORD_MIN_LENGTH_ERROR_MESSAGES = {
+    "min_length": PASSWORD_MIN_LENGTH_MESSAGE
+}
+
 
 class UserSerializer(serializers.ModelSerializer):
     totp_enabled = serializers.BooleanField(source="has_totp_enabled", read_only=True)
@@ -41,7 +46,11 @@ class SessionSerializer(serializers.Serializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=12)
+    password = serializers.CharField(
+        write_only=True,
+        min_length=12,
+        error_messages=PASSWORD_MIN_LENGTH_ERROR_MESSAGES,
+    )
 
     class Meta:
         model = User
@@ -55,9 +64,10 @@ class RegisterSerializer(serializers.ModelSerializer):
 class ManagedUserSerializer(UserSerializer):
     grant_count = serializers.SerializerMethodField()
     global_scopes = serializers.ListField(source="global_grant_scopes", child=serializers.CharField(), read_only=True)
+    can_resend_setup_email = serializers.BooleanField(read_only=True)
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ["grant_count", "global_scopes"]
+        fields = UserSerializer.Meta.fields + ["grant_count", "global_scopes", "can_resend_setup_email"]
 
     def get_grant_count(self, obj):
         return obj.permission_grants.count()

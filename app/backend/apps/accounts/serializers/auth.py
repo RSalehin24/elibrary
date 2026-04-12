@@ -5,7 +5,8 @@ from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
-from .support import send_password_reset_email
+from .base import PASSWORD_MIN_LENGTH_ERROR_MESSAGES
+from .support import password_link_token_generator, send_password_reset_email
 
 
 class LoginSerializer(serializers.Serializer):
@@ -41,37 +42,70 @@ class LoginSerializer(serializers.Serializer):
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
+    default_error_messages = {
+        "missing_user": _("No user exist with this email."),
+    }
 
     def save(self):
-        send_password_reset_email(
+        sent = send_password_reset_email(
             self.validated_data["email"],
             request=self.context["request"],
             subject_template_name="registration/password_reset_subject.txt",
             email_template_name="registration/password_reset_email.html",
         )
+        if not sent:
+            raise serializers.ValidationError(
+                {"detail": self.error_messages["missing_user"]}
+            )
+        return sent
 
 
-class PasswordResetConfirmSerializer(serializers.Serializer):
+def resolve_password_link_user(uid, token):
+    UserModel = get_user_model()
+    try:
+        user_id = force_str(urlsafe_base64_decode(uid))
+        user = UserModel.objects.get(pk=user_id)
+    except Exception as exc:
+        raise serializers.ValidationError("Invalid reset link.") from exc
+
+    if password_link_token_generator.check_token(user, token):
+        return user
+
+    # Backward compatibility for reset links issued before nonce-backed invalidation
+    # was introduced. Once a newer reset request is sent, the nonce is non-zero and
+    # only the latest link remains valid.
+    if not user.email_setup_pending and user.password_setup_nonce == 0:
+        if PasswordResetTokenGenerator().check_token(user, token):
+            return user
+
+    raise serializers.ValidationError("Reset token is invalid or expired.")
+
+
+class PasswordResetValidateSerializer(serializers.Serializer):
     uid = serializers.CharField()
     token = serializers.CharField()
-    new_password = serializers.CharField(write_only=True, min_length=12)
 
     def validate(self, attrs):
-        UserModel = get_user_model()
-        try:
-            user_id = force_str(urlsafe_base64_decode(attrs["uid"]))
-            user = UserModel.objects.get(pk=user_id)
-        except Exception as exc:
-            raise serializers.ValidationError("Invalid reset link.") from exc
-
-        token_generator = PasswordResetTokenGenerator()
-        if not token_generator.check_token(user, attrs["token"]):
-            raise serializers.ValidationError("Reset token is invalid or expired.")
-        attrs["user"] = user
+        attrs["user"] = resolve_password_link_user(attrs["uid"], attrs["token"])
         return attrs
+
+
+class PasswordResetConfirmSerializer(PasswordResetValidateSerializer):
+    new_password = serializers.CharField(
+        write_only=True,
+        min_length=12,
+        error_messages=PASSWORD_MIN_LENGTH_ERROR_MESSAGES,
+    )
 
     def save(self):
         user = self.validated_data["user"]
         user.set_password(self.validated_data["new_password"])
+        if user.email_setup_pending:
+            user.password_setup_nonce += 1
+            user.email_setup_pending = user.totp_required and not user.has_totp_enabled
+            user.save(
+                update_fields=["password", "password_setup_nonce", "email_setup_pending"]
+            )
+            return user
         user.save(update_fields=["password"])
         return user

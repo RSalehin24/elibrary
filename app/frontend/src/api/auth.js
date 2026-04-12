@@ -12,8 +12,17 @@ export const authApi = {
   updateUser: (id, body) =>
     apiFetch(`/auth/users/${id}/`, { method: "PATCH", body }),
   deleteUser: (id) => apiFetch(`/auth/users/${id}/`, { method: "DELETE" }),
+  resendUserSetupEmail: (id) =>
+    apiFetch(`/auth/users/${id}/resend-setup-email/`, {
+      method: "POST",
+      body: {},
+    }),
   passwordReset: (body) =>
     apiFetch("/auth/password-reset/", { method: "POST", body }),
+  passwordResetValidate: (body) =>
+    apiFetch("/auth/password-reset/validate/", { method: "POST", body }),
+  passwordResetConfirm: (body) =>
+    apiFetch("/auth/password-reset/confirm/", { method: "POST", body }),
   twoFactorStatus: () => apiFetch("/auth/2fa/status/"),
   twoFactorSetup: () => apiFetch("/auth/2fa/setup/", { method: "POST" }),
   twoFactorConfirm: (body) =>

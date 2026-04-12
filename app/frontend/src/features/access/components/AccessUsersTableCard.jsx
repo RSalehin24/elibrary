@@ -4,6 +4,7 @@ export default function AccessUsersTableCard({
   onClearSearch,
   onDeleteUser,
   onEditUser,
+  onResendSetupEmail,
   onSetUsersPage,
   onSetUsersRowsPerPage,
   onUpdateUsersSearch,
@@ -11,6 +12,7 @@ export default function AccessUsersTableCard({
   onUpdateUsersStatus,
   pagedManagedUsers,
   propertyTableRowOptions,
+  resendingSetupUserId,
   userListFilters,
   usersHasNext,
   usersHasPrevious,
@@ -179,6 +181,18 @@ export default function AccessUsersTableCard({
                         <span className="table-note">Locked</span>
                       ) : (
                         <>
+                          {entry.can_resend_setup_email ? (
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              onClick={() => onResendSetupEmail(entry)}
+                              disabled={`${resendingSetupUserId}` === `${entry.id}`}
+                            >
+                              {`${resendingSetupUserId}` === `${entry.id}`
+                                ? "Sending..."
+                                : "Resend Email"}
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="primary-button"

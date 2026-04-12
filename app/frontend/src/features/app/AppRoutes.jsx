@@ -8,6 +8,7 @@ import HomePage from "../../pages/HomePage";
 import LibraryPage from "../../pages/LibraryPage";
 import LoginPage from "../../pages/LoginPage";
 import ManualBooksPage from "../../pages/ManualBooksPage";
+import PasswordLinkPage from "../../pages/PasswordLinkPage";
 import PasswordResetPage from "../../pages/PasswordResetPage";
 import ProcessingAllActivityPage from "../../pages/ProcessingAllActivityPage";
 import ProcessingAutomationPage from "../../pages/ProcessingAutomationPage";
@@ -17,6 +18,7 @@ import ProcessingMyRequestsPage from "../../pages/ProcessingMyRequestsPage";
 import ProfilePage from "../../pages/ProfilePage";
 import ReaderPage from "../../pages/ReaderPage";
 import SeriesPage from "../../pages/SeriesPage";
+import TwoFactorSetupPage from "../../pages/TwoFactorSetupPage";
 import WriterPage from "../../pages/WriterPage";
 import ProtectedRoute from "./ProtectedRoute";
 
@@ -46,6 +48,7 @@ const protectedRoutes = [
   { path: "/books/:slug", element: <BookDetailPage /> },
   { path: "/access", element: <AccessPage /> },
   { path: "/profile", element: <ProfilePage /> },
+  { path: "/two-factor-setup", element: <TwoFactorSetupPage /> },
   { path: "/reader", element: <ReaderPage /> },
 ];
 
@@ -72,6 +75,14 @@ export default function AppRoutes() {
       />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/reset-password" element={<PasswordResetPage />} />
+      <Route
+        path="/reset-password/confirm"
+        element={<PasswordLinkPage mode="reset" />}
+      />
+      <Route
+        path="/create-password"
+        element={<PasswordLinkPage mode="create" />}
+      />
       {protectedRoutes.map(renderProtectedRoute)}
       <Route
         path="/processing"

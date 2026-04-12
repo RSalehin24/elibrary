@@ -108,6 +108,30 @@
   width: min(100%, 420px);
 }
 
+.password-link-expired-card {
+  text-align: center;
+}
+
+.auth-request-card {
+  width: min(100%, 460px);
+}
+
+.auth-setup-card {
+  width: min(100%, 480px);
+  display: grid;
+  gap: 18px;
+}
+
+.auth-setup-card .totp-setup-panel {
+  gap: 16px;
+  margin-top: 4px;
+  padding: 0;
+}
+
+.auth-setup-loader {
+  width: 100%;
+}
+
 .login-header {
   display: grid;
   gap: 6px;
@@ -123,6 +147,46 @@
 
 .login-actions {
   padding-top: 4px;
+}
+
+.login-email-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.login-email-feedback-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.login-email-feedback-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.login-email-feedback-valid {
+  color: var(--success);
+}
+
+.login-email-feedback-valid .login-email-feedback-icon {
+  background: rgba(36, 80, 66, 0.12);
+}
+
+.login-email-feedback-invalid {
+  color: var(--danger);
+}
+
+.login-email-feedback-invalid .login-email-feedback-icon {
+  background: rgba(138, 52, 52, 0.12);
 }
 
 .password-input-row {

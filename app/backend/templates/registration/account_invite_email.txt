@@ -1,18 +1,19 @@
 Dear{% if invited_user and invited_user.full_name %} {{ invited_user.full_name }}{% else %} User{% endif %},
 
-Your Bangla Library account is ready.
+Your RSalehin24 Library account is ready.
 
 Please set your password using the secure link below:
-{{ frontend_reset_full_url }}
+{{ frontend_reset_full_url|safe }}
 
 Account details:
 - Email: {{ email }}
+- Create password link: {{ frontend_reset_full_url|safe }}
 {% if invited_by %}- Invited by: {{ invited_by.display_name }}
 {% endif %}
 
 If you did not expect this email, you may safely ignore it.
 
 Regards,
-Bangla Library Team
+RSalehin24 Library Team
 
 This is an automated message from {{ site_name }}. Please do not reply to this email.

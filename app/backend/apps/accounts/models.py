@@ -49,6 +49,8 @@ class User(AbstractUser, TimeStampedModel):
     full_name = models.CharField(max_length=255, blank=True)
     profile_image = models.FileField(upload_to=profile_image_upload_to, blank=True)
     totp_required = models.BooleanField(default=False)
+    email_setup_pending = models.BooleanField(default=False)
+    password_setup_nonce = models.PositiveIntegerField(default=0)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
@@ -74,6 +76,10 @@ class User(AbstractUser, TimeStampedModel):
     @property
     def requires_totp_setup(self):
         return self.totp_required and not self.has_totp_enabled
+
+    @property
+    def can_resend_setup_email(self):
+        return self.is_active and self.email_setup_pending
 
     @property
     def global_grant_scopes(self):

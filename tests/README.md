@@ -34,6 +34,11 @@ All repo-facing helpers under `tests/scripts/` support `-h` or `--help` for usag
 | User Story | Coverage Layer | Main Location |
 | --- | --- | --- |
 | Sign in and search the live catalog | Playwright against Dockerized app | `tests/frontend/e2e/auth-pages.spec.js` |
+| Request a password reset email from the public reset page | Playwright against Dockerized app | `tests/frontend/e2e/auth-public-pages.spec.js` |
+| Create a password from an invite link, see the TOTP guidance toast, and enter the forced setup gate | Playwright against Dockerized app | `tests/frontend/e2e/auth-public-pages.spec.js` |
+| Redirect forced-TOTP users away from protected pages into the centered setup gate with the shared header visible | Playwright against Dockerized app | `tests/frontend/e2e/auth-public-pages.spec.js` |
+| Create an invited user and show the minimal setup-email toast | Playwright with mocked API routes | `tests/frontend/e2e/access-page-mocked.spec.js` |
+| Resend setup mail for an onboarding-pending user from Users & Access | Playwright with mocked API routes | `tests/frontend/e2e/access-page-mocked.spec.js` |
 | Edit a managed user without losing filters | Playwright against Dockerized app | `tests/frontend/e2e/access-page.spec.js` |
 | Create a scoped book access rule from the browser | Playwright against Dockerized app | `tests/frontend/e2e/access-page.spec.js` |
 | Remove a bookmark while saving metadata edits | Playwright against Dockerized app | `tests/frontend/e2e/book-detail-page.spec.js` |

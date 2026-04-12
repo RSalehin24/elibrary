@@ -98,6 +98,7 @@ export default function AccessPage() {
             onClearSearch={accessUsers.clearUsersSearch}
             onDeleteUser={accessUsers.requestDeleteUser}
             onEditUser={accessUsers.startEditing}
+            onResendSetupEmail={accessUsers.resendSetupEmail}
             onSetUsersPage={accessUsers.setUsersPage}
             onSetUsersRowsPerPage={accessUsers.setUsersRowsPerPage}
             onUpdateUsersSearch={accessUsers.updateUsersSearch}
@@ -105,6 +106,7 @@ export default function AccessPage() {
             onUpdateUsersStatus={accessUsers.updateUsersStatus}
             pagedManagedUsers={accessUsers.pagedManagedUsers}
             propertyTableRowOptions={accessUsers.PROPERTY_TABLE_ROW_OPTIONS}
+            resendingSetupUserId={accessUsers.resendingSetupUserId}
             userListFilters={accessUsers.userListFilters}
             usersHasNext={accessUsers.usersHasNext}
             usersHasPrevious={accessUsers.usersHasPrevious}

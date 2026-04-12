@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model, login, logout, update_session_au
 from django.db import transaction
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ErrorDetail, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -15,6 +15,7 @@ from apps.accounts.serializers import (
     ManagedUserUpdateSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    PasswordResetValidateSerializer,
     ProfileSerializer,
     ProfileUpdateSerializer,
     RegisterSerializer,
@@ -24,8 +25,39 @@ from apps.accounts.serializers import (
     TOTPStatusSerializer,
     UserSerializer,
 )
+from apps.accounts.serializers.support import send_account_setup_email
 from apps.common.permissions import IsSuperAdmin
 from apps.common.throttles import LoginRateThrottle, PasswordResetRateThrottle, RegisterRateThrottle
+
+
+def extract_validation_error_message(detail):
+    if isinstance(detail, ErrorDetail):
+        return str(detail).strip()
+    if isinstance(detail, str):
+        return detail.strip()
+    if isinstance(detail, (list, tuple)):
+        for item in detail:
+            message = extract_validation_error_message(item)
+            if message:
+                return message
+        return ""
+    if isinstance(detail, dict):
+        for key in ("detail", "message", "non_field_errors"):
+            if key in detail:
+                message = extract_validation_error_message(detail[key])
+                if message:
+                    return message
+        for key, value in detail.items():
+            if key in {"detail", "message", "non_field_errors", "code"}:
+                continue
+            message = extract_validation_error_message(value)
+            if message:
+                return message
+    return ""
+
+
+def normalize_validation_error_detail(exc):
+    return extract_validation_error_message(exc.detail) or "Request failed."
 
 
 class SessionView(APIView):
@@ -80,9 +112,18 @@ class PasswordResetRequestView(APIView):
 
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response({"detail": "If the email exists, reset instructions were sent."})
+        try:
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+        except ValidationError as exc:
+            detail = normalize_validation_error_detail(exc)
+            status_code = (
+                status.HTTP_404_NOT_FOUND
+                if detail == "No user exist with this email."
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"detail": detail}, status=status_code)
+        return Response({"detail": "Reset email has been sent."})
 
 
 class PasswordResetConfirmView(APIView):
@@ -95,9 +136,41 @@ class PasswordResetConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         serializer = PasswordResetConfirmSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response({"detail": "Password reset complete."})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as exc:
+            return Response(
+                {"detail": normalize_validation_error_detail(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = serializer.save()
+        if user.requires_totp_setup:
+            login(request, user)
+            return Response(
+                {
+                    "detail": "Password saved. Continue with two-factor setup.",
+                    "next_step": "totp_setup",
+                    "user": UserSerializer(
+                        request.user, context={"request": request}
+                    ).data,
+                }
+            )
+        return Response({"detail": "Password reset complete.", "next_step": "login"})
+
+
+class PasswordResetValidateView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetValidateSerializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as exc:
+            return Response(
+                {"detail": normalize_validation_error_detail(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"detail": "Password link is valid."})
 
 
 class TOTPStatusView(APIView):
@@ -144,6 +217,9 @@ class TOTPConfirmView(APIView):
 
         device.confirmed = True
         device.save(update_fields=["confirmed"])
+        if request.user.email_setup_pending and request.user.has_usable_password():
+            request.user.email_setup_pending = False
+            request.user.save(update_fields=["email_setup_pending"])
         return Response({"detail": "TOTP is now enabled."})
 
 
@@ -238,5 +314,26 @@ class ManagedUserDetailView(generics.RetrieveUpdateDestroyAPIView):
             return Response({"detail": "You cannot delete your own account."}, status=status.HTTP_400_BAD_REQUEST)
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ManagedUserResendSetupEmailView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        user = get_user_model().objects.filter(pk=pk).first()
+        if user is None:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if user.is_superuser:
+            return Response({"detail": "Super admin users do not use setup emails."}, status=status.HTTP_400_BAD_REQUEST)
+        if user.pk == request.user.pk:
+            return Response({"detail": "You cannot send a setup email to your own account."}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.can_resend_setup_email:
+            return Response({"detail": "This user does not need a setup email."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            send_account_setup_email(user, request=request, invited_by=request.user)
+        except Exception:
+            return Response({"detail": "Setup email could not be delivered."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(ManagedUserSerializer(user, context={"request": request}).data)
 
 # Create your views here.

@@ -17,10 +17,13 @@ export default function AppShell({ children }) {
   const navigate = useNavigate();
   const { authenticated, user, logout } = useSession();
   const isReaderRoute = location.pathname === "/reader";
+  const isCreatePasswordRoute = location.pathname === "/create-password";
+  const isTotpSetupRoute = location.pathname === "/two-factor-setup";
   const readerNavHidden =
     isReaderRoute &&
     new URLSearchParams(location.search).get("appNav") !== "shown";
   const showTopbar = !readerNavHidden;
+  const useMinimalTopbar = isTotpSetupRoute || isCreatePasswordRoute;
   const [menuOpen, setMenuOpen] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [processingOpen, setProcessingOpen] = useState(false);
@@ -109,14 +112,20 @@ export default function AppShell({ children }) {
         />
       ) : null}
       {showTopbar ? (
-        <header className={authenticated ? "topbar" : "topbar topbar-public"}>
+        <header
+          className={
+            authenticated && !useMinimalTopbar
+              ? "topbar"
+              : "topbar topbar-public"
+          }
+        >
           <div className="brand-block">
             <NavLink to="/home" className="brand-mark">
               <span className="brand-mark-name">RSalehin24</span>
               <span className="brand-mark-suffix">Library</span>
             </NavLink>
           </div>
-          {authenticated ? (
+          {authenticated && !useMinimalTopbar ? (
             <nav className="topnav" aria-label="Primary">
               {navigation.map((item) => (
                 <NavLink
@@ -149,37 +158,39 @@ export default function AppShell({ children }) {
               />
             </nav>
           ) : null}
-          <div className="session-box">
-            {authenticated ? (
-              <>
-                <NavLink
-                  to="/created-books"
-                  className={({ isActive }) =>
-                    isActive ? "nav-link is-active" : "nav-link"
-                  }
-                >
-                  My Books
+          {!useMinimalTopbar ? (
+            <div className="session-box">
+              {authenticated ? (
+                <>
+                  <NavLink
+                    to="/created-books"
+                    className={({ isActive }) =>
+                      isActive ? "nav-link is-active" : "nav-link"
+                    }
+                  >
+                    My Books
+                  </NavLink>
+                  <ProfileMenu
+                    displayName={displayName}
+                    email={user?.email}
+                    profileImageUrl={user?.profile_image_url}
+                    menuOpen={menuOpen}
+                    menuRef={profileMenuRef}
+                    onToggle={() => setMenuOpen((current) => !current)}
+                    onClose={() => setMenuOpen(false)}
+                    onLogout={async () => {
+                      setMenuOpen(false);
+                      await logout();
+                    }}
+                  />
+                </>
+              ) : !isLoginRoute ? (
+                <NavLink to="/login" className="ghost-button">
+                  Sign in
                 </NavLink>
-                <ProfileMenu
-                  displayName={displayName}
-                  email={user?.email}
-                  profileImageUrl={user?.profile_image_url}
-                  menuOpen={menuOpen}
-                  menuRef={profileMenuRef}
-                  onToggle={() => setMenuOpen((current) => !current)}
-                  onClose={() => setMenuOpen(false)}
-                  onLogout={async () => {
-                    setMenuOpen(false);
-                    await logout();
-                  }}
-                />
-              </>
-            ) : !isLoginRoute ? (
-              <NavLink to="/login" className="ghost-button">
-                Sign in
-              </NavLink>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          ) : null}
         </header>
       ) : null}
       {isReaderRoute && showTopbar ? (

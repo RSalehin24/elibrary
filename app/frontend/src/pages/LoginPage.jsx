@@ -4,6 +4,41 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function LoginEmailFeedbackIcon({ valid }) {
+  if (valid) {
+    return (
+      <svg
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M4.5 10.5 8 14l7.5-8.5" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m6 6 8 8" />
+      <path d="m14 6-8 8" />
+    </svg>
+  );
+}
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useSession();
@@ -12,17 +47,40 @@ export default function LoginPage() {
   const [form, setForm] = useState({ email: "", password: "", otp_token: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const normalizedEmail = form.email.trim();
+  const hasEmailInput = normalizedEmail.length > 0;
+  const emailLooksValid = EMAIL_PATTERN.test(normalizedEmail);
+  const showEmailFeedback = phase === "credentials" && hasEmailInput;
+  const credentialsReady =
+    hasEmailInput && emailLooksValid && form.password.trim().length > 0;
 
   async function handleLogin(event) {
     event.preventDefault();
     if (submitting) {
       return;
     }
+    if (!event.currentTarget.reportValidity()) {
+      return;
+    }
+    if (phase === "credentials" && !credentialsReady) {
+      return;
+    }
     try {
       setSubmitting(true);
-      await login(form);
-      toast.success("Signed in.");
-      navigate("/home", { replace: true });
+      const user = await login({
+        ...form,
+        email: normalizedEmail,
+        otp_token: form.otp_token.trim(),
+      });
+      const requiresTotpSetup = Boolean(user?.totp_setup_required);
+      toast.success(
+        requiresTotpSetup
+          ? "Signed in. Finish two-factor setup to continue."
+          : "Signed in.",
+      );
+      navigate(requiresTotpSetup ? "/two-factor-setup" : "/home", {
+        replace: true,
+      });
     } catch (error) {
       const code = error?.payload?.code;
       if (code === "otp_required") {
@@ -61,9 +119,36 @@ export default function LoginPage() {
               onChange={(event) =>
                 setForm({ ...form, email: event.target.value })
               }
+              inputMode="email"
               autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
               readOnly={phase === "otp"}
+              required={phase === "credentials"}
+              aria-describedby={
+                showEmailFeedback ? "login-email-feedback" : undefined
+              }
+              aria-invalid={
+                showEmailFeedback && !emailLooksValid ? "true" : undefined
+              }
             />
+            {showEmailFeedback ? (
+              <span
+                id="login-email-feedback"
+                className={`login-email-feedback login-email-feedback-${emailLooksValid ? "valid" : "invalid"}`}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="login-email-feedback-icon" aria-hidden="true">
+                  <LoginEmailFeedbackIcon valid={emailLooksValid} />
+                </span>
+                <span>
+                  {emailLooksValid
+                    ? "Email looks good."
+                    : "Enter a valid email address."}
+                </span>
+              </span>
+            ) : null}
           </label>
           <label>
             <span>Password</span>
@@ -76,6 +161,7 @@ export default function LoginPage() {
                 }
                 autoComplete="current-password"
                 readOnly={phase === "otp"}
+                required={phase === "credentials"}
               />
               <button
                 type="button"
@@ -100,11 +186,16 @@ export default function LoginPage() {
                 autoFocus
                 inputMode="numeric"
                 placeholder="123456"
+                required={phase === "otp"}
               />
             </label>
           ) : null}
           <div className="inline-pills login-actions">
-            <button type="submit" className="primary-button">
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={submitting || (phase === "credentials" && !credentialsReady)}
+            >
               <span className="button-label">
                 {submitting ? <LoadingSpinner size={16} /> : null}
                 {submitting

@@ -13,9 +13,23 @@ export class AuthPageModel {
   }
 
   async gotoPasswordResetLink(uid = "reset-user", token = "reset-token") {
-    await this.page.goto(`/reset-password?uid=${uid}&token=${token}`);
+    await this.page.goto(`/reset-password/confirm?uid=${uid}&token=${token}`);
     await expect(
       this.page.getByRole("heading", { name: "New password" }),
+    ).toBeVisible();
+  }
+
+  async gotoPasswordResetRequest() {
+    await this.page.goto("/reset-password");
+    await expect(
+      this.page.getByRole("heading", { name: "Reset your password" }),
+    ).toBeVisible();
+  }
+
+  async gotoCreatePasswordLink(uid = "invite-user", token = "invite-token") {
+    await this.page.goto(`/create-password?uid=${uid}&token=${token}`);
+    await expect(
+      this.page.getByRole("heading", { name: "Create password" }),
     ).toBeVisible();
   }
 
@@ -39,6 +53,10 @@ export class AuthPageModel {
     await this.passwordInput().fill(password);
   }
 
+  async fillPasswordResetRequestEmail(email) {
+    await this.emailInput().fill(email);
+  }
+
   async submitLogin() {
     await this.page.getByRole("button", { name: /Continue|Verify/ }).click();
   }
@@ -57,6 +75,12 @@ export class AuthPageModel {
   }
 
   async submitPasswordReset() {
-    await this.page.getByRole("button", { name: "Reset password" }).click();
+    await this.page
+      .getByRole("button", { name: /Reset password|Create password/ })
+      .click();
+  }
+
+  async submitPasswordResetRequest() {
+    await this.page.getByRole("button", { name: "Reset Password" }).click();
   }
 }

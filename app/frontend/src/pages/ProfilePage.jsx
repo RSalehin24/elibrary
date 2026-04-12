@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { authApi } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
+import TwoFactorSetupPanel from "../components/TwoFactorSetupPanel";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
@@ -631,82 +632,15 @@ export default function ProfilePage() {
               </div>
 
               {setupVisible && setup.provisioning_uri ? (
-                <div className="totp-setup-panel">
-                  <div className="panel-header">
-                    <div className="profile-section-heading">
-                      <h3>Authenticator Setup</h3>
-                    </div>
-                    <div className="inline-pills">
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={copyProvisioningUrl}
-                        disabled={Boolean(totpAction)}
-                      >
-                        Copy URL
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={cancelSetup}
-                        disabled={Boolean(totpAction)}
-                      >
-                        <span className="button-label">
-                          {totpAction === "cancel" ? (
-                            <LoadingSpinner size={14} />
-                          ) : null}
-                          {totpAction === "cancel"
-                            ? "Canceling..."
-                            : "Cancel Setup"}
-                        </span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="two-column-layout profile-setup-grid">
-                    <div
-                      className="totp-qr-card"
-                      aria-label="Two-factor QR code"
-                      dangerouslySetInnerHTML={{ __html: setup.qr_svg }}
-                    />
-                    <div className="stack-form">
-                      <div className="settings-list">
-                        <span className="fact-label">Setup URL</span>
-                        <p className="mono-line">{setup.provisioning_uri}</p>
-                        <span className="fact-label">Secret</span>
-                        <p className="mono-line">{setup.secret}</p>
-                      </div>
-
-                      <form className="stack-form" onSubmit={confirmSetup}>
-                        <label>
-                          <span className="fact-label">Verification Code</span>
-                          <input
-                            value={token}
-                            onChange={(event) => setToken(event.target.value)}
-                            inputMode="numeric"
-                            placeholder="123456"
-                          />
-                        </label>
-                        <div className="inline-pills">
-                          <button
-                            type="submit"
-                            className="primary-button"
-                            disabled={Boolean(totpAction)}
-                          >
-                            <span className="button-label">
-                              {totpAction === "verify" ? (
-                                <LoadingSpinner size={14} />
-                              ) : null}
-                              {totpAction === "verify"
-                                ? "Verifying..."
-                                : "Verify and Enable"}
-                            </span>
-                          </button>
-                        </div>
-                      </form>
-                    </div>
-                  </div>
-                </div>
+                <TwoFactorSetupPanel
+                  onCancel={cancelSetup}
+                  onCopy={copyProvisioningUrl}
+                  onSubmit={confirmSetup}
+                  onTokenChange={setToken}
+                  setup={setup}
+                  token={token}
+                  totpAction={totpAction}
+                />
               ) : null}
             </section>
           </div>
