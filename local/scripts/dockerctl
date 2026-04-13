@@ -1,0 +1,76 @@
+#!/bin/bash
+set -euo pipefail
+
+PROFILE="colima"
+
+start_colima() {
+  echo "Starting Colima..."
+
+  if colima start --runtime docker; then
+    return 0
+  fi
+
+  echo "Start failed. Attempting recovery..."
+
+  # Fix common broken state
+  colima stop -f || true
+  colima delete -f || true
+  rm -rf ~/.lima/colima
+  rm -rf ~/.colima/_templates/colima.yaml ~/.colima/colima.yaml
+
+  echo "Recreating Colima..."
+  colima start --runtime docker
+}
+
+wait_docker() {
+  echo "Waiting for Docker..."
+  until docker info >/dev/null 2>&1; do
+    sleep 2
+  done
+  echo "Docker is ready."
+}
+
+case "${1:-start}" in
+  start)
+    if colima status 2>&1 | grep -qi "running"; then
+      echo "Colima already running."
+    else
+      start_colima
+    fi
+    wait_docker
+    docker context show
+    ;;
+
+  stop)
+    echo "Stopping Colima..."
+    colima stop
+    echo "Stopped."
+    ;;
+
+  restart)
+    echo "Restarting Colima..."
+    colima stop || true
+    start_colima
+    wait_docker
+    ;;
+
+  reset)
+    echo "Force resetting Colima (this removes containers/images)..."
+    colima stop -f || true
+    colima delete -f || true
+    rm -rf ~/.lima/colima
+    rm -rf ~/.colima/_templates/colima.yaml ~/.colima/colima.yaml
+    colima start --runtime docker
+    wait_docker
+    ;;
+
+  status)
+    colima status || true
+    docker info || true
+    ;;
+
+  *)
+    echo "Usage: $0 [start|stop|restart|reset|status]"
+    exit 1
+    ;;
+esac
