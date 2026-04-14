@@ -38,6 +38,7 @@ require_cmd curl
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
 COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
 COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+STACK_SERVICES=(postgres redis backend frontend)
 
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"
@@ -95,7 +96,8 @@ run_browser_suite() {
 
 for run_index in $(seq 1 "${repeat_count}"); do
   print_info "Verification run ${run_index}/${repeat_count}: starting live stack"
-  "${REPO_ROOT}/local/scripts/dev.sh" up
+  compose "${COMPOSE_ARGS[@]}" up -d --build "${STACK_SERVICES[@]}"
+  compose "${COMPOSE_ARGS[@]}" stop worker beat >/dev/null 2>&1 || true
 
   print_info "Verification run ${run_index}/${repeat_count}: waiting for services"
   wait_for_url "${FRONTEND_URL}" 120 || die "Frontend did not become ready at ${FRONTEND_URL}"
@@ -103,6 +105,10 @@ for run_index in $(seq 1 "${repeat_count}"); do
 
   print_info "Verification run ${run_index}/${repeat_count}: seeding live browser data"
   "${REPO_ROOT}/tests/scripts/seed-e2e-data.sh"
+
+  print_info "Verification run ${run_index}/${repeat_count}: reconfirming services after seed"
+  wait_for_url "${FRONTEND_URL}" 120 || die "Frontend did not become ready at ${FRONTEND_URL} after seed"
+  wait_for_url "${BACKEND_SESSION_URL}" 120 || die "Backend did not become ready at ${BACKEND_SESSION_URL} after seed"
 
   print_info "Verification run ${run_index}/${repeat_count}: backend tests"
   run_backend_tests

@@ -36,6 +36,24 @@ export class ProcessingPageModel {
     });
   }
 
+  catalogSyncButton() {
+    return this.card("Catalog Books").locator(".catalog-toolbar-sync-button");
+  }
+
+  catalogSyncStatus() {
+    return this.card("Catalog Books").locator(".catalog-toolbar-sync-status");
+  }
+
+  catalogCreateSelectedButton() {
+    return this.card("Catalog Books")
+      .locator(".processing-card-actions .primary-button")
+      .first();
+  }
+
+  catalogRowCheckbox(title) {
+    return this.card("Catalog Books").getByLabel(`Select ${title}`);
+  }
+
   cardHead(title) {
     return this.card(title).locator(".processing-card-head");
   }

@@ -54,7 +54,7 @@ async function writeSuperAdminStorageState({ frontend, repoRoot }) {
       })
       .catch(() => null),
   ]);
-  await page.goto("/home", { waitUntil: "networkidle" });
+  await page.goto("/home", { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "All Books" }).waitFor({
     state: "visible",
     timeout: 15_000,
@@ -65,17 +65,29 @@ async function writeSuperAdminStorageState({ frontend, repoRoot }) {
   await browser.close();
 }
 
+function startDetachedStack({ env, repoRoot }) {
+  const composeFile = path.join(repoRoot, "local/compose/docker-compose.yml");
+  const services = "postgres redis backend worker beat frontend";
+  const command = [
+    "set -euo pipefail",
+    `if docker compose version >/dev/null 2>&1; then docker compose -f "${composeFile}" up -d --build ${services}; else docker-compose -f "${composeFile}" up -d --build ${services}; fi`,
+  ].join("; ");
+
+  execFileSync("bash", ["-lc", command], {
+    cwd: repoRoot,
+    env: { ...process.env, ...env },
+    stdio: "inherit",
+  });
+}
+
 export default async function globalSetup() {
-  loadLocalEnv();
+  const env = loadLocalEnv();
   const repoRoot = getRepoRoot();
   const { frontend, backend } = getLiveBaseUrls();
   const backendSessionUrl = `${backend.replace(/\/$/, "")}/api/auth/session/`;
 
   if (process.env.PLAYWRIGHT_SKIP_STACK_START !== "1") {
-    execFileSync(path.join(repoRoot, "local/scripts/dev.sh"), ["up"], {
-      cwd: repoRoot,
-      stdio: "inherit",
-    });
+    startDetachedStack({ env, repoRoot });
   }
 
   await Promise.all([waitForUrl(frontend), waitForUrl(backendSessionUrl)]);

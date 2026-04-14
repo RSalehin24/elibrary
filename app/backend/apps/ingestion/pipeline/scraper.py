@@ -1,11 +1,13 @@
 import json
-import re
 import os
+import re
 import shutil
+import time
 from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 
+import requests
 from bs4 import BeautifulSoup, Tag
 from django.conf import settings
 
@@ -13,6 +15,7 @@ from apps.ingestion.services.normalization import extract_main_content_segments
 from apps.common.text import clean_display_text
 from .scraper_support.network import (
     ALLOWED_SOURCE_HOSTS,
+    HEADERS,
     clean_buttons,
     create_session_with_retries,
     get_soup,
@@ -533,8 +536,11 @@ def download_cover_image(soup, output_folder):
     if not img_url:
         return None
 
-    response = requests.get(img_url, headers=HEADERS)
-    if response.status_code != 200:
+    try:
+        with create_session_with_retries() as session:
+            response = session.get(img_url, headers=HEADERS, timeout=30)
+            response.raise_for_status()
+    except requests.exceptions.RequestException:
         return None
 
     ext = ".webp" if ".webp" in img_url else ".jpg"

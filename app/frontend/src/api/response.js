@@ -1,4 +1,8 @@
 export async function parseResponse(response) {
+  if ([204, 205].includes(response.status)) {
+    return null;
+  }
+
   const contentType = response.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
     return response.json();

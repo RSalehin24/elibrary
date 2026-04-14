@@ -81,6 +81,15 @@ test("getSubmissionDisplayStatus prioritizes failed jobs and queued jobs over st
 
   assert.equal(
     getSubmissionDisplayStatus({
+      id: "stale-processing-1",
+      status: "processing",
+      latest_job: { status: "queued" },
+    }),
+    "queued",
+  );
+
+  assert.equal(
+    getSubmissionDisplayStatus({
       id: "deleted-1",
       status: "deleted",
       latest_job: { status: "failed" },

@@ -31,6 +31,8 @@ fi
 
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
 COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
+COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+STACK_SERVICES=(postgres redis backend)
 BACKEND_SESSION_URL=""
 
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
@@ -58,10 +60,10 @@ wait_for_url() {
 }
 
 print_info "Starting local stack for deterministic E2E seed data"
-"${REPO_ROOT}/local/scripts/dev.sh" up
+compose "${COMPOSE_ARGS[@]}" up -d --build "${STACK_SERVICES[@]}"
 
 print_info "Waiting for backend"
 wait_for_url "${BACKEND_SESSION_URL}" 120 || die "Backend did not become ready at ${BACKEND_SESSION_URL}"
 
 print_info "Seeding deterministic live E2E data inside the local backend container."
-compose -f "${COMPOSE_FILE}" exec -T backend python manage.py seed_e2e_data
+compose "${COMPOSE_ARGS[@]}" exec -T backend python manage.py seed_e2e_data

@@ -17,6 +17,9 @@
 | My Requests | Deleted | Deleted request is requeued | Request leaves Deleted and appears in Ready |
 | Catalog | Processing/Ready/Queued/Stopped/Deleted | Seeded curation requests render | Each seeded request appears in one card only |
 | Catalog | Catalog Books | Sort control changes order | Visible catalog rows remain correct after sort change |
+| Catalog | Catalog Books | Create selected and leave the page mid-run | Create controls keep loading, selection stays disabled, and both clear only after the tracked rows reach a terminal result |
+| Catalog | Catalog Sync | Start sync | Sync control switches to an active loading state immediately after the action starts |
+| Catalog | Processing/Stopped/Deleted/Catalog Books | Stop, resume, requeue, and delete from visible rows | Each live action updates the matching card or row without manual refresh |
 | Automation | Processing/Ready/Queued/Stopped/Deleted | Seeded automation requests render | Each seeded request appears in one card only |
 | Automation | Run History | Expand/collapse and persistence | Expanded run history rises to the top and saved settings persist after reload |
 | Failed Requests | Failed Requests | Failed rows render with Errors column | Row shows failure message inline and no side log panel is rendered |

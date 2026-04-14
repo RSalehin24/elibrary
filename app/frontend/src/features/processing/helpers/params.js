@@ -5,7 +5,7 @@ import {
   USER_TAB,
   defaultJobFilters,
 } from "../constants";
-import { cutoffForPeriod } from "./activity";
+import { cutoffForPeriod } from "./activity.js";
 
 export function getOriginForTab(tab) {
   if (tab === SOURCE_TAB || tab === INCOMPLETE_TAB) {

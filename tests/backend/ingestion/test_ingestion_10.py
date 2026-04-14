@@ -146,6 +146,106 @@ def test_scrape_book_data_recurses_through_nested_toc_links(monkeypatch, tmp_pat
     assert "পাতার ভেতরের লেখা" in scraped["content_items"][1]["content"]
 
 
+def test_download_cover_image_uses_retry_session_and_saves_the_cover(monkeypatch, tmp_path):
+    class FakeResponse:
+        status_code = 200
+        content = b"cover-bytes"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, url, headers=None, timeout=None):
+            self.calls.append(
+                {
+                    "url": url,
+                    "headers": headers,
+                    "timeout": timeout,
+                }
+            )
+            return FakeResponse()
+
+    session = FakeSession()
+    monkeypatch.setattr(
+        legacy_scraper,
+        "create_session_with_retries",
+        lambda: session,
+    )
+
+    soup = legacy_scraper.BeautifulSoup(
+        """
+        <figure class="entry-image-link entry-image-single">
+          <img src="https://cdn.example.com/cover.webp" />
+        </figure>
+        """,
+        "html.parser",
+    )
+
+    filename = legacy_scraper.download_cover_image(soup, str(tmp_path))
+
+    assert filename == "book_cover.webp"
+    assert session.calls == [
+        {
+            "url": "https://cdn.example.com/cover.webp",
+            "headers": legacy_scraper.HEADERS,
+            "timeout": 30,
+        }
+    ]
+    assert (tmp_path / filename).read_bytes() == b"cover-bytes"
+
+
+def test_scrape_all_lessons_waits_between_pages(monkeypatch):
+    seen_urls = []
+    sleep_calls = []
+    lesson_pages = {
+        "https://www.ebanglalibrary.com/books/example/?ld-courseinfo-lesson-page=1": {
+            "lessons": [{"title": "প্রথম পাঠ", "url": "lesson-1", "topics": [], "has_topics": False}],
+            "total_pages": 2,
+        },
+        "https://www.ebanglalibrary.com/books/example/?ld-courseinfo-lesson-page=2": {
+            "lessons": [{"title": "দ্বিতীয় পাঠ", "url": "lesson-2", "topics": [], "has_topics": False}],
+            "total_pages": 2,
+        },
+    }
+
+    def fake_get_soup(url):
+        seen_urls.append(url)
+        return url
+
+    monkeypatch.setattr(legacy_scraper, "get_soup", fake_get_soup)
+    monkeypatch.setattr(
+        legacy_scraper,
+        "scrape_lesson_list",
+        lambda soup: lesson_pages[soup]["lessons"],
+    )
+    monkeypatch.setattr(
+        legacy_scraper,
+        "get_total_pages",
+        lambda soup: lesson_pages[soup]["total_pages"],
+    )
+    monkeypatch.setattr(legacy_scraper.time, "sleep", sleep_calls.append)
+
+    lessons = legacy_scraper.scrape_all_lessons(
+        "https://www.ebanglalibrary.com/books/example/",
+    )
+
+    assert [lesson["title"] for lesson in lessons] == ["প্রথম পাঠ", "দ্বিতীয় পাঠ"]
+    assert seen_urls == [
+        "https://www.ebanglalibrary.com/books/example/?ld-courseinfo-lesson-page=1",
+        "https://www.ebanglalibrary.com/books/example/?ld-courseinfo-lesson-page=2",
+    ]
+    assert sleep_calls == [1]
+
+
 def test_normalize_scraped_book_drops_author_role_when_same_person_is_translator_or_editor():
     normalized = normalize_scraped_book(
         {

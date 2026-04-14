@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import BookRouteLink from "../components/BookRouteLink";
 import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
@@ -69,6 +69,7 @@ export default function ProcessingMyRequestsPage() {
   const toast = useToast();
   const canManageProcessing = hasCapability(user, "processing:manage");
   const activeTab = USER_TAB;
+  const loadRequestIdRef = useRef(0);
   const [jobs, setJobs] = useState([]);
   const [jobReviewRows, setJobReviewRows] = useState([]);
   const [submissions, setSubmissions] = useState([]);
@@ -161,6 +162,8 @@ export default function ProcessingMyRequestsPage() {
   }
 
   async function load(options = {}) {
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
     const {
       nextJobFilters = jobFilters,
       nextSubmissionFilters = submissionFilters,
@@ -234,6 +237,9 @@ export default function ProcessingMyRequestsPage() {
       }
 
       const payloads = await Promise.all(requests);
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
       const payloadByScope = new Map(
         payloads.map(({ scope, payload }) => [scope, payload]),
       );
@@ -260,12 +266,12 @@ export default function ProcessingMyRequestsPage() {
 
       setError("");
     } catch (nextError) {
-      if (!silent) {
+      if (!silent && requestId === loadRequestIdRef.current) {
         setError(nextError.message);
         toast.error(nextError.message);
       }
     } finally {
-      if (!silent) {
+      if (!silent && requestId === loadRequestIdRef.current) {
         setScopeLoading(scopeSet, false);
         if (isFullLoad) {
           setLoading(false);

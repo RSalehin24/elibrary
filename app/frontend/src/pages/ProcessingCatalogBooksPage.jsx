@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import BookRouteLink from "../components/BookRouteLink";
 import CatalogToolbar, { CatalogSearchRow } from "../components/CatalogToolbar";
@@ -60,6 +60,7 @@ import {
   getRunActivityAt,
   getSubmissionActivityAt,
   getUniqueSubmissionIds,
+  hasActiveCatalogCreationWork,
   isActiveStatus,
   isCatalogSyncActive,
   isDefaultCatalogBrowseRequest,
@@ -70,6 +71,7 @@ import {
   orderExpandableCards,
   getSubmissionDisplayStatus,
   partitionSubmissionsForCards,
+  resolvePendingCatalogCreationEntries,
   runModeLabel,
   runSummaryLabel,
   runTypeLabel,
@@ -89,6 +91,7 @@ import {
   renderProcessingCardLoader,
 } from "../features/processing/components/ProcessingScaffold";
 import {
+  useProcessingActivity,
   usePersistentProcessingPageState,
 } from "../features/processing/ProcessingActivityProvider";
 import { useSession } from "../hooks/useSession";
@@ -99,9 +102,11 @@ import { toQueryString } from "../utils/query";
 
 export default function ProcessingCatalogBooksPage() {
   const { user } = useSession();
+  const { activeScopes, loaded: activityLoaded } = useProcessingActivity();
   const toast = useToast();
   const canManageProcessing = hasCapability(user, "processing:manage");
   const activeTab = SOURCE_TAB;
+  const loadRequestIdRef = useRef(0);
   const [jobs, setJobs] = useState([]);
   const [jobReviewRows, setJobReviewRows] = useState([]);
   const [submissions, setSubmissions] = useState([]);
@@ -238,6 +243,19 @@ export default function ProcessingCatalogBooksPage() {
       false,
     );
   const [catalogSyncDismissed, setCatalogSyncDismissed] = useState(false);
+  const [catalogSyncVisualState, setCatalogSyncVisualState] =
+    usePersistentProcessingPageState(
+      "processing-catalog",
+      "catalogSyncVisualState",
+      null,
+    );
+  const [catalogCreationTracker, setCatalogCreationTracker] =
+    usePersistentProcessingPageState(
+      "processing-catalog",
+      "catalogCreationTracker",
+      null,
+    );
+  const previousQueuedCountRef = useRef(0);
 
   const defaultScopes = useMemo(
     () => [
@@ -250,6 +268,61 @@ export default function ProcessingCatalogBooksPage() {
     ],
     [canManageProcessing],
   );
+  const trackedCatalogCreationEntries = catalogCreationTracker?.entries || [];
+  const trackedCatalogCreationIdSet = useMemo(
+    () => new Set(trackedCatalogCreationEntries.map((entry) => entry.id)),
+    [trackedCatalogCreationEntries],
+  );
+  const pendingCatalogCreationEntries = useMemo(
+    () =>
+      resolvePendingCatalogCreationEntries(trackedCatalogCreationEntries, {
+        catalogEntries,
+        catalogOverviewEntries,
+        jobs: jobReviewRows,
+      }),
+    [
+      trackedCatalogCreationEntries,
+      catalogEntries,
+      catalogOverviewEntries,
+      jobReviewRows,
+    ],
+  );
+  const catalogCreationDisplayEntries = useMemo(
+    () =>
+      catalogCreationTracker?.awaitingStart
+        ? trackedCatalogCreationEntries
+        : pendingCatalogCreationEntries,
+    [
+      catalogCreationTracker,
+      trackedCatalogCreationEntries,
+      pendingCatalogCreationEntries,
+    ],
+  );
+  const catalogCreationDisplayIdSet = useMemo(
+    () => new Set(catalogCreationDisplayEntries.map((entry) => entry.id)),
+    [catalogCreationDisplayEntries],
+  );
+  const hasPendingCatalogCreations = pendingCatalogCreationEntries.length > 0;
+  const hasTrackedCatalogCreations = catalogCreationDisplayEntries.length > 0;
+  const hasBackendCatalogCreationWork = useMemo(
+    () =>
+      hasActiveCatalogCreationWork({
+        catalogEntries,
+        catalogOverviewEntries,
+        jobs: jobReviewRows,
+        submissions,
+      }),
+    [catalogEntries, catalogOverviewEntries, jobReviewRows, submissions],
+  );
+  const catalogCreateControlsDisabled =
+    creatingCatalog || hasTrackedCatalogCreations || hasBackendCatalogCreationWork;
+  const catalogCreationStatusLoaded =
+    !catalogBrowseLoading &&
+    !catalogOverviewLoading &&
+    !jobsLoading &&
+    !jobReviewsLoading;
+  const catalogSyncStatusLoaded =
+    activityLoaded && !catalogBrowseLoading && !catalogOverviewLoading;
 
   const globalActionsLocked = Boolean(
     busyActionId ||
@@ -259,14 +332,21 @@ export default function ProcessingCatalogBooksPage() {
     creatingCatalog ||
     stoppingCatalogSync,
   );
-  const catalogSyncActive = isCatalogSyncActive(catalogSyncState?.status);
+  const sharedCatalogSyncActive = activeScopes.includes("catalog_refresh");
+  const effectiveCatalogSyncState = catalogSyncState || catalogSyncVisualState;
+  const catalogSyncActive =
+    isCatalogSyncActive(effectiveCatalogSyncState?.status) ||
+    sharedCatalogSyncActive;
   const refreshingCatalog = catalogSyncActive && !catalogSyncDismissed;
   const sourceTabButtonsDisabled = refreshingCatalog || globalActionsLocked;
   const catalogActionsDisabled = refreshingCatalog;
-  const creationActionsDisabled = sourceTabButtonsDisabled;
+  const creationActionsDisabled =
+    sourceTabButtonsDisabled || catalogCreateControlsDisabled;
   const catalogActionDisabledReason = refreshingCatalog
     ? "Disabled while catalog sync is running."
-    : "";
+    : catalogCreateControlsDisabled
+      ? "Disabled while catalog book creation is running."
+      : "";
 
   function getScopesForTab() {
     return defaultScopes;
@@ -306,6 +386,8 @@ export default function ProcessingCatalogBooksPage() {
   }
 
   async function load(options = {}) {
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
     const {
       nextTab = activeTab,
       nextJobFilters = jobFilters,
@@ -444,6 +526,9 @@ export default function ProcessingCatalogBooksPage() {
       }
 
       const payloads = await Promise.all(requests);
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
       const payloadByScope = new Map(
         payloads.map(({ scope, payload }) => [scope, payload]),
       );
@@ -571,12 +656,12 @@ export default function ProcessingCatalogBooksPage() {
 
       setError("");
     } catch (nextError) {
-      if (!silent) {
+      if (!silent && requestId === loadRequestIdRef.current) {
         setError(nextError.message);
         toast.error(nextError.message);
       }
     } finally {
-      if (!silent) {
+      if (!silent && requestId === loadRequestIdRef.current) {
         setScopeLoading(scopes, false);
         if (isFullTabLoad) {
           setLoading(false);
@@ -588,6 +673,46 @@ export default function ProcessingCatalogBooksPage() {
   useEffect(() => {
     load({ nextTab: activeTab }).catch(() => {});
   }, [user?.id, canManageProcessing, activeTab]);
+
+  useEffect(() => {
+    if (catalogSyncState && isCatalogSyncActive(catalogSyncState.status)) {
+      setCatalogSyncVisualState(catalogSyncState);
+      return;
+    }
+
+    if (sharedCatalogSyncActive) {
+      if (!isCatalogSyncActive(catalogSyncVisualState?.status)) {
+        setCatalogSyncVisualState({
+          ...(catalogSyncVisualState || {}),
+          status: "queued",
+          updated_at: new Date().toISOString(),
+          finished_at: null,
+        });
+      }
+      return;
+    }
+
+    if (
+      isCatalogSyncActive(catalogSyncVisualState?.status) &&
+      !catalogSyncStatusLoaded
+    ) {
+      return;
+    }
+
+    if (!stoppingCatalogSync) {
+      setCatalogSyncVisualState(null);
+    }
+  }, [
+    activityLoaded,
+    catalogBrowseLoading,
+    catalogOverviewLoading,
+    catalogSyncState,
+    catalogSyncStatusLoaded,
+    catalogSyncVisualState,
+    setCatalogSyncVisualState,
+    sharedCatalogSyncActive,
+    stoppingCatalogSync,
+  ]);
 
   useEffect(() => {
     const hasActiveJobs = [...jobs, ...jobReviewRows].some((job) =>
@@ -605,7 +730,8 @@ export default function ProcessingCatalogBooksPage() {
       !hasActiveJobs &&
       !hasActiveRuns &&
       !hasActiveCatalogSync &&
-      !hasActiveAutomationRun
+      !hasActiveAutomationRun &&
+      !hasTrackedCatalogCreations
     ) {
       return undefined;
     }
@@ -630,6 +756,39 @@ export default function ProcessingCatalogBooksPage() {
     runFilters,
     reviewFilters,
     incompleteFilters,
+    hasTrackedCatalogCreations,
+  ]);
+
+  useEffect(() => {
+    if (
+      !catalogCreationTracker?.entries?.length ||
+      creatingCatalog ||
+      !catalogCreationStatusLoaded
+    ) {
+      return;
+    }
+
+    if (catalogCreationTracker.awaitingStart) {
+      if (hasPendingCatalogCreations) {
+        setCatalogCreationTracker({
+          ...catalogCreationTracker,
+          awaitingStart: false,
+        });
+      }
+      return;
+    }
+
+    if (hasPendingCatalogCreations) {
+      return;
+    }
+
+    setCatalogCreationTracker(null);
+  }, [
+    catalogCreationTracker,
+    catalogCreationStatusLoaded,
+    creatingCatalog,
+    hasPendingCatalogCreations,
+    setCatalogCreationTracker,
   ]);
 
   useEffect(() => {
@@ -731,6 +890,47 @@ export default function ProcessingCatalogBooksPage() {
 
   async function reloadCurrent(options = {}) {
     await load({ preserveAutomationForm: true, ...options });
+  }
+
+  function buildCatalogCreationTracker(entryIds, mode = "") {
+    const entryById = new Map();
+    for (const entry of [...catalogOverviewEntries, ...catalogEntries]) {
+      if (entry?.id) {
+        entryById.set(entry.id, entry);
+      }
+    }
+
+    const uniqueIds = Array.from(new Set(entryIds));
+    return {
+      mode,
+      count: uniqueIds.length,
+      awaitingStart: true,
+      entries: uniqueIds.map((id) => {
+        const entry = entryById.get(id);
+        return {
+          id,
+          source_url: entry?.source_url || "",
+          title: entry?.title || "",
+        };
+      }),
+    };
+  }
+
+  function isCatalogCreationModeActive(mode) {
+    return (
+      catalogCreationTracker?.mode === mode && hasTrackedCatalogCreations
+    );
+  }
+
+  function trackedCatalogActionLabel(defaultLabel, selectedCount, mode) {
+    if (isCatalogCreationModeActive(mode)) {
+      return selectedActionLabel(
+        defaultLabel,
+        catalogCreationTracker?.count || selectedCount,
+      );
+    }
+
+    return selectedActionLabel(defaultLabel, selectedCount);
   }
 
   function toggleCollapsibleCard(cardKey, setter) {
@@ -988,15 +1188,33 @@ export default function ProcessingCatalogBooksPage() {
       return;
     }
 
+    const previousSyncState = catalogSyncState ?? catalogSyncVisualState;
+    const optimisticSyncState = {
+      ...(previousSyncState || {}),
+      status: "queued",
+      max_pages: 80,
+      requested_by_email:
+        user?.email ||
+        previousSyncState?.requested_by_email ||
+        "",
+      updated_at: new Date().toISOString(),
+      finished_at: null,
+    };
+
     try {
       setCatalogSyncDismissed(false);
+      setCatalogSyncState(optimisticSyncState);
+      setCatalogSyncVisualState(optimisticSyncState);
       const payload = await apiFetch("/ingestion/catalog/refresh/", {
         method: "POST",
         body: { max_pages: 80 },
       });
       setCatalogSyncState(payload);
+      setCatalogSyncVisualState(payload);
       await reloadCurrent({ silent: true });
     } catch (nextError) {
+      setCatalogSyncState(previousSyncState || null);
+      setCatalogSyncVisualState(previousSyncState || null);
       toast.error(nextError.message);
     }
   }
@@ -1007,29 +1225,33 @@ export default function ProcessingCatalogBooksPage() {
     }
 
     const previousSyncState = catalogSyncState;
+    const previousVisualState = catalogSyncVisualState;
     setStoppingCatalogSync(true);
     setCatalogSyncDismissed(true);
-    setCatalogSyncState((current) =>
-      current
+    const optimisticStoppedState =
+      (previousSyncState || previousVisualState)
         ? {
-            ...current,
+            ...(previousSyncState || previousVisualState),
             status: "idle",
             task_id: "",
             queue_name: "",
             finished_at: new Date().toISOString(),
           }
-        : current,
-    );
+        : previousSyncState || previousVisualState;
+    setCatalogSyncState(optimisticStoppedState);
+    setCatalogSyncVisualState(optimisticStoppedState);
     try {
       const payload = await apiFetch("/ingestion/catalog/refresh/stop/", {
         method: "POST",
         body: {},
       });
       setCatalogSyncState(payload);
+      setCatalogSyncVisualState(payload);
       await reloadCurrent({ silent: true });
     } catch (nextError) {
       setCatalogSyncDismissed(false);
       setCatalogSyncState(previousSyncState);
+      setCatalogSyncVisualState(previousVisualState);
       toast.error(nextError.message);
       await reloadCurrent({ silent: true }).catch(() => {});
     } finally {
@@ -1041,7 +1263,7 @@ export default function ProcessingCatalogBooksPage() {
     if (catalogActionsDisabled) {
       return;
     }
-    if (!entryIds.length || creatingCatalog) {
+    if (!entryIds.length || catalogCreateControlsDisabled) {
       return;
     }
 
@@ -1090,6 +1312,12 @@ export default function ProcessingCatalogBooksPage() {
           skipped_processing: "busy",
         }) || "Book creation queued.",
       );
+      setCatalogCreationTracker(
+        buildCatalogCreationTracker(
+          creatableEntryIds,
+          rowId ? "row" : (mode || "selected"),
+        ),
+      );
       setSelectedCatalogEntryIds([]);
       await reloadCurrent();
     } catch (nextError) {
@@ -1111,7 +1339,7 @@ export default function ProcessingCatalogBooksPage() {
     if (catalogActionsDisabled) {
       return;
     }
-    if (!entryIds.length || creatingCatalog) {
+    if (!entryIds.length || catalogCreateControlsDisabled) {
       return;
     }
 
@@ -1157,6 +1385,12 @@ export default function ProcessingCatalogBooksPage() {
           queued_updates: "update",
           skipped_processing: "busy",
         }) || "Book creation queued.",
+      );
+      setCatalogCreationTracker(
+        buildCatalogCreationTracker(
+          creatableEntryIds,
+          rowId ? "row" : (mode || "catalog-status"),
+        ),
       );
       clearSelection?.([]);
       await reloadCurrent();
@@ -1395,6 +1629,13 @@ export default function ProcessingCatalogBooksPage() {
   const queuedSubmissions = submissionCardGroups.queued;
   const stoppedSubmissions = submissionCardGroups.stopped;
   const deletedSubmissions = submissionCardGroups.deleted;
+
+  useEffect(() => {
+    if (previousQueuedCountRef.current === 0 && queuedSubmissions.length > 0) {
+      setQueuedCardExpanded(true);
+    }
+    previousQueuedCountRef.current = queuedSubmissions.length;
+  }, [queuedSubmissions.length]);
 
   const selectedJobIdSet = useMemo(
     () => new Set(selectedJobIds),
@@ -2997,6 +3238,12 @@ export default function ProcessingCatalogBooksPage() {
     const catalogPageCount = catalogPagination.page_count || 1;
     const isFirstCatalogPage = (catalogPagination.page || 1) <= 1;
     const isLastCatalogPage = (catalogPagination.page || 1) >= catalogPageCount;
+    const catalogSyncStatusMessage = stoppingCatalogSync
+      ? "Stopping catalog sync"
+      : refreshingCatalog
+        ? "Syncing catalog"
+        : "Catalog sync idle";
+    const showCatalogSyncSpinner = stoppingCatalogSync || refreshingCatalog;
     const catalogSyncControlLabel = stoppingCatalogSync
       ? "Stopping catalog sync"
       : refreshingCatalog
@@ -3062,27 +3309,41 @@ export default function ProcessingCatalogBooksPage() {
             secondaryContent={
               <div className="catalog-toolbar-secondary-layout">
                 <div className="catalog-toolbar-sync-panel">
-                  <button
-                    type="button"
-                    className={`icon-button catalog-toolbar-sync-button${refreshingCatalog || stoppingCatalogSync ? " warning-button" : ""}`}
-                    onClick={
-                      refreshingCatalog ? stopCatalogRefresh : refreshCatalog
-                    }
-                    disabled={
-                      stoppingCatalogSync ||
-                      (!refreshingCatalog && catalogActionsDisabled)
-                    }
-                    title={catalogSyncControlTitle}
-                    aria-label={catalogSyncControlLabel}
-                  >
-                    {stoppingCatalogSync ? (
-                      <LoadingSpinner size={18} />
-                    ) : refreshingCatalog ? (
-                      <CatalogStopIcon />
-                    ) : (
-                      <CatalogRefreshIcon />
-                    )}
-                  </button>
+                  <div className="catalog-toolbar-sync-shell">
+                    <button
+                      type="button"
+                      className={`icon-button catalog-toolbar-sync-button${refreshingCatalog || stoppingCatalogSync ? " warning-button" : ""}`}
+                      onClick={
+                        refreshingCatalog ? stopCatalogRefresh : refreshCatalog
+                      }
+                      disabled={
+                        stoppingCatalogSync ||
+                        (!refreshingCatalog && catalogActionsDisabled)
+                      }
+                      title={catalogSyncControlTitle}
+                      aria-label={catalogSyncControlLabel}
+                      aria-describedby={`${activeTab}-catalog-sync-status`}
+                    >
+                      {stoppingCatalogSync ? (
+                        <LoadingSpinner size={18} />
+                      ) : refreshingCatalog ? (
+                        <CatalogStopIcon />
+                      ) : (
+                        <CatalogRefreshIcon />
+                      )}
+                    </button>
+                    <div
+                      id={`${activeTab}-catalog-sync-status`}
+                      className={`catalog-toolbar-sync-status${refreshingCatalog || stoppingCatalogSync ? " is-active" : ""}`}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {showCatalogSyncSpinner ? (
+                        <LoadingSpinner size={12} />
+                      ) : null}
+                      <span>{catalogSyncStatusMessage}</span>
+                    </div>
+                  </div>
                 </div>
                 <div className="catalog-toolbar-secondary catalog-toolbar-secondary--catalog-card">
                   <label className="catalog-toolbar-field catalog-toolbar-field-sort">
@@ -3210,16 +3471,21 @@ export default function ProcessingCatalogBooksPage() {
                 }
                 disabled={
                   !selectedCatalogCount ||
-                  creatingCatalog ||
+                  catalogCreateControlsDisabled ||
                   catalogActionsDisabled
                 }
                 title={catalogActionDisabledReason || undefined}
               >
                 <span className="button-label">
-                  {creatingCatalog && catalogActionMode === "selected" ? (
+                  {((creatingCatalog && catalogActionMode === "selected") ||
+                    isCatalogCreationModeActive("selected")) ? (
                     <LoadingSpinner size={14} />
                   ) : null}
-                  {selectedActionLabel("Create selected", selectedCatalogCount)}
+                  {trackedCatalogActionLabel(
+                    "Create selected",
+                    selectedCatalogCount,
+                    "selected",
+                  )}
                 </span>
               </button>
               <button
@@ -3265,7 +3531,8 @@ export default function ProcessingCatalogBooksPage() {
                     }
                     disabled={
                       !creatableCatalogEntryIdsOnPage.length ||
-                      catalogActionsDisabled
+                      catalogActionsDisabled ||
+                      catalogCreateControlsDisabled
                     }
                     aria-label={
                       allCatalogSelected
@@ -3287,6 +3554,9 @@ export default function ProcessingCatalogBooksPage() {
                 const isSelectable = canCreateCatalogEntry(entry);
                 const isSelected = selectedCatalogIdSet.has(entry.id);
                 const isBusy = busyActionId === entry.id;
+                const isTrackedPending = catalogCreationDisplayIdSet.has(
+                  entry.id,
+                );
                 const isDeleting = busyDeleteId === `catalog:${entry.id}`;
                 return (
                   <tr key={entry.id}>
@@ -3300,7 +3570,11 @@ export default function ProcessingCatalogBooksPage() {
                             toggleSelectedId(current, entry.id),
                           )
                         }
-                        disabled={!isSelectable || catalogActionsDisabled}
+                        disabled={
+                          !isSelectable ||
+                          catalogActionsDisabled ||
+                          catalogCreateControlsDisabled
+                        }
                         aria-label={`Select ${entry.title}`}
                       />
                     </td>
@@ -3352,22 +3626,34 @@ export default function ProcessingCatalogBooksPage() {
                           >
                             Open
                           </BookRouteLink>
-                        ) : canCreateCatalogEntry(entry) ? (
+                        ) : isTrackedPending || canCreateCatalogEntry(entry) ? (
                           <button
                             type="button"
                             className="ghost-button"
                             onClick={() =>
                               queueCatalogBooks([entry.id], entry.id)
                             }
-                            disabled={isBusy || catalogActionsDisabled}
+                            disabled={
+                              isBusy ||
+                              isTrackedPending ||
+                              catalogActionsDisabled ||
+                              catalogCreateControlsDisabled
+                            }
                           >
-                            {isBusy
-                              ? entry.curation_status === "stopped"
-                                ? "Resuming..."
-                                : "Queueing..."
-                              : entry.curation_status === "stopped"
-                                ? "Resume"
-                                : "Create"}
+                            <span className="button-label">
+                              {isBusy || isTrackedPending ? (
+                                <LoadingSpinner size={14} />
+                              ) : null}
+                              {isBusy
+                                ? entry.curation_status === "stopped"
+                                  ? "Resuming..."
+                                  : "Queueing..."
+                                : isTrackedPending
+                                  ? "Processing..."
+                                  : entry.curation_status === "stopped"
+                                    ? "Resume"
+                                    : "Create"}
+                            </span>
                           </button>
                         ) : (
                           <span className="table-note">-</span>
@@ -3449,16 +3735,23 @@ export default function ProcessingCatalogBooksPage() {
                 className="primary-button"
                 onClick={onCreateSelected}
                 disabled={
-                  !selectedCount || creatingCatalog || catalogActionsDisabled
+                  !selectedCount ||
+                  catalogCreateControlsDisabled ||
+                  catalogActionsDisabled
                 }
                 title={catalogActionDisabledReason || undefined}
               >
                 <span className="button-label">
-                  {creatingCatalog &&
-                  catalogActionMode === `${bulkMode}:selected` ? (
+                  {((creatingCatalog &&
+                    catalogActionMode === `${bulkMode}:selected`) ||
+                    isCatalogCreationModeActive(`${bulkMode}:selected`)) ? (
                     <LoadingSpinner size={14} />
                   ) : null}
-                  {selectedActionLabel("Create selected", selectedCount)}
+                  {trackedCatalogActionLabel(
+                    "Create selected",
+                    selectedCount,
+                    `${bulkMode}:selected`,
+                  )}
                 </span>
               </button>
             </div>
@@ -3476,7 +3769,9 @@ export default function ProcessingCatalogBooksPage() {
                     checked={allSelected}
                     onChange={onToggleAll}
                     disabled={
-                      !selectedIdsOnPage.length || catalogActionsDisabled
+                      !selectedIdsOnPage.length ||
+                      catalogActionsDisabled ||
+                      catalogCreateControlsDisabled
                     }
                     aria-label={
                       allSelected
@@ -3495,6 +3790,9 @@ export default function ProcessingCatalogBooksPage() {
             <tbody>
               {matchingEntries.map((entry) => {
                 const isBusy = busyActionId === entry.id;
+                const isTrackedPending = catalogCreationDisplayIdSet.has(
+                  entry.id,
+                );
                 return (
                   <tr key={`catalog-status-${entry.id}`}>
                     <td className="processing-col-select">
@@ -3505,7 +3803,8 @@ export default function ProcessingCatalogBooksPage() {
                         onChange={() => onToggleEntry(entry.id)}
                         disabled={
                           !canCreateCatalogEntry(entry) ||
-                          catalogActionsDisabled
+                          catalogActionsDisabled ||
+                          catalogCreateControlsDisabled
                         }
                         aria-label={`Select ${entry.title}`}
                       />
@@ -3550,9 +3849,23 @@ export default function ProcessingCatalogBooksPage() {
                               rowId: entry.id,
                             })
                           }
-                          disabled={isBusy || catalogActionsDisabled}
+                          disabled={
+                            isBusy ||
+                            isTrackedPending ||
+                            catalogActionsDisabled ||
+                            catalogCreateControlsDisabled
+                          }
                         >
-                          {isBusy ? "Queueing..." : "Create"}
+                          <span className="button-label">
+                            {isBusy || isTrackedPending ? (
+                              <LoadingSpinner size={14} />
+                            ) : null}
+                            {isBusy
+                              ? "Queueing..."
+                              : isTrackedPending
+                                ? "Processing..."
+                                : "Create"}
+                          </span>
                         </button>
                       </div>
                     </td>
@@ -3806,46 +4119,52 @@ export default function ProcessingCatalogBooksPage() {
   function renderSourceTab() {
     const expandableCards = orderExpandableCards(
       [
-        {
-          key: "stopped",
-          expanded: stoppedCardExpanded,
-          element: renderSubmissionsCard("Stopped", "", {
-            rows: stoppedSubmissions,
-            emptyTitle: "No stopped requests",
-            actionMode: "stopped",
-            collapsible: true,
-            collapsed: !stoppedCardExpanded,
-            onToggleCollapsed: () =>
-              toggleCollapsibleCard("stopped", setStoppedCardExpanded),
-          }),
-        },
-        {
-          key: "queued",
-          expanded: queuedCardExpanded,
-          element: renderSubmissionsCard("Queued", "", {
-            rows: queuedSubmissions,
-            emptyTitle: "No queued requests",
-            actionMode: "queued",
-            collapsible: true,
-            collapsed: !queuedCardExpanded,
-            onToggleCollapsed: () =>
-              toggleCollapsibleCard("queued", setQueuedCardExpanded),
-          }),
-        },
-        {
-          key: "deleted",
-          expanded: deletedCardExpanded,
-          element: renderSubmissionsCard("Deleted", "", {
-            rows: deletedSubmissions,
-            emptyTitle: "No deleted requests",
-            actionMode: "deleted",
-            collapsible: true,
-            collapsed: !deletedCardExpanded,
-            onToggleCollapsed: () =>
-              toggleCollapsibleCard("deleted", setDeletedCardExpanded),
-          }),
-        },
-      ],
+        stoppedSubmissions.length || submissionsLoading
+          ? {
+              key: "stopped",
+              expanded: stoppedCardExpanded,
+              element: renderSubmissionsCard("Stopped", "", {
+                rows: stoppedSubmissions,
+                emptyTitle: "No stopped requests",
+                actionMode: "stopped",
+                collapsible: true,
+                collapsed: !stoppedCardExpanded,
+                onToggleCollapsed: () =>
+                  toggleCollapsibleCard("stopped", setStoppedCardExpanded),
+              }),
+            }
+          : null,
+        queuedSubmissions.length || submissionsLoading
+          ? {
+              key: "queued",
+              expanded: queuedCardExpanded,
+              element: renderSubmissionsCard("Queued", "", {
+                rows: queuedSubmissions,
+                emptyTitle: "No queued requests",
+                actionMode: "queued",
+                collapsible: true,
+                collapsed: !queuedCardExpanded,
+                onToggleCollapsed: () =>
+                  toggleCollapsibleCard("queued", setQueuedCardExpanded),
+              }),
+            }
+          : null,
+        deletedSubmissions.length || submissionsLoading
+          ? {
+              key: "deleted",
+              expanded: deletedCardExpanded,
+              element: renderSubmissionsCard("Deleted", "", {
+                rows: deletedSubmissions,
+                emptyTitle: "No deleted requests",
+                actionMode: "deleted",
+                collapsible: true,
+                collapsed: !deletedCardExpanded,
+                onToggleCollapsed: () =>
+                  toggleCollapsibleCard("deleted", setDeletedCardExpanded),
+              }),
+            }
+          : null,
+      ].filter(Boolean),
       expandedCardPriorityKey,
     );
 

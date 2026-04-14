@@ -58,7 +58,19 @@ export class AuthPageModel {
   }
 
   async submitLogin() {
-    await this.page.getByRole("button", { name: /Continue|Verify/ }).click();
+    const backendStatusOverlay = this.page.locator(".backend-status-overlay");
+    let forceClick = false;
+    if (await backendStatusOverlay.count()) {
+      try {
+        await expect(backendStatusOverlay).toBeHidden({ timeout: 5_000 });
+      } catch {
+        forceClick = true;
+      }
+    }
+
+    await this.page
+      .getByRole("button", { name: /Continue|Verify/ })
+      .click({ force: forceClick });
   }
 
   async fillResetPasswords(password) {

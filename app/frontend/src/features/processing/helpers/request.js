@@ -1,4 +1,4 @@
-import { cutoffForPeriod, getJobActivityAt } from "./activity";
+import { cutoffForPeriod, getJobActivityAt } from "./activity.js";
 
 export function safeDecode(value) {
   try {
@@ -138,11 +138,19 @@ export function getSubmissionDisplayStatus(
     return "stopped";
   }
 
-  if (latestJobStatus === "processing" || submissionStatus === "processing") {
+  if (latestJobStatus === "processing") {
     return "processing";
   }
 
-  if (latestJobStatus === "queued" || submissionStatus === "queued") {
+  if (latestJobStatus === "queued") {
+    return "queued";
+  }
+
+  if (submissionStatus === "processing") {
+    return "processing";
+  }
+
+  if (submissionStatus === "queued") {
     return "queued";
   }
 

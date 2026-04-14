@@ -17,12 +17,52 @@ import {
 
 const ProcessingActivityContext = createContext(null);
 const POLL_INTERVAL_MS = 5000;
+const PERSISTENT_PAGE_STATE_STORAGE_KEY =
+  "processing.persistent-page-state";
+
+function readPersistentPageState() {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const rawValue = window.sessionStorage.getItem(
+      PERSISTENT_PAGE_STATE_STORAGE_KEY,
+    );
+    if (!rawValue) {
+      return {};
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+    return parsedValue && typeof parsedValue === "object" ? parsedValue : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePersistentPageState(nextValue) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      PERSISTENT_PAGE_STATE_STORAGE_KEY,
+      JSON.stringify(nextValue),
+    );
+  } catch {
+    // Ignore storage write failures and keep the in-memory fallback.
+  }
+}
 
 export function ProcessingActivityProvider({ children }) {
   const location = useLocation();
   const { authenticated, loading: sessionLoading } = useSession();
   const requestIdRef = useRef(0);
-  const persistentPageStateRef = useRef({});
+  const persistentPageStateRef = useRef(null);
+  if (persistentPageStateRef.current === null) {
+    persistentPageStateRef.current = readPersistentPageState();
+  }
   const [state, setState] = useState({
     loading: false,
     loaded: false,
@@ -109,6 +149,7 @@ export function ProcessingActivityProvider({ children }) {
         [field]: resolvedValue,
       },
     };
+    writePersistentPageState(persistentPageStateRef.current);
     setPersistentPageStateVersion((current) => current + 1);
   }, []);
 

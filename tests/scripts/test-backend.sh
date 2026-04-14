@@ -37,6 +37,7 @@ fi
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
 COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
 COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+STACK_SERVICES=(postgres redis backend worker beat frontend)
 
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"
@@ -63,7 +64,7 @@ wait_for_url() {
 }
 
 print_info "Starting local stack for backend tests"
-"${REPO_ROOT}/local/scripts/dev.sh" up
+compose "${COMPOSE_ARGS[@]}" up -d --build "${STACK_SERVICES[@]}"
 
 print_info "Waiting for backend"
 wait_for_url "${BACKEND_SESSION_URL}" 120 || die "Backend did not become ready at ${BACKEND_SESSION_URL}"

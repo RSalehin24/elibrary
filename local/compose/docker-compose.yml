@@ -106,13 +106,14 @@ services:
     build:
       context: ../..
       dockerfile: local/docker/backend.Dockerfile
+    restart: unless-stopped
     environment:
       <<: *app_environment
     command: >
       sh -c "mkdir -p /logs/local/backend &&
       python manage.py migrate &&
       python manage.py seed_superadmin &&
-      python manage.py runserver 0.0.0.0:8000 2>&1 | tee -a /logs/local/backend/backend.log"
+      python manage.py runserver 0.0.0.0:8000 --noreload 2>&1 | tee -a /logs/local/backend/backend.log"
     volumes:
       - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
       - ../../tests:/workspace/tests:ro
@@ -130,6 +131,12 @@ services:
           path: ../../app/backend/requirements-dev.txt
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/', timeout=5).read()\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -242,7 +249,8 @@ services:
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - public
 

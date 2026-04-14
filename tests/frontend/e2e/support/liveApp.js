@@ -34,26 +34,39 @@ async function persistLiveStorageState(page) {
 }
 
 export async function loginAsSuperAdmin(page) {
-  await page.goto("/home");
+  const credentials = getSuperAdminCredentials();
+  let lastError = null;
 
-  if ((await waitForHomeOrLogin(page)) === "home") {
-    await persistLiveStorageState(page);
-    return;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.goto("/home");
+
+    if ((await waitForHomeOrLogin(page, 30_000)) === "home") {
+      await persistLiveStorageState(page);
+      return;
+    }
+
+    const authPage = new AuthPageModel(page);
+    await authPage.fillCredentials(credentials);
+    await authPage.submitLogin();
+
+    await page.goto("/home");
+
+    try {
+      await expect(
+        page.getByRole("heading", { name: "All Books" }),
+      ).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(page).toHaveURL(/\/home/, { timeout: 15_000 });
+      await persistLiveStorageState(page);
+      return;
+    } catch (error) {
+      lastError = error;
+      await page.waitForTimeout((attempt + 1) * 1_000);
+    }
   }
 
-  const authPage = new AuthPageModel(page);
-  const credentials = getSuperAdminCredentials();
-  await authPage.fillCredentials(credentials);
-  await authPage.submitLogin();
-
-  await page.goto("/home");
-  await expect(
-    page.getByRole("heading", { name: "All Books" }),
-  ).toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(page).toHaveURL(/\/home/, { timeout: 15_000 });
-  await persistLiveStorageState(page);
+  throw lastError || new Error("Unable to authenticate the super admin user.");
 }
 
 export async function installWindowOpenRecorder(page) {

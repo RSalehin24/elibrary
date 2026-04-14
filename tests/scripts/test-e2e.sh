@@ -36,6 +36,9 @@ if [[ "${1:-}" == "--" ]]; then
 fi
 
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
+COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
+COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+STACK_SERVICES=(postgres redis backend frontend)
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"
 
@@ -62,7 +65,8 @@ wait_for_url() {
 }
 
 print_info "Starting local stack for browser tests"
-"${REPO_ROOT}/local/scripts/dev.sh" up
+compose "${COMPOSE_ARGS[@]}" up -d --build "${STACK_SERVICES[@]}"
+compose "${COMPOSE_ARGS[@]}" stop worker beat >/dev/null 2>&1 || true
 
 print_info "Waiting for frontend and backend"
 wait_for_url "${FRONTEND_URL}" 120 || die "Frontend did not become ready at ${FRONTEND_URL}"
@@ -70,6 +74,10 @@ wait_for_url "${BACKEND_SESSION_URL}" 120 || die "Backend did not become ready a
 
 print_info "Seeding deterministic browser data"
 "${REPO_ROOT}/tests/scripts/seed-e2e-data.sh"
+
+print_info "Reconfirming frontend and backend after seed"
+wait_for_url "${FRONTEND_URL}" 120 || die "Frontend did not become ready at ${FRONTEND_URL} after seed"
+wait_for_url "${BACKEND_SESSION_URL}" 120 || die "Backend did not become ready at ${BACKEND_SESSION_URL} after seed"
 
 print_info "Running Playwright browser suite"
 (
