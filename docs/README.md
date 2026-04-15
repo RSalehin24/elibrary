@@ -13,6 +13,7 @@ This folder contains the repo’s operational and domain-specific documentation.
 - Deployment: [docs/operations/deployment.md](operations/deployment.md)
 - Log viewing: [docs/operations/log-viewing.md](operations/log-viewing.md)
 - Ingestion metadata notes: [docs/ingestion/source-site-metadata.md](ingestion/source-site-metadata.md)
+- Processing pages implementation audit: [docs/processing-pages-implementation-audit.md](processing-pages-implementation-audit.md)
 
 ## Scope
 
