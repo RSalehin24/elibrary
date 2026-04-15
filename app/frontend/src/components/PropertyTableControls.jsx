@@ -70,21 +70,23 @@ export default function PropertyTableControls({
 }) {
   const controls = (
     <div className="catalog-toolbar-secondary property-table-controls">
-      <label className="catalog-toolbar-field catalog-toolbar-field-sort">
-        <span className="fact-label catalog-toolbar-inline-label">Sort</span>
-        <select
-          className="catalog-toolbar-select"
-          value={sortValue}
-          onChange={(event) => onSortChange(event.target.value)}
-          disabled={disabled}
-        >
-          {(sortOptions || []).map((option) => (
-            <option key={`sort-${option.value}`} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      {sortOptions?.length ? (
+        <label className="catalog-toolbar-field catalog-toolbar-field-sort">
+          <span className="fact-label catalog-toolbar-inline-label">Sort</span>
+          <select
+            className="catalog-toolbar-select"
+            value={sortValue}
+            onChange={(event) => onSortChange?.(event.target.value)}
+            disabled={disabled}
+          >
+            {sortOptions.map((option) => (
+              <option key={`sort-${option.value}`} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <label className="catalog-toolbar-field catalog-toolbar-field-rows">
         <span className="fact-label catalog-toolbar-inline-label">Rows</span>
         <select

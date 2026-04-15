@@ -28,4 +28,20 @@ test.describe("Auth Pages", () => {
       page.getByRole("heading", { name: seedData.books.homePrimary.title }),
     ).toHaveCount(0);
   });
+
+  test("home pagination limits the visible cover grid", async ({ page }) => {
+    await loginAsSuperAdmin(page);
+
+    await page.getByLabel("Rows").selectOption("5");
+
+    await expect(
+      page.getByRole("heading", { name: seedData.books.homePrimary.title }),
+    ).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Next" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: seedData.books.homePrimary.title }),
+    ).toBeVisible();
+  });
 });

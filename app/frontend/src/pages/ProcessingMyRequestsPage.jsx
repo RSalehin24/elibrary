@@ -51,9 +51,12 @@ import {
 import {
   BookLinkCell,
   InlineErrorCell,
+  ProcessingSummaryStat,
+  ProcessingTableSkeletonActions,
+  ProcessingTableSkeletonCheckbox,
+  ProcessingTableSkeletonStack,
   QueueTableCard,
   RequestValue,
-  renderProcessingCardLoader,
 } from "../features/processing/components/ProcessingScaffold";
 import {
   usePersistentProcessingPageState,
@@ -105,23 +108,27 @@ export default function ProcessingMyRequestsPage() {
     "processing-my-requests",
     "busyActionId",
     "",
+    { persist: false },
   );
   const [busyDeleteId, setBusyDeleteId] = usePersistentProcessingPageState(
     "processing-my-requests",
     "busyDeleteId",
     "",
+    { persist: false },
   );
   const [activeRequeueJobId, setActiveRequeueJobId] = useState("");
   const [bulkActionKey, setBulkActionKey] = usePersistentProcessingPageState(
     "processing-my-requests",
     "bulkActionKey",
     "",
+    { persist: false },
   );
   const [confirmState, setConfirmState] = useState(null);
   const [confirmLoading, setConfirmLoading] = usePersistentProcessingPageState(
     "processing-my-requests",
     "confirmLoading",
     false,
+    { persist: false },
   );
   const [queuedCardExpanded, setQueuedCardExpanded] = useState(false);
   const [stoppedCardExpanded, setStoppedCardExpanded] = useState(false);
@@ -135,6 +142,14 @@ export default function ProcessingMyRequestsPage() {
       ...(canManageProcessing ? [LOAD_SCOPE_REVIEWS] : []),
     ],
     [canManageProcessing],
+  );
+  const hasActiveJobs = useMemo(
+    () => [...jobs, ...jobReviewRows].some((job) => isActiveStatus(job.status)),
+    [jobs, jobReviewRows],
+  );
+  const pollingScopes = useMemo(
+    () => [LOAD_SCOPE_SUBMISSIONS, LOAD_SCOPE_JOBS, LOAD_SCOPE_JOB_REVIEWS],
+    [],
   );
 
   const globalActionsLocked = Boolean(
@@ -285,27 +300,25 @@ export default function ProcessingMyRequestsPage() {
   }, [user?.id, canManageProcessing]);
 
   useEffect(() => {
-    const hasActiveJobs = [...jobs, ...jobReviewRows].some((job) =>
-      isActiveStatus(job.status),
-    );
     if (!hasActiveJobs) {
       return undefined;
     }
 
     const intervalId = window.setInterval(() => {
-      load({ silent: true }).catch(() => {});
+      load({
+        silent: true,
+        scopes: pollingScopes,
+      }).catch(() => {});
     }, 5000);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, [
-    jobs,
-    jobReviewRows,
+    hasActiveJobs,
+    pollingScopes,
     jobFilters,
     submissionFilters,
-    reviewFilters,
-    canManageProcessing,
   ]);
 
   useEffect(() => {
@@ -849,27 +862,25 @@ export default function ProcessingMyRequestsPage() {
           </div>
           {countPill}
         </div>
-        {submissionsLoading ? (
-          renderProcessingCardLoader("Loading my requests overview")
-        ) : (
-          <div className="processing-summary-bar processing-summary-bar--catalog">
-            {[
-              ["Requests", requestSubmissions.length],
-              ["Failed", failedJobs.length],
-              ["Duplicate", duplicateReviews.length],
-              ["Processing", processingJobs.length],
-              ["Ready", readySubmissions.length],
-              ["Stopped", stoppedSubmissions.length],
-              ["Queued", queuedSubmissions.length],
-              ["Deleted", deletedSubmissions.length],
-            ].map(([label, value]) => (
-              <article key={label} className="processing-summary-stat">
-                <span className="fact-label">{label}</span>
-                <strong>{value}</strong>
-              </article>
-            ))}
-          </div>
-        )}
+        <div className="processing-summary-bar processing-summary-bar--catalog">
+          {[
+            ["Requests", requestSubmissions.length],
+            ["Failed", failedJobs.length],
+            ["Duplicate", duplicateReviews.length],
+            ["Processing", processingJobs.length],
+            ["Ready", readySubmissions.length],
+            ["Stopped", stoppedSubmissions.length],
+            ["Queued", queuedSubmissions.length],
+            ["Deleted", deletedSubmissions.length],
+          ].map(([label, value]) => (
+            <ProcessingSummaryStat
+              key={label}
+              label={label}
+              value={value}
+              loading={submissionsLoading}
+            />
+          ))}
+        </div>
       </section>
     );
   }
@@ -944,6 +955,7 @@ export default function ProcessingMyRequestsPage() {
         cardClassName={cardClassName}
         loading={submissionsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={
           showControls
             ? renderCardHeaderSearch({
@@ -1148,30 +1160,34 @@ export default function ProcessingMyRequestsPage() {
         collapsed={collapsed}
         onToggleCollapsed={onToggleCollapsed}
       >
-        {rows.length ? (
+        {submissionsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedSubmissionIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible request selections"
-                        : "Select all visible requests"
-                    }
-                  />
+                  {submissionsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedSubmissionIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible request selections"
+                          : "Select all visible requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -1181,7 +1197,36 @@ export default function ProcessingMyRequestsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((submission) => {
+              {(submissionsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((submissionOrIndex) => {
+                if (submissionsLoading) {
+                  return (
+                    <tr key={`submission-loading-${submissionOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const submission = submissionOrIndex;
                 const latestJob = submission.latest_job || null;
                 const displayStatus = getSubmissionDisplayStatus(
                   submission,
@@ -1288,10 +1333,25 @@ export default function ProcessingMyRequestsPage() {
                           <button
                             type="button"
                             className="ghost-button"
+                            onClick={() =>
+                              latestJob?.status === "stopped"
+                                ? resumeJob(latestJob.id)
+                                : retrySubmission(submission.id)
+                            }
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : submission.status === "failed" ||
+                          latestJob?.status === "failed" ||
+                          submission.status === "needs_review" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
                             onClick={() => retrySubmission(submission.id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Queueing..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : (
                           <span className="table-note">-</span>
@@ -1358,6 +1418,7 @@ export default function ProcessingMyRequestsPage() {
         cardClassName={cardClassName}
         loading={jobsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={
           showControls
             ? renderCardHeaderSearch({
@@ -1514,30 +1575,34 @@ export default function ProcessingMyRequestsPage() {
         collapsed={collapsed}
         onToggleCollapsed={onToggleCollapsed}
       >
-        {rows.length ? (
+        {jobsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedJobIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible book creation selections"
-                        : "Select all visible book creation rows"
-                    }
-                  />
+                  {jobsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedJobIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible book creation selections"
+                          : "Select all visible book creation rows"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -1547,7 +1612,36 @@ export default function ProcessingMyRequestsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((job) => {
+              {(jobsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((jobOrIndex) => {
+                if (jobsLoading) {
+                  return (
+                    <tr key={`job-loading-${jobOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const job = jobOrIndex;
                 const isBusy = busyActionId === job.id;
                 const isDeleting = busyDeleteId === `job:${job.id}`;
                 const isSelected = selectedJobIdSet.has(job.id);
@@ -1618,10 +1712,19 @@ export default function ProcessingMyRequestsPage() {
                           <button
                             type="button"
                             className="ghost-button"
+                            onClick={() => resumeJob(job.id)}
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : job.status === "failed" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
                             onClick={() => retrySubmission(job.submission_id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Resuming..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : job.target_book_slug ? null : (
                           <span className="table-note">-</span>
@@ -1658,12 +1761,20 @@ export default function ProcessingMyRequestsPage() {
       return null;
     }
 
+    const selectedDuplicateSubmissionIds = duplicateReviews
+      .filter(
+        (review) =>
+          selectedDuplicateReviewIdSet.has(review.id) && review.submission?.id,
+      )
+      .map((review) => review.submission.id);
+
     return (
       <QueueTableCard
         title={title}
         emptyTitle="No duplicates"
         loading={reviewsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={renderCardHeaderSearch({
           filters: reviewFilters,
           setFilters: setReviewFilters,
@@ -1769,34 +1880,60 @@ export default function ProcessingMyRequestsPage() {
                   )}
                 </span>
               </button>
+              <button
+                type="button"
+                className="ghost-button danger-button processing-inline-danger"
+                disabled={
+                  !selectedDuplicateSubmissionIds.length ||
+                  bulkActionKey === "submissions:delete" ||
+                  sourceTabButtonsDisabled
+                }
+                onClick={() =>
+                  openDeleteDialog(
+                    "submission-bulk",
+                    selectedDuplicateSubmissionIds,
+                    "Delete selected duplicate requests",
+                    "This will remove the selected duplicate requests.",
+                  )
+                }
+              >
+                {selectedActionLabel(
+                  "Delete selected",
+                  selectedDuplicateSubmissionIds.length,
+                )}
+              </button>
             </div>
           </div>
         }
       >
-        {duplicateReviews.length ? (
+        {reviewsLoading || duplicateReviews.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allDuplicatesSelected}
-                    onChange={() =>
-                      setSelectedDuplicateReviewIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          duplicateIdsOnPage,
-                          allDuplicatesSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allDuplicatesSelected
-                        ? "Clear visible duplicate selections"
-                        : "Select all visible duplication requests"
-                    }
-                  />
+                  {reviewsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allDuplicatesSelected}
+                      onChange={() =>
+                        setSelectedDuplicateReviewIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            duplicateIdsOnPage,
+                            allDuplicatesSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allDuplicatesSelected
+                          ? "Clear visible duplicate selections"
+                          : "Select all visible duplication requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-book">Existing</th>
@@ -1805,34 +1942,64 @@ export default function ProcessingMyRequestsPage() {
               </tr>
             </thead>
             <tbody>
-              {duplicateReviews.map((review) => (
-                <tr key={review.id}>
-                  <td className="processing-col-select">
-                    <input
-                      type="checkbox"
-                      className="processing-checkbox"
-                      checked={selectedDuplicateReviewIdSet.has(review.id)}
-                      onChange={() =>
-                        setSelectedDuplicateReviewIds((current) =>
-                          toggleSelectedId(current, review.id),
-                        )
-                      }
-                      aria-label={`Select duplicate check ${review.id}`}
-                    />
-                  </td>
-                  <td className="processing-col-request">
-                    <RequestValue value={review.submission?.original_input} />
-                  </td>
-                  <td>
-                    {review.existing_book?.title ||
-                      (review.existing_book_deleted ? "Deleted record" : "-")}
-                  </td>
-                  <td>
-                    <StatusPill value={review.status} />
-                  </td>
-                  <td>
-                    <div className="table-actions">
-                      {!review.existing_book_deleted ? (
+              {(reviewsLoading
+                ? Array.from({ length: 4 }, (_, index) => index)
+                : duplicateReviews
+              ).map((reviewOrIndex) => {
+                if (reviewsLoading) {
+                  return (
+                    <tr key={`duplicate-loading-${reviewOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={3} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const review = reviewOrIndex;
+                const isDeleting =
+                  busyDeleteId === `submission:${review.submission?.id || ""}`;
+
+                return (
+                  <tr key={review.id}>
+                    <td className="processing-col-select">
+                      <input
+                        type="checkbox"
+                        className="processing-checkbox"
+                        checked={selectedDuplicateReviewIdSet.has(review.id)}
+                        onChange={() =>
+                          setSelectedDuplicateReviewIds((current) =>
+                            toggleSelectedId(current, review.id),
+                          )
+                        }
+                        aria-label={`Select duplicate check ${review.id}`}
+                      />
+                    </td>
+                    <td className="processing-col-request">
+                      <RequestValue value={review.submission?.original_input} />
+                    </td>
+                    <td>
+                      {review.existing_book?.title ||
+                        (review.existing_book_deleted ? "Deleted record" : "-")}
+                    </td>
+                    <td>
+                      <StatusPill value={review.status} />
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        {!review.existing_book_deleted ? (
                           <button
                             type="button"
                             className="ghost-button"
@@ -1846,21 +2013,41 @@ export default function ProcessingMyRequestsPage() {
                           >
                             Same Book
                           </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => resolveDuplicate(review.id, "new_book")}
-                        disabled={
-                          busyActionId === review.id || creationActionsDisabled
-                        }
-                      >
-                        New Book
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        ) : null}
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => resolveDuplicate(review.id, "new_book")}
+                          disabled={
+                            busyActionId === review.id || creationActionsDisabled
+                          }
+                        >
+                          New Book
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-button danger-button processing-inline-danger"
+                          onClick={() =>
+                            openDeleteDialog(
+                              "submission-single",
+                              [review.submission.id],
+                              "Delete duplicate request",
+                              "This duplicate request will be removed.",
+                            )
+                          }
+                          disabled={
+                            !review.submission?.id ||
+                            isDeleting ||
+                            sourceTabButtonsDisabled
+                          }
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : null}

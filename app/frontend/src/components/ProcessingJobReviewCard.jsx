@@ -1,7 +1,11 @@
 import EmptyState from "./EmptyState";
-import ProcessingCardSkeleton from "./ProcessingCardSkeleton";
 import StatusPill from "./StatusPill";
 import { formatBookDateTime } from "../utils/bookPresentation";
+import {
+  ProcessingTableSkeletonActions,
+  ProcessingTableSkeletonCheckbox,
+  ProcessingTableSkeletonStack,
+} from "../features/processing/components/ProcessingScaffold";
 
 export default function ProcessingJobReviewCard({
   visible,
@@ -45,6 +49,7 @@ export default function ProcessingJobReviewCard({
   selectAllAriaLabel,
   clearAllAriaLabel,
   rowAriaLabel,
+  replaceOnLoading = false,
 }) {
   if (!visible) {
     return null;
@@ -53,26 +58,26 @@ export default function ProcessingJobReviewCard({
   const activeJob = showDetailPanel
     ? jobs.find((job) => job.id === activeJobId) || jobs[0] || null
     : null;
-  const shellContent = loading ? (
-    <ProcessingCardSkeleton
-      label={loadingLabel || `Loading ${title.toLowerCase()}`}
-    />
-  ) : jobs.length ? (
+  const shellContent = loading || jobs.length ? (
     <div className={showDetailPanel ? layoutClassName : undefined}>
       <div className={tableWrapClassName}>
         <table className="simple-table processing-table">
           <thead>
             <tr>
               <th className="processing-col-select processing-incomplete-col-select">
-                <input
-                  type="checkbox"
-                  className="processing-checkbox"
-                  checked={allSelected}
-                  onChange={onToggleAll}
-                  aria-label={
-                    allSelected ? clearAllAriaLabel : selectAllAriaLabel
-                  }
-                />
+                {loading ? (
+                  <ProcessingTableSkeletonCheckbox />
+                ) : (
+                  <input
+                    type="checkbox"
+                    className="processing-checkbox"
+                    checked={allSelected}
+                    onChange={onToggleAll}
+                    aria-label={
+                      allSelected ? clearAllAriaLabel : selectAllAriaLabel
+                    }
+                  />
+                )}
               </th>
               <th className="processing-col-request">Request</th>
               {showStatusColumn ? (
@@ -86,7 +91,38 @@ export default function ProcessingJobReviewCard({
             </tr>
           </thead>
           <tbody>
-            {jobs.map((job) => {
+            {(loading ? Array.from({ length: 5 }, (_, index) => index) : jobs).map(
+              (jobOrIndex) => {
+              if (loading) {
+                return (
+                  <tr key={`loading-${jobOrIndex}`}>
+                    <td className="processing-col-select processing-incomplete-col-select">
+                      <ProcessingTableSkeletonCheckbox />
+                    </td>
+                    <td className="processing-col-request processing-incomplete-col-book">
+                      <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                    </td>
+                    {showStatusColumn ? (
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                    ) : null}
+                    <td>
+                      <ProcessingTableSkeletonStack lines={["sm"]} />
+                    </td>
+                    <td>
+                      <ProcessingTableSkeletonStack lines={["sm"]} />
+                    </td>
+                    {errorColumnLabel ? (
+                      <td className="processing-col-error">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              }
+
+              const job = jobOrIndex;
               const isActive = showDetailPanel && activeJob?.id === job.id;
               const requestText = getRequestPrimaryText(job.submission_input);
 
@@ -136,7 +172,7 @@ export default function ProcessingJobReviewCard({
       {showDetailPanel ? (
         <aside className="processing-requeue-error-panel">
           {detailTitle ? <h3>{detailTitle}</h3> : null}
-          {activeJob ? (
+          {!loading && activeJob ? (
             <>
               <p className="table-note">
                 {getRequestPrimaryText(activeJob.submission_input)}
@@ -150,7 +186,11 @@ export default function ProcessingJobReviewCard({
               </div>
             </>
           ) : (
-            <p className="table-note">{emptySelectionMessage}</p>
+            loading ? (
+              <ProcessingTableSkeletonStack lines={["lg", "xl", "xl"]} />
+            ) : (
+              <p className="table-note">{emptySelectionMessage}</p>
+            )
           )}
         </aside>
       ) : null}
@@ -188,26 +228,32 @@ export default function ProcessingJobReviewCard({
         <div className="processing-bulk-bar">
           <div className="processing-card-actions processing-card-actions-grouped">
             <div className="processing-card-action-row">
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={
-                  !selectedSubmissionIds.length ||
-                  bulkActionKey === actionKey ||
-                  creationActionsDisabled
-                }
-                onClick={() => onCreate(selectedSubmissionIds, actionKey)}
-              >
-                {selectedActionLabel(
-                  createSelectedLabel,
-                  selectedSubmissionIds.length,
-                )}
-              </button>
+              {loading ? (
+                <ProcessingTableSkeletonActions />
+              ) : (
+                <button
+                  type="button"
+                  className="ghost-button"
+                  disabled={
+                    !selectedSubmissionIds.length ||
+                    bulkActionKey === actionKey ||
+                    creationActionsDisabled
+                  }
+                  onClick={() => onCreate(selectedSubmissionIds, actionKey)}
+                >
+                  {selectedActionLabel(
+                    createSelectedLabel,
+                    selectedSubmissionIds.length,
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>
       ) : null}
-      <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>
+      <div
+        className={`processing-table-shell${loading && replaceOnLoading ? " is-loading" : ""}`}
+      >
         {shellContent}
       </div>
     </section>

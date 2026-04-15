@@ -108,7 +108,6 @@ class TitleResolver:
                 break
             page_signatures.add(signature)
 
-            page_added_count = 0
             for entry in page_entries:
                 if entry["source_url"] in seen:
                     continue
@@ -119,10 +118,6 @@ class TitleResolver:
                 )
                 if created:
                     refreshed.append(entry)
-                    page_added_count += 1
-
-            if page_added_count == 0:
-                break
 
         return refreshed
 

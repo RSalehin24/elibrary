@@ -1,4 +1,7 @@
+from uuid import uuid4
+
 from celery import current_app
+from django.conf import settings
 from django.utils import timezone
 
 from apps.ingestion.models import JobStatus
@@ -31,17 +34,30 @@ def dispatch_catalog_curation_run(run, *, fallback_processor, logger, force=Fals
     if not force and run.status == JobStatus.QUEUED and run.task_id:
         return run
 
+    assigned_task_id = str(uuid4())
+    run.task_id = assigned_task_id
+    run.queue_name = "celery"
+    run.save(update_fields=["task_id", "queue_name", "updated_at"])
+
     try:
-        async_result = process_catalog_curation_run_task.delay(str(run.id))
-        run.task_id = getattr(async_result, "id", "")
-        run.queue_name = "celery"
-        run.save(update_fields=["task_id", "queue_name", "updated_at"])
+        async_result = process_catalog_curation_run_task.apply_async(
+            args=[str(run.id)],
+            task_id=assigned_task_id,
+        )
+        dispatched_task_id = getattr(async_result, "id", assigned_task_id) or assigned_task_id
+        if dispatched_task_id != assigned_task_id:
+            run.task_id = dispatched_task_id
+            run.save(update_fields=["task_id", "updated_at"])
     except Exception as exc:
+        run.refresh_from_db()
+        if settings.CELERY_TASK_ALWAYS_EAGER:
+            logger.warning("Catalog curation eager execution raised during dispatch.", exc_info=True)
+            return run
         logger.warning("Catalog curation dispatch failed, falling back to inline processing", exc_info=True)
+        run.task_id = ""
         run.queue_name = "inline-fallback"
         run.last_error = f"Celery dispatch failed: {exc}"
-        run.save(update_fields=["queue_name", "last_error", "updated_at"])
+        run.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
         fallback_processor(str(run.id), retry_count=run.retry_count, task_id="")
 
     return run
-

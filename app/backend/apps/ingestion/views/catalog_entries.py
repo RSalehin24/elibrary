@@ -13,6 +13,7 @@ from apps.ingestion.services.curation import (
     get_source_catalog_refresh_state,
     inspect_source_catalog_entry,
     source_catalog_book_source_map,
+    source_catalog_entry_overview,
     source_catalog_entry_snapshots,
     source_catalog_submission_map,
     summarize_source_catalog_snapshots,
@@ -28,6 +29,41 @@ def deleted_source_catalog_entries_queryset(queryset):
     return queryset.filter(source_url__in=deleted_book_sources)
 
 
+def truthy_query_param(raw_value, *, default):
+    if raw_value is None:
+        return default
+
+    normalized = str(raw_value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def ordered_source_catalog_entries_queryset(queryset, sort_key):
+    if sort_key == "created_desc":
+        return queryset.order_by("-created_at", "title")
+    if sort_key == "created_asc":
+        return queryset.order_by("created_at", "title")
+    if sort_key == "title_desc":
+        return queryset.order_by("-title")
+    return queryset.order_by("title")
+
+
+def pagination_payload(*, total_count, page_value, limit_value):
+    page_count = max(1, ((total_count - 1) // limit_value) + 1) if total_count else 1
+    page_value = min(page_value, page_count)
+    return page_value, {
+        "page": page_value,
+        "limit": limit_value,
+        "total_count": total_count,
+        "page_count": page_count,
+        "has_previous": page_value > 1,
+        "has_next": page_value < page_count,
+    }
+
+
 class SourceCatalogEntryListView(APIView):
     permission_classes = [CanManageProcessing]
 
@@ -38,12 +74,17 @@ class SourceCatalogEntryListView(APIView):
             queryset = queryset.filter(Q(title__icontains=query) | Q(author_line__icontains=query))
 
         normalized_status_filter = normalize_status_filter(request.query_params.get("status", "").strip())
+        include_summary = truthy_query_param(
+            request.query_params.get("include_summary"),
+            default=True,
+        )
+        include_sync_state = truthy_query_param(
+            request.query_params.get("include_sync_state"),
+            default=True,
+        )
+        view_mode = request.query_params.get("view", "").strip().lower()
+        sort_key = request.query_params.get("sort", "").strip()
         snapshot_queryset = deleted_source_catalog_entries_queryset(queryset) if normalized_status_filter == "deleted" else queryset
-        snapshots, _ = source_catalog_entry_snapshots(snapshot_queryset)
-        if normalized_status_filter and normalized_status_filter != "deleted":
-            snapshots = [snapshot for snapshot in snapshots if normalize_status_filter(snapshot["curation_status"]) == normalized_status_filter]
-        summary = summarize_source_catalog_snapshots(snapshots)
-        sort_source_catalog_snapshots(snapshots, request.query_params.get("sort", "").strip())
 
         try:
             limit_value = max(1, min(int(request.query_params.get("limit", "").strip() or 180), 400))
@@ -54,27 +95,96 @@ class SourceCatalogEntryListView(APIView):
         except (TypeError, ValueError):
             page_value = 1
 
+        if view_mode == "overview" and not normalized_status_filter:
+            overview_entries, summary = source_catalog_entry_overview(
+                snapshot_queryset,
+                entry_statuses={"failed", "requeued"},
+            )
+            sort_source_catalog_snapshots(overview_entries, sort_key)
+            response_payload = {
+                "summary": summary,
+                "entries": SourceCatalogEntrySnapshotSerializer(
+                    overview_entries,
+                    many=True,
+                ).data,
+                "pagination": {
+                    "page": 1,
+                    "limit": len(overview_entries),
+                    "total_count": len(overview_entries),
+                    "page_count": 1,
+                    "has_previous": False,
+                    "has_next": False,
+                },
+            }
+            if include_sync_state:
+                response_payload["sync_state"] = SourceCatalogRefreshStateSerializer(
+                    get_source_catalog_refresh_state()
+                ).data
+            return Response(response_payload)
+
+        fast_sort_keys = {"created_desc", "created_asc", "title_asc", "title_desc"}
+        if (
+            not include_summary
+            and normalized_status_filter in {"", "deleted"}
+            and sort_key in fast_sort_keys
+        ):
+            ordered_queryset = ordered_source_catalog_entries_queryset(
+                snapshot_queryset,
+                sort_key,
+            )
+            total_count = ordered_queryset.count()
+            page_value, pagination = pagination_payload(
+                total_count=total_count,
+                page_value=page_value,
+                limit_value=limit_value,
+            )
+            start = (page_value - 1) * limit_value
+            page_entries = list(ordered_queryset[start : start + limit_value])
+            page_snapshots, _ = source_catalog_entry_snapshots(page_entries)
+            response_payload = {
+                "entries": SourceCatalogEntrySnapshotSerializer(
+                    page_snapshots,
+                    many=True,
+                ).data,
+                "pagination": pagination,
+            }
+            if include_sync_state:
+                response_payload["sync_state"] = SourceCatalogRefreshStateSerializer(
+                    get_source_catalog_refresh_state()
+                ).data
+            return Response(response_payload)
+
+        snapshots, _ = source_catalog_entry_snapshots(snapshot_queryset)
+        if normalized_status_filter and normalized_status_filter != "deleted":
+            snapshots = [
+                snapshot
+                for snapshot in snapshots
+                if normalize_status_filter(snapshot["curation_status"])
+                == normalized_status_filter
+            ]
+        summary = summarize_source_catalog_snapshots(snapshots)
+        sort_source_catalog_snapshots(snapshots, sort_key)
+
         total_count = len(snapshots)
-        page_count = max(1, ((total_count - 1) // limit_value) + 1) if total_count else 1
-        page_value = min(page_value, page_count)
+        page_value, pagination = pagination_payload(
+            total_count=total_count,
+            page_value=page_value,
+            limit_value=limit_value,
+        )
         start = (page_value - 1) * limit_value
         page_entries = snapshots[start : start + limit_value]
 
-        return Response(
-            {
-                "summary": summary,
-                "entries": SourceCatalogEntrySnapshotSerializer(page_entries, many=True).data,
-                "pagination": {
-                    "page": page_value,
-                    "limit": limit_value,
-                    "total_count": total_count,
-                    "page_count": page_count,
-                    "has_previous": page_value > 1,
-                    "has_next": page_value < page_count,
-                },
-                "sync_state": SourceCatalogRefreshStateSerializer(get_source_catalog_refresh_state()).data,
-            }
-        )
+        response_payload = {
+            "entries": SourceCatalogEntrySnapshotSerializer(page_entries, many=True).data,
+            "pagination": pagination,
+        }
+        if include_summary:
+            response_payload["summary"] = summary
+        if include_sync_state:
+            response_payload["sync_state"] = SourceCatalogRefreshStateSerializer(
+                get_source_catalog_refresh_state()
+            ).data
+        return Response(response_payload)
 
 
 class SourceCatalogEntryDetailView(APIView):

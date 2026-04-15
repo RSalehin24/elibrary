@@ -133,9 +133,12 @@ def test_process_submission_job_does_not_reuse_same_title_book_when_source_url_d
     with pytest.raises(IntegrityError, match="uniq_book_source_normalized_title"):
         process_submission_job(str(job.id))
 
+    job.refresh_from_db()
     submission.refresh_from_db()
     assert conflict_raised["value"] is True
-    assert submission.status == SubmissionStatus.FAILED
+    assert job.status == JobStatus.QUEUED
+    assert job.retry_count == 1
+    assert submission.status == SubmissionStatus.QUEUED
     assert submission.linked_book_id is None
 
 

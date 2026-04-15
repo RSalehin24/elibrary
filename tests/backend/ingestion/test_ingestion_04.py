@@ -150,7 +150,7 @@ def test_title_resolver_refresh_catalog_accepts_long_source_urls():
 
 
 @pytest.mark.django_db
-def test_title_resolver_refresh_catalog_stops_when_a_page_adds_no_new_books():
+def test_title_resolver_refresh_catalog_continues_past_existing_first_page_entries():
     existing_url = "https://www.ebanglalibrary.com/books/existing-book/"
     new_url = "https://www.ebanglalibrary.com/books/new-book/"
     SourceCatalogEntry.objects.create(
@@ -205,6 +205,23 @@ def test_title_resolver_refresh_catalog_stops_when_a_page_adds_no_new_books():
 
     refreshed = resolver.refresh_catalog(max_pages=2)
 
-    assert refreshed == []
-    assert session.calls == [(CATALOG_URL, {})]
-    assert SourceCatalogEntry.objects.filter(source_url=new_url).count() == 0
+    assert refreshed == [
+        {
+            "source_url": new_url,
+            "title": "New Book",
+            "author_line": "New Author",
+            "normalized_title": normalize_text("New Book"),
+            "normalized_display": normalize_text("New Book New Author"),
+            "raw_data": {
+                "title": "New Book",
+                "display_title": "New Book - New Author",
+                "author_line": "New Author",
+                "metadata_source": "archive_page",
+            },
+        }
+    ]
+    assert session.calls == [
+        (CATALOG_URL, {}),
+        (CATALOG_URL, {"_paged": 2}),
+    ]
+    assert SourceCatalogEntry.objects.filter(source_url=new_url).count() == 1

@@ -149,6 +149,61 @@ def test_source_catalog_entry_snapshots_mark_new_and_ready_books():
 
 
 @pytest.mark.django_db
+def test_source_catalog_entry_snapshots_preserve_results_when_processed_in_small_chunks(monkeypatch):
+    monkeypatch.setattr(
+        "apps.ingestion.services.curation_support.catalog_entries.SOURCE_LOOKUP_CHUNK_SIZE",
+        1,
+    )
+    missing_entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/chunked-missing-book/",
+        title="Chunked Missing Book",
+        author_line="Writer One",
+        raw_data={"category": "Mystery"},
+        normalized_title=normalize_text("Chunked Missing Book"),
+        normalized_display=normalize_text("Chunked Missing Book Writer One"),
+    )
+    ready_entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/chunked-ready-book/",
+        title="Chunked Ready Book",
+        author_line="Writer Two",
+        normalized_title=normalize_text("Chunked Ready Book"),
+        normalized_display=normalize_text("Chunked Ready Book Writer Two"),
+    )
+    ready_book = Book.objects.create(
+        title="Chunked Ready Book",
+        state="ready",
+        review_state="pending",
+    )
+    BookSource.objects.create(
+        book=ready_book,
+        source_url=ready_entry.source_url,
+        normalized_source_url=ready_entry.source_url,
+        source_title=ready_entry.title,
+    )
+    GeneratedAsset.objects.create(
+        book=ready_book,
+        asset_type=GeneratedAssetType.HTML,
+        status=GeneratedAssetStatus.READY,
+    )
+    GeneratedAsset.objects.create(
+        book=ready_book,
+        asset_type=GeneratedAssetType.EPUB,
+        status=GeneratedAssetStatus.READY,
+    )
+    ready_book.categories.add(Category.objects.create(name="Novel"))
+
+    snapshots, summary = source_catalog_entry_snapshots(
+        SourceCatalogEntry.objects.order_by("title")
+    )
+    by_url = {snapshot["source_url"]: snapshot for snapshot in snapshots}
+
+    assert by_url[missing_entry.source_url]["curation_status"] == "new"
+    assert by_url[ready_entry.source_url]["curation_status"] == "ready"
+    assert summary["new"] == 1
+    assert summary["ready"] == 1
+
+
+@pytest.mark.django_db
 def test_source_catalog_entry_snapshots_surface_failed_creation_before_local_book_exists():
     entry = SourceCatalogEntry.objects.create(
         source_url="https://www.ebanglalibrary.com/books/failed-book/",

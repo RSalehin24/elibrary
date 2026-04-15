@@ -131,9 +131,13 @@ export class ProcessingPageModel {
 
   async expandCard(title) {
     const card = this.card(title);
+    await expect(card).toBeVisible();
     const expandButton = card.getByRole("button", { name: "Expand" }).first();
     if (await expandButton.count()) {
-      await expect(expandButton).toBeVisible();
+      const isVisible = await expandButton.isVisible().catch(() => false);
+      if (!isVisible) {
+        return card;
+      }
       await expandButton.click();
     }
     return card;

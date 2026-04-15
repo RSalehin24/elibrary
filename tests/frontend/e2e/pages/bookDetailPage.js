@@ -69,4 +69,8 @@ export class BookDetailPageModel {
   epubButton() {
     return this.page.getByTestId("book-asset-epub");
   }
+
+  openReaderButton() {
+    return this.page.getByTestId("book-open-reader-button");
+  }
 }

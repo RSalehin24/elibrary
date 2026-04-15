@@ -36,16 +36,13 @@ test("reader nav controls expose aria labels and button semantics", () => {
   );
   assert.match(
     html,
-    /<button[^>]*class="[^"]*icon-wrap[^"]*iconcc-close-square[^"]*"[^>]*aria-label="Close current book"[^>]*>/i
-  );
-  assert.match(
-    html,
     /<button[^>]*class="[^"]*arrow[^"]*prev-btn[^"]*"[^>]*aria-label="Previous section"[^>]*>/i
   );
   assert.match(
     html,
     /<button[^>]*class="[^"]*arrow[^"]*next-btn[^"]*"[^>]*aria-label="Next section"[^>]*>/i
   );
+  assert.doesNotMatch(html, /aria-label="Close current book"/i);
 });
 
 test("toc and settings controls are wired with aria relationships", () => {

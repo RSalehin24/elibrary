@@ -7,9 +7,92 @@ import {
 } from "./support/liveApp";
 import { seedData } from "./support/seedData";
 
+async function openReaderFromBookDetail(page, slug = seedData.books.detail.slug) {
+  const bookPage = new BookDetailPageModel(page);
+
+  await bookPage.goto(slug);
+  await bookPage.openReaderButton().click();
+
+  await expect(page).toHaveURL(/\/reader\?/);
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("manifest"), {
+      timeout: 15_000,
+    })
+    .toBeTruthy();
+  await expect(page.locator("#reader-view")).toBeVisible();
+  await expect(page.locator("#viewer iframe")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  return bookPage;
+}
+
 test.describe("Book Detail Page", () => {
   test.beforeEach(async ({ page }) => {
     await loginAsSuperAdmin(page);
+  });
+
+  test("open reader launches the reader route from the book detail page", async ({
+    page,
+  }) => {
+    await openReaderFromBookDetail(page);
+  });
+
+  test("reader controls stay functional after the epub loads", async ({
+    page,
+  }) => {
+    await openReaderFromBookDetail(page);
+
+    const readerFrameBody = page.frameLocator("#viewer iframe").locator("body");
+    const tocToggle = page.getByRole("button", {
+      name: "Toggle table of contents",
+    });
+    const settingsButton = page.getByRole("button", {
+      name: "Open reading settings",
+    });
+    const settingsPanel = page.locator("#reader-settings-panel");
+    const tocItems = page.locator(".slide-contents-item-label");
+
+    await expect(readerFrameBody).toContainText(/\S+/, { timeout: 15_000 });
+
+    await expect(tocToggle).toHaveAttribute("aria-expanded", "true");
+    await tocToggle.click();
+    await expect(tocToggle).toHaveAttribute("aria-expanded", "false");
+    await tocToggle.click();
+    await expect(tocToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(tocItems.first()).toBeVisible();
+
+    const tocItemCount = await tocItems.count();
+    const tocTarget = tocItems.nth(tocItemCount > 1 ? 1 : 0);
+    await tocTarget.click();
+    await expect(tocTarget).toHaveAttribute("aria-current", "true");
+
+    await settingsButton.click();
+    await expect(settingsPanel).toHaveAttribute("aria-hidden", "false");
+
+    const initialFontSize = await page.evaluate(
+      () => Number(window.localStorage.getItem("epub_reader_font_size") || "20"),
+    );
+    await page.getByRole("button", { name: "Increase font size" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Number(window.localStorage.getItem("epub_reader_font_size") || "0"),
+        ),
+      )
+      .toBeGreaterThan(initialFontSize);
+
+    const nightThemeButton = page.getByRole("button", { name: "Night" });
+    await nightThemeButton.click();
+    await expect(nightThemeButton).toHaveAttribute("aria-pressed", "true");
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.localStorage.getItem("epub_reader_theme_index")),
+      )
+      .toBe("2");
+
+    await page.getByRole("button", { name: "Next section" }).click();
+    await expect(page.locator("#viewer iframe")).toBeVisible();
   });
 
   test("removing a bookmark does not clear metadata edits in progress", async ({

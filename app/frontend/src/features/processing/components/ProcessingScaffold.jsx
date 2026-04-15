@@ -110,6 +110,69 @@ export function renderProcessingCardLoader(label) {
   return <ProcessingCardSkeleton label={label || "Loading"} />;
 }
 
+export function ProcessingSummaryStat({ label, value, loading = false }) {
+  return (
+    <article className="processing-summary-stat">
+      <span className="fact-label">{label}</span>
+      {loading ? (
+        <span
+          className="processing-summary-value-skeleton skeleton-line skeleton-line-sm"
+          aria-hidden="true"
+        />
+      ) : (
+        <strong>{value}</strong>
+      )}
+    </article>
+  );
+}
+
+export function ProcessingTableSkeletonStack({
+  lines = ["xl"],
+  className = "",
+}) {
+  return (
+    <div
+      className={`processing-table-skeleton-stack${className ? ` ${className}` : ""}`.trim()}
+      aria-hidden="true"
+    >
+      {lines.map((line, index) => (
+        <span
+          key={`${line}-${index}`}
+          className={`skeleton-line skeleton-line-${line}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+export function ProcessingTableSkeletonCheckbox() {
+  return (
+    <span
+      className="processing-checkbox-skeleton skeleton-line"
+      aria-hidden="true"
+    />
+  );
+}
+
+export function ProcessingTableSkeletonActions({ count = 1 }) {
+  return (
+    <div className="processing-table-skeleton-actions" aria-hidden="true">
+      {Array.from({ length: count }, (_, index) => (
+        <span key={index} className="skeleton-line processing-action-skeleton" />
+      ))}
+    </div>
+  );
+}
+
+export function ProcessingControlSkeleton({ className = "" }) {
+  return (
+    <span
+      className={`processing-control-skeleton skeleton-line${className ? ` ${className}` : ""}`.trim()}
+      aria-hidden="true"
+    />
+  );
+}
+
 export function QueueTableCard({
   title,
   count,
@@ -121,6 +184,7 @@ export function QueueTableCard({
   cardClassName = "",
   loading = false,
   loadingLabel = "",
+  replaceOnLoading = false,
   collapsible = false,
   collapsed = false,
   onToggleCollapsed = null,
@@ -131,7 +195,7 @@ export function QueueTableCard({
     </div>
   );
   const showHeaderAside = Boolean(headerAside) && !collapsed;
-  const shellContent = loading
+  const shellContent = loading && replaceOnLoading
     ? renderProcessingCardLoader(
         loadingLabel || `Loading ${title.toLowerCase()}`,
       )
@@ -168,7 +232,9 @@ export function QueueTableCard({
         <div className="processing-bulk-bar">{actions}</div>
       ) : null}
       {!collapsed ? (
-        <div className={`processing-table-shell${loading ? " is-loading" : ""}`}>
+        <div
+          className={`processing-table-shell${loading && replaceOnLoading ? " is-loading" : ""}`}
+        >
           {shellContent}
         </div>
       ) : null}

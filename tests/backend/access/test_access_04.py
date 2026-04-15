@@ -18,6 +18,7 @@ from apps.catalog.models import (
     GeneratedAssetStatus,
     GeneratedAssetType,
 )
+from apps.common.epub_utils import build_simple_epub
 from apps.common.permissions import user_has_scope
 from apps.ingestion.models import BookSubmission, ResolutionStatus, SubmissionStatus
 from apps.access.views import normalize_preview_book_sections
@@ -35,7 +36,7 @@ def test_reader_token_state_and_bookmark_endpoints_work(tmp_path, client):
     user = User.objects.create_user(email="token-reader@example.com", password="strong-password-123")
     book = Book.objects.create(title="Token Reader Book", state="ready", review_state="approved")
     epub_path = Path(tmp_path) / "token-reader.epub"
-    epub_path.write_bytes(b"epub")
+    epub_path.write_bytes(build_simple_epub("Token Reader Book"))
 
     GeneratedAsset.objects.create(
         book=book,
@@ -55,6 +56,18 @@ def test_reader_token_state_and_bookmark_endpoints_work(tmp_path, client):
     manifest = client.get(manifest_path)
     assert manifest.status_code == 200
     payload = manifest.json()
+
+    container_response = client.get(
+        f"{payload['epub_download_url'].replace('http://testserver', '')}META-INF/container.xml"
+    )
+    assert container_response.status_code == 200
+    assert b"OEBPS/content.opf" in container_response.content
+
+    chapter_response = client.get(
+        f"{payload['epub_download_url'].replace('http://testserver', '')}OEBPS/text/chapter-1.xhtml"
+    )
+    assert chapter_response.status_code == 200
+    assert b"Seeded EPUB chapter one for reader coverage." in chapter_response.content
 
     session_get = client.get(payload["reading_session_url"].replace("http://testserver", ""))
     assert session_get.status_code == 200

@@ -43,7 +43,7 @@ export const defaultJobFilters = {
 export const defaultCatalogFilters = {
   q: "",
   status: "",
-  sort: "status_recent",
+  sort: "created_desc",
   page: 1,
   limit: 180,
 };

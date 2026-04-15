@@ -1,6 +1,6 @@
-from collections import Counter
 from datetime import timedelta
 
+from django.db.models import Prefetch
 from django.utils import timezone
 
 from apps.catalog.models import BookSource, GeneratedAssetStatus, GeneratedAssetType
@@ -10,12 +10,32 @@ from apps.ingestion.models import (
     CatalogCurationMode,
     CatalogCurationTrigger,
     JobStatus,
+    ProcessingJob,
     SubmissionOrigin,
 )
 
 REQUIRED_READY_ASSETS = (GeneratedAssetType.HTML, GeneratedAssetType.EPUB)
 FAILED_AUTOMATION_RETRY_COOLDOWN = timedelta(hours=6)
 SOURCE_LOOKUP_CHUNK_SIZE = 500
+HEAVY_BOOK_LIST_FIELDS = (
+    "summary",
+    "raw_scraped_metadata",
+    "raw_scrape_payload",
+    "main_content_html",
+    "book_info_html",
+    "dedication_html",
+    "toc",
+    "content_items",
+)
+OVERVIEW_CURATION_STATUSES = {"failed", "requeued"}
+
+
+def related_book_list_defer_fields(*prefixes):
+    return [
+        f"{prefix}{field}"
+        for prefix in prefixes
+        for field in HEAVY_BOOK_LIST_FIELDS
+    ]
 
 
 def iter_source_url_chunks(source_urls, chunk_size=SOURCE_LOOKUP_CHUNK_SIZE):
@@ -31,7 +51,20 @@ def source_catalog_book_source_map(source_urls):
         book_sources = (
             BookSource.objects.filter(normalized_source_url__in=source_url_chunk)
             .select_related("book")
-            .prefetch_related("book__generated_assets", "book__processing_jobs", "book__book_categories__category")
+            .defer(*related_book_list_defer_fields("book__"))
+            .prefetch_related(
+                "book__generated_assets",
+                Prefetch(
+                    "book__processing_jobs",
+                    queryset=ProcessingJob.objects.defer("payload").order_by(
+                        "-finished_at",
+                        "-started_at",
+                        "-updated_at",
+                        "-created_at",
+                    ),
+                ),
+                "book__book_categories__category",
+            )
         )
         book_source_map.update(
             {
@@ -54,9 +87,33 @@ def source_catalog_submission_map(source_urls):
                 "canonical_submission",
                 "canonical_submission__linked_book",
             )
+            .defer(
+                "raw_payload",
+                "canonical_submission__raw_payload",
+                *related_book_list_defer_fields(
+                    "linked_book__",
+                    "canonical_submission__linked_book__",
+                ),
+            )
             .prefetch_related(
-                "processing_jobs",
-                "canonical_submission__processing_jobs",
+                Prefetch(
+                    "processing_jobs",
+                    queryset=ProcessingJob.objects.defer("payload").order_by(
+                        "-finished_at",
+                        "-started_at",
+                        "-updated_at",
+                        "-created_at",
+                    ),
+                ),
+                Prefetch(
+                    "canonical_submission__processing_jobs",
+                    queryset=ProcessingJob.objects.defer("payload").order_by(
+                        "-finished_at",
+                        "-started_at",
+                        "-updated_at",
+                        "-created_at",
+                    ),
+                ),
             )
             .order_by("-updated_at", "-created_at")
         )
@@ -65,6 +122,39 @@ def source_catalog_submission_map(source_urls):
             submission_map.setdefault(submission.resolved_url, submission)
 
     return submission_map
+
+
+def inspect_source_catalog_entry_batch(entries):
+    entries = list(entries or [])
+    if not entries:
+        return []
+
+    source_urls = [entry.source_url for entry in entries]
+    source_map = source_catalog_book_source_map(source_urls)
+    submission_map = source_catalog_submission_map(source_urls)
+    return [
+        inspect_source_catalog_entry(entry, source_map, submission_map)
+        for entry in entries
+    ]
+
+
+def iter_source_catalog_entry_inspections(queryset, chunk_size=None):
+    chunk_size = chunk_size or SOURCE_LOOKUP_CHUNK_SIZE
+    entry_iterable = (
+        queryset.iterator(chunk_size=chunk_size)
+        if hasattr(queryset, "iterator")
+        else iter(queryset)
+    )
+    entry_chunk = []
+
+    for entry in entry_iterable:
+        entry_chunk.append(entry)
+        if len(entry_chunk) >= chunk_size:
+            yield from inspect_source_catalog_entry_batch(entry_chunk)
+            entry_chunk = []
+
+    if entry_chunk:
+        yield from inspect_source_catalog_entry_batch(entry_chunk)
 
 
 def book_has_required_assets(book):
@@ -168,42 +258,63 @@ def serialize_source_catalog_entry_inspection(inspection):
 
 
 def summarize_source_catalog_snapshots(snapshots):
-    summary = Counter(snapshot["curation_status"] for snapshot in snapshots)
-    queued_count = 0
-    processing_count = 0
-
+    summary = empty_source_catalog_snapshot_summary()
     for snapshot in snapshots:
-        if snapshot.get("curation_status") != "processing":
-            continue
+        update_source_catalog_snapshot_summary(summary, snapshot)
+    return summary
 
-        latest_job_status = (snapshot.get("latest_job_status") or "").strip()
-        latest_submission_status = (snapshot.get("latest_submission_status") or "").strip()
 
-        if latest_job_status == JobStatus.QUEUED or latest_submission_status == "queued":
-            queued_count += 1
-        else:
-            processing_count += 1
-
+def empty_source_catalog_snapshot_summary():
     return {
-        "total": len(snapshots),
-        "new": summary.get("new", 0),
-        "queued": queued_count,
-        "processing": processing_count,
-        "stopped": summary.get("stopped", 0),
-        "unfinished": summary.get("unfinished", 0),
-        "failed": summary.get("failed", 0),
-        "ready": summary.get("ready", 0),
-        "deleted": summary.get("deleted", 0),
+        "total": 0,
+        "new": 0,
+        "queued": 0,
+        "processing": 0,
+        "stopped": 0,
+        "unfinished": 0,
+        "failed": 0,
+        "ready": 0,
+        "deleted": 0,
     }
 
 
+def update_source_catalog_snapshot_summary(summary, snapshot):
+    summary["total"] += 1
+    status = snapshot.get("curation_status")
+
+    if status == "processing":
+        latest_job_status = (snapshot.get("latest_job_status") or "").strip()
+        latest_submission_status = (snapshot.get("latest_submission_status") or "").strip()
+        if latest_job_status == JobStatus.QUEUED or latest_submission_status == "queued":
+            summary["queued"] += 1
+        else:
+            summary["processing"] += 1
+        return
+
+    if status in summary:
+        summary[status] += 1
+
+
 def source_catalog_entry_snapshots(queryset):
-    entries = list(queryset)
-    source_map = source_catalog_book_source_map([entry.source_url for entry in entries])
-    submission_map = source_catalog_submission_map([entry.source_url for entry in entries])
-    inspections = [inspect_source_catalog_entry(entry, source_map, submission_map) for entry in entries]
-    snapshots = [serialize_source_catalog_entry_inspection(inspection) for inspection in inspections]
+    snapshots = [
+        serialize_source_catalog_entry_inspection(inspection)
+        for inspection in iter_source_catalog_entry_inspections(queryset)
+    ]
     return snapshots, summarize_source_catalog_snapshots(snapshots)
+
+
+def source_catalog_entry_overview(queryset, entry_statuses=None):
+    selected_statuses = set(entry_statuses or OVERVIEW_CURATION_STATUSES)
+    entries = []
+    summary = empty_source_catalog_snapshot_summary()
+
+    for inspection in iter_source_catalog_entry_inspections(queryset):
+        snapshot = serialize_source_catalog_entry_inspection(inspection)
+        update_source_catalog_snapshot_summary(summary, snapshot)
+        if snapshot["curation_status"] in selected_statuses:
+            entries.append(snapshot)
+
+    return entries, summary
 
 
 def build_catalog_curation_run_summary():
@@ -234,12 +345,14 @@ def should_update_existing_book(inspection, mode):
         return False
     if mode == CatalogCurationMode.ALL:
         return inspection["local_book"] is not None
-    return status in {"unfinished", "failed"}
+    return status in {"unfinished", "failed", "stopped"}
 
 
 def should_create_missing_book(inspection):
     local_book = inspection["local_book"]
-    return (local_book is None or bool(local_book.deleted_at)) and inspection["curation_status"] in {"new", "failed", "deleted"}
+    return (local_book is None or bool(local_book.deleted_at)) and inspection[
+        "curation_status"
+    ] in {"new", "failed", "stopped", "deleted"}
 
 
 def should_retry_failed_entry(inspection, now=None):

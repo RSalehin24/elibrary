@@ -590,7 +590,16 @@ async function mockFailedRequestsRoutes(page) {
     status: "failed",
     lastError: "Seeded failure for live-browser coverage.",
   });
-  let jobs = [failedJob];
+  const processingJobs = Array.from({ length: 65 }, (_, index) =>
+    createProcessingJob({
+      id: `job-crowded-processing-${index}`,
+      submissionId: `submission-crowded-processing-${index}`,
+      input: `Crowded processing request ${index + 1}`,
+      status: "processing",
+      taskId: `crowded-processing-${index}`,
+    }),
+  );
+  let failedJobs = [failedJob];
   const submissions = [
     createProcessingSubmission({
       id: "submission-user-failed",
@@ -617,9 +626,10 @@ async function mockFailedRequestsRoutes(page) {
   await page.route("**/api/ingestion/jobs/**", async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
+    const isFailedRequest = url.searchParams.get("status") === "failed";
 
     if (method === "POST" && url.pathname.endsWith("/jobs/bulk-delete/")) {
-      jobs = [];
+      failedJobs = [];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -631,7 +641,7 @@ async function mockFailedRequestsRoutes(page) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(jobs),
+      body: JSON.stringify(isFailedRequest ? failedJobs : processingJobs),
     });
   });
 
@@ -643,7 +653,7 @@ async function mockFailedRequestsRoutes(page) {
       method === "POST" &&
       url.pathname.endsWith("/submissions/bulk-delete/")
     ) {
-      jobs = [];
+      failedJobs = [];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -1013,7 +1023,6 @@ test.describe("Processing Pages", () => {
       ["/processing-my-requests", "My Requests"],
       ["/processing-catalog-books", "Catalog"],
       ["/processing-automation", "Automation"],
-      ["/processing-failed-requests", "Failed Requests"],
       ["/processing-incomplete-check", "Incomplete Requests"],
     ];
 
@@ -1251,7 +1260,7 @@ test.describe("Processing Pages", () => {
       .rowActionButton("Stopped", seedData.submissions.userStopped, "Resume")
       .click();
 
-    await expect(page.getByText("Request queued.")).toBeVisible();
+    await expect(page.getByText("Book creation started.")).toBeVisible();
     await expect(
       processingPage.rowInCard("Stopped", seedData.submissions.userStopped),
     ).toHaveCount(0);
@@ -1362,6 +1371,16 @@ test.describe("Processing Pages", () => {
         };
       }
 
+      if (catalogCreatePhase === "deleted") {
+        return {
+          ...entryBase,
+          curation_status: "deleted",
+          latest_submission_status: "processing",
+          latest_job_status: "processing",
+          latest_job_error: "",
+        };
+      }
+
       return {
         ...entryBase,
         curation_status: "new",
@@ -1370,6 +1389,18 @@ test.describe("Processing Pages", () => {
         latest_job_error: "",
       };
     }
+
+    await page.route("**/api/ingestion/activity/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          can_manage_processing: true,
+          has_visible_activity: false,
+          active_scopes: [],
+        }),
+      });
+    });
 
     await page.route("**/api/ingestion/catalog/entries/**", async (route) => {
       await route.fulfill({
@@ -1464,7 +1495,7 @@ test.describe("Processing Pages", () => {
         .getByRole("button", { name: "Processing..." }),
     ).toBeVisible();
 
-    catalogCreatePhase = "failed";
+    catalogCreatePhase = "deleted";
     await page.reload();
 
     await expect(
@@ -1477,7 +1508,7 @@ test.describe("Processing Pages", () => {
     ).toBeVisible();
   });
 
-  test("catalog sync control switches to an active state immediately", async ({
+  test("catalog sync control can stop an in-flight sync and start again later", async ({
     page,
   }) => {
     const processingPage = new ProcessingPageModel(page);
@@ -1525,11 +1556,26 @@ test.describe("Processing Pages", () => {
       });
     });
 
-    await page.route("**/api/ingestion/catalog/refresh**", async (route) => {
+    await page.route("**/api/ingestion/catalog/refresh/", async (route) => {
       syncActive = true;
       syncState = createCatalogSyncState();
       await route.fulfill({
         status: 202,
+        contentType: "application/json",
+        body: JSON.stringify(syncState),
+      });
+    });
+    await page.route("**/api/ingestion/catalog/refresh/stop/", async (route) => {
+      syncActive = false;
+      syncState = createCatalogSyncState({
+        status: "idle",
+        task_id: "",
+        queue_name: "",
+        finished_at: "2026-04-14T00:05:00Z",
+        updated_at: "2026-04-14T00:05:00Z",
+      });
+      await route.fulfill({
+        status: 200,
         contentType: "application/json",
         body: JSON.stringify(syncState),
       });
@@ -1558,6 +1604,26 @@ test.describe("Processing Pages", () => {
     await expect(
       processingPage.catalogSyncStatus().locator(".loading-spinner"),
     ).toBeVisible();
+
+    await processingPage.catalogSyncButton().click();
+    await expect
+      .poll(async () =>
+        processingPage.catalogSyncButton().getAttribute("aria-label"),
+      )
+      .toBe("Sync catalog");
+    await expect(processingPage.catalogSyncStatus()).toContainText(
+      "Catalog sync idle",
+    );
+
+    await processingPage.catalogSyncButton().click();
+    await expect
+      .poll(async () =>
+        processingPage.catalogSyncButton().getAttribute("aria-label"),
+      )
+      .toBe("Stop catalog sync");
+    await expect(processingPage.catalogSyncStatus()).toContainText(
+      "Syncing catalog",
+    );
   });
 
   test("automation keeps run history collapsible with the expanded card first and preserves saved settings", async ({
@@ -1659,16 +1725,20 @@ test.describe("Processing Pages", () => {
       "Failed Requests",
     );
     await expect(processingPage.card("Failed Requests")).toBeVisible();
+    await expect(processingPage.card("Ready")).toHaveCount(0);
     await expect(processingPage.card("Deplicate Requests")).toHaveCount(0);
     await expect(summaryValue(processingPage, "Failed Requests Overview", "Failed")).toHaveText("1");
-    await expect(summaryValue(processingPage, "Failed Requests Overview", "Duplicate")).toHaveText("1");
+    await expect(
+      summaryValue(processingPage, "Failed Requests Overview", "Duplicate"),
+    ).toHaveCount(0);
     await expect(processingPage.card("Run History")).toHaveCount(0);
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.userFailed,
-      "Failed Requests",
-      ["Processing", "Ready", "Queued", "Stopped", "Deleted"],
-    );
+    await processingPage.expandCard("Failed Requests");
+    await expect(
+      processingPage.rowInCard(
+        "Failed Requests",
+        seedData.submissions.userFailed,
+      ),
+    ).toBeVisible();
     const failedRow = processingPage.rowInCard(
       "Failed Requests",
       seedData.submissions.userFailed,
@@ -2187,7 +2257,7 @@ test.describe("Processing Pages", () => {
     await processingPage
       .rowActionButton("Stopped", seedData.submissions.curationStopped, "Resume")
       .click();
-    await expect(page.getByText("Request queued.")).toBeVisible();
+    await expect(page.getByText("Book creation started.")).toBeVisible();
     await expect(
       processingPage.rowInCard("Stopped", seedData.submissions.curationStopped),
     ).toHaveCount(0);

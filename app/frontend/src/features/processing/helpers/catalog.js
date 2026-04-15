@@ -17,6 +17,22 @@ const ACTIVE_CATALOG_CREATION_STATUSES = new Set([
   "processing",
 ]);
 
+const TERMINAL_CATALOG_CREATION_STATUSES = new Set([
+  "failed",
+  "duplicate",
+  "ready",
+  "stopped",
+  "deleted",
+]);
+
+function hasCatalogCreationStatus(entry, statuses) {
+  return (
+    statuses.has(entry?.curation_status) ||
+    statuses.has(entry?.latest_job_status) ||
+    statuses.has(entry?.latest_submission_status)
+  );
+}
+
 export function filterCatalogEntriesByControls(entryRows, filters) {
   const query = String(filters.q || "")
     .trim()
@@ -67,11 +83,11 @@ export function isCatalogEntryCreatePending(entry) {
     return false;
   }
 
-  return (
-    ACTIVE_CATALOG_CREATION_STATUSES.has(entry.curation_status) ||
-    ACTIVE_CATALOG_CREATION_STATUSES.has(entry.latest_job_status) ||
-    ACTIVE_CATALOG_CREATION_STATUSES.has(entry.latest_submission_status)
-  );
+  if (hasCatalogCreationStatus(entry, TERMINAL_CATALOG_CREATION_STATUSES)) {
+    return false;
+  }
+
+  return hasCatalogCreationStatus(entry, ACTIVE_CATALOG_CREATION_STATUSES);
 }
 
 export function hasActiveCatalogCreationWork({
@@ -84,7 +100,11 @@ export function hasActiveCatalogCreationWork({
     [...catalogOverviewEntries, ...catalogEntries].some((entry) =>
       isCatalogEntryCreatePending(entry),
     ) ||
-    jobs.some((job) => isActiveStatus(job?.status)) ||
+    jobs.some(
+      (job) =>
+        isActiveStatus(job?.status) &&
+        !TERMINAL_CATALOG_CREATION_STATUSES.has(job?.submission_status),
+    ) ||
     submissions.some((submission) =>
       ACTIVE_CATALOG_CREATION_STATUSES.has(submission?.status),
     )
@@ -93,16 +113,33 @@ export function hasActiveCatalogCreationWork({
 
 export function resolvePendingCatalogCreationEntries(
   trackedEntries,
-  { catalogEntries = [], catalogOverviewEntries = [], jobs = [] } = {},
+  {
+    catalogEntries = [],
+    catalogOverviewEntries = [],
+    jobs = [],
+    submissions = [],
+  } = {},
 ) {
   if (!Array.isArray(trackedEntries) || !trackedEntries.length) {
     return [];
   }
 
   const entriesById = new Map();
+  const submissionStatusesBySourceUrl = new Map();
   for (const entry of [...catalogOverviewEntries, ...catalogEntries]) {
     if (entry?.id) {
       entriesById.set(entry.id, entry);
+    }
+  }
+  for (const submission of submissions) {
+    const sourceUrls = [
+      String(submission?.resolved_url || "").trim(),
+      String(submission?.original_input || "").trim(),
+    ].filter(Boolean);
+    for (const sourceUrl of sourceUrls) {
+      const statuses = submissionStatusesBySourceUrl.get(sourceUrl) || [];
+      statuses.push(String(submission?.status || "").trim());
+      submissionStatusesBySourceUrl.set(sourceUrl, statuses);
     }
   }
 
@@ -119,9 +156,27 @@ export function resolvePendingCatalogCreationEntries(
       return false;
     }
 
+    const submissionStatuses =
+      submissionStatusesBySourceUrl.get(sourceUrl) || [];
+    if (
+      submissionStatuses.some((status) =>
+        ACTIVE_CATALOG_CREATION_STATUSES.has(status),
+      )
+    ) {
+      return true;
+    }
+    if (
+      submissionStatuses.some((status) =>
+        TERMINAL_CATALOG_CREATION_STATUSES.has(status),
+      )
+    ) {
+      return false;
+    }
+
     return jobs.some(
       (job) =>
         isActiveStatus(job.status) &&
+        !TERMINAL_CATALOG_CREATION_STATUSES.has(job?.submission_status) &&
         String(job.submission_input || "").trim() === sourceUrl,
     );
   });

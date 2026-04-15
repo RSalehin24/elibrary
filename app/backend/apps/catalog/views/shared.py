@@ -115,7 +115,27 @@ class BookQueryMixin:
 
     def base_queryset(self):
         owned_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=self.request.user)
-        return Book.objects.prefetch_related("book_contributors__contributor", "book_series__series", "book_categories__category", "generated_assets", "source_urls").annotate(user_owns_book=Exists(owned_submission)).filter(deleted_at__isnull=True)
+        return (
+            Book.objects.prefetch_related(
+                "book_contributors__contributor",
+                "book_series__series",
+                "book_categories__category",
+                "generated_assets",
+                "source_urls",
+            )
+            .annotate(user_owns_book=Exists(owned_submission))
+            .defer(
+                "summary",
+                "raw_scraped_metadata",
+                "raw_scrape_payload",
+                "main_content_html",
+                "book_info_html",
+                "dedication_html",
+                "toc",
+                "content_items",
+            )
+            .filter(deleted_at__isnull=True)
+        )
 
     def get_queryset(self):
         return filtered_book_queryset(self.base_queryset(), self.request, default_record_type=self.default_record_type)

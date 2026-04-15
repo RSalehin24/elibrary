@@ -60,10 +60,8 @@ import {
   getRunActivityAt,
   getSubmissionActivityAt,
   getUniqueSubmissionIds,
-  hasActiveCatalogCreationWork,
   isActiveStatus,
   isCatalogSyncActive,
-  isDefaultCatalogBrowseRequest,
   isDefaultJobRequest,
   isResumableJob,
   jobTypeLabel,
@@ -85,10 +83,13 @@ import {
   CatalogRefreshIcon,
   CatalogStopIcon,
   InlineErrorCell,
+  ProcessingSummaryStat,
+  ProcessingTableSkeletonActions,
+  ProcessingTableSkeletonCheckbox,
+  ProcessingTableSkeletonStack,
   ProcessingErrorDisclosure,
   QueueTableCard,
   RequestValue,
-  renderProcessingCardLoader,
 } from "../features/processing/components/ProcessingScaffold";
 import {
   useProcessingActivity,
@@ -107,6 +108,7 @@ export default function ProcessingCatalogBooksPage() {
   const canManageProcessing = hasCapability(user, "processing:manage");
   const activeTab = SOURCE_TAB;
   const loadRequestIdRef = useRef(0);
+  const catalogSyncActionRequestIdRef = useRef(0);
   const [jobs, setJobs] = useState([]);
   const [jobReviewRows, setJobReviewRows] = useState([]);
   const [submissions, setSubmissions] = useState([]);
@@ -198,39 +200,46 @@ export default function ProcessingCatalogBooksPage() {
     "processing-catalog",
     "creatingCatalog",
     false,
+    { persist: false },
   );
   const [catalogActionMode, setCatalogActionMode] = useState("");
   const [savingAutomation, setSavingAutomation] = usePersistentProcessingPageState(
     "processing-catalog",
     "savingAutomation",
     false,
+    { persist: false },
   );
   const [busyActionId, setBusyActionId] = usePersistentProcessingPageState(
     "processing-catalog",
     "busyActionId",
     "",
+    { persist: false },
   );
   const [busyRunId, setBusyRunId] = usePersistentProcessingPageState(
     "processing-catalog",
     "busyRunId",
     "",
+    { persist: false },
   );
   const [busyDeleteId, setBusyDeleteId] = usePersistentProcessingPageState(
     "processing-catalog",
     "busyDeleteId",
     "",
+    { persist: false },
   );
   const [activeRequeueJobId, setActiveRequeueJobId] = useState("");
   const [bulkActionKey, setBulkActionKey] = usePersistentProcessingPageState(
     "processing-catalog",
     "bulkActionKey",
     "",
+    { persist: false },
   );
   const [confirmState, setConfirmState] = useState(null);
   const [confirmLoading, setConfirmLoading] = usePersistentProcessingPageState(
     "processing-catalog",
     "confirmLoading",
     false,
+    { persist: false },
   );
   const [queuedCardExpanded, setQueuedCardExpanded] = useState(false);
   const [stoppedCardExpanded, setStoppedCardExpanded] = useState(false);
@@ -241,6 +250,7 @@ export default function ProcessingCatalogBooksPage() {
       "processing-catalog",
       "stoppingCatalogSync",
       false,
+      { persist: false },
     );
   const [catalogSyncDismissed, setCatalogSyncDismissed] = useState(false);
   const [catalogSyncVisualState, setCatalogSyncVisualState] =
@@ -248,6 +258,7 @@ export default function ProcessingCatalogBooksPage() {
       "processing-catalog",
       "catalogSyncVisualState",
       null,
+      { persist: false },
     );
   const [catalogCreationTracker, setCatalogCreationTracker] =
     usePersistentProcessingPageState(
@@ -256,6 +267,16 @@ export default function ProcessingCatalogBooksPage() {
       null,
     );
   const previousQueuedCountRef = useRef(0);
+
+  function beginCatalogSyncAction() {
+    const requestId = catalogSyncActionRequestIdRef.current + 1;
+    catalogSyncActionRequestIdRef.current = requestId;
+    return requestId;
+  }
+
+  function isCurrentCatalogSyncAction(requestId) {
+    return requestId === catalogSyncActionRequestIdRef.current;
+  }
 
   const defaultScopes = useMemo(
     () => [
@@ -279,12 +300,14 @@ export default function ProcessingCatalogBooksPage() {
         catalogEntries,
         catalogOverviewEntries,
         jobs: jobReviewRows,
+        submissions,
       }),
     [
       trackedCatalogCreationEntries,
       catalogEntries,
       catalogOverviewEntries,
       jobReviewRows,
+      submissions,
     ],
   );
   const catalogCreationDisplayEntries = useMemo(
@@ -304,18 +327,8 @@ export default function ProcessingCatalogBooksPage() {
   );
   const hasPendingCatalogCreations = pendingCatalogCreationEntries.length > 0;
   const hasTrackedCatalogCreations = catalogCreationDisplayEntries.length > 0;
-  const hasBackendCatalogCreationWork = useMemo(
-    () =>
-      hasActiveCatalogCreationWork({
-        catalogEntries,
-        catalogOverviewEntries,
-        jobs: jobReviewRows,
-        submissions,
-      }),
-    [catalogEntries, catalogOverviewEntries, jobReviewRows, submissions],
-  );
   const catalogCreateControlsDisabled =
-    creatingCatalog || hasTrackedCatalogCreations || hasBackendCatalogCreationWork;
+    creatingCatalog || hasTrackedCatalogCreations;
   const catalogCreationStatusLoaded =
     !catalogBrowseLoading &&
     !catalogOverviewLoading &&
@@ -340,13 +353,62 @@ export default function ProcessingCatalogBooksPage() {
   const refreshingCatalog = catalogSyncActive && !catalogSyncDismissed;
   const sourceTabButtonsDisabled = refreshingCatalog || globalActionsLocked;
   const catalogActionsDisabled = refreshingCatalog;
-  const creationActionsDisabled =
-    sourceTabButtonsDisabled || catalogCreateControlsDisabled;
+  const creationActionsDisabled = sourceTabButtonsDisabled;
   const catalogActionDisabledReason = refreshingCatalog
     ? "Disabled while catalog sync is running."
     : catalogCreateControlsDisabled
       ? "Disabled while catalog book creation is running."
       : "";
+  const hasActiveJobs = useMemo(
+    () => [...jobs, ...jobReviewRows].some((job) => isActiveStatus(job.status)),
+    [jobs, jobReviewRows],
+  );
+  const hasActiveRuns = useMemo(
+    () => curationRuns.some((run) => isActiveStatus(run.status)),
+    [curationRuns],
+  );
+  const hasActiveCatalogSync = useMemo(
+    () => activeTab === SOURCE_TAB && isCatalogSyncActive(catalogSyncState?.status),
+    [activeTab, catalogSyncState?.status],
+  );
+  const hasActiveAutomationRun = useMemo(
+    () => isActiveStatus(automationState?.latest_run?.status),
+    [automationState?.latest_run?.status],
+  );
+  const pollingScopes = useMemo(() => {
+    const scopes = [];
+
+    if (
+      hasActiveJobs ||
+      hasActiveRuns ||
+      hasActiveAutomationRun ||
+      hasTrackedCatalogCreations
+    ) {
+      scopes.push(
+        LOAD_SCOPE_SUBMISSIONS,
+        LOAD_SCOPE_JOBS,
+        LOAD_SCOPE_JOB_REVIEWS,
+      );
+    }
+    if (hasActiveCatalogSync || hasTrackedCatalogCreations) {
+      scopes.push(LOAD_SCOPE_CATALOG_BROWSE, LOAD_SCOPE_CATALOG_OVERVIEW);
+    }
+    if (canManageProcessing && hasActiveRuns) {
+      scopes.push(LOAD_SCOPE_RUNS);
+    }
+    if (canManageProcessing && hasActiveAutomationRun) {
+      scopes.push(LOAD_SCOPE_AUTOMATION);
+    }
+
+    return scopes;
+  }, [
+    canManageProcessing,
+    hasActiveAutomationRun,
+    hasActiveCatalogSync,
+    hasActiveJobs,
+    hasActiveRuns,
+    hasTrackedCatalogCreations,
+  ]);
 
   function getScopesForTab() {
     return defaultScopes;
@@ -411,22 +473,116 @@ export default function ProcessingCatalogBooksPage() {
     }
 
     try {
-      const requests = [];
+      const priorityScopes = new Set([
+        LOAD_SCOPE_SUBMISSIONS,
+        LOAD_SCOPE_JOBS,
+        LOAD_SCOPE_JOB_REVIEWS,
+      ]);
+      const primaryRequests = [];
+      const secondaryRequests = [];
       const shouldReuseJobReviewRows =
         scopes.has(LOAD_SCOPE_JOBS) &&
         scopes.has(LOAD_SCOPE_JOB_REVIEWS) &&
         isDefaultJobRequest(nextJobFilters);
-      const shouldReuseCatalogOverview =
-        scopes.has(LOAD_SCOPE_CATALOG_BROWSE) &&
-        scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW) &&
-        isDefaultCatalogBrowseRequest(nextCatalogFilters);
+      const shouldReuseCatalogOverview = false;
       const queueScopeRequest = (scope, url) => {
-        requests.push(
+        const requestTarget = priorityScopes.has(scope)
+          ? primaryRequests
+          : secondaryRequests;
+        requestTarget.push(
           apiFetch(url).then((payload) => ({
             scope,
             payload,
           })),
         );
+      };
+      const applyPayloads = (payloads) => {
+        if (!payloads.length) {
+          return;
+        }
+
+        const payloadByScope = new Map(
+          payloads.map(({ scope, payload }) => [scope, payload]),
+        );
+
+        if (payloadByScope.has(LOAD_SCOPE_JOBS)) {
+          setJobs(payloadByScope.get(LOAD_SCOPE_JOBS) || []);
+        }
+
+        if (
+          payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS) ||
+          shouldReuseJobReviewRows
+        ) {
+          setJobReviewRows(
+            (shouldReuseJobReviewRows
+              ? payloadByScope.get(LOAD_SCOPE_JOBS)
+              : payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS)) || [],
+          );
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_SUBMISSIONS)) {
+          setSubmissions(payloadByScope.get(LOAD_SCOPE_SUBMISSIONS) || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_REVIEWS)) {
+          setDuplicateReviews(payloadByScope.get(LOAD_SCOPE_REVIEWS) || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_CATALOG_BROWSE)) {
+          const catalogPayload =
+            payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE) || null;
+          setCatalogEntries(catalogPayload?.entries || []);
+          setCatalogPagination(
+            catalogPayload?.pagination || defaultCatalogPagination,
+          );
+        }
+
+        if (
+          payloadByScope.has(LOAD_SCOPE_CATALOG_OVERVIEW) ||
+          shouldReuseCatalogOverview
+        ) {
+          const catalogPayload =
+            (shouldReuseCatalogOverview
+              ? payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE)
+              : payloadByScope.get(LOAD_SCOPE_CATALOG_OVERVIEW)) || null;
+          setCatalogOverviewEntries(catalogPayload?.entries || []);
+          setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
+          setCatalogSyncState(catalogPayload?.sync_state || null);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_RUNS)) {
+          setCurationRuns(payloadByScope.get(LOAD_SCOPE_RUNS) || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
+          const incompletePayload =
+            payloadByScope.get(LOAD_SCOPE_INCOMPLETE_BROWSE) || null;
+          setIncompleteEntries(incompletePayload?.entries || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
+          const incompletePayload =
+            payloadByScope.get(LOAD_SCOPE_INCOMPLETE_OVERVIEW) || null;
+          setIncompleteOverviewEntries(incompletePayload?.entries || []);
+          setIncompleteSummary(
+            incompletePayload?.summary || defaultIncompleteSummary,
+          );
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_AUTOMATION)) {
+          const automationPayload =
+            payloadByScope.get(LOAD_SCOPE_AUTOMATION) || null;
+          setAutomationState(automationPayload);
+          if (
+            !preserveAutomationForm &&
+            automationPayload?.settings &&
+            [AUTOMATION_TAB, INCOMPLETE_TAB].includes(nextTab)
+          ) {
+            setAutomationForm(
+              automationFormFromSettings(automationPayload.settings),
+            );
+          }
+        }
       };
 
       if (scopes.has(LOAD_SCOPE_JOBS)) {
@@ -474,6 +630,8 @@ export default function ProcessingCatalogBooksPage() {
             ...nextCatalogFilters,
             limit:
               Number(nextCatalogFilters.limit) || defaultCatalogFilters.limit,
+            include_summary: "0",
+            include_sync_state: "0",
           })}`,
         );
       }
@@ -483,9 +641,7 @@ export default function ProcessingCatalogBooksPage() {
           queueScopeRequest(
             LOAD_SCOPE_CATALOG_OVERVIEW,
             `/ingestion/catalog/entries/${toQueryString({
-              ...defaultCatalogFilters,
-              page: 1,
-              limit: catalogOverviewLimit,
+              view: "overview",
             })}`,
           );
         }
@@ -525,92 +681,22 @@ export default function ProcessingCatalogBooksPage() {
         );
       }
 
-      const payloads = await Promise.all(requests);
+      const primaryPayloads = await Promise.all(primaryRequests);
       if (requestId !== loadRequestIdRef.current) {
         return;
       }
-      const payloadByScope = new Map(
-        payloads.map(({ scope, payload }) => [scope, payload]),
-      );
-
-      if (payloadByScope.has(LOAD_SCOPE_JOBS)) {
-        setJobs(payloadByScope.get(LOAD_SCOPE_JOBS) || []);
-      }
-
-      if (
-        payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS) ||
-        shouldReuseJobReviewRows
-      ) {
-        setJobReviewRows(
-          (shouldReuseJobReviewRows
-            ? payloadByScope.get(LOAD_SCOPE_JOBS)
-            : payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS)) || [],
+      applyPayloads(primaryPayloads);
+      if (!silent && primaryPayloads.length) {
+        setScopeLoading(
+          new Set(primaryPayloads.map(({ scope }) => scope)),
+          false,
         );
       }
-
-      if (payloadByScope.has(LOAD_SCOPE_SUBMISSIONS)) {
-        setSubmissions(payloadByScope.get(LOAD_SCOPE_SUBMISSIONS) || []);
+      const secondaryPayloads = await Promise.all(secondaryRequests);
+      if (requestId !== loadRequestIdRef.current) {
+        return;
       }
-
-      if (payloadByScope.has(LOAD_SCOPE_REVIEWS)) {
-        setDuplicateReviews(payloadByScope.get(LOAD_SCOPE_REVIEWS) || []);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_CATALOG_BROWSE)) {
-        const catalogPayload =
-          payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE) || null;
-        setCatalogEntries(catalogPayload?.entries || []);
-        setCatalogPagination(
-          catalogPayload?.pagination || defaultCatalogPagination,
-        );
-      }
-
-      if (
-        payloadByScope.has(LOAD_SCOPE_CATALOG_OVERVIEW) ||
-        shouldReuseCatalogOverview
-      ) {
-        const catalogPayload =
-          (shouldReuseCatalogOverview
-            ? payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE)
-            : payloadByScope.get(LOAD_SCOPE_CATALOG_OVERVIEW)) || null;
-        setCatalogOverviewEntries(catalogPayload?.entries || []);
-        setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
-        setCatalogSyncState(catalogPayload?.sync_state || null);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_RUNS)) {
-        setCurationRuns(payloadByScope.get(LOAD_SCOPE_RUNS) || []);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
-        const incompletePayload =
-          payloadByScope.get(LOAD_SCOPE_INCOMPLETE_BROWSE) || null;
-        setIncompleteEntries(incompletePayload?.entries || []);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
-        const incompletePayload =
-          payloadByScope.get(LOAD_SCOPE_INCOMPLETE_OVERVIEW) || null;
-        setIncompleteOverviewEntries(incompletePayload?.entries || []);
-        setIncompleteSummary(
-          incompletePayload?.summary || defaultIncompleteSummary,
-        );
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_AUTOMATION)) {
-        const automationPayload =
-          payloadByScope.get(LOAD_SCOPE_AUTOMATION) || null;
-        setAutomationState(automationPayload);
-        if (
-          !preserveAutomationForm &&
-          automationPayload?.settings &&
-          [AUTOMATION_TAB, INCOMPLETE_TAB].includes(nextTab)
-        ) {
-          setAutomationForm(
-            automationFormFromSettings(automationPayload.settings),
-          );
-        }
-      }
+      applyPayloads(secondaryPayloads);
 
       if (isFullTabLoad) {
         const defaultScopes = new Set(getScopesForTab(nextTab));
@@ -715,48 +801,27 @@ export default function ProcessingCatalogBooksPage() {
   ]);
 
   useEffect(() => {
-    const hasActiveJobs = [...jobs, ...jobReviewRows].some((job) =>
-      isActiveStatus(job.status),
-    );
-    const hasActiveRuns = curationRuns.some((run) =>
-      isActiveStatus(run.status),
-    );
-    const hasActiveCatalogSync =
-      activeTab === SOURCE_TAB && isCatalogSyncActive(catalogSyncState?.status);
-    const hasActiveAutomationRun = isActiveStatus(
-      automationState?.latest_run?.status,
-    );
-    if (
-      !hasActiveJobs &&
-      !hasActiveRuns &&
-      !hasActiveCatalogSync &&
-      !hasActiveAutomationRun &&
-      !hasTrackedCatalogCreations
-    ) {
+    if (!pollingScopes.length) {
       return undefined;
     }
 
     const intervalId = window.setInterval(() => {
-      load({ preserveAutomationForm: true, silent: true }).catch(() => {});
+      load({
+        preserveAutomationForm: true,
+        silent: true,
+        scopes: pollingScopes,
+      }).catch(() => {});
     }, 5000);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, [
-    jobs,
-    jobReviewRows,
-    curationRuns,
-    catalogSyncState,
-    automationState,
-    activeTab,
+    pollingScopes,
     jobFilters,
     submissionFilters,
     catalogFilters,
     runFilters,
-    reviewFilters,
-    incompleteFilters,
-    hasTrackedCatalogCreations,
   ]);
 
   useEffect(() => {
@@ -774,6 +839,8 @@ export default function ProcessingCatalogBooksPage() {
           ...catalogCreationTracker,
           awaitingStart: false,
         });
+      } else {
+        setCatalogCreationTracker(null);
       }
       return;
     }
@@ -892,6 +959,18 @@ export default function ProcessingCatalogBooksPage() {
     await load({ preserveAutomationForm: true, ...options });
   }
 
+  async function reloadProcessingQueues(options = {}) {
+    await reloadScoped(
+      [
+        LOAD_SCOPE_SUBMISSIONS,
+        LOAD_SCOPE_JOBS,
+        LOAD_SCOPE_JOB_REVIEWS,
+        LOAD_SCOPE_REVIEWS,
+      ],
+      options,
+    );
+  }
+
   function buildCatalogCreationTracker(entryIds, mode = "") {
     const entryById = new Map();
     for (const entry of [...catalogOverviewEntries, ...catalogEntries]) {
@@ -954,7 +1033,7 @@ export default function ProcessingCatalogBooksPage() {
         body: {},
       });
       toast.success("Request queued.");
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -977,7 +1056,7 @@ export default function ProcessingCatalogBooksPage() {
       );
       setReviewSubmission(null);
       toast.success("Source selected.");
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -995,7 +1074,7 @@ export default function ProcessingCatalogBooksPage() {
       toast.success(
         decision === "same_book" ? "Marked as same book." : "New book queued.",
       );
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -1024,7 +1103,7 @@ export default function ProcessingCatalogBooksPage() {
           ? `${resolvedCount} duplication requests marked as same book.`
           : `${resolvedCount} duplication requests queued as new books.`,
       );
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -1053,7 +1132,7 @@ export default function ProcessingCatalogBooksPage() {
           skipped_invalid: "skipped",
         }) || "Requests queued.",
       );
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -1072,7 +1151,7 @@ export default function ProcessingCatalogBooksPage() {
         body: {},
       });
       toast.success("Book creation started.");
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -1088,7 +1167,7 @@ export default function ProcessingCatalogBooksPage() {
         body: {},
       });
       toast.success("Book creation stopped.");
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -1106,7 +1185,7 @@ export default function ProcessingCatalogBooksPage() {
         current.filter((id) => id !== submissionId),
       );
       toast.success("Request deleted.");
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -1122,7 +1201,7 @@ export default function ProcessingCatalogBooksPage() {
       });
       setSelectedJobIds((current) => current.filter((id) => id !== jobId));
       toast.success("Book creation deleted.");
-      await reloadCurrent();
+      await reloadProcessingQueues();
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -1188,6 +1267,7 @@ export default function ProcessingCatalogBooksPage() {
       return;
     }
 
+    const actionRequestId = beginCatalogSyncAction();
     const previousSyncState = catalogSyncState ?? catalogSyncVisualState;
     const optimisticSyncState = {
       ...(previousSyncState || {}),
@@ -1209,10 +1289,16 @@ export default function ProcessingCatalogBooksPage() {
         method: "POST",
         body: { max_pages: 80 },
       });
+      if (!isCurrentCatalogSyncAction(actionRequestId)) {
+        return;
+      }
       setCatalogSyncState(payload);
       setCatalogSyncVisualState(payload);
       await reloadCurrent({ silent: true });
     } catch (nextError) {
+      if (!isCurrentCatalogSyncAction(actionRequestId)) {
+        return;
+      }
       setCatalogSyncState(previousSyncState || null);
       setCatalogSyncVisualState(previousSyncState || null);
       toast.error(nextError.message);
@@ -1224,6 +1310,7 @@ export default function ProcessingCatalogBooksPage() {
       return;
     }
 
+    const actionRequestId = beginCatalogSyncAction();
     const previousSyncState = catalogSyncState;
     const previousVisualState = catalogSyncVisualState;
     setStoppingCatalogSync(true);
@@ -1245,17 +1332,25 @@ export default function ProcessingCatalogBooksPage() {
         method: "POST",
         body: {},
       });
+      if (!isCurrentCatalogSyncAction(actionRequestId)) {
+        return;
+      }
       setCatalogSyncState(payload);
       setCatalogSyncVisualState(payload);
       await reloadCurrent({ silent: true });
     } catch (nextError) {
+      if (!isCurrentCatalogSyncAction(actionRequestId)) {
+        return;
+      }
       setCatalogSyncDismissed(false);
       setCatalogSyncState(previousSyncState);
       setCatalogSyncVisualState(previousVisualState);
       toast.error(nextError.message);
       await reloadCurrent({ silent: true }).catch(() => {});
     } finally {
-      setStoppingCatalogSync(false);
+      if (isCurrentCatalogSyncAction(actionRequestId)) {
+        setStoppingCatalogSync(false);
+      }
     }
   }
 
@@ -1312,12 +1407,16 @@ export default function ProcessingCatalogBooksPage() {
           skipped_processing: "busy",
         }) || "Book creation queued.",
       );
-      setCatalogCreationTracker(
-        buildCatalogCreationTracker(
-          creatableEntryIds,
-          rowId ? "row" : (mode || "selected"),
-        ),
-      );
+      if ((payload?.queued_creates || 0) + (payload?.queued_updates || 0) > 0) {
+        setCatalogCreationTracker(
+          buildCatalogCreationTracker(
+            creatableEntryIds,
+            rowId ? "row" : (mode || "selected"),
+          ),
+        );
+      } else {
+        setCatalogCreationTracker(null);
+      }
       setSelectedCatalogEntryIds([]);
       await reloadCurrent();
     } catch (nextError) {
@@ -1386,12 +1485,16 @@ export default function ProcessingCatalogBooksPage() {
           skipped_processing: "busy",
         }) || "Book creation queued.",
       );
-      setCatalogCreationTracker(
-        buildCatalogCreationTracker(
-          creatableEntryIds,
-          rowId ? "row" : (mode || "catalog-status"),
-        ),
-      );
+      if ((payload?.queued_creates || 0) + (payload?.queued_updates || 0) > 0) {
+        setCatalogCreationTracker(
+          buildCatalogCreationTracker(
+            creatableEntryIds,
+            rowId ? "row" : (mode || "catalog-status"),
+          ),
+        );
+      } else {
+        setCatalogCreationTracker(null);
+      }
       clearSelection?.([]);
       await reloadCurrent();
     } catch (nextError) {
@@ -2014,6 +2117,20 @@ export default function ProcessingCatalogBooksPage() {
     const selectedRetryIds = rows
       .filter((submission) => selectedSubmissionIdSet.has(submission.id))
       .map((submission) => submission.id);
+    const hasLocalSubmissionSearchMatch = (nextFilters) => {
+      const query = String(nextFilters?.q || "")
+        .trim()
+        .toLowerCase();
+      if (!query) {
+        return true;
+      }
+
+      return rows.some((submission) =>
+        getRequestPrimaryText(submission.original_input)
+          .toLowerCase()
+          .includes(query),
+      );
+    };
     const showResumeActions =
       actionMode === "default" || actionMode === "stopped";
     const showRetryActions = actionMode === "deleted";
@@ -2039,6 +2156,7 @@ export default function ProcessingCatalogBooksPage() {
         cardClassName={cardClassName}
         loading={submissionsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={
           showControls
             ? renderCardHeaderSearch({
@@ -2059,15 +2177,14 @@ export default function ProcessingCatalogBooksPage() {
                 onSubmit: (event, nextFilters) => {
                   event.preventDefault();
                   setSubmissionFilters(nextFilters);
-                  reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
-                    nextSubmissionFilters: nextFilters,
-                  }).catch(() => {});
+                  if (!hasLocalSubmissionSearchMatch(nextFilters)) {
+                    reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+                      nextSubmissionFilters: nextFilters,
+                    }).catch(() => {});
+                  }
                 },
                 onSearchClear: (nextFilters) => {
                   setSubmissionFilters(nextFilters);
-                  reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
-                    nextSubmissionFilters: nextFilters,
-                  }).catch(() => {});
                 },
                 buttonsDisabled: sourceTabButtonsDisabled,
               })
@@ -2089,18 +2206,19 @@ export default function ProcessingCatalogBooksPage() {
               }
               onSubmit={(event) => {
                 event.preventDefault();
-                reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
-                  nextSubmissionFilters: submissionFilters,
-                }).catch(() => {});
+                if (!hasLocalSubmissionSearchMatch(submissionFilters)) {
+                  reloadScoped([LOAD_SCOPE_SUBMISSIONS], {
+                    nextSubmissionFilters: submissionFilters,
+                  }).catch(() => {});
+                }
               }}
-              onReset={() =>
-                resetWithLoad(
-                  defaultSubmissionFilters,
-                  setSubmissionFilters,
-                  "nextSubmissionFilters",
-                  [LOAD_SCOPE_SUBMISSIONS],
-                )
-              }
+              onReset={() => {
+                setSubmissionFilters(defaultSubmissionFilters);
+                setSubmissionCardFiltersExpanded(
+                  submissionFilterDrawerId,
+                  false,
+                );
+              }}
               searchPlaceholder="Search requests"
               resultCount={rows.length}
               showSearchRow={false}
@@ -2243,30 +2361,34 @@ export default function ProcessingCatalogBooksPage() {
         collapsed={collapsed}
         onToggleCollapsed={onToggleCollapsed}
       >
-        {rows.length ? (
+        {submissionsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedSubmissionIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible request selections"
-                        : "Select all visible requests"
-                    }
-                  />
+                  {submissionsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedSubmissionIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible request selections"
+                          : "Select all visible requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -2276,7 +2398,36 @@ export default function ProcessingCatalogBooksPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((submission) => {
+              {(submissionsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((submissionOrIndex) => {
+                if (submissionsLoading) {
+                  return (
+                    <tr key={`submission-loading-${submissionOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const submission = submissionOrIndex;
                 const latestJob = submission.latest_job || null;
                 const displayStatus = getSubmissionDisplayStatus(
                   submission,
@@ -2378,19 +2529,30 @@ export default function ProcessingCatalogBooksPage() {
                           >
                             {isBusy ? "Queueing..." : "Add Again to Queue"}
                           </button>
-                        ) : [
-                            "failed",
-                            "stopped",
-                            "needs_review",
-                          ].includes(submission.status) ||
-                          latestJob?.status === "failed" ? (
+                        ) : submission.status === "stopped" ||
+                          latestJob?.status === "stopped" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              latestJob?.status === "stopped"
+                                ? resumeJob(latestJob.id)
+                                : retrySubmission(submission.id)
+                            }
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : submission.status === "failed" ||
+                          latestJob?.status === "failed" ||
+                          submission.status === "needs_review" ? (
                           <button
                             type="button"
                             className="ghost-button"
                             onClick={() => retrySubmission(submission.id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Queueing..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : (
                           <span className="table-note">-</span>
@@ -2439,6 +2601,16 @@ export default function ProcessingCatalogBooksPage() {
     const selectedRowIds = rows
       .filter((job) => selectedJobIdSet.has(job.id))
       .map((job) => job.id);
+    const hasLocalJobSearchMatch = (nextFilters) => {
+      const query = String(nextFilters?.q || "")
+        .trim()
+        .toLowerCase();
+      if (!query) {
+        return true;
+      }
+
+      return filterJobsByControls(rows, nextFilters).length > 0;
+    };
     const selectedCountOnPage = rowIdsOnPage.filter((id) =>
       selectedJobIdSet.has(id),
     ).length;
@@ -2452,6 +2624,7 @@ export default function ProcessingCatalogBooksPage() {
         cardClassName={cardClassName}
         loading={jobsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={renderCardHeaderSearch({
           filters: jobFilters,
           setFilters: setJobFilters,
@@ -2466,15 +2639,14 @@ export default function ProcessingCatalogBooksPage() {
           onSubmit: (event, nextFilters) => {
             event.preventDefault();
             setJobFilters(nextFilters);
-            reloadScoped([LOAD_SCOPE_JOBS], {
-              nextJobFilters: nextFilters,
-            }).catch(() => {});
+            if (!hasLocalJobSearchMatch(nextFilters)) {
+              reloadScoped([LOAD_SCOPE_JOBS], {
+                nextJobFilters: nextFilters,
+              }).catch(() => {});
+            }
           },
           onSearchClear: (nextFilters) => {
             setJobFilters(nextFilters);
-            reloadScoped([LOAD_SCOPE_JOBS], {
-              nextJobFilters: nextFilters,
-            }).catch(() => {});
           },
           buttonsDisabled: sourceTabButtonsDisabled,
         })}
@@ -2488,18 +2660,16 @@ export default function ProcessingCatalogBooksPage() {
             setFiltersExpanded={setJobFiltersExpanded}
             onSubmit={(event) => {
               event.preventDefault();
-              reloadScoped([LOAD_SCOPE_JOBS], {
-                nextJobFilters: jobFilters,
-              }).catch(() => {});
+              if (!hasLocalJobSearchMatch(jobFilters)) {
+                reloadScoped([LOAD_SCOPE_JOBS], {
+                  nextJobFilters: jobFilters,
+                }).catch(() => {});
+              }
             }}
-            onReset={() =>
-              resetWithLoad(
-                defaultJobFilters,
-                setJobFilters,
-                "nextJobFilters",
-                [LOAD_SCOPE_JOBS],
-              )
-            }
+            onReset={() => {
+              setJobFilters(defaultJobFilters);
+              setJobFiltersExpanded(false);
+            }}
             searchPlaceholder="Search book creation"
             resultCount={rows.length}
             showSearchRow={false}
@@ -2600,30 +2770,34 @@ export default function ProcessingCatalogBooksPage() {
           </div>
         }
       >
-        {rows.length ? (
+        {jobsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedJobIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible book creation selections"
-                        : "Select all visible book creation rows"
-                    }
-                  />
+                  {jobsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedJobIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible book creation selections"
+                          : "Select all visible book creation rows"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -2633,7 +2807,36 @@ export default function ProcessingCatalogBooksPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((job) => {
+              {(jobsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((jobOrIndex) => {
+                if (jobsLoading) {
+                  return (
+                    <tr key={`job-loading-${jobOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const job = jobOrIndex;
                 const isBusy = busyActionId === job.id;
                 const isDeleting = busyDeleteId === `job:${job.id}`;
                 const isSelected = selectedJobIdSet.has(job.id);
@@ -2704,10 +2907,19 @@ export default function ProcessingCatalogBooksPage() {
                           <button
                             type="button"
                             className="ghost-button"
+                            onClick={() => resumeJob(job.id)}
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : job.status === "failed" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
                             onClick={() => retrySubmission(job.submission_id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Resuming..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : job.target_book_slug ? null : (
                           <span className="table-note">-</span>
@@ -2744,12 +2956,20 @@ export default function ProcessingCatalogBooksPage() {
       return null;
     }
 
+    const selectedDuplicateSubmissionIds = duplicateReviews
+      .filter(
+        (review) =>
+          selectedDuplicateReviewIdSet.has(review.id) && review.submission?.id,
+      )
+      .map((review) => review.submission.id);
+
     return (
       <QueueTableCard
         title={title}
         emptyTitle="No duplicates"
         loading={reviewsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={renderCardHeaderSearch({
           filters: reviewFilters,
           setFilters: setReviewFilters,
@@ -2857,34 +3077,60 @@ export default function ProcessingCatalogBooksPage() {
                   )}
                 </span>
               </button>
+              <button
+                type="button"
+                className="ghost-button danger-button processing-inline-danger"
+                disabled={
+                  !selectedDuplicateSubmissionIds.length ||
+                  bulkActionKey === "submissions:delete" ||
+                  sourceTabButtonsDisabled
+                }
+                onClick={() =>
+                  openDeleteDialog(
+                    "submission-bulk",
+                    selectedDuplicateSubmissionIds,
+                    "Delete selected duplicate requests",
+                    "This will remove the selected duplicate requests.",
+                  )
+                }
+              >
+                {selectedActionLabel(
+                  "Delete selected",
+                  selectedDuplicateSubmissionIds.length,
+                )}
+              </button>
             </div>
           </div>
         }
       >
-        {duplicateReviews.length ? (
+        {reviewsLoading || duplicateReviews.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allDuplicatesSelected}
-                    onChange={() =>
-                      setSelectedDuplicateReviewIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          duplicateIdsOnPage,
-                          allDuplicatesSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allDuplicatesSelected
-                        ? "Clear visible duplicate selections"
-                        : "Select all visible duplication requests"
-                    }
-                  />
+                  {reviewsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allDuplicatesSelected}
+                      onChange={() =>
+                        setSelectedDuplicateReviewIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            duplicateIdsOnPage,
+                            allDuplicatesSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allDuplicatesSelected
+                          ? "Clear visible duplicate selections"
+                          : "Select all visible duplication requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-book">Existing</th>
@@ -2893,62 +3139,112 @@ export default function ProcessingCatalogBooksPage() {
               </tr>
             </thead>
             <tbody>
-              {duplicateReviews.map((review) => (
-                <tr key={review.id}>
-                  <td className="processing-col-select">
-                    <input
-                      type="checkbox"
-                      className="processing-checkbox"
-                      checked={selectedDuplicateReviewIdSet.has(review.id)}
-                      onChange={() =>
-                        setSelectedDuplicateReviewIds((current) =>
-                          toggleSelectedId(current, review.id),
-                        )
-                      }
-                      aria-label={`Select duplicate check ${review.id}`}
-                    />
-                  </td>
-                  <td className="processing-col-request">
-                    <RequestValue value={review.submission?.original_input} />
-                  </td>
-                  <td>
-                    {review.existing_book?.title ||
-                      (review.existing_book_deleted ? "Deleted record" : "-")}
-                  </td>
-                  <td>
-                    <StatusPill value={review.status} />
-                  </td>
-                  <td>
-                    <div className="table-actions">
-                      {!review.existing_book_deleted ? (
+              {(reviewsLoading
+                ? Array.from({ length: 4 }, (_, index) => index)
+                : duplicateReviews
+              ).map((reviewOrIndex) => {
+                if (reviewsLoading) {
+                  return (
+                    <tr key={`duplicate-loading-${reviewOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={3} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const review = reviewOrIndex;
+                const isDeleting =
+                  busyDeleteId === `submission:${review.submission?.id || ""}`;
+
+                return (
+                  <tr key={review.id}>
+                    <td className="processing-col-select">
+                      <input
+                        type="checkbox"
+                        className="processing-checkbox"
+                        checked={selectedDuplicateReviewIdSet.has(review.id)}
+                        onChange={() =>
+                          setSelectedDuplicateReviewIds((current) =>
+                            toggleSelectedId(current, review.id),
+                          )
+                        }
+                        aria-label={`Select duplicate check ${review.id}`}
+                      />
+                    </td>
+                    <td className="processing-col-request">
+                      <RequestValue value={review.submission?.original_input} />
+                    </td>
+                    <td>
+                      {review.existing_book?.title ||
+                        (review.existing_book_deleted ? "Deleted record" : "-")}
+                    </td>
+                    <td>
+                      <StatusPill value={review.status} />
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        {!review.existing_book_deleted ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              resolveDuplicate(review.id, "same_book")
+                            }
+                            disabled={
+                              busyActionId === review.id ||
+                              creationActionsDisabled
+                            }
+                          >
+                            Same Book
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="ghost-button"
-                          onClick={() =>
-                            resolveDuplicate(review.id, "same_book")
-                          }
+                          onClick={() => resolveDuplicate(review.id, "new_book")}
                           disabled={
-                            busyActionId === review.id ||
-                            creationActionsDisabled
+                            busyActionId === review.id || creationActionsDisabled
                           }
                         >
-                          Same Book
+                          New Book
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => resolveDuplicate(review.id, "new_book")}
-                        disabled={
-                          busyActionId === review.id || creationActionsDisabled
-                        }
-                      >
-                        New Book
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        <button
+                          type="button"
+                          className="ghost-button danger-button processing-inline-danger"
+                          onClick={() =>
+                            openDeleteDialog(
+                              "submission-single",
+                              [review.submission?.id],
+                              "Delete duplicate request",
+                              "This duplicate request will be removed.",
+                            )
+                          }
+                          disabled={
+                            !review.submission?.id ||
+                            isDeleting ||
+                            sourceTabButtonsDisabled
+                          }
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : null}
@@ -3209,27 +3505,26 @@ export default function ProcessingCatalogBooksPage() {
           </div>
           {countPill}
         </div>
-        {catalogOverviewLoading ? (
-          renderProcessingCardLoader("Loading catalog overview")
-        ) : (
-          <div className="processing-summary-bar processing-summary-bar--catalog">
-            {[
-              ["Catalog Books", catalogSummary.total],
-              ["Failed", failedJobs.length],
-              ["Duplicate", duplicateReviews.length],
-              ["Processing", processingJobs.length],
-              ["Ready", readySubmissions.length],
-              ["Stopped", stoppedSubmissions.length],
-              ["Queued", queuedSubmissions.length],
-              ["Deleted", deletedSubmissions.length],
-            ].map(([label, value]) => (
-              <article key={label} className="processing-summary-stat">
-                <span className="fact-label">{label}</span>
-                <strong>{value}</strong>
-              </article>
-            ))}
-          </div>
-        )}
+        <div className="processing-summary-bar processing-summary-bar--catalog">
+          {[
+            ["Catalog Books", catalogSummary.total],
+            ["In Bulk", catalogCreationDisplayEntries.length],
+            ["Failed", failedJobs.length],
+            ["Duplicate", duplicateReviews.length],
+            ["Processing", processingJobs.length],
+            ["Ready", readySubmissions.length],
+            ["Stopped", stoppedSubmissions.length],
+            ["Queued", queuedSubmissions.length],
+            ["Deleted", deletedSubmissions.length],
+          ].map(([label, value]) => (
+            <ProcessingSummaryStat
+              key={label}
+              label={label}
+              value={value}
+              loading={catalogOverviewLoading}
+            />
+          ))}
+        </div>
       </section>
     );
   }
@@ -3238,17 +3533,13 @@ export default function ProcessingCatalogBooksPage() {
     const catalogPageCount = catalogPagination.page_count || 1;
     const isFirstCatalogPage = (catalogPagination.page || 1) <= 1;
     const isLastCatalogPage = (catalogPagination.page || 1) >= catalogPageCount;
-    const catalogSyncStatusMessage = stoppingCatalogSync
-      ? "Stopping catalog sync"
-      : refreshingCatalog
-        ? "Syncing catalog"
-        : "Catalog sync idle";
+    const catalogSyncStatusMessage = refreshingCatalog
+      ? "Syncing catalog"
+      : "Catalog sync idle";
     const showCatalogSyncSpinner = stoppingCatalogSync || refreshingCatalog;
-    const catalogSyncControlLabel = stoppingCatalogSync
-      ? "Stopping catalog sync"
-      : refreshingCatalog
-        ? "Stop catalog sync"
-        : "Sync catalog";
+    const catalogSyncControlLabel = refreshingCatalog
+      ? "Stop catalog sync"
+      : "Sync catalog";
     const catalogSyncControlTitle = catalogSyncControlLabel;
 
     return (
@@ -3258,6 +3549,7 @@ export default function ProcessingCatalogBooksPage() {
         cardClassName="processing-catalog-card"
         loading={catalogBrowseLoading}
         loadingLabel="Loading catalog books"
+        replaceOnLoading={false}
         headerAside={
           <CatalogSearchRow
             filters={catalogFilters}
@@ -3511,35 +3803,39 @@ export default function ProcessingCatalogBooksPage() {
           </div>
         }
       >
-        {catalogEntries.length ? (
+        {catalogBrowseLoading || catalogEntries.length ? (
           <table className="simple-table processing-table processing-catalog-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allCatalogSelected}
-                    onChange={() =>
-                      setSelectedCatalogEntryIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          creatableCatalogEntryIdsOnPage,
-                          allCatalogSelected,
-                        ),
-                      )
-                    }
-                    disabled={
-                      !creatableCatalogEntryIdsOnPage.length ||
-                      catalogActionsDisabled ||
-                      catalogCreateControlsDisabled
-                    }
-                    aria-label={
-                      allCatalogSelected
-                        ? "Clear visible catalog selections"
-                        : "Select all visible catalog rows"
-                    }
-                  />
+                  {catalogBrowseLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allCatalogSelected}
+                      onChange={() =>
+                        setSelectedCatalogEntryIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            creatableCatalogEntryIdsOnPage,
+                            allCatalogSelected,
+                          ),
+                        )
+                      }
+                      disabled={
+                        !creatableCatalogEntryIdsOnPage.length ||
+                        catalogActionsDisabled ||
+                        catalogCreateControlsDisabled
+                      }
+                      aria-label={
+                        allCatalogSelected
+                          ? "Clear visible catalog selections"
+                          : "Select all visible catalog rows"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Book</th>
                 <th className="processing-col-category">Categories</th>
@@ -3550,7 +3846,39 @@ export default function ProcessingCatalogBooksPage() {
               </tr>
             </thead>
             <tbody>
-              {catalogEntries.map((entry) => {
+              {(catalogBrowseLoading
+                ? Array.from({ length: 6 }, (_, index) => index)
+                : catalogEntries
+              ).map((entryOrIndex) => {
+                if (catalogBrowseLoading) {
+                  return (
+                    <tr key={`catalog-loading-${entryOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td className="processing-col-category">
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const entry = entryOrIndex;
                 const isSelectable = canCreateCatalogEntry(entry);
                 const isSelected = selectedCatalogIdSet.has(entry.id);
                 const isBusy = busyActionId === entry.id;
@@ -3709,6 +4037,7 @@ export default function ProcessingCatalogBooksPage() {
         emptyTitle={emptyTitle}
         loading={catalogOverviewLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={
           <CatalogSearchRow
             filters={filters}
@@ -3758,27 +4087,31 @@ export default function ProcessingCatalogBooksPage() {
           </div>
         }
       >
-        {hasEntries ? (
+        {catalogOverviewLoading || hasEntries ? (
           <table className="simple-table processing-table processing-catalog-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allSelected}
-                    onChange={onToggleAll}
-                    disabled={
-                      !selectedIdsOnPage.length ||
-                      catalogActionsDisabled ||
-                      catalogCreateControlsDisabled
-                    }
-                    aria-label={
-                      allSelected
-                        ? `Clear visible ${title.toLowerCase()} selections`
-                        : `Select all visible ${title.toLowerCase()} rows`
-                    }
-                  />
+                  {catalogOverviewLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allSelected}
+                      onChange={onToggleAll}
+                      disabled={
+                        !selectedIdsOnPage.length ||
+                        catalogActionsDisabled ||
+                        catalogCreateControlsDisabled
+                      }
+                      aria-label={
+                        allSelected
+                          ? `Clear visible ${title.toLowerCase()} selections`
+                          : `Select all visible ${title.toLowerCase()} rows`
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Book</th>
                 <th className="processing-col-category">Categories</th>
@@ -3788,7 +4121,36 @@ export default function ProcessingCatalogBooksPage() {
               </tr>
             </thead>
             <tbody>
-              {matchingEntries.map((entry) => {
+              {(catalogOverviewLoading
+                ? Array.from({ length: 4 }, (_, index) => index)
+                : matchingEntries
+              ).map((entryOrIndex) => {
+                if (catalogOverviewLoading) {
+                  return (
+                    <tr key={`catalog-status-loading-${entryOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td className="processing-col-category">
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={1} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const entry = entryOrIndex;
                 const isBusy = busyActionId === entry.id;
                 const isTrackedPending = catalogCreationDisplayIdSet.has(
                   entry.id,

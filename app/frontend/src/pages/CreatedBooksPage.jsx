@@ -5,7 +5,12 @@ import BookCard from "../components/BookCard";
 import BookCardSkeleton from "../components/BookCardSkeleton";
 import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
-import { toQueryString } from "../utils/query";
+import PropertyTableControls from "../components/PropertyTableControls";
+import {
+  cleanQueryParams,
+  filtersFromSearchParams,
+  toQueryString,
+} from "../utils/query";
 
 const defaultFilters = {
   q: "",
@@ -16,6 +21,8 @@ const defaultFilters = {
   review_state: "",
   sort: "-requested_at",
   ownership: "mine",
+  page: "1",
+  limit: "10",
 };
 
 const createdBookFilterFields = [
@@ -63,34 +70,42 @@ const createdBookFilterFields = [
   },
 ];
 
-function cleanFilters(nextFilters) {
-  return Object.fromEntries(
-    Object.entries(nextFilters).filter(
-      ([, value]) =>
-        value !== undefined && value !== null && String(value).trim(),
-    ),
-  );
-}
+const defaultPagination = {
+  page: 1,
+  limit: 10,
+  total_count: 0,
+  page_count: 1,
+  has_previous: false,
+  has_next: false,
+};
 
-function filtersFromSearchParams(searchParams) {
-  const nextFilters = { ...defaultFilters };
+function normalizeBookPayload(payload) {
+  if (Array.isArray(payload)) {
+    return {
+      entries: payload,
+      pagination: {
+        ...defaultPagination,
+        total_count: payload.length,
+      },
+    };
+  }
 
-  Object.keys(defaultFilters).forEach((key) => {
-    const value = searchParams.get(key);
-    if (value !== null) {
-      nextFilters[key] = value;
-    }
-  });
-
-  return nextFilters;
+  return {
+    entries: payload?.entries || [],
+    pagination: {
+      ...defaultPagination,
+      ...(payload?.pagination || {}),
+    },
+  };
 }
 
 export default function CreatedBooksPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
   const [filters, setFilters] = useState(() =>
-    filtersFromSearchParams(searchParams),
+    filtersFromSearchParams(defaultFilters, searchParams),
   );
+  const [pagination, setPagination] = useState(defaultPagination);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -101,9 +116,13 @@ export default function CreatedBooksPage() {
       const payload = await apiFetch(
         `/catalog/books/${toQueryString(nextFilters)}`,
       );
-      setBooks(payload);
+      const normalized = normalizeBookPayload(payload);
+      setBooks(normalized.entries);
+      setPagination(normalized.pagination);
       setError("");
     } catch (nextError) {
+      setBooks([]);
+      setPagination(defaultPagination);
       setError(nextError.message);
     } finally {
       setLoading(false);
@@ -111,31 +130,32 @@ export default function CreatedBooksPage() {
   }
 
   useEffect(() => {
-    const nextFilters = filtersFromSearchParams(searchParams);
+    const nextFilters = filtersFromSearchParams(defaultFilters, searchParams);
     setFilters(nextFilters);
     loadBooks(nextFilters);
   }, [searchParams.toString()]);
 
   function applyFilters(event) {
     event.preventDefault();
-    setSearchParams(cleanFilters(filters));
+    setSearchParams(cleanQueryParams({ ...filters, page: "1" }));
   }
 
   function resetFilters() {
     setFilters(defaultFilters);
-    setSearchParams(cleanFilters(defaultFilters));
+    setSearchParams(cleanQueryParams(defaultFilters));
   }
 
   function clearSearch(nextFilters) {
-    setFilters(nextFilters);
-    setSearchParams(cleanFilters(nextFilters));
+    const nextSearchFilters = { ...nextFilters, page: "1" };
+    setFilters(nextSearchFilters);
+    setSearchParams(cleanQueryParams(nextSearchFilters));
   }
 
-  const resultCount = error || loading ? "" : `${books.length}`;
+  const resultCount = error || loading ? "" : `${pagination.total_count}`;
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header catalog-page-header--with-toolbar">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
         <h1 className="created-books-page-title">My Books</h1>
 
         <CatalogToolbar
@@ -153,6 +173,35 @@ export default function CreatedBooksPage() {
           inline
           buttonsLoading={loading}
         />
+
+        <div className="catalog-page-controls-row">
+          <PropertyTableControls
+            rowsPerPage={Number(pagination.limit) || Number(filters.limit) || 10}
+            onRowsPerPageChange={(nextLimit) => {
+              const nextFilters = {
+                ...filters,
+                page: "1",
+                limit: String(nextLimit),
+              };
+              setFilters(nextFilters);
+              setSearchParams(cleanQueryParams(nextFilters));
+            }}
+            page={Number(pagination.page) || 1}
+            pageCount={Number(pagination.page_count) || 1}
+            hasPrevious={Boolean(pagination.has_previous)}
+            hasNext={Boolean(pagination.has_next)}
+            onPageChange={(nextPage) => {
+              const nextFilters = {
+                ...filters,
+                page: String(nextPage),
+                limit: String(pagination.limit || filters.limit || 10),
+              };
+              setFilters(nextFilters);
+              setSearchParams(cleanQueryParams(nextFilters));
+            }}
+            disabled={loading}
+          />
+        </div>
       </header>
 
       {loading ? (

@@ -728,10 +728,11 @@
     justify-content: flex-end;
   }
 
-  .epub-reader-container .epub-contents:not(.close) + .reader-wrapper .wrapper-nav .icon-anchor,
-  .epub-reader-container .epub-contents:not(.close) + .reader-wrapper .wrapper-nav .icon-wrap.right {
-    display: none !important;
-  }
+.epub-reader-container .epub-contents:not(.close) + .reader-wrapper .wrapper-nav .icon-anchor,
+.epub-reader-container .epub-contents:not(.close) + .reader-wrapper .wrapper-nav .icon-wrap.right,
+.epub-reader-container .epub-contents:not(.close) + .reader-wrapper .wrapper-nav .reader-nav-right {
+  display: none !important;
+}
 
   .epub-reader-container .epub-contents:not(.close) + .reader-wrapper .wrapper-nav .iconmulu {
     margin-left: 0;

@@ -31,6 +31,8 @@ import {
   bindDoubleTapToggle,
   createSwipeBinder,
 } from "./utils/gesture-handlers.js";
+import { resolveAppUrl } from "../../../../api/urls.js";
+import { normalizeReaderManifestPayload } from "../../../../features/reader/manifest.js";
 import { LoadingIndicatorController } from "./controllers/loading-indicator-controller.js";
 import { ReaderThemeManager } from "./controllers/theme-manager.js";
 import { ShortcutDialogController } from "./controllers/shortcut-dialog-controller.js";
@@ -205,7 +207,7 @@ export class ReaderApplication {
   getLaunchManifestUrl() {
     try {
       const params = new URLSearchParams(window.location.search);
-      return params.get("manifest") || "";
+      return resolveAppUrl(params.get("manifest") || "");
     } catch {
       return "";
     }
@@ -230,6 +232,9 @@ export class ReaderApplication {
         }
         return response.json();
       })
+      .then((manifest) =>
+        normalizeReaderManifestPayload(manifest, resolveAppUrl),
+      )
       .then((manifest) => {
         if (!manifest?.epub_download_url) {
           throw new Error("Manifest did not provide an EPUB download URL.");
@@ -367,12 +372,6 @@ export class ReaderApplication {
     );
 
     this.cleanupHandlers.push(
-      delegateEvent(document, "click", ".iconcc-close-square", () => {
-        this.closeBook();
-      }),
-    );
-
-    this.cleanupHandlers.push(
       delegateEvent(document, "click", ".iconshezhi", (event) => {
         this.toggleSettingsPanel(event);
       }),
@@ -482,16 +481,21 @@ export class ReaderApplication {
     const sessionId = this.beginReaderSession();
     this.teardownCurrentPublication({ clearViewer: true, clearToc: true });
     this.loadingIndicatorController.show();
-    this.launchManifest = options.launchManifest || this.launchManifest;
+    this.launchManifest = normalizeReaderManifestPayload(
+      options.launchManifest || this.launchManifest,
+      resolveAppUrl,
+    );
+    const normalizedSource =
+      typeof source === "string" ? resolveAppUrl(source) : source;
 
     let nextBook;
     try {
-      nextBook = window.ePub(source, {
+      nextBook = window.ePub(normalizedSource, {
         requestCredentials: true,
       });
     } catch (error) {
       try {
-        nextBook = new window.ePub(source, {
+        nextBook = new window.ePub(normalizedSource, {
           requestCredentials: true,
         });
       } catch (fallbackError) {
@@ -675,7 +679,7 @@ export class ReaderApplication {
   }
 
   queueReadingStateSync(location) {
-    const syncUrl = this.launchManifest?.reading_session_url;
+    const syncUrl = resolveAppUrl(this.launchManifest?.reading_session_url);
     if (!syncUrl) return;
 
     const payload = this.buildReadingStatePayload(location);
@@ -1235,7 +1239,12 @@ export class ReaderApplication {
         width = Math.floor(width || 0);
         height = Math.floor(height || 0);
 
-        if (width > 0 && height > 0) {
+        if (
+          width > 0 &&
+          height > 0 &&
+          typeof this.rendition?.resize === "function" &&
+          this.rendition?.manager
+        ) {
           this.rendition.resize(width, height);
           this.iframeBridgeController.waitForContentReady(() => {
             if (typeof onResized === "function") {

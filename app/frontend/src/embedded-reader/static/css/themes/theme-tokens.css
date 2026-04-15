@@ -1,4 +1,5 @@
-.epub-container {
+body.epub-container,
+.reader-page-fullscreen.epub-container {
   --page-background: #fff;
   --reader-background: #fff;
   --toc-background: #e8e7e7;
@@ -48,7 +49,8 @@
   --scrollbar-thumb-hover: #666;
 }
 
-.epub-container.theme-type-1 {
+body.epub-container.theme-type-1,
+.reader-page-fullscreen.epub-container.theme-type-1 {
   --page-background: #f4eacd;
   --reader-background: #f4eacd;
   --toc-background: #efe3c2;
@@ -98,7 +100,8 @@
   --scrollbar-thumb-hover: #582e04;
 }
 
-.epub-container.theme-type-2 {
+body.epub-container.theme-type-2,
+.reader-page-fullscreen.epub-container.theme-type-2 {
   --page-background: #1b1f2a;
   --reader-background: #1b1f2a;
   --toc-background: #242938;

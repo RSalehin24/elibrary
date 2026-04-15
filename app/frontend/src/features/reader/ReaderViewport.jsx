@@ -148,18 +148,6 @@ export default function ReaderViewport({
                   </span>
                 </button>
               </div>
-              <button
-                type="button"
-                className="icon-wrap icon-control iconcc-close-square"
-                aria-label="Close current book"
-              >
-                <span className="iconfont" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" focusable="false">
-                    <circle cx="12" cy="12" r="8.25" />
-                    <path d="M9.5 9.5l5 5M14.5 9.5l-5 5" />
-                  </svg>
-                </span>
-              </button>
             </div>
           </div>
           <div className="wrapper-main">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../../api/client";
-import { decodeValue, manifestFromLaunchUrl } from "./params";
+import { apiFetch, resolveAppUrl } from "../../api/client";
+import { normalizeReaderManifestPayload, resolveReaderManifestUrl } from "./manifest";
+import { decodeValue } from "./params";
 
 export function useReaderLaunch({
   searchParams,
@@ -21,6 +22,10 @@ export function useReaderLaunch({
     () => decodeValue(manifestParam),
     [manifestParam],
   );
+  const resolvedManifestParam = useMemo(
+    () => resolveAppUrl(decodedManifestParam),
+    [decodedManifestParam],
+  );
 
   useEffect(() => {
     let active = true;
@@ -30,11 +35,31 @@ export function useReaderLaunch({
       setError("");
 
       try {
-        if (decodedManifestParam) {
+        if (resolvedManifestParam) {
+          if (
+            active &&
+            (resolvedManifestParam !== decodedManifestParam || decodedLaunchParam)
+          ) {
+            setSearchParams(
+              (prevParams) => {
+                const nextParams = new URLSearchParams(prevParams);
+                nextParams.set("manifest", resolvedManifestParam);
+                nextParams.delete("launch");
+                if (!nextParams.get("appNav")) {
+                  nextParams.set("appNav", "hidden");
+                }
+                return nextParams;
+              },
+              { replace: true },
+            );
+          }
           return;
         }
 
-        const manifestFromLaunch = manifestFromLaunchUrl(decodedLaunchParam);
+        const manifestFromLaunch = resolveReaderManifestUrl(
+          { launch_url: decodedLaunchParam },
+          resolveAppUrl,
+        );
         if (manifestFromLaunch) {
           if (active) {
             setSearchParams(
@@ -60,8 +85,10 @@ export function useReaderLaunch({
           method: "POST",
           body: {},
         });
-        const manifestUrl =
-          payload.manifest_url || manifestFromLaunchUrl(payload.launch_url);
+        const manifestUrl = resolveReaderManifestUrl(
+          normalizeReaderManifestPayload(payload, resolveAppUrl),
+          resolveAppUrl,
+        );
 
         if (!manifestUrl) {
           throw new Error("Reader manifest is not available for this book yet.");
@@ -101,6 +128,7 @@ export function useReaderLaunch({
   }, [
     decodedLaunchParam,
     decodedManifestParam,
+    resolvedManifestParam,
     setSearchParams,
     slugParam,
     toast,
@@ -111,6 +139,6 @@ export function useReaderLaunch({
     setLoading,
     error,
     setError,
-    decodedManifestParam,
+    decodedManifestParam: resolvedManifestParam,
   };
 }

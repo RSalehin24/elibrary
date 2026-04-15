@@ -184,17 +184,29 @@ export function usePersistentProcessingPageState(
   pageKey,
   field,
   initialValue,
+  options = {},
 ) {
+  const { persist = true } = options;
   const { persistentPageState, setPersistentPageState } = useProcessingActivity();
   const pageState = persistentPageState?.[pageKey] || {};
-  const value =
-    Object.hasOwn(pageState, field) ? pageState[field] : initialValue;
+  const [ephemeralValue, setEphemeralValue] = useState(initialValue);
+  const hasStoredValue = persist && Object.hasOwn(pageState, field);
+  const value = hasStoredValue ? pageState[field] : ephemeralValue;
 
   const setValue = useCallback(
     (nextValue) => {
+      if (!persist) {
+        setEphemeralValue((previousValue) =>
+          typeof nextValue === "function"
+            ? nextValue(previousValue)
+            : nextValue,
+        );
+        return;
+      }
+
       setPersistentPageState(pageKey, field, nextValue);
     },
-    [field, pageKey, setPersistentPageState],
+    [field, pageKey, persist, setPersistentPageState],
   );
 
   return [value, setValue];

@@ -64,7 +64,7 @@ test("small-screen reader keeps side-by-side layout with compact nav controls", 
   );
   assert.match(
     readerCss,
-    /\.epub-contents:not\(\.close\) \+ \.reader-wrapper \.wrapper-nav \.icon-anchor,\s*[\s\S]*\.icon-wrap\.right\s*\{[\s\S]*display:\s*none\s*!important;/
+    /\.epub-contents:not\(\.close\) \+ \.reader-wrapper \.wrapper-nav \.icon-anchor,\s*[\s\S]*\.reader-nav-right\s*\{[\s\S]*display:\s*none\s*!important;/
   );
   assert.match(
     readerCss,

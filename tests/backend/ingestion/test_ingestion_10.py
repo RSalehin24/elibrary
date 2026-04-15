@@ -47,13 +47,23 @@ from apps.ingestion.services.normalization import (
     split_leading_front_sections,
 )
 from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_with_host_fallback
+from apps.ingestion.services.curation import (
+    dispatch_catalog_curation_run,
+    dispatch_source_catalog_refresh,
+)
 from apps.ingestion.services.submissions import (
+    MAX_PROCESSING_JOB_ATTEMPTS,
     create_submission_records,
     detect_metadata_duplicate,
+    dispatch_processing_job,
     find_exact_existing_book,
     process_submission_job,
     queue_submission,
+    recover_stale_processing_jobs,
     sync_assets,
+)
+from apps.ingestion.services.curation_support.source_refresh import (
+    process_source_catalog_refresh,
 )
 from apps.ingestion.tasks import process_submission_task
 from apps.catalog.services import find_existing_book_by_source_url
@@ -280,7 +290,7 @@ def test_queue_submission_falls_back_to_inline_processing_when_celery_dispatch_f
         status=SubmissionStatus.QUEUED,
     )
 
-    def fail_delay(job_id):
+    def fail_apply_async(args=None, task_id=None, **_kwargs):
         raise RuntimeError("Error 111 connecting to redis")
 
     def fake_process(job_id, retry_count=0, task_id=""):
@@ -291,7 +301,7 @@ def test_queue_submission_falls_back_to_inline_processing_when_celery_dispatch_f
         job.submission.save(update_fields=["status", "updated_at"])
         return job
 
-    monkeypatch.setattr("apps.ingestion.tasks.process_submission_task.delay", fail_delay)
+    monkeypatch.setattr("apps.ingestion.tasks.process_submission_task.apply_async", fail_apply_async)
     monkeypatch.setattr("apps.ingestion.services.submissions.process_submission_job", fake_process)
 
     job = queue_submission(submission)
@@ -300,6 +310,84 @@ def test_queue_submission_falls_back_to_inline_processing_when_celery_dispatch_f
     assert "Celery dispatch failed" in job.last_error
     submission.refresh_from_db()
     assert submission.status == SubmissionStatus.READY
+
+
+@pytest.mark.django_db
+def test_queue_submission_inline_fallback_retries_up_to_three_total_attempts(monkeypatch):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/fallback-retry/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/fallback-retry/"),
+        resolved_url="https://www.ebanglalibrary.com/books/fallback-retry/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    attempts = []
+
+    def fail_apply_async(args=None, task_id=None, **_kwargs):
+        raise RuntimeError("Error 111 connecting to redis")
+
+    def fake_process(job_id, retry_count=0, task_id=""):
+        attempts.append(retry_count)
+        job = ProcessingJob.objects.get(pk=job_id)
+        job.retry_count = retry_count
+        if retry_count < MAX_PROCESSING_JOB_ATTEMPTS - 1:
+            job.status = JobStatus.FAILED
+            job.last_error = f"retry-{retry_count}"
+            job.save(update_fields=["retry_count", "status", "last_error", "updated_at"])
+            raise RuntimeError(f"retry-{retry_count}")
+
+        job.status = JobStatus.SUCCEEDED
+        job.save(update_fields=["retry_count", "status", "updated_at"])
+        job.submission.status = SubmissionStatus.READY
+        job.submission.save(update_fields=["status", "updated_at"])
+        return job
+
+    monkeypatch.setattr("apps.ingestion.tasks.process_submission_task.apply_async", fail_apply_async)
+    monkeypatch.setattr("apps.ingestion.services.submissions.process_submission_job", fake_process)
+
+    job = queue_submission(submission)
+
+    assert attempts == [0, 1, 2]
+    assert job.queue_name == "inline-fallback"
+    submission.refresh_from_db()
+    assert submission.status == SubmissionStatus.READY
+
+
+@pytest.mark.django_db
+def test_queue_submission_inline_fallback_stops_after_three_total_attempts(monkeypatch):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/fallback-stop/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/fallback-stop/"),
+        resolved_url="https://www.ebanglalibrary.com/books/fallback-stop/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    attempts = []
+
+    def fail_apply_async(args=None, task_id=None, **_kwargs):
+        raise RuntimeError("Error 111 connecting to redis")
+
+    def fake_process(job_id, retry_count=0, task_id=""):
+        attempts.append(retry_count)
+        job = ProcessingJob.objects.get(pk=job_id)
+        job.retry_count = retry_count
+        job.status = JobStatus.FAILED
+        job.last_error = f"retry-{retry_count}"
+        job.save(update_fields=["retry_count", "status", "last_error", "updated_at"])
+        raise RuntimeError(f"retry-{retry_count}")
+
+    monkeypatch.setattr("apps.ingestion.tasks.process_submission_task.apply_async", fail_apply_async)
+    monkeypatch.setattr("apps.ingestion.services.submissions.process_submission_job", fake_process)
+
+    with pytest.raises(RuntimeError, match="retry-2"):
+        queue_submission(submission)
+
+    assert attempts == [0, 1, 2]
+    job = ProcessingJob.objects.get(submission=submission)
+    assert job.retry_count == 2
+    assert job.status == JobStatus.FAILED
 
 
 @pytest.mark.django_db
@@ -325,3 +413,444 @@ def test_process_submission_task_returns_serializable_job_payload(monkeypatch):
         "status": JobStatus.SUCCEEDED,
     }
     json.dumps(result.result)
+
+
+@pytest.mark.django_db
+def test_process_submission_task_uses_three_total_attempts():
+    assert process_submission_task.max_retries == 2
+
+
+@pytest.mark.django_db
+def test_process_submission_job_requeues_intermediate_failures_without_becoming_terminal(monkeypatch):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/retry-intermediate/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/retry-intermediate/"),
+        resolved_url="https://www.ebanglalibrary.com/books/retry-intermediate/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.QUEUED,
+        task_id="celery-retry-task",
+        queue_name="celery",
+    )
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.capture_source_page_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.find_existing_book_by_source_url",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.scrape_book",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("temporary scrape failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="temporary scrape failure"):
+        process_submission_job(
+            str(job.id),
+            retry_count=1,
+            task_id="celery-retry-task",
+        )
+
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert job.status == JobStatus.QUEUED
+    assert job.retry_count == 2
+    assert job.task_id == "celery-retry-task"
+    assert job.queue_name == "celery"
+    assert "attempt 2 of 3" in job.last_error
+    assert submission.status == SubmissionStatus.QUEUED
+    assert submission.error_message == ""
+
+
+@pytest.mark.django_db
+def test_process_submission_job_marks_last_attempt_as_failed(monkeypatch):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/retry-final/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/retry-final/"),
+        resolved_url="https://www.ebanglalibrary.com/books/retry-final/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.QUEUED,
+        task_id="celery-final-task",
+        queue_name="celery",
+    )
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.capture_source_page_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.find_existing_book_by_source_url",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.scrape_book",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("permanent scrape failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="permanent scrape failure"):
+        process_submission_job(
+            str(job.id),
+            retry_count=MAX_PROCESSING_JOB_ATTEMPTS - 1,
+            task_id="celery-final-task",
+        )
+
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert job.status == JobStatus.FAILED
+    assert job.retry_count == MAX_PROCESSING_JOB_ATTEMPTS - 1
+    assert job.task_id == ""
+    assert job.queue_name == ""
+    assert submission.status == SubmissionStatus.FAILED
+    assert submission.error_message == "permanent scrape failure"
+
+
+@pytest.mark.django_db
+def test_source_catalog_refresh_ignores_stale_task_after_stop(monkeypatch):
+    state = SourceCatalogRefreshState.objects.create(
+        singleton_key="default",
+        status=SourceCatalogRefreshStatus.IDLE,
+        task_id="",
+        queue_name="",
+    )
+
+    def fail_refresh_catalog(*_args, **_kwargs):
+        raise AssertionError("stale source refresh task should not run")
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.curation_support.source_refresh.TitleResolver.refresh_catalog",
+        fail_refresh_catalog,
+    )
+
+    result = process_source_catalog_refresh(task_id="stale-task-id")
+
+    state.refresh_from_db()
+    assert result.id == state.id
+    assert state.status == SourceCatalogRefreshStatus.IDLE
+
+
+@pytest.mark.django_db
+def test_source_catalog_refresh_ignores_completion_after_stop(monkeypatch):
+    SourceCatalogRefreshState.objects.create(
+        singleton_key="default",
+        status=SourceCatalogRefreshStatus.QUEUED,
+        task_id="active-task-id",
+        queue_name="celery",
+    )
+
+    def fake_refresh_catalog(*_args, **_kwargs):
+        state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+        state.status = SourceCatalogRefreshStatus.IDLE
+        state.task_id = ""
+        state.queue_name = ""
+        state.last_error = "Stopped by user."
+        state.finished_at = timezone.now()
+        state.save(update_fields=["status", "task_id", "queue_name", "last_error", "finished_at", "updated_at"])
+        return [{"source_url": "https://www.ebanglalibrary.com/books/new-book/"}]
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.curation_support.source_refresh.TitleResolver.refresh_catalog",
+        fake_refresh_catalog,
+    )
+
+    result = process_source_catalog_refresh(task_id="active-task-id")
+
+    state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+    assert result.id == state.id
+    assert state.status == SourceCatalogRefreshStatus.IDLE
+    assert state.task_id == ""
+    assert state.last_error == "Stopped by user."
+    assert state.refreshed_entries == 0
+
+
+@pytest.mark.django_db
+def test_source_catalog_refresh_ignores_completion_after_replacement(monkeypatch):
+    SourceCatalogRefreshState.objects.create(
+        singleton_key="default",
+        status=SourceCatalogRefreshStatus.QUEUED,
+        task_id="old-task-id",
+        queue_name="celery",
+    )
+
+    def fake_refresh_catalog(*_args, **_kwargs):
+        state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+        state.status = SourceCatalogRefreshStatus.QUEUED
+        state.task_id = "new-task-id"
+        state.queue_name = "celery"
+        state.last_error = ""
+        state.finished_at = None
+        state.save(update_fields=["status", "task_id", "queue_name", "last_error", "finished_at", "updated_at"])
+        return [{"source_url": "https://www.ebanglalibrary.com/books/new-book/"}]
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.curation_support.source_refresh.TitleResolver.refresh_catalog",
+        fake_refresh_catalog,
+    )
+
+    result = process_source_catalog_refresh(task_id="old-task-id")
+
+    state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+    assert result.id == state.id
+    assert state.status == SourceCatalogRefreshStatus.QUEUED
+    assert state.task_id == "new-task-id"
+    assert state.queue_name == "celery"
+    assert state.refreshed_entries == 0
+
+
+@pytest.mark.django_db
+def test_source_catalog_refresh_ignores_failure_after_replacement(monkeypatch):
+    SourceCatalogRefreshState.objects.create(
+        singleton_key="default",
+        status=SourceCatalogRefreshStatus.QUEUED,
+        task_id="old-task-id",
+        queue_name="celery",
+    )
+
+    def fail_refresh_catalog(*_args, **_kwargs):
+        state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+        state.status = SourceCatalogRefreshStatus.QUEUED
+        state.task_id = "new-task-id"
+        state.queue_name = "celery"
+        state.last_error = ""
+        state.finished_at = None
+        state.save(update_fields=["status", "task_id", "queue_name", "last_error", "finished_at", "updated_at"])
+        raise RuntimeError("old refresh failed after replacement")
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.curation_support.source_refresh.TitleResolver.refresh_catalog",
+        fail_refresh_catalog,
+    )
+
+    result = process_source_catalog_refresh(task_id="old-task-id")
+
+    state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+    assert result.id == state.id
+    assert state.status == SourceCatalogRefreshStatus.QUEUED
+    assert state.task_id == "new-task-id"
+    assert state.queue_name == "celery"
+    assert state.last_error == ""
+
+
+@pytest.mark.django_db
+def test_dispatch_processing_job_returns_failed_job_after_eager_execution_error(monkeypatch, settings):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/eager-job/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/eager-job/"),
+        resolved_url="https://www.ebanglalibrary.com/books/eager-job/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.QUEUED,
+    )
+    job = ProcessingJob.objects.create(submission=submission, status=JobStatus.QUEUED)
+
+    def fake_apply_async(args=None, task_id=None, **_kwargs):
+        eager_job = ProcessingJob.objects.get(pk=args[0])
+        eager_job.status = JobStatus.FAILED
+        eager_job.task_id = task_id
+        eager_job.queue_name = "celery"
+        eager_job.last_error = "eager-job-failure"
+        eager_job.finished_at = timezone.now()
+        eager_job.save(update_fields=["status", "task_id", "queue_name", "last_error", "finished_at", "updated_at"])
+        eager_job.submission.status = SubmissionStatus.FAILED
+        eager_job.submission.error_message = "eager-job-failure"
+        eager_job.submission.save(update_fields=["status", "error_message", "updated_at"])
+        raise RuntimeError("eager-job-failure")
+
+    monkeypatch.setattr("apps.ingestion.tasks.process_submission_task.apply_async", fake_apply_async)
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.process_submission_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("inline fallback should not rerun eager job failures")),
+    )
+
+    result = dispatch_processing_job(job)
+
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert result.id == job.id
+    assert job.status == JobStatus.FAILED
+    assert job.queue_name == "celery"
+    assert job.task_id
+    assert submission.status == SubmissionStatus.FAILED
+
+
+@pytest.mark.django_db
+def test_dispatch_source_catalog_refresh_returns_failed_state_after_eager_execution_error(monkeypatch, settings):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    state = SourceCatalogRefreshState.objects.create(
+        singleton_key="default",
+        status=SourceCatalogRefreshStatus.QUEUED,
+        task_id="",
+        queue_name="",
+    )
+
+    def fake_apply_async(*_args, task_id=None, **_kwargs):
+        refresh_state = SourceCatalogRefreshState.objects.get(singleton_key="default")
+        refresh_state.status = SourceCatalogRefreshStatus.FAILED
+        refresh_state.task_id = task_id or refresh_state.task_id
+        refresh_state.queue_name = "celery"
+        refresh_state.last_error = "eager-refresh-failure"
+        refresh_state.finished_at = timezone.now()
+        refresh_state.save(update_fields=["status", "task_id", "queue_name", "last_error", "finished_at", "updated_at"])
+        raise RuntimeError("eager-refresh-failure")
+
+    monkeypatch.setattr("apps.ingestion.tasks.refresh_source_catalog_task.apply_async", fake_apply_async)
+    monkeypatch.setattr(
+        "apps.ingestion.services.curation.process_source_catalog_refresh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("inline fallback should not rerun eager refresh failures")),
+    )
+
+    result = dispatch_source_catalog_refresh(state)
+
+    state.refresh_from_db()
+    assert result.id == state.id
+    assert state.status == SourceCatalogRefreshStatus.FAILED
+    assert state.queue_name == "celery"
+    assert state.task_id
+
+
+@pytest.mark.django_db
+def test_dispatch_catalog_curation_run_returns_failed_run_after_eager_execution_error(monkeypatch, settings):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    run = CatalogCurationRun.objects.create(status=JobStatus.QUEUED)
+
+    def fake_apply_async(args=None, task_id=None, **_kwargs):
+        eager_run = CatalogCurationRun.objects.get(pk=args[0])
+        eager_run.status = JobStatus.FAILED
+        eager_run.task_id = task_id or eager_run.task_id
+        eager_run.queue_name = "celery"
+        eager_run.last_error = "eager-run-failure"
+        eager_run.finished_at = timezone.now()
+        eager_run.save(update_fields=["status", "task_id", "queue_name", "last_error", "finished_at", "updated_at"])
+        raise RuntimeError("eager-run-failure")
+
+    monkeypatch.setattr("apps.ingestion.tasks.process_catalog_curation_run_task.apply_async", fake_apply_async)
+    monkeypatch.setattr(
+        "apps.ingestion.services.curation.process_catalog_curation_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("inline fallback should not rerun eager curation failures")),
+    )
+
+    result = dispatch_catalog_curation_run(run)
+
+    run.refresh_from_db()
+    assert result.id == run.id
+    assert run.status == JobStatus.FAILED
+    assert run.queue_name == "celery"
+    assert run.task_id
+
+
+@pytest.mark.django_db
+def test_recover_stale_processing_jobs_requeues_stale_processing_work(monkeypatch):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/stale-processing/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/stale-processing/"),
+        resolved_url="https://www.ebanglalibrary.com/books/stale-processing/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.PROCESSING,
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.PROCESSING,
+        retry_count=0,
+        task_id="stale-task-id",
+        queue_name="celery",
+        started_at=timezone.now() - timedelta(minutes=45),
+    )
+    revoked = []
+    dispatched = []
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.revoke_processing_task",
+        lambda task_id, terminate=False: revoked.append((task_id, terminate)),
+    )
+
+    def fake_apply_async(args=None, kwargs=None, task_id=None, **_extra_kwargs):
+        dispatched.append(
+            {
+                "args": args,
+                "kwargs": kwargs,
+                "task_id": task_id,
+            }
+        )
+        return type("AsyncResult", (), {"id": task_id})()
+
+    monkeypatch.setattr(
+        "apps.ingestion.tasks.process_submission_task.apply_async",
+        fake_apply_async,
+    )
+
+    recovered = recover_stale_processing_jobs(limit=10)
+
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert recovered == 1
+    assert revoked == [("stale-task-id", True)]
+    assert dispatched == [
+        {
+            "args": [str(job.id)],
+            "kwargs": {"attempt_offset": 1},
+            "task_id": job.task_id,
+        }
+    ]
+    assert job.status == JobStatus.QUEUED
+    assert job.retry_count == 1
+    assert job.queue_name == "celery"
+    assert job.task_id
+    assert job.last_error
+    assert submission.status == SubmissionStatus.QUEUED
+    assert submission.error_message == ""
+
+
+@pytest.mark.django_db
+def test_recover_stale_processing_jobs_fails_exhausted_processing_work(monkeypatch):
+    submission = BookSubmission.objects.create(
+        input_type="url",
+        original_input="https://www.ebanglalibrary.com/books/stale-processing-final/",
+        normalized_input=normalize_text("https://www.ebanglalibrary.com/books/stale-processing-final/"),
+        resolved_url="https://www.ebanglalibrary.com/books/stale-processing-final/",
+        resolution_status=ResolutionStatus.RESOLVED,
+        status=SubmissionStatus.PROCESSING,
+    )
+    job = ProcessingJob.objects.create(
+        submission=submission,
+        status=JobStatus.PROCESSING,
+        retry_count=MAX_PROCESSING_JOB_ATTEMPTS - 1,
+        task_id="stale-final-task-id",
+        queue_name="celery",
+        started_at=timezone.now() - timedelta(minutes=45),
+    )
+    revoked = []
+
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.revoke_processing_task",
+        lambda task_id, terminate=False: revoked.append((task_id, terminate)),
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.tasks.process_submission_task.apply_async",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exhausted stale jobs must not be re-dispatched")
+        ),
+    )
+
+    recovered = recover_stale_processing_jobs(limit=10)
+
+    job.refresh_from_db()
+    submission.refresh_from_db()
+    assert recovered == 0
+    assert revoked == [("stale-final-task-id", True)]
+    assert job.status == JobStatus.FAILED
+    assert job.task_id == ""
+    assert job.queue_name == ""
+    assert submission.status == SubmissionStatus.FAILED
+    assert submission.error_message == job.last_error

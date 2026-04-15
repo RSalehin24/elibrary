@@ -1,14 +1,13 @@
 from rest_framework import serializers
 
-from apps.catalog.serializers import BookListSerializer
 from apps.ingestion.models import DuplicateReview, ProcessingLog
 
-from .submissions import SubmissionSerializer
+from .submissions import ProcessingBookSummarySerializer, SubmissionSerializer
 
 
 class DuplicateReviewSerializer(serializers.ModelSerializer):
     submission = SubmissionSerializer(read_only=True)
-    existing_book = BookListSerializer(read_only=True)
+    existing_book = ProcessingBookSummarySerializer(read_only=True)
     existing_book_deleted = serializers.SerializerMethodField()
 
     class Meta:

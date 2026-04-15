@@ -16,7 +16,9 @@ export function manifestFromLaunchUrl(launchUrlValue) {
   }
 
   try {
-    const parsed = new URL(launchUrlValue, window.location.origin);
+    const baseOrigin =
+      typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    const parsed = new URL(launchUrlValue, baseOrigin);
     const manifest = parsed.searchParams.get("manifest") || "";
     return manifest ? decodeValue(manifest) : "";
   } catch {

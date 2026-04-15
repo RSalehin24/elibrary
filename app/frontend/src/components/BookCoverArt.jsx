@@ -16,6 +16,8 @@ export default function BookCoverArt({ book, className = "", ariaHidden = false 
           className="book-cover-image"
           src={coverUrl}
           alt={ariaHidden ? "" : `${book.title} cover`}
+          loading="lazy"
+          decoding="async"
           onError={() => setImageError(true)}
         />
       </div>

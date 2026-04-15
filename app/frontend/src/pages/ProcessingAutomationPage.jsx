@@ -59,7 +59,6 @@ import {
   getUniqueSubmissionIds,
   isActiveStatus,
   isCatalogSyncActive,
-  isDefaultCatalogBrowseRequest,
   isDefaultJobRequest,
   isResumableJob,
   jobTypeLabel,
@@ -77,10 +76,14 @@ import {
 import {
   BookLinkCell,
   InlineErrorCell,
+  ProcessingControlSkeleton,
+  ProcessingSummaryStat,
+  ProcessingTableSkeletonActions,
+  ProcessingTableSkeletonCheckbox,
+  ProcessingTableSkeletonStack,
   ProcessingErrorDisclosure,
   QueueTableCard,
   RequestValue,
-  renderProcessingCardLoader,
 } from "../features/processing/components/ProcessingScaffold";
 import {
   usePersistentProcessingPageState,
@@ -180,33 +183,39 @@ export default function ProcessingAutomationPage() {
     "processing-automation",
     "savingAutomation",
     false,
+    { persist: false },
   );
   const [busyActionId, setBusyActionId] = usePersistentProcessingPageState(
     "processing-automation",
     "busyActionId",
     "",
+    { persist: false },
   );
   const [busyRunId, setBusyRunId] = usePersistentProcessingPageState(
     "processing-automation",
     "busyRunId",
     "",
+    { persist: false },
   );
   const [busyDeleteId, setBusyDeleteId] = usePersistentProcessingPageState(
     "processing-automation",
     "busyDeleteId",
     "",
+    { persist: false },
   );
   const [activeRequeueJobId, setActiveRequeueJobId] = useState("");
   const [bulkActionKey, setBulkActionKey] = usePersistentProcessingPageState(
     "processing-automation",
     "bulkActionKey",
     "",
+    { persist: false },
   );
   const [confirmState, setConfirmState] = useState(null);
   const [confirmLoading, setConfirmLoading] = usePersistentProcessingPageState(
     "processing-automation",
     "confirmLoading",
     false,
+    { persist: false },
   );
   const [queuedCardExpanded, setQueuedCardExpanded] = useState(false);
   const [stoppedCardExpanded, setStoppedCardExpanded] = useState(false);
@@ -236,6 +245,42 @@ export default function ProcessingAutomationPage() {
   );
   const sourceTabButtonsDisabled = globalActionsLocked;
   const creationActionsDisabled = globalActionsLocked;
+  const hasActiveJobs = useMemo(
+    () => [...jobs, ...jobReviewRows].some((job) => isActiveStatus(job.status)),
+    [jobs, jobReviewRows],
+  );
+  const hasActiveRuns = useMemo(
+    () => curationRuns.some((run) => isActiveStatus(run.status)),
+    [curationRuns],
+  );
+  const hasActiveAutomationRun = useMemo(
+    () => isActiveStatus(automationState?.latest_run?.status),
+    [automationState?.latest_run?.status],
+  );
+  const pollingScopes = useMemo(() => {
+    const scopes = [];
+
+    if (hasActiveJobs || hasActiveRuns || hasActiveAutomationRun) {
+      scopes.push(
+        LOAD_SCOPE_SUBMISSIONS,
+        LOAD_SCOPE_JOBS,
+        LOAD_SCOPE_JOB_REVIEWS,
+      );
+    }
+    if (canManageProcessing && hasActiveRuns) {
+      scopes.push(LOAD_SCOPE_RUNS);
+    }
+    if (canManageProcessing && hasActiveAutomationRun) {
+      scopes.push(LOAD_SCOPE_AUTOMATION);
+    }
+
+    return scopes;
+  }, [
+    canManageProcessing,
+    hasActiveAutomationRun,
+    hasActiveJobs,
+    hasActiveRuns,
+  ]);
 
   function getScopesForTab() {
     return defaultScopes;
@@ -305,10 +350,7 @@ export default function ProcessingAutomationPage() {
         scopes.has(LOAD_SCOPE_JOBS) &&
         scopes.has(LOAD_SCOPE_JOB_REVIEWS) &&
         isDefaultJobRequest(nextJobFilters);
-      const shouldReuseCatalogOverview =
-        scopes.has(LOAD_SCOPE_CATALOG_BROWSE) &&
-        scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW) &&
-        isDefaultCatalogBrowseRequest(nextCatalogFilters);
+      const shouldReuseCatalogOverview = false;
       const queueScopeRequest = (scope, url) => {
         requests.push(
           apiFetch(url).then((payload) => ({
@@ -362,6 +404,8 @@ export default function ProcessingAutomationPage() {
           `/ingestion/catalog/entries/${toQueryString({
             ...nextCatalogFilters,
             limit: Number(nextCatalogFilters.limit) || 180,
+            include_summary: "0",
+            include_sync_state: "0",
           })}`,
         );
       }
@@ -371,9 +415,7 @@ export default function ProcessingAutomationPage() {
           queueScopeRequest(
             LOAD_SCOPE_CATALOG_OVERVIEW,
             `/ingestion/catalog/entries/${toQueryString({
-              ...defaultCatalogFilters,
-              page: 1,
-              limit: defaultCatalogFilters.limit,
+              view: "overview",
             })}`,
           );
         }
@@ -559,46 +601,26 @@ export default function ProcessingAutomationPage() {
   }, [user?.id, canManageProcessing, activeTab]);
 
   useEffect(() => {
-    const hasActiveJobs = [...jobs, ...jobReviewRows].some((job) =>
-      isActiveStatus(job.status),
-    );
-    const hasActiveRuns = curationRuns.some((run) =>
-      isActiveStatus(run.status),
-    );
-    const hasActiveCatalogSync =
-      activeTab === SOURCE_TAB && isCatalogSyncActive(catalogSyncState?.status);
-    const hasActiveAutomationRun = isActiveStatus(
-      automationState?.latest_run?.status,
-    );
-    if (
-      !hasActiveJobs &&
-      !hasActiveRuns &&
-      !hasActiveCatalogSync &&
-      !hasActiveAutomationRun
-    ) {
+    if (!pollingScopes.length) {
       return undefined;
     }
 
     const intervalId = window.setInterval(() => {
-      load({ preserveAutomationForm: true, silent: true }).catch(() => {});
+      load({
+        preserveAutomationForm: true,
+        silent: true,
+        scopes: pollingScopes,
+      }).catch(() => {});
     }, 5000);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, [
-    jobs,
-    jobReviewRows,
-    curationRuns,
-    catalogSyncState,
-    automationState,
-    activeTab,
+    pollingScopes,
     jobFilters,
     submissionFilters,
-    catalogFilters,
     runFilters,
-    reviewFilters,
-    incompleteFilters,
   ]);
 
   useEffect(() => {
@@ -1393,27 +1415,25 @@ export default function ProcessingAutomationPage() {
           </div>
           {countPill}
         </div>
-        {submissionsLoading ? (
-          renderProcessingCardLoader("Loading automation overview")
-        ) : (
-          <div className="processing-summary-bar processing-summary-bar--automation">
-            {[
-              ["Automation Requests", requestSubmissions.length],
-              ["Failed", failedJobs.length],
-              ["Duplicate", duplicateReviews.length],
-              ["Processing", processingJobs.length],
-              ["Ready", readySubmissions.length],
-              ["Stopped", stoppedSubmissions.length],
-              ["Queued", queuedSubmissions.length],
-              ["Deleted", deletedSubmissions.length],
-            ].map(([label, value]) => (
-              <article key={label} className="processing-summary-stat">
-                <span className="fact-label">{label}</span>
-                <strong>{value}</strong>
-              </article>
-            ))}
-          </div>
-        )}
+        <div className="processing-summary-bar processing-summary-bar--automation">
+          {[
+            ["Automation Requests", requestSubmissions.length],
+            ["Failed", failedJobs.length],
+            ["Duplicate", duplicateReviews.length],
+            ["Processing", processingJobs.length],
+            ["Ready", readySubmissions.length],
+            ["Stopped", stoppedSubmissions.length],
+            ["Queued", queuedSubmissions.length],
+            ["Deleted", deletedSubmissions.length],
+          ].map(([label, value]) => (
+            <ProcessingSummaryStat
+              key={label}
+              label={label}
+              value={value}
+              loading={submissionsLoading}
+            />
+          ))}
+        </div>
       </section>
     );
   }
@@ -1488,6 +1508,7 @@ export default function ProcessingAutomationPage() {
         cardClassName={cardClassName}
         loading={submissionsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={
           showControls
             ? renderCardHeaderSearch({
@@ -1692,30 +1713,34 @@ export default function ProcessingAutomationPage() {
         collapsed={collapsed}
         onToggleCollapsed={onToggleCollapsed}
       >
-        {rows.length ? (
+        {submissionsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedSubmissionIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible request selections"
-                        : "Select all visible requests"
-                    }
-                  />
+                  {submissionsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedSubmissionIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible request selections"
+                          : "Select all visible requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -1725,7 +1750,36 @@ export default function ProcessingAutomationPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((submission) => {
+              {(submissionsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((submissionOrIndex) => {
+                if (submissionsLoading) {
+                  return (
+                    <tr key={`submission-loading-${submissionOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const submission = submissionOrIndex;
                 const latestJob = submission.latest_job || null;
                 const displayStatus = getSubmissionDisplayStatus(
                   submission,
@@ -1827,19 +1881,30 @@ export default function ProcessingAutomationPage() {
                           >
                             {isBusy ? "Queueing..." : "Add Again to Queue"}
                           </button>
-                        ) : [
-                            "failed",
-                            "stopped",
-                            "needs_review",
-                          ].includes(submission.status) ||
-                          latestJob?.status === "failed" ? (
+                        ) : submission.status === "stopped" ||
+                          latestJob?.status === "stopped" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              latestJob?.status === "stopped"
+                                ? resumeJob(latestJob.id)
+                                : retrySubmission(submission.id)
+                            }
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : submission.status === "failed" ||
+                          latestJob?.status === "failed" ||
+                          submission.status === "needs_review" ? (
                           <button
                             type="button"
                             className="ghost-button"
                             onClick={() => retrySubmission(submission.id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Queueing..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : (
                           <span className="table-note">-</span>
@@ -1901,6 +1966,7 @@ export default function ProcessingAutomationPage() {
         cardClassName={cardClassName}
         loading={jobsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={renderCardHeaderSearch({
           filters: jobFilters,
           setFilters: setJobFilters,
@@ -2049,30 +2115,34 @@ export default function ProcessingAutomationPage() {
           </div>
         }
       >
-        {rows.length ? (
+        {jobsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedJobIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible book creation selections"
-                        : "Select all visible book creation rows"
-                    }
-                  />
+                  {jobsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedJobIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible book creation selections"
+                          : "Select all visible book creation rows"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -2082,7 +2152,36 @@ export default function ProcessingAutomationPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((job) => {
+              {(jobsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((jobOrIndex) => {
+                if (jobsLoading) {
+                  return (
+                    <tr key={`job-loading-${jobOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const job = jobOrIndex;
                 const isBusy = busyActionId === job.id;
                 const isDeleting = busyDeleteId === `job:${job.id}`;
                 const isSelected = selectedJobIdSet.has(job.id);
@@ -2153,10 +2252,19 @@ export default function ProcessingAutomationPage() {
                           <button
                             type="button"
                             className="ghost-button"
+                            onClick={() => resumeJob(job.id)}
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : job.status === "failed" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
                             onClick={() => retrySubmission(job.submission_id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Resuming..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : job.target_book_slug ? null : (
                           <span className="table-note">-</span>
@@ -2193,12 +2301,20 @@ export default function ProcessingAutomationPage() {
       return null;
     }
 
+    const selectedDuplicateSubmissionIds = duplicateReviews
+      .filter(
+        (review) =>
+          selectedDuplicateReviewIdSet.has(review.id) && review.submission?.id,
+      )
+      .map((review) => review.submission.id);
+
     return (
       <QueueTableCard
         title={title}
         emptyTitle="No duplicates"
         loading={reviewsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={renderCardHeaderSearch({
           filters: reviewFilters,
           setFilters: setReviewFilters,
@@ -2306,34 +2422,60 @@ export default function ProcessingAutomationPage() {
                   )}
                 </span>
               </button>
+              <button
+                type="button"
+                className="ghost-button danger-button processing-inline-danger"
+                disabled={
+                  !selectedDuplicateSubmissionIds.length ||
+                  bulkActionKey === "submissions:delete" ||
+                  sourceTabButtonsDisabled
+                }
+                onClick={() =>
+                  openDeleteDialog(
+                    "submission-bulk",
+                    selectedDuplicateSubmissionIds,
+                    "Delete selected duplicate requests",
+                    "This will remove the selected duplicate requests.",
+                  )
+                }
+              >
+                {selectedActionLabel(
+                  "Delete selected",
+                  selectedDuplicateSubmissionIds.length,
+                )}
+              </button>
             </div>
           </div>
         }
       >
-        {duplicateReviews.length ? (
+        {reviewsLoading || duplicateReviews.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allDuplicatesSelected}
-                    onChange={() =>
-                      setSelectedDuplicateReviewIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          duplicateIdsOnPage,
-                          allDuplicatesSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allDuplicatesSelected
-                        ? "Clear visible duplicate selections"
-                        : "Select all visible duplication requests"
-                    }
-                  />
+                  {reviewsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allDuplicatesSelected}
+                      onChange={() =>
+                        setSelectedDuplicateReviewIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            duplicateIdsOnPage,
+                            allDuplicatesSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allDuplicatesSelected
+                          ? "Clear visible duplicate selections"
+                          : "Select all visible duplication requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-book">Existing</th>
@@ -2342,62 +2484,112 @@ export default function ProcessingAutomationPage() {
               </tr>
             </thead>
             <tbody>
-              {duplicateReviews.map((review) => (
-                <tr key={review.id}>
-                  <td className="processing-col-select">
-                    <input
-                      type="checkbox"
-                      className="processing-checkbox"
-                      checked={selectedDuplicateReviewIdSet.has(review.id)}
-                      onChange={() =>
-                        setSelectedDuplicateReviewIds((current) =>
-                          toggleSelectedId(current, review.id),
-                        )
-                      }
-                      aria-label={`Select duplicate check ${review.id}`}
-                    />
-                  </td>
-                  <td className="processing-col-request">
-                    <RequestValue value={review.submission?.original_input} />
-                  </td>
-                  <td>
-                    {review.existing_book?.title ||
-                      (review.existing_book_deleted ? "Deleted record" : "-")}
-                  </td>
-                  <td>
-                    <StatusPill value={review.status} />
-                  </td>
-                  <td>
-                    <div className="table-actions">
-                      {!review.existing_book_deleted ? (
+              {(reviewsLoading
+                ? Array.from({ length: 4 }, (_, index) => index)
+                : duplicateReviews
+              ).map((reviewOrIndex) => {
+                if (reviewsLoading) {
+                  return (
+                    <tr key={`duplicate-loading-${reviewOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={3} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const review = reviewOrIndex;
+                const isDeleting =
+                  busyDeleteId === `submission:${review.submission?.id || ""}`;
+
+                return (
+                  <tr key={review.id}>
+                    <td className="processing-col-select">
+                      <input
+                        type="checkbox"
+                        className="processing-checkbox"
+                        checked={selectedDuplicateReviewIdSet.has(review.id)}
+                        onChange={() =>
+                          setSelectedDuplicateReviewIds((current) =>
+                            toggleSelectedId(current, review.id),
+                          )
+                        }
+                        aria-label={`Select duplicate check ${review.id}`}
+                      />
+                    </td>
+                    <td className="processing-col-request">
+                      <RequestValue value={review.submission?.original_input} />
+                    </td>
+                    <td>
+                      {review.existing_book?.title ||
+                        (review.existing_book_deleted ? "Deleted record" : "-")}
+                    </td>
+                    <td>
+                      <StatusPill value={review.status} />
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        {!review.existing_book_deleted ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              resolveDuplicate(review.id, "same_book")
+                            }
+                            disabled={
+                              busyActionId === review.id ||
+                              creationActionsDisabled
+                            }
+                          >
+                            Same Book
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="ghost-button"
-                          onClick={() =>
-                            resolveDuplicate(review.id, "same_book")
-                          }
+                          onClick={() => resolveDuplicate(review.id, "new_book")}
                           disabled={
-                            busyActionId === review.id ||
-                            creationActionsDisabled
+                            busyActionId === review.id || creationActionsDisabled
                           }
                         >
-                          Same Book
+                          New Book
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => resolveDuplicate(review.id, "new_book")}
-                        disabled={
-                          busyActionId === review.id || creationActionsDisabled
-                        }
-                      >
-                        New Book
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        <button
+                          type="button"
+                          className="ghost-button danger-button processing-inline-danger"
+                          onClick={() =>
+                            openDeleteDialog(
+                              "submission-single",
+                              [review.submission?.id],
+                              "Delete duplicate request",
+                              "This duplicate request will be removed.",
+                            )
+                          }
+                          disabled={
+                            !review.submission?.id ||
+                            isDeleting ||
+                            sourceTabButtonsDisabled
+                          }
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : null}
@@ -2898,7 +3090,9 @@ export default function ProcessingAutomationPage() {
           </div>
           <div className="processing-card-head-meta">
             {nextRunContent}
-            {!automationLoading ? (
+            {automationLoading ? (
+              <ProcessingControlSkeleton className="processing-switch-skeleton" />
+            ) : (
               <label
                 className="processing-switch"
                 title={
@@ -2929,12 +3123,33 @@ export default function ProcessingAutomationPage() {
                   <span className="processing-switch-thumb" />
                 </span>
               </label>
-            ) : null}
+            )}
           </div>
         </div>
         <div className="processing-automation-body">
           {automationLoading ? (
-            renderProcessingCardLoader("Loading automation settings")
+            <div
+              className="stack-form processing-automation-form"
+              role="status"
+              aria-live="polite"
+              aria-label="Loading automation settings"
+            >
+              <div className="detail-facts processing-automation-grid">
+                {["Time", "Frequency", "Mode", "Refresh Pages"].map((label) => (
+                  <div
+                    key={label}
+                    className="processing-form-field-skeleton"
+                    aria-hidden="true"
+                  >
+                    <span className="fact-label">{label}</span>
+                    <ProcessingControlSkeleton />
+                  </div>
+                ))}
+              </div>
+              <div className="processing-card-actions processing-automation-save-actions">
+                <ProcessingControlSkeleton className="processing-control-skeleton-button" />
+              </div>
+            </div>
           ) : (
             <form
               className="stack-form processing-automation-form"

@@ -1,5 +1,7 @@
 import logging
+from uuid import uuid4
 
+from django.conf import settings
 from django.utils import timezone
 
 from apps.ingestion.models import (
@@ -14,13 +16,15 @@ from apps.ingestion.models import (
 from apps.ingestion.services.curation_support.catalog_entries import (
     build_catalog_curation_run_summary,
     inspect_source_catalog_entry as support_inspect_source_catalog_entry,
+    iter_source_catalog_entry_inspections,
     serialize_source_catalog_entry_inspection as support_serialize_source_catalog_entry_inspection,
     should_create_missing_book,
     should_retry_failed_entry,
     should_update_existing_book,
-    source_catalog_book_source_map,
+    source_catalog_book_source_map as support_source_catalog_book_source_map,
     source_catalog_entry_snapshots as support_source_catalog_entry_snapshots,
-    source_catalog_submission_map,
+    source_catalog_entry_overview as support_source_catalog_entry_overview,
+    source_catalog_submission_map as support_source_catalog_submission_map,
     submission_origin_for_run,
     summarize_source_catalog_snapshots as support_summarize_source_catalog_snapshots,
 )
@@ -71,16 +75,27 @@ def dispatch_source_catalog_refresh(state, force=False):
     if not force and state.status == SourceCatalogRefreshStatus.QUEUED and state.task_id:
         return state
 
+    assigned_task_id = str(uuid4())
+    state.task_id = assigned_task_id
+    state.queue_name = "celery"
+    state.save(update_fields=["task_id", "queue_name", "updated_at"])
+
     try:
-        async_result = refresh_source_catalog_task.delay()
-        state.task_id = getattr(async_result, "id", "")
-        state.queue_name = "celery"
-        state.save(update_fields=["task_id", "queue_name", "updated_at"])
+        async_result = refresh_source_catalog_task.apply_async(task_id=assigned_task_id)
+        dispatched_task_id = getattr(async_result, "id", assigned_task_id) or assigned_task_id
+        if dispatched_task_id != assigned_task_id:
+            state.task_id = dispatched_task_id
+            state.save(update_fields=["task_id", "updated_at"])
     except Exception as exc:
+        state.refresh_from_db()
+        if settings.CELERY_TASK_ALWAYS_EAGER:
+            logger.warning("Source catalog refresh eager execution raised during dispatch.", exc_info=True)
+            return state
         logger.warning("Source catalog refresh dispatch failed, falling back to inline processing", exc_info=True)
+        state.task_id = ""
         state.queue_name = "inline-fallback"
         state.last_error = f"Celery dispatch failed: {exc}"
-        state.save(update_fields=["queue_name", "last_error", "updated_at"])
+        state.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
         process_source_catalog_refresh(retry_count=state.retry_count, task_id="")
 
     return state
@@ -145,7 +160,20 @@ def serialize_source_catalog_entry_inspection(inspection): return support_serial
 def summarize_source_catalog_snapshots(snapshots): return support_summarize_source_catalog_snapshots(snapshots)
 
 
+def source_catalog_book_source_map(source_urls): return support_source_catalog_book_source_map(source_urls)
+
+
+def source_catalog_submission_map(source_urls): return support_source_catalog_submission_map(source_urls)
+
+
 def source_catalog_entry_snapshots(queryset): return support_source_catalog_entry_snapshots(queryset)
+
+
+def source_catalog_entry_overview(queryset, entry_statuses=None):
+    return support_source_catalog_entry_overview(
+        queryset,
+        entry_statuses=entry_statuses,
+    )
 
 
 def revoke_curation_task(task_id): return support_revoke_curation_task(task_id, logger)
@@ -219,20 +247,18 @@ def process_catalog_curation_run(run_id, retry_count=0, task_id=""):
             refreshed = TitleResolver().refresh_catalog(max_pages=normalize_refresh_max_pages(run.refresh_max_pages))
             summary["refreshed_entries"] = len(refreshed)
 
-        entries = list(SourceCatalogEntry.objects.order_by("title"))
-        summary["catalog_entries"] = len(entries)
-        source_map = source_catalog_book_source_map([entry.source_url for entry in entries])
-        submission_map = source_catalog_submission_map([entry.source_url for entry in entries])
+        entry_queryset = SourceCatalogEntry.objects.order_by("title")
+        summary["catalog_entries"] = entry_queryset.count()
         submission_origin = submission_origin_for_run(run)
 
-        for entry in entries:
+        for inspection in iter_source_catalog_entry_inspections(entry_queryset):
             run.refresh_from_db(fields=["status", "cancel_requested", "updated_at"])
             if run.status == JobStatus.CANCELLED or run.cancel_requested:
                 run.summary = summary
                 run.save(update_fields=["summary", "updated_at"])
                 return finalize_cancelled_catalog_curation_run(run)
 
-            inspection = inspect_source_catalog_entry(entry, source_map, submission_map)
+            entry = inspection["entry"]
             status = inspection["curation_status"]
             summary["status_counts"][status] += 1
 

@@ -343,12 +343,6 @@ export class ReaderApplication {
     );
 
     this.cleanupHandlers.push(
-      delegateEvent(document, "click", ".iconcc-close-square", () => {
-        this.closeBook();
-      })
-    );
-
-    this.cleanupHandlers.push(
       delegateEvent(document, "click", ".iconshezhi", (event) => {
         this.toggleSettingsPanel(event);
       })

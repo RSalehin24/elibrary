@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { apiFetch, resolveAppUrl } from "../../../api/client";
 import { getPreviewLockKey, isPreviewLocked } from "../../../utils/previewLock";
+import { launchBookReader } from "../readerLaunch";
 import {
   openManagedPreviewWindow,
   waitForMinimumLoader,
@@ -10,20 +11,17 @@ import {
 const previewWindows = new Map();
 
 export function useBookDetailActions({
-  applyReaderState,
   book,
   currentDetailPath,
   detail,
   editor,
   fetchBook,
-  fetchReaderCollections,
   htmlPreviewLockedByAssetId,
   navigate,
   refreshMetadataCollections,
   replaceBookRoute,
   returnTarget,
   reviewForm,
-  setBookmarks,
   setBook,
   setHtmlPreviewLockedByAssetId,
   setMetadataReviews,
@@ -68,13 +66,13 @@ export function useBookDetailActions({
       setLaunchingReader(true);
       const startedAt = Date.now();
       await waitForUiFrame();
-      const { sessionPayload, bookmarkPayload } =
-        await fetchReaderCollections(slug);
+      await launchBookReader({
+        slug,
+        apiClient: apiFetch,
+        navigate,
+        resolveUrl: resolveAppUrl,
+      });
       await waitForMinimumLoader(startedAt);
-      applyReaderState(sessionPayload);
-      setBookmarks(bookmarkPayload);
-      navigate(`/reader?slug=${encodeURIComponent(slug)}&appNav=hidden`);
-      toast.success("Reader opened.");
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -372,6 +370,7 @@ export function useBookDetailActions({
     deletingBookmarkId,
     downloadAsset,
     epubInputRef,
+    launchReader,
     launchingReader,
     openEpubPicker,
     pickingEpub,

@@ -99,20 +99,22 @@ test("playwright smoke: compact TOC rail keeps non-primary controls hidden", asy
       const wrapperNav = document.querySelector(".reader-wrapper .wrapper-nav");
       const wrapperMain = document.querySelector(".reader-wrapper .wrapper-main");
       const settingsAnchor = wrapperNav?.querySelector(".icon-anchor");
-      const closeButton = wrapperNav?.querySelector(".icon-wrap.right");
+      const tocToggle = wrapperNav?.querySelector(".iconmulu");
 
       return {
         wrapperMainVisibility: wrapperMain ? getComputedStyle(wrapperMain).visibility : "",
         wrapperMainPointerEvents: wrapperMain ? getComputedStyle(wrapperMain).pointerEvents : "",
         settingsDisplay: settingsAnchor ? getComputedStyle(settingsAnchor).display : "",
-        closeDisplay: closeButton ? getComputedStyle(closeButton).display : ""
+        tocToggleDisplay: tocToggle ? getComputedStyle(tocToggle).display : "",
+        wrapperNavJustifyContent: wrapperNav ? getComputedStyle(wrapperNav).justifyContent : ""
       };
     });
 
     assert.equal(state.wrapperMainVisibility, "hidden");
     assert.equal(state.wrapperMainPointerEvents, "none");
     assert.equal(state.settingsDisplay, "none");
-    assert.equal(state.closeDisplay, "none");
+    assert.equal(state.tocToggleDisplay, "flex");
+    assert.equal(state.wrapperNavJustifyContent, "flex-end");
   });
 });
 

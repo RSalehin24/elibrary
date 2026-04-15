@@ -5,6 +5,7 @@ import BookCard from "../components/BookCard";
 import BookCardSkeleton from "../components/BookCardSkeleton";
 import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
+import PropertyTableControls from "../components/PropertyTableControls";
 import {
   cleanQueryParams,
   filtersFromSearchParams,
@@ -20,6 +21,8 @@ const defaultFilters = {
   review_state: "",
   record_type: "all",
   sort: "-created_at",
+  page: "1",
+  limit: "10",
 };
 
 const homeFilterFields = [
@@ -75,12 +78,42 @@ const homeFilterFields = [
   },
 ];
 
+const defaultPagination = {
+  page: 1,
+  limit: 10,
+  total_count: 0,
+  page_count: 1,
+  has_previous: false,
+  has_next: false,
+};
+
+function normalizeBookPayload(payload) {
+  if (Array.isArray(payload)) {
+    return {
+      entries: payload,
+      pagination: {
+        ...defaultPagination,
+        total_count: payload.length,
+      },
+    };
+  }
+
+  return {
+    entries: payload?.entries || [],
+    pagination: {
+      ...defaultPagination,
+      ...(payload?.pagination || {}),
+    },
+  };
+}
+
 export default function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
   const [filters, setFilters] = useState(() =>
     filtersFromSearchParams(defaultFilters, searchParams),
   );
+  const [pagination, setPagination] = useState(defaultPagination);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -91,9 +124,13 @@ export default function HomePage() {
       const payload = await apiFetch(
         `/catalog/books/${toQueryString(nextFilters)}`,
       );
-      setBooks(payload);
+      const normalized = normalizeBookPayload(payload);
+      setBooks(normalized.entries);
+      setPagination(normalized.pagination);
       setError("");
     } catch (nextError) {
+      setBooks([]);
+      setPagination(defaultPagination);
       setError(nextError.message);
     } finally {
       setLoading(false);
@@ -108,7 +145,7 @@ export default function HomePage() {
 
   function applyFilters(event) {
     event.preventDefault();
-    setSearchParams(cleanQueryParams(filters));
+    setSearchParams(cleanQueryParams({ ...filters, page: "1" }));
   }
 
   function resetFilters() {
@@ -117,15 +154,18 @@ export default function HomePage() {
   }
 
   function clearSearch(nextFilters) {
-    setFilters(nextFilters);
-    setSearchParams(cleanQueryParams(nextFilters));
+    const nextSearchFilters = { ...nextFilters, page: "1" };
+    setFilters(nextSearchFilters);
+    setSearchParams(cleanQueryParams(nextSearchFilters));
   }
 
-  const resultCount = error || loading ? "" : `${books.length}`;
+  const resultCount = error || loading ? "" : `${pagination.total_count}`;
+  const sortOptions =
+    homeFilterFields.find((field) => field.key === "sort")?.options || [];
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header catalog-page-header--with-toolbar">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
         <h1 className="created-books-page-title">All Books</h1>
 
         <CatalogToolbar
@@ -142,6 +182,46 @@ export default function HomePage() {
           onSearchClear={clearSearch}
           inline
         />
+
+        <div className="catalog-page-controls-row">
+          <PropertyTableControls
+            sortValue={filters.sort}
+            sortOptions={sortOptions}
+            onSortChange={(nextSort) => {
+              const nextFilters = {
+                ...filters,
+                sort: nextSort,
+                page: "1",
+              };
+              setFilters(nextFilters);
+              setSearchParams(cleanQueryParams(nextFilters));
+            }}
+            rowsPerPage={Number(pagination.limit) || Number(filters.limit) || 10}
+            onRowsPerPageChange={(nextLimit) => {
+              const nextFilters = {
+                ...filters,
+                page: "1",
+                limit: String(nextLimit),
+              };
+              setFilters(nextFilters);
+              setSearchParams(cleanQueryParams(nextFilters));
+            }}
+            page={Number(pagination.page) || 1}
+            pageCount={Number(pagination.page_count) || 1}
+            hasPrevious={Boolean(pagination.has_previous)}
+            hasNext={Boolean(pagination.has_next)}
+            onPageChange={(nextPage) => {
+              const nextFilters = {
+                ...filters,
+                page: String(nextPage),
+                limit: String(pagination.limit || filters.limit || 10),
+              };
+              setFilters(nextFilters);
+              setSearchParams(cleanQueryParams(nextFilters));
+            }}
+            disabled={loading}
+          />
+        </div>
       </header>
 
       {loading ? (

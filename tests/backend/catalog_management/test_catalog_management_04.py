@@ -3,8 +3,10 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from django.db import connection
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -88,6 +90,68 @@ def test_catalog_can_filter_books_created_by_current_user(client):
     assert other_book.slug not in {entry["slug"] for entry in payload}
     assert payload[0]["latest_submission_at"]
     assert payload[1]["latest_submission_at"]
+
+
+@pytest.mark.django_db
+def test_catalog_book_list_supports_paginated_responses(client):
+    user = User.objects.create_user(email="paged-reader@example.com", password="strong-password-123")
+    Book.objects.create(title="আলফা বই", state="ready", review_state="approved")
+    Book.objects.create(title="বিটা বই", state="ready", review_state="approved")
+    third_book = Book.objects.create(title="গামা বই", state="ready", review_state="approved")
+    client.force_login(user)
+
+    response = client.get("/api/catalog/books/?record_type=all&sort=created_at&limit=2&page=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"] == {
+        "page": 2,
+        "limit": 2,
+        "total_count": 3,
+        "page_count": 2,
+        "has_previous": True,
+        "has_next": False,
+    }
+    assert [entry["slug"] for entry in payload["entries"]] == [third_book.slug]
+
+
+@pytest.mark.django_db
+def test_catalog_book_list_avoids_loading_heavy_content_columns(client):
+    user = User.objects.create_user(email="catalog-reader@example.com", password="strong-password-123")
+    Book.objects.create(
+        title="ভারী বই",
+        state="ready",
+        review_state="approved",
+        summary="Summary",
+        raw_scraped_metadata={"source": "seed"},
+        raw_scrape_payload={"payload": "seed"},
+        main_content_html="<p>Heavy content</p>",
+        book_info_html="<p>Book info</p>",
+        dedication_html="<p>Dedication</p>",
+        toc=[{"label": "One", "href": "#one"}],
+        content_items=[{"title": "One", "slug": "one"}],
+    )
+    client.force_login(user)
+
+    with CaptureQueriesContext(connection) as captured_queries:
+        response = client.get("/api/catalog/books/?limit=1&page=1")
+
+    assert response.status_code == 200
+    book_queries = [
+        query["sql"]
+        for query in captured_queries.captured_queries
+        if 'FROM "catalog_book"' in query["sql"] and "COUNT(" not in query["sql"]
+    ]
+    assert book_queries
+    list_query = book_queries[0]
+    assert '"catalog_book"."summary"' not in list_query
+    assert '"catalog_book"."raw_scraped_metadata"' not in list_query
+    assert '"catalog_book"."raw_scrape_payload"' not in list_query
+    assert '"catalog_book"."main_content_html"' not in list_query
+    assert '"catalog_book"."book_info_html"' not in list_query
+    assert '"catalog_book"."dedication_html"' not in list_query
+    assert '"catalog_book"."toc"' not in list_query
+    assert '"catalog_book"."content_items"' not in list_query
 
 
 @pytest.mark.django_db

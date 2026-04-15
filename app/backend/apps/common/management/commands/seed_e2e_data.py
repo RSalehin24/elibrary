@@ -25,6 +25,7 @@ from apps.catalog.models import (
 from apps.catalog.models.choices import ContributorRole
 from apps.catalog.services import replace_book_relations
 from apps.common.models import LifecycleState, ReviewState
+from apps.common.epub_utils import build_simple_epub
 from apps.common.text import normalize_catalog_text
 from apps.ingestion.models import (
     BookSubmission,
@@ -271,7 +272,7 @@ class Command(BaseCommand):
                     GeneratedAssetType.EPUB,
                     "book.epub",
                     "application/epub+zip",
-                    f"Seeded EPUB content for {definition.title}".encode("utf-8"),
+                    build_simple_epub(definition.title),
                 )
             books[key] = book
         return books
@@ -310,13 +311,13 @@ class Command(BaseCommand):
         ReadingSession.objects.create(
             user=admin,
             book=detail_book,
-            last_location="chapter-1",
+            last_location="text/chapter-1.xhtml",
             progress_percent=42.0,
         )
         Bookmark.objects.create(
             user=admin,
             book=detail_book,
-            location="chapter-1",
+            location="text/chapter-1.xhtml",
             label="Seeded Bookmark",
             note="Remove me during the live test.",
         )

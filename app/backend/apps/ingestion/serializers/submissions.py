@@ -77,6 +77,12 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
         book = self.get_raw_target_book(obj)
         return bool(book and book.deleted_at)
 
+
+class ProcessingBookSummarySerializer(BookListSerializer):
+    class Meta(BookListSerializer.Meta):
+        fields = ["id", "title", "slug", "authors", "series"]
+
+
 class SubmissionSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     candidates = serializers.SerializerMethodField()
@@ -136,7 +142,11 @@ class SubmissionSerializer(serializers.ModelSerializer):
 
     def get_linked_book(self, obj):
         linked_book = self.linked_book_for(obj)
-        return BookListSerializer(linked_book, context=self.context).data if linked_book else None
+        return (
+            ProcessingBookSummarySerializer(linked_book, context=self.context).data
+            if linked_book
+            else None
+        )
 
     def get_linked_book_deleted(self, obj):
         linked_book = self.linked_book_for(obj)
@@ -151,5 +161,9 @@ class SubmissionSerializer(serializers.ModelSerializer):
     def get_uses_existing_request(self, obj):
         return bool(obj.canonical_submission_id)
 
-
-__all__ = ["MatchCandidateSerializer", "ProcessingJobSerializer", "SubmissionSerializer"]
+__all__ = [
+    "MatchCandidateSerializer",
+    "ProcessingBookSummarySerializer",
+    "ProcessingJobSerializer",
+    "SubmissionSerializer",
+]

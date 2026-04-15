@@ -6,9 +6,7 @@ import CatalogToolbar from "../components/CatalogToolbar";
 import ExportActions from "../components/ExportActions";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
-import PropertyTableControls, {
-  useClientPagination,
-} from "../components/PropertyTableControls";
+import PropertyTableControls from "../components/PropertyTableControls";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
@@ -46,6 +44,8 @@ const defaultFilters = {
   created_after: "",
   created_before: "",
   sort: "-created_at",
+  page: "1",
+  limit: "10",
 };
 
 const libraryFilterFields = [
@@ -168,6 +168,35 @@ function waitForMinimumLoader(startedAt, minimumMs = 240) {
   return new Promise((resolve) => window.setTimeout(resolve, remaining));
 }
 
+const defaultPagination = {
+  page: 1,
+  limit: 10,
+  total_count: 0,
+  page_count: 1,
+  has_previous: false,
+  has_next: false,
+};
+
+function normalizeBookPayload(payload) {
+  if (Array.isArray(payload)) {
+    return {
+      entries: payload,
+      pagination: {
+        ...defaultPagination,
+        total_count: payload.length,
+      },
+    };
+  }
+
+  return {
+    entries: payload?.entries || [],
+    pagination: {
+      ...defaultPagination,
+      ...(payload?.pagination || {}),
+    },
+  };
+}
+
 export default function LibraryPage() {
   const { authenticated } = useSession();
   const toast = useToast();
@@ -180,13 +209,13 @@ export default function LibraryPage() {
   );
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [savedFilters, setSavedFilters] = useState([]);
+  const [pagination, setPagination] = useState(defaultPagination);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [savedFilterAction, setSavedFilterAction] = useState("");
   const [downloadState, setDownloadState] = useState(
     () => pendingExportRef.current?.mode || "",
   );
-  const pagination = useClientPagination(books);
 
   async function loadBooks(nextFilters = filters) {
     try {
@@ -194,13 +223,45 @@ export default function LibraryPage() {
       const payload = await apiFetch(
         `/catalog/books/${toQueryString(nextFilters)}`,
       );
-      setBooks(payload);
+      const normalized = normalizeBookPayload(payload);
+      setBooks(normalized.entries);
+      setPagination(normalized.pagination);
       setError("");
     } catch (nextError) {
+      setBooks([]);
+      setPagination(defaultPagination);
       setError(nextError.message);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function loadAllBooksForExport(nextFilters = filters) {
+    const pageSize = 100;
+    const normalizedFilters = {
+      ...nextFilters,
+      page: "1",
+      limit: String(pageSize),
+    };
+    const firstPayload = normalizeBookPayload(
+      await apiFetch(`/catalog/books/${toQueryString(normalizedFilters)}`),
+    );
+    const allEntries = [...firstPayload.entries];
+    const totalPages = Number(firstPayload.pagination.page_count) || 1;
+
+    for (let page = 2; page <= totalPages; page += 1) {
+      const nextPayload = normalizeBookPayload(
+        await apiFetch(
+          `/catalog/books/${toQueryString({
+            ...normalizedFilters,
+            page: String(page),
+          })}`,
+        ),
+      );
+      allEntries.push(...nextPayload.entries);
+    }
+
+    return allEntries;
   }
 
   async function loadSavedFilters() {
@@ -270,20 +331,18 @@ export default function LibraryPage() {
 
   function applyFilters(event) {
     event.preventDefault();
-    pagination.resetPage();
-    setSearchParams(cleanQueryParams(filters));
+    setSearchParams(cleanQueryParams({ ...filters, page: "1" }));
   }
 
   function resetFilters() {
-    pagination.resetPage();
     setFilters(defaultFilters);
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
   function clearSearch(nextFilters) {
-    pagination.resetPage();
-    setFilters(nextFilters);
-    setSearchParams(cleanQueryParams(nextFilters));
+    const nextSearchFilters = { ...nextFilters, page: "1" };
+    setFilters(nextSearchFilters);
+    setSearchParams(cleanQueryParams(nextSearchFilters));
   }
 
   function applySavedFilter(savedFilter) {
@@ -292,7 +351,6 @@ export default function LibraryPage() {
     }
     setSavedFilterAction(`apply:${savedFilter.id}`);
     const nextFilters = { ...defaultFilters, ...(savedFilter.params || {}) };
-    pagination.resetPage();
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
     toast.success(`Applied "${savedFilter.name}".`);
@@ -316,22 +374,23 @@ export default function LibraryPage() {
   }
 
   async function runDownload(mode) {
-    const blocked = getExportBlockState({
-      items: books,
-      loading,
-      error,
-      nounSingular: "book",
-      nounPlural: "books",
-    });
-    if (blocked) {
-      toast[blocked.type](blocked.message);
-      return;
-    }
-
     try {
+      const exportItems = await loadAllBooksForExport(filters);
+      const blocked = getExportBlockState({
+        items: exportItems,
+        loading,
+        error,
+        nounSingular: "book",
+        nounPlural: "books",
+      });
+      if (blocked) {
+        toast[blocked.type](blocked.message);
+        return;
+      }
+
       const exportRequest = writePendingExport(EXPORT_STORAGE_KEY, {
         mode,
-        items: books,
+        items: exportItems,
         title: "Books Export",
         filename: "catalog-books.csv",
       });
@@ -358,7 +417,7 @@ export default function LibraryPage() {
     }
   }
 
-  const resultCount = error || loading ? "" : `${books.length}`;
+  const resultCount = error || loading ? "" : `${pagination.total_count}`;
   const sortOptions =
     libraryFilterFields.find((field) => field.key === "sort")?.options || [];
   const exportActions = (
@@ -374,18 +433,37 @@ export default function LibraryPage() {
       sortValue={filters.sort}
       sortOptions={sortOptions}
       onSortChange={(nextSort) => {
-        const nextFilters = { ...filters, sort: nextSort };
-        pagination.resetPage();
+        const nextFilters = {
+          ...filters,
+          sort: nextSort,
+          page: "1",
+        };
         setFilters(nextFilters);
         setSearchParams(cleanQueryParams(nextFilters));
       }}
-      rowsPerPage={pagination.rowsPerPage}
-      onRowsPerPageChange={pagination.setRowsPerPage}
-      page={pagination.page}
-      pageCount={pagination.pageCount}
-      hasPrevious={pagination.hasPrevious}
-      hasNext={pagination.hasNext}
-      onPageChange={pagination.setPage}
+      rowsPerPage={Number(pagination.limit) || Number(filters.limit) || 10}
+      onRowsPerPageChange={(nextLimit) => {
+        const nextFilters = {
+          ...filters,
+          page: "1",
+          limit: String(nextLimit),
+        };
+        setFilters(nextFilters);
+        setSearchParams(cleanQueryParams(nextFilters));
+      }}
+      page={Number(pagination.page) || 1}
+      pageCount={Number(pagination.page_count) || 1}
+      hasPrevious={Boolean(pagination.has_previous)}
+      hasNext={Boolean(pagination.has_next)}
+      onPageChange={(nextPage) => {
+        const nextFilters = {
+          ...filters,
+          page: String(nextPage),
+          limit: String(pagination.limit || filters.limit || 10),
+        };
+        setFilters(nextFilters);
+        setSearchParams(cleanQueryParams(nextFilters));
+      }}
       disabled={loading}
     />
   );
@@ -459,7 +537,7 @@ export default function LibraryPage() {
       ) : error ? (
         <div className="page-state page-state-error">{error}</div>
       ) : (
-        <BookTable books={pagination.items} emptyLabel="No books found." />
+        <BookTable books={books} emptyLabel="No books found." />
       )}
     </div>
   );

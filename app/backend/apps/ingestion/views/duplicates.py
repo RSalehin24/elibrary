@@ -1,3 +1,4 @@
+from django.db.models import Prefetch
 from apps.ingestion import views as ingestion_views
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -6,13 +7,22 @@ from rest_framework.views import APIView
 
 from apps.common.models import ReviewState
 from apps.common.permissions import CanManageProcessing
-from apps.ingestion.models import DuplicateReview, DuplicateReviewStatus, SubmissionStatus
+from apps.ingestion.models import (
+    DuplicateReview,
+    DuplicateReviewStatus,
+    ProcessingJob,
+    SubmissionStatus,
+    TitleResolutionAttempt,
+)
 from apps.ingestion.serializers import DuplicateReviewDecisionSerializer, DuplicateReviewSerializer
 from apps.ingestion.services.submissions import fulfill_submission_with_existing_book
 
 from .filters import apply_limit, apply_submission_origin_filter, apply_text_search
 from .guards import automation_manual_creation_locked_response
-from .querysets import duplicate_reviews_ordered_queryset
+from .querysets import (
+    duplicate_reviews_ordered_queryset,
+    related_book_list_defer_fields,
+)
 
 
 class DuplicateReviewListView(generics.ListAPIView):
@@ -20,8 +30,47 @@ class DuplicateReviewListView(generics.ListAPIView):
     serializer_class = DuplicateReviewSerializer
 
     def get_queryset(self):
-        queryset = DuplicateReview.objects.select_related("submission__linked_book", "existing_book").prefetch_related(
-            "submission__resolution_attempts__match_candidates",
+        queryset = DuplicateReview.objects.select_related(
+            "submission",
+            "submission__linked_book",
+            "submission__canonical_submission",
+            "submission__canonical_submission__linked_book",
+            "existing_book",
+        ).defer(
+            *related_book_list_defer_fields(
+                "submission__linked_book__",
+                "submission__canonical_submission__linked_book__",
+                "existing_book__",
+            ),
+        ).prefetch_related(
+            Prefetch(
+                "submission__resolution_attempts",
+                queryset=TitleResolutionAttempt.objects.defer(
+                    "raw_results",
+                    "error_message",
+                ).prefetch_related("match_candidates"),
+            ),
+            Prefetch(
+                "submission__processing_jobs",
+                queryset=ProcessingJob.objects.select_related("book").defer(
+                    "payload",
+                    *related_book_list_defer_fields("book__"),
+                ),
+            ),
+            Prefetch(
+                "submission__canonical_submission__resolution_attempts",
+                queryset=TitleResolutionAttempt.objects.defer(
+                    "raw_results",
+                    "error_message",
+                ).prefetch_related("match_candidates"),
+            ),
+            Prefetch(
+                "submission__canonical_submission__processing_jobs",
+                queryset=ProcessingJob.objects.select_related("book").defer(
+                    "payload",
+                    *related_book_list_defer_fields("book__"),
+                ),
+            ),
             "existing_book__book_contributors__contributor",
             "existing_book__book_series__series",
             "existing_book__book_categories__category",

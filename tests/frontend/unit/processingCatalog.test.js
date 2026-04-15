@@ -85,6 +85,100 @@ test("resolvePendingCatalogCreationEntries keeps tracked rows active from catalo
   );
 });
 
+test("resolvePendingCatalogCreationEntries drops tracked rows once the matching submission is deleted", () => {
+  const pendingEntries = resolvePendingCatalogCreationEntries(
+    [
+      {
+        id: "tracked-deleted",
+        source_url: "https://www.ebanglalibrary.com/books/tracked-deleted/",
+      },
+      {
+        id: "tracked-processing",
+        source_url: "https://www.ebanglalibrary.com/books/tracked-processing/",
+      },
+    ],
+    {
+      catalogEntries: [],
+      catalogOverviewEntries: [],
+      jobs: [
+        {
+          id: "job-deleted",
+          status: "queued",
+          submission_status: "deleted",
+          submission_input:
+            "https://www.ebanglalibrary.com/books/tracked-deleted/",
+        },
+        {
+          id: "job-processing",
+          status: "queued",
+          submission_status: "queued",
+          submission_input:
+            "https://www.ebanglalibrary.com/books/tracked-processing/",
+        },
+      ],
+      submissions: [
+        {
+          id: "submission-deleted",
+          status: "deleted",
+          resolved_url:
+            "https://www.ebanglalibrary.com/books/tracked-deleted/",
+          original_input:
+            "https://www.ebanglalibrary.com/books/tracked-deleted/",
+        },
+        {
+          id: "submission-processing",
+          status: "queued",
+          resolved_url:
+            "https://www.ebanglalibrary.com/books/tracked-processing/",
+          original_input:
+            "https://www.ebanglalibrary.com/books/tracked-processing/",
+        },
+      ],
+    },
+  );
+
+  assert.deepEqual(
+    pendingEntries.map((entry) => entry.id),
+    ["tracked-processing"],
+  );
+});
+
+test("resolvePendingCatalogCreationEntries drops tracked rows when the catalog snapshot is already terminal", () => {
+  const pendingEntries = resolvePendingCatalogCreationEntries(
+    [
+      {
+        id: "tracked-deleted",
+        source_url: "https://www.ebanglalibrary.com/books/tracked-deleted/",
+      },
+      {
+        id: "tracked-processing",
+        source_url: "https://www.ebanglalibrary.com/books/tracked-processing/",
+      },
+    ],
+    {
+      catalogEntries: [
+        {
+          id: "tracked-deleted",
+          curation_status: "deleted",
+          latest_job_status: "processing",
+          latest_submission_status: "processing",
+        },
+        {
+          id: "tracked-processing",
+          curation_status: "processing",
+          latest_job_status: "processing",
+          latest_submission_status: "processing",
+        },
+      ],
+    },
+  );
+
+  assert.deepEqual(
+    pendingEntries.map((entry) => entry.id),
+    ["tracked-processing"],
+  );
+});
+
 test("hasActiveCatalogCreationWork detects active catalog jobs and submissions", () => {
   assert.equal(
     hasActiveCatalogCreationWork({
@@ -107,5 +201,18 @@ test("hasActiveCatalogCreationWork detects active catalog jobs and submissions",
       jobs: [{ id: "queued-job", status: "queued" }],
     }),
     true,
+  );
+
+  assert.equal(
+    hasActiveCatalogCreationWork({
+      jobs: [
+        {
+          id: "deleted-job",
+          status: "queued",
+          submission_status: "deleted",
+        },
+      ],
+    }),
+    false,
   );
 });

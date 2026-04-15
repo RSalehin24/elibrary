@@ -261,12 +261,34 @@ export class ReaderThemeManager {
         active: "#a1d8ff"
       }
     };
+    const scrollbarPaletteByTheme = {
+      0: {
+        track: "#e8e7e7",
+        thumb: "#888",
+        thumbHover: "#666"
+      },
+      1: {
+        track: "#efe3c2",
+        thumb: "#663403",
+        thumbHover: "#582e04"
+      },
+      2: {
+        track: "#242938",
+        thumb: "#5a5f73",
+        thumbHover: "#6e7489"
+      }
+    };
 
     const activeLinkPalette = linkPaletteByTheme[themeIndex] || linkPaletteByTheme[DEFAULT_THEME_INDEX];
+    const activeScrollbarPalette =
+      scrollbarPaletteByTheme[themeIndex] || scrollbarPaletteByTheme[DEFAULT_THEME_INDEX];
     const iframeLinkDefault = activeLinkPalette.default;
     const iframeLinkVisited = activeLinkPalette.visited;
     const iframeLinkHover = activeLinkPalette.hover;
     const iframeLinkActive = activeLinkPalette.active;
+    const scrollbarTrack = activeScrollbarPalette.track;
+    const scrollbarThumb = activeScrollbarPalette.thumb;
+    const scrollbarThumbHover = activeScrollbarPalette.thumbHover;
 
     const isDocumentUsable = (doc) => {
       if (!doc || !doc.body || !doc.documentElement) return false;
@@ -409,6 +431,33 @@ export class ReaderThemeManager {
             overflow-y: auto !important;
             overflow-x: hidden !important;
             scrollbar-gutter: stable;
+          }
+          html,
+          body,
+          .reader-scroll-container {
+            scrollbar-color: ${scrollbarThumb} ${scrollbarTrack};
+          }
+          html::-webkit-scrollbar,
+          body::-webkit-scrollbar,
+          .reader-scroll-container::-webkit-scrollbar {
+            width: 12px;
+          }
+          html::-webkit-scrollbar-track,
+          body::-webkit-scrollbar-track,
+          .reader-scroll-container::-webkit-scrollbar-track {
+            background: ${scrollbarTrack};
+          }
+          html::-webkit-scrollbar-thumb,
+          body::-webkit-scrollbar-thumb,
+          .reader-scroll-container::-webkit-scrollbar-thumb {
+            background-color: ${scrollbarThumb};
+            border: 3px solid ${scrollbarTrack};
+            border-radius: 6px;
+          }
+          html::-webkit-scrollbar-thumb:hover,
+          body::-webkit-scrollbar-thumb:hover,
+          .reader-scroll-container::-webkit-scrollbar-thumb:hover {
+            background-color: ${scrollbarThumbHover};
           }
           body > div,
           body > main,

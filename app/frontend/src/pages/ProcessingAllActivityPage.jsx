@@ -76,10 +76,13 @@ import {
 import {
   BookLinkCell,
   InlineErrorCell,
+  ProcessingSummaryStat,
+  ProcessingTableSkeletonActions,
+  ProcessingTableSkeletonCheckbox,
+  ProcessingTableSkeletonStack,
   ProcessingErrorDisclosure,
   QueueTableCard,
   RequestValue,
-  renderProcessingCardLoader,
 } from "../features/processing/components/ProcessingScaffold";
 import {
   usePersistentProcessingPageState,
@@ -180,28 +183,33 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
     "processing-all-activity",
     "busyActionId",
     "",
+    { persist: false },
   );
   const [busyRunId, setBusyRunId] = usePersistentProcessingPageState(
     "processing-all-activity",
     "busyRunId",
     "",
+    { persist: false },
   );
   const [busyDeleteId, setBusyDeleteId] = usePersistentProcessingPageState(
     "processing-all-activity",
     "busyDeleteId",
     "",
+    { persist: false },
   );
   const [activeRequeueJobId, setActiveRequeueJobId] = useState("");
   const [bulkActionKey, setBulkActionKey] = usePersistentProcessingPageState(
     "processing-all-activity",
     "bulkActionKey",
     "",
+    { persist: false },
   );
   const [confirmState, setConfirmState] = useState(null);
   const [confirmLoading, setConfirmLoading] = usePersistentProcessingPageState(
     "processing-all-activity",
     "confirmLoading",
     false,
+    { persist: false },
   );
   const [queuedCardExpanded, setQueuedCardExpanded] = useState(false);
   const [stoppedCardExpanded, setStoppedCardExpanded] = useState(false);
@@ -212,17 +220,24 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
       "processing-all-activity",
       "stoppingCatalogSync",
       false,
+      { persist: false },
     );
   const [catalogSyncDismissed, setCatalogSyncDismissed] = useState(false);
 
   const defaultScopes = useMemo(
-    () => [
-      LOAD_SCOPE_SUBMISSIONS,
-      LOAD_SCOPE_JOBS,
-      LOAD_SCOPE_JOB_REVIEWS,
-      ...(canManageProcessing ? [LOAD_SCOPE_REVIEWS, LOAD_SCOPE_RUNS] : []),
-    ],
-    [canManageProcessing],
+    () => {
+      if (view === "failed") {
+        return [LOAD_SCOPE_JOB_REVIEWS];
+      }
+
+      return [
+        LOAD_SCOPE_SUBMISSIONS,
+        LOAD_SCOPE_JOBS,
+        LOAD_SCOPE_JOB_REVIEWS,
+        ...(canManageProcessing ? [LOAD_SCOPE_REVIEWS, LOAD_SCOPE_RUNS] : []),
+      ];
+    },
+    [canManageProcessing, view],
   );
 
   const globalActionsLocked = Boolean(
@@ -234,6 +249,30 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
   );
   const sourceTabButtonsDisabled = globalActionsLocked;
   const creationActionsDisabled = globalActionsLocked;
+  const hasActiveJobs = useMemo(
+    () => [...jobs, ...jobReviewRows].some((job) => isActiveStatus(job.status)),
+    [jobs, jobReviewRows],
+  );
+  const hasActiveRuns = useMemo(
+    () => curationRuns.some((run) => isActiveStatus(run.status)),
+    [curationRuns],
+  );
+  const pollingScopes = useMemo(() => {
+    const scopes = [];
+
+    if (hasActiveJobs || hasActiveRuns) {
+      scopes.push(
+        LOAD_SCOPE_SUBMISSIONS,
+        LOAD_SCOPE_JOBS,
+        LOAD_SCOPE_JOB_REVIEWS,
+      );
+    }
+    if (canManageProcessing && hasActiveRuns) {
+      scopes.push(LOAD_SCOPE_RUNS);
+    }
+
+    return scopes;
+  }, [canManageProcessing, hasActiveJobs, hasActiveRuns]);
 
   function getScopesForTab() {
     return defaultScopes;
@@ -272,6 +311,30 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
     }
   }
 
+  function buildJobReviewRequestParams(filters, tab) {
+    if (view !== "failed") {
+      return buildJobsParams(filters, tab);
+    }
+
+    const baseParams = buildJobsParams(
+      {
+        ...(filters || {}),
+        status: "",
+      },
+      tab,
+    );
+
+    return {
+      q: baseParams.q,
+      limit: 60,
+      status: "failed",
+      ...(baseParams.created_after
+        ? { created_after: baseParams.created_after }
+        : {}),
+      ...(baseParams.origin ? { origin: baseParams.origin } : {}),
+    };
+  }
+
   async function load(options = {}) {
     const requestId = loadRequestIdRef.current + 1;
     loadRequestIdRef.current = requestId;
@@ -298,8 +361,16 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
     }
 
     try {
-      const requests = [];
+      const priorityScopes =
+        view === "failed"
+          ? new Set([LOAD_SCOPE_JOB_REVIEWS])
+          : view === "duplicate"
+            ? new Set([LOAD_SCOPE_REVIEWS])
+            : new Set();
+      const primaryRequests = [];
+      const secondaryRequests = [];
       const shouldReuseJobReviewRows =
+        view !== "failed" &&
         scopes.has(LOAD_SCOPE_JOBS) &&
         scopes.has(LOAD_SCOPE_JOB_REVIEWS) &&
         isDefaultJobRequest(nextJobFilters);
@@ -308,12 +379,103 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
         scopes.has(LOAD_SCOPE_CATALOG_OVERVIEW) &&
         isDefaultCatalogBrowseRequest(nextCatalogFilters);
       const queueScopeRequest = (scope, url) => {
-        requests.push(
+        const requestTarget = priorityScopes.has(scope)
+          ? primaryRequests
+          : secondaryRequests;
+        requestTarget.push(
           apiFetch(url).then((payload) => ({
             scope,
             payload,
           })),
         );
+      };
+      const applyPayloads = (payloads) => {
+        if (!payloads.length) {
+          return;
+        }
+
+        const payloadByScope = new Map(
+          payloads.map(({ scope, payload }) => [scope, payload]),
+        );
+
+        if (payloadByScope.has(LOAD_SCOPE_JOBS)) {
+          setJobs(payloadByScope.get(LOAD_SCOPE_JOBS) || []);
+        }
+
+        if (
+          payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS) ||
+          shouldReuseJobReviewRows
+        ) {
+          setJobReviewRows(
+            (shouldReuseJobReviewRows
+              ? payloadByScope.get(LOAD_SCOPE_JOBS)
+              : payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS)) || [],
+          );
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_SUBMISSIONS)) {
+          setSubmissions(payloadByScope.get(LOAD_SCOPE_SUBMISSIONS) || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_REVIEWS)) {
+          setDuplicateReviews(payloadByScope.get(LOAD_SCOPE_REVIEWS) || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_CATALOG_BROWSE)) {
+          const catalogPayload =
+            payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE) || null;
+          setCatalogEntries(catalogPayload?.entries || []);
+          setCatalogPagination(
+            catalogPayload?.pagination || defaultCatalogPagination,
+          );
+        }
+
+        if (
+          payloadByScope.has(LOAD_SCOPE_CATALOG_OVERVIEW) ||
+          shouldReuseCatalogOverview
+        ) {
+          const catalogPayload =
+            (shouldReuseCatalogOverview
+              ? payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE)
+              : payloadByScope.get(LOAD_SCOPE_CATALOG_OVERVIEW)) || null;
+          setCatalogOverviewEntries(catalogPayload?.entries || []);
+          setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
+          setCatalogSyncState(catalogPayload?.sync_state || null);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_RUNS)) {
+          setCurationRuns(payloadByScope.get(LOAD_SCOPE_RUNS) || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
+          const incompletePayload =
+            payloadByScope.get(LOAD_SCOPE_INCOMPLETE_BROWSE) || null;
+          setIncompleteEntries(incompletePayload?.entries || []);
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
+          const incompletePayload =
+            payloadByScope.get(LOAD_SCOPE_INCOMPLETE_OVERVIEW) || null;
+          setIncompleteOverviewEntries(incompletePayload?.entries || []);
+          setIncompleteSummary(
+            incompletePayload?.summary || defaultIncompleteSummary,
+          );
+        }
+
+        if (payloadByScope.has(LOAD_SCOPE_AUTOMATION)) {
+          const automationPayload =
+            payloadByScope.get(LOAD_SCOPE_AUTOMATION) || null;
+          setAutomationState(automationPayload);
+          if (
+            !preserveAutomationForm &&
+            automationPayload?.settings &&
+            [AUTOMATION_TAB, INCOMPLETE_TAB].includes(nextTab)
+          ) {
+            setAutomationForm(
+              automationFormFromSettings(automationPayload.settings),
+            );
+          }
+        }
       };
 
       if (scopes.has(LOAD_SCOPE_JOBS)) {
@@ -330,7 +492,7 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
           queueScopeRequest(
             LOAD_SCOPE_JOB_REVIEWS,
             `/ingestion/jobs/${toQueryString(
-              buildJobsParams(defaultJobFilters, nextTab),
+              buildJobReviewRequestParams(nextJobFilters, nextTab),
             )}`,
           );
         }
@@ -411,87 +573,22 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
         );
       }
 
-      const payloads = await Promise.all(requests);
+      const primaryPayloads = await Promise.all(primaryRequests);
       if (requestId !== loadRequestIdRef.current) {
         return;
       }
-      const payloadByScope = new Map(
-        payloads.map(({ scope, payload }) => [scope, payload]),
-      );
-
-      if (payloadByScope.has(LOAD_SCOPE_JOBS)) {
-        setJobs(payloadByScope.get(LOAD_SCOPE_JOBS) || []);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_JOB_REVIEWS) || shouldReuseJobReviewRows) {
-        setJobReviewRows(
-          (shouldReuseJobReviewRows
-            ? payloadByScope.get(LOAD_SCOPE_JOBS)
-            : payloadByScope.get(LOAD_SCOPE_JOB_REVIEWS)) || [],
+      applyPayloads(primaryPayloads);
+      if (!silent && primaryPayloads.length) {
+        setScopeLoading(
+          new Set(primaryPayloads.map(({ scope }) => scope)),
+          false,
         );
       }
-
-      if (payloadByScope.has(LOAD_SCOPE_SUBMISSIONS)) {
-        setSubmissions(payloadByScope.get(LOAD_SCOPE_SUBMISSIONS) || []);
+      const secondaryPayloads = await Promise.all(secondaryRequests);
+      if (requestId !== loadRequestIdRef.current) {
+        return;
       }
-
-      if (payloadByScope.has(LOAD_SCOPE_REVIEWS)) {
-        setDuplicateReviews(payloadByScope.get(LOAD_SCOPE_REVIEWS) || []);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_CATALOG_BROWSE)) {
-        const catalogPayload =
-          payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE) || null;
-        setCatalogEntries(catalogPayload?.entries || []);
-        setCatalogPagination(
-          catalogPayload?.pagination || defaultCatalogPagination,
-        );
-      }
-
-      if (
-        payloadByScope.has(LOAD_SCOPE_CATALOG_OVERVIEW) ||
-        shouldReuseCatalogOverview
-      ) {
-        const catalogPayload =
-          (shouldReuseCatalogOverview
-            ? payloadByScope.get(LOAD_SCOPE_CATALOG_BROWSE)
-            : payloadByScope.get(LOAD_SCOPE_CATALOG_OVERVIEW)) || null;
-        setCatalogOverviewEntries(catalogPayload?.entries || []);
-        setCatalogSummary(catalogPayload?.summary || defaultCatalogSummary);
-        setCatalogSyncState(catalogPayload?.sync_state || null);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_RUNS)) {
-        setCurationRuns(payloadByScope.get(LOAD_SCOPE_RUNS) || []);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_BROWSE)) {
-        const incompletePayload =
-          payloadByScope.get(LOAD_SCOPE_INCOMPLETE_BROWSE) || null;
-        setIncompleteEntries(incompletePayload?.entries || []);
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_INCOMPLETE_OVERVIEW)) {
-        const incompletePayload =
-          payloadByScope.get(LOAD_SCOPE_INCOMPLETE_OVERVIEW) || null;
-        setIncompleteOverviewEntries(incompletePayload?.entries || []);
-        setIncompleteSummary(
-          incompletePayload?.summary || defaultIncompleteSummary,
-        );
-      }
-
-      if (payloadByScope.has(LOAD_SCOPE_AUTOMATION)) {
-        const automationPayload =
-          payloadByScope.get(LOAD_SCOPE_AUTOMATION) || null;
-        setAutomationState(automationPayload);
-        if (
-          !preserveAutomationForm &&
-          automationPayload?.settings &&
-          [AUTOMATION_TAB, INCOMPLETE_TAB].includes(nextTab)
-        ) {
-          setAutomationForm(automationFormFromSettings(automationPayload.settings));
-        }
-      }
+      applyPayloads(secondaryPayloads);
 
       if (isFullTabLoad) {
         const defaultScopes = new Set(getScopesForTab(nextTab));
@@ -557,46 +654,26 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
   }, [user?.id, canManageProcessing, activeTab]);
 
   useEffect(() => {
-    const hasActiveJobs = [...jobs, ...jobReviewRows].some((job) =>
-      isActiveStatus(job.status),
-    );
-    const hasActiveRuns = curationRuns.some((run) =>
-      isActiveStatus(run.status),
-    );
-    const hasActiveCatalogSync =
-      activeTab === SOURCE_TAB && isCatalogSyncActive(catalogSyncState?.status);
-    const hasActiveAutomationRun = isActiveStatus(
-      automationState?.latest_run?.status,
-    );
-    if (
-      !hasActiveJobs &&
-      !hasActiveRuns &&
-      !hasActiveCatalogSync &&
-      !hasActiveAutomationRun
-    ) {
+    if (!pollingScopes.length) {
       return undefined;
     }
 
     const intervalId = window.setInterval(() => {
-      load({ preserveAutomationForm: true, silent: true }).catch(() => {});
+      load({
+        preserveAutomationForm: true,
+        silent: true,
+        scopes: pollingScopes,
+      }).catch(() => {});
     }, 5000);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, [
-    jobs,
-    jobReviewRows,
-    curationRuns,
-    catalogSyncState,
-    automationState,
-    activeTab,
+    pollingScopes,
     jobFilters,
     submissionFilters,
-    catalogFilters,
     runFilters,
-    reviewFilters,
-    incompleteFilters,
   ]);
 
   useEffect(() => {
@@ -1383,14 +1460,30 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
   function renderAllActivityOverviewCard() {
     const primaryLabel =
       view === "duplicate" ? "Deplicate Requests" : "Failed Requests";
+    const summaryStats =
+      view === "failed"
+        ? [["Failed", failedJobs.length]]
+        : [
+            ["Failed", failedJobs.length],
+            ["Duplicate", duplicateReviews.length],
+            ["Processing", processingJobs.length],
+            ["Ready", readySubmissions.length],
+            ["Stopped", stoppedSubmissions.length],
+            ["Queued", queuedSubmissions.length],
+            ["Deleted", deletedSubmissions.length],
+          ];
+    const summaryLoading =
+      view === "failed" ? jobReviewsLoading : submissionsLoading;
     const countPill = (
-      submissionsLoading ? (
+      summaryLoading ? (
         <span
           className="processing-card-count processing-card-count-skeleton"
           aria-hidden="true"
         />
       ) : (
-        <span className="processing-card-count">{submissionOverview.total}</span>
+        <span className="processing-card-count">
+          {summaryStats[0]?.[1] || 0}
+        </span>
       )
     );
 
@@ -1402,26 +1495,16 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
           </div>
           {countPill}
         </div>
-        {submissionsLoading ? (
-          renderProcessingCardLoader("Loading all activity overview")
-        ) : (
-          <div className="processing-summary-bar processing-summary-bar--catalog">
-            {[
-              ["Failed", failedJobs.length],
-              ["Duplicate", duplicateReviews.length],
-              ["Processing", processingJobs.length],
-              ["Ready", readySubmissions.length],
-              ["Stopped", stoppedSubmissions.length],
-              ["Queued", queuedSubmissions.length],
-              ["Deleted", deletedSubmissions.length],
-            ].map(([label, value]) => (
-              <article key={label} className="processing-summary-stat">
-                <span className="fact-label">{label}</span>
-                <strong>{value}</strong>
-              </article>
-            ))}
-          </div>
-        )}
+        <div className="processing-summary-bar processing-summary-bar--catalog">
+          {summaryStats.map(([label, value]) => (
+            <ProcessingSummaryStat
+              key={label}
+              label={label}
+              value={value}
+              loading={summaryLoading}
+            />
+          ))}
+        </div>
       </section>
     );
   }
@@ -1496,6 +1579,7 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
         cardClassName={cardClassName}
         loading={submissionsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={
           showControls
             ? renderCardHeaderSearch({
@@ -1700,30 +1784,34 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
         collapsed={collapsed}
         onToggleCollapsed={onToggleCollapsed}
       >
-        {rows.length ? (
+        {submissionsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedSubmissionIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible request selections"
-                        : "Select all visible requests"
-                    }
-                  />
+                  {submissionsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedSubmissionIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible request selections"
+                          : "Select all visible requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -1733,7 +1821,36 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((submission) => {
+              {(submissionsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((submissionOrIndex) => {
+                if (submissionsLoading) {
+                  return (
+                    <tr key={`submission-loading-${submissionOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const submission = submissionOrIndex;
                 const latestJob = submission.latest_job || null;
                 const displayStatus = getSubmissionDisplayStatus(
                   submission,
@@ -1835,19 +1952,30 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
                           >
                             {isBusy ? "Queueing..." : "Add Again to Queue"}
                           </button>
-                        ) : [
-                            "failed",
-                            "stopped",
-                            "needs_review",
-                          ].includes(submission.status) ||
-                          latestJob?.status === "failed" ? (
+                        ) : submission.status === "stopped" ||
+                          latestJob?.status === "stopped" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              latestJob?.status === "stopped"
+                                ? resumeJob(latestJob.id)
+                                : retrySubmission(submission.id)
+                            }
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : submission.status === "failed" ||
+                          latestJob?.status === "failed" ||
+                          submission.status === "needs_review" ? (
                           <button
                             type="button"
                             className="ghost-button"
                             onClick={() => retrySubmission(submission.id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Queueing..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : (
                           <span className="table-note">-</span>
@@ -1909,6 +2037,7 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
         cardClassName={cardClassName}
         loading={jobsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={renderCardHeaderSearch({
           filters: jobFilters,
           setFilters: setJobFilters,
@@ -2057,30 +2186,34 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
           </div>
         }
       >
-        {rows.length ? (
+        {jobsLoading || rows.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allRowsSelected}
-                    onChange={() =>
-                      setSelectedJobIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          rowIdsOnPage,
-                          allRowsSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allRowsSelected
-                        ? "Clear visible book creation selections"
-                        : "Select all visible book creation rows"
-                    }
-                  />
+                  {jobsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allRowsSelected}
+                      onChange={() =>
+                        setSelectedJobIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            rowIdsOnPage,
+                            allRowsSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allRowsSelected
+                          ? "Clear visible book creation selections"
+                          : "Select all visible book creation rows"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-status">Status</th>
@@ -2090,7 +2223,36 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((job) => {
+              {(jobsLoading
+                ? Array.from({ length: 5 }, (_, index) => index)
+                : rows
+              ).map((jobOrIndex) => {
+                if (jobsLoading) {
+                  return (
+                    <tr key={`job-loading-${jobOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={2} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const job = jobOrIndex;
                 const isBusy = busyActionId === job.id;
                 const isDeleting = busyDeleteId === `job:${job.id}`;
                 const isSelected = selectedJobIdSet.has(job.id);
@@ -2161,10 +2323,19 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
                           <button
                             type="button"
                             className="ghost-button"
+                            onClick={() => resumeJob(job.id)}
+                            disabled={isBusy || creationActionsDisabled}
+                          >
+                            {isBusy ? "Starting..." : "Resume"}
+                          </button>
+                        ) : job.status === "failed" ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
                             onClick={() => retrySubmission(job.submission_id)}
                             disabled={isBusy || creationActionsDisabled}
                           >
-                            {isBusy ? "Resuming..." : "Resume"}
+                            {isBusy ? "Queueing..." : "Retry"}
                           </button>
                         ) : job.target_book_slug ? null : (
                           <span className="table-note">-</span>
@@ -2201,12 +2372,20 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
       return null;
     }
 
+    const selectedDuplicateSubmissionIds = duplicateReviews
+      .filter(
+        (review) =>
+          selectedDuplicateReviewIdSet.has(review.id) && review.submission?.id,
+      )
+      .map((review) => review.submission.id);
+
     return (
       <QueueTableCard
         title={title}
         emptyTitle="No duplicates"
         loading={reviewsLoading}
         loadingLabel={`Loading ${title.toLowerCase()}`}
+        replaceOnLoading={false}
         headerAside={renderCardHeaderSearch({
           filters: reviewFilters,
           setFilters: setReviewFilters,
@@ -2314,34 +2493,60 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
                   )}
                 </span>
               </button>
+              <button
+                type="button"
+                className="ghost-button danger-button processing-inline-danger"
+                disabled={
+                  !selectedDuplicateSubmissionIds.length ||
+                  bulkActionKey === "submissions:delete" ||
+                  sourceTabButtonsDisabled
+                }
+                onClick={() =>
+                  openDeleteDialog(
+                    "submission-bulk",
+                    selectedDuplicateSubmissionIds,
+                    "Delete selected duplicate requests",
+                    "This will remove the selected duplicate requests.",
+                  )
+                }
+              >
+                {selectedActionLabel(
+                  "Delete selected",
+                  selectedDuplicateSubmissionIds.length,
+                )}
+              </button>
             </div>
           </div>
         }
       >
-        {duplicateReviews.length ? (
+        {reviewsLoading || duplicateReviews.length ? (
           <table className="simple-table processing-table">
             <thead>
               <tr>
                 <th className="processing-col-select">
-                  <input
-                    type="checkbox"
-                    className="processing-checkbox"
-                    checked={allDuplicatesSelected}
-                    onChange={() =>
-                      setSelectedDuplicateReviewIds((current) =>
-                        toggleVisibleSelection(
-                          current,
-                          duplicateIdsOnPage,
-                          allDuplicatesSelected,
-                        ),
-                      )
-                    }
-                    aria-label={
-                      allDuplicatesSelected
-                        ? "Clear visible duplicate selections"
-                        : "Select all visible duplication requests"
-                    }
-                  />
+                  {reviewsLoading ? (
+                    <ProcessingTableSkeletonCheckbox />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      className="processing-checkbox"
+                      checked={allDuplicatesSelected}
+                      onChange={() =>
+                        setSelectedDuplicateReviewIds((current) =>
+                          toggleVisibleSelection(
+                            current,
+                            duplicateIdsOnPage,
+                            allDuplicatesSelected,
+                          ),
+                        )
+                      }
+                      aria-label={
+                        allDuplicatesSelected
+                          ? "Clear visible duplicate selections"
+                          : "Select all visible duplication requests"
+                      }
+                    />
+                  )}
                 </th>
                 <th className="processing-col-request">Request</th>
                 <th className="processing-col-book">Existing</th>
@@ -2350,62 +2555,112 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
               </tr>
             </thead>
             <tbody>
-              {duplicateReviews.map((review) => (
-                <tr key={review.id}>
-                  <td className="processing-col-select">
-                    <input
-                      type="checkbox"
-                      className="processing-checkbox"
-                      checked={selectedDuplicateReviewIdSet.has(review.id)}
-                      onChange={() =>
-                        setSelectedDuplicateReviewIds((current) =>
-                          toggleSelectedId(current, review.id),
-                        )
-                      }
-                      aria-label={`Select duplicate check ${review.id}`}
-                    />
-                  </td>
-                  <td className="processing-col-request">
-                    <RequestValue value={review.submission?.original_input} />
-                  </td>
-                  <td>
-                    {review.existing_book?.title ||
-                      (review.existing_book_deleted ? "Deleted record" : "-")}
-                  </td>
-                  <td>
-                    <StatusPill value={review.status} />
-                  </td>
-                  <td>
-                    <div className="table-actions">
-                      {!review.existing_book_deleted ? (
+              {(reviewsLoading
+                ? Array.from({ length: 4 }, (_, index) => index)
+                : duplicateReviews
+              ).map((reviewOrIndex) => {
+                if (reviewsLoading) {
+                  return (
+                    <tr key={`duplicate-loading-${reviewOrIndex}`}>
+                      <td className="processing-col-select">
+                        <ProcessingTableSkeletonCheckbox />
+                      </td>
+                      <td className="processing-col-request">
+                        <ProcessingTableSkeletonStack lines={["xl", "sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["lg"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonStack lines={["sm"]} />
+                      </td>
+                      <td>
+                        <ProcessingTableSkeletonActions count={3} />
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const review = reviewOrIndex;
+                const isDeleting =
+                  busyDeleteId === `submission:${review.submission?.id || ""}`;
+
+                return (
+                  <tr key={review.id}>
+                    <td className="processing-col-select">
+                      <input
+                        type="checkbox"
+                        className="processing-checkbox"
+                        checked={selectedDuplicateReviewIdSet.has(review.id)}
+                        onChange={() =>
+                          setSelectedDuplicateReviewIds((current) =>
+                            toggleSelectedId(current, review.id),
+                          )
+                        }
+                        aria-label={`Select duplicate check ${review.id}`}
+                      />
+                    </td>
+                    <td className="processing-col-request">
+                      <RequestValue value={review.submission?.original_input} />
+                    </td>
+                    <td>
+                      {review.existing_book?.title ||
+                        (review.existing_book_deleted ? "Deleted record" : "-")}
+                    </td>
+                    <td>
+                      <StatusPill value={review.status} />
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        {!review.existing_book_deleted ? (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              resolveDuplicate(review.id, "same_book")
+                            }
+                            disabled={
+                              busyActionId === review.id ||
+                              creationActionsDisabled
+                            }
+                          >
+                            Same Book
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="ghost-button"
-                          onClick={() =>
-                            resolveDuplicate(review.id, "same_book")
-                          }
+                          onClick={() => resolveDuplicate(review.id, "new_book")}
                           disabled={
-                            busyActionId === review.id ||
-                            creationActionsDisabled
+                            busyActionId === review.id || creationActionsDisabled
                           }
                         >
-                          Same Book
+                          New Book
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => resolveDuplicate(review.id, "new_book")}
-                        disabled={
-                          busyActionId === review.id || creationActionsDisabled
-                        }
-                      >
-                        New Book
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        <button
+                          type="button"
+                          className="ghost-button danger-button processing-inline-danger"
+                          onClick={() =>
+                            openDeleteDialog(
+                              "submission-single",
+                              [review.submission?.id],
+                              "Delete duplicate request",
+                              "This duplicate request will be removed.",
+                            )
+                          }
+                          disabled={
+                            !review.submission?.id ||
+                            isDeleting ||
+                            sourceTabButtonsDisabled
+                          }
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : null}
@@ -2878,6 +3133,15 @@ export default function ProcessingAllActivityPage({ view = "failed" }) {
   }
 
   function renderAllTab() {
+    if (view === "failed") {
+      return (
+        <div className="processing-section-grid">
+          {renderAllActivityOverviewCard()}
+          {renderFailedJobsCard()}
+        </div>
+      );
+    }
+
     const expandableCards = orderExpandableCards(
       [
         {

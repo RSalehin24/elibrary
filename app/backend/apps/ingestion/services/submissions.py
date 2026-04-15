@@ -1,4 +1,6 @@
 import logging
+from datetime import timedelta
+from uuid import uuid4
 
 from celery import current_app
 from django.conf import settings
@@ -112,6 +114,17 @@ GENERATED_ASSET_LABELS = {
     GeneratedAssetType.HTML: "HTML",
     GeneratedAssetType.EPUB: "EPUB",
 }
+MAX_PROCESSING_JOB_ATTEMPTS = 3
+STALE_PROCESSING_JOB_AFTER = timedelta(minutes=20)
+STALE_PROCESSING_RETRY_MESSAGE = (
+    "Processing exceeded the recovery window and was retried automatically."
+)
+STALE_PROCESSING_FAILURE_MESSAGE = (
+    "Processing exceeded the recovery window and failed after the maximum retry attempts."
+)
+PROCESSING_RETRY_MESSAGE_TEMPLATE = (
+    "Processing failed on attempt {attempt} of {max_attempts} and will retry automatically."
+)
 RETRY_PAYLOAD_RESET_KEYS = (
     "served_from_database",
     "existing_book_source",
@@ -250,18 +263,136 @@ def delete_submission_record(submission):
     return "soft_deleted"
 
 
-def recover_stale_processing_jobs(*, origin="", limit=50):
-    queryset = (
-        ProcessingJob.objects.select_related("submission")
-        .filter(status=JobStatus.QUEUED, cancel_requested=False)
-        .filter(Q(task_id="") | Q(task_id__isnull=True))
-        .order_by("created_at")
+def fail_processing_job(job, message):
+    submission = job.submission
+    submission.status = SubmissionStatus.FAILED
+    submission.error_message = message
+    submission.save(update_fields=["status", "error_message", "updated_at"])
+    sync_deduplicated_submissions(submission)
+
+    job.status = JobStatus.FAILED
+    job.cancel_requested = False
+    job.task_id = ""
+    job.queue_name = ""
+    job.last_error = message
+    job.finished_at = timezone.now()
+    job.save(
+        update_fields=[
+            "status",
+            "cancel_requested",
+            "task_id",
+            "queue_name",
+            "last_error",
+            "finished_at",
+            "updated_at",
+        ]
+    )
+    record_job_log(job, "error", message, {"auto_failed": True})
+    return job
+
+
+def requeue_processing_job(
+    job,
+    *,
+    retry_count=0,
+    message="",
+    preserve_dispatch_state=False,
+):
+    submission = job.submission
+    submission.status = SubmissionStatus.QUEUED
+    submission.error_message = ""
+    submission.save(update_fields=["status", "error_message", "updated_at"])
+    sync_deduplicated_submissions(submission)
+
+    job.status = JobStatus.QUEUED
+    job.retry_count = retry_count
+    job.cancel_requested = False
+    if not preserve_dispatch_state:
+        job.task_id = ""
+        job.queue_name = ""
+    job.last_error = message
+    job.started_at = None
+    job.finished_at = None
+    update_fields = [
+        "status",
+        "retry_count",
+        "cancel_requested",
+        "last_error",
+        "started_at",
+        "finished_at",
+        "updated_at",
+    ]
+    if not preserve_dispatch_state:
+        update_fields.extend(["task_id", "queue_name"])
+    job.save(update_fields=update_fields)
+    record_job_log(
+        job,
+        "warning",
+        message or "Processing job was requeued automatically.",
+        {
+            "auto_requeued": True,
+            "retry_count": retry_count,
+            "preserve_dispatch_state": preserve_dispatch_state,
+        },
+    )
+    return job
+
+
+def recover_stale_processing_jobs(
+    *,
+    origin="",
+    limit=50,
+    stale_after=STALE_PROCESSING_JOB_AFTER,
+):
+    queryset = ProcessingJob.objects.select_related("submission").filter(
+        cancel_requested=False
     )
     if origin:
         queryset = queryset.filter(submission__origin=origin)
 
+    queued_job_ids = list(
+        queryset.filter(status=JobStatus.QUEUED)
+        .filter(Q(task_id="") | Q(task_id__isnull=True))
+        .order_by("created_at")
+        .values_list("id", flat=True)[:limit]
+    )
+    remaining_limit = max(limit - len(queued_job_ids), 0)
+    stale_before = timezone.now() - stale_after
+    stale_job_ids = []
+    if remaining_limit:
+        stale_job_ids = list(
+            queryset.filter(status=JobStatus.PROCESSING)
+            .filter(
+                Q(started_at__lt=stale_before)
+                | (
+                    Q(started_at__isnull=True)
+                    & Q(updated_at__lt=stale_before)
+                )
+            )
+            .order_by("created_at")
+            .values_list("id", flat=True)[:remaining_limit]
+        )
+
     recovered = 0
-    for job in queryset[:limit]:
+    jobs = list(
+        ProcessingJob.objects.select_related("submission")
+        .filter(pk__in=[*queued_job_ids, *stale_job_ids])
+        .order_by("created_at")
+    )
+
+    for job in jobs:
+        if job.status == JobStatus.PROCESSING:
+            revoke_processing_task(job.task_id, terminate=True)
+            next_retry_count = int(job.retry_count or 0) + 1
+            if next_retry_count >= MAX_PROCESSING_JOB_ATTEMPTS:
+                fail_processing_job(job, STALE_PROCESSING_FAILURE_MESSAGE)
+                continue
+            requeue_processing_job(
+                job,
+                retry_count=next_retry_count,
+                message=STALE_PROCESSING_RETRY_MESSAGE,
+            )
+
         dispatch_processing_job(job, force=True)
         recovered += 1
     return recovered
@@ -523,7 +654,7 @@ def queue_submission(submission, actor=None):
     return job
 
 
-def dispatch_processing_job(job, force=False):
+def dispatch_processing_job(job, force=False, attempt_offset=None):
     from apps.ingestion.tasks import process_submission_task
 
     job.refresh_from_db(fields=["status", "task_id", "queue_name", "cancel_requested", "updated_at"])
@@ -531,24 +662,55 @@ def dispatch_processing_job(job, force=False):
         return job
     if not force and job.status == JobStatus.QUEUED and job.task_id:
         return job
+    resolved_attempt_offset = max(
+        int(job.retry_count or 0),
+        int(attempt_offset or 0),
+    )
+
+    assigned_task_id = str(uuid4())
+    job.task_id = assigned_task_id
+    job.queue_name = "celery"
+    job.save(update_fields=["task_id", "queue_name", "updated_at"])
 
     try:
-        async_result = process_submission_task.delay(str(job.id))
-        job.task_id = getattr(async_result, "id", "")
-        job.queue_name = "celery"
-        job.save(update_fields=["task_id", "queue_name", "updated_at"])
+        async_result = process_submission_task.apply_async(
+            args=[str(job.id)],
+            kwargs={"attempt_offset": resolved_attempt_offset},
+            task_id=assigned_task_id,
+        )
+        dispatched_task_id = getattr(async_result, "id", assigned_task_id) or assigned_task_id
+        if dispatched_task_id != assigned_task_id:
+            job.task_id = dispatched_task_id
+            job.save(update_fields=["task_id", "updated_at"])
     except Exception as exc:
+        job.refresh_from_db()
+        if settings.CELERY_TASK_ALWAYS_EAGER:
+            logger.warning("Processing job eager execution raised during dispatch.", exc_info=True)
+            return job
         logger.warning("Celery dispatch failed, falling back to inline processing", exc_info=True)
+        job.task_id = ""
         job.queue_name = "inline-fallback"
         job.last_error = f"Celery dispatch failed: {exc}"
-        job.save(update_fields=["queue_name", "last_error", "updated_at"])
+        job.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
         record_job_log(
             job,
             "warning",
             "Celery dispatch failed, processing inline instead.",
             {"error": str(exc), "always_eager": settings.CELERY_TASK_ALWAYS_EAGER},
         )
-        process_submission_job(str(job.id), retry_count=job.retry_count, task_id="")
+        inline_retry_count = int(job.retry_count or 0)
+        last_error = None
+        for attempt in range(inline_retry_count, MAX_PROCESSING_JOB_ATTEMPTS):
+            try:
+                process_submission_job(str(job.id), retry_count=attempt, task_id="")
+                last_error = None
+                break
+            except Exception as inline_exc:
+                last_error = inline_exc
+                if attempt + 1 >= MAX_PROCESSING_JOB_ATTEMPTS:
+                    break
+        if last_error is not None:
+            raise last_error
         job.refresh_from_db()
 
 
@@ -801,6 +963,9 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             reprocess_book = Book.objects.filter(pk=reprocess_book_id, deleted_at__isnull=True).first()
             if reprocess_book is None:
                 raise ValueError("The target book for regeneration is unavailable.")
+            if reprocess_book.state != LifecycleState.PROCESSING:
+                reprocess_book.state = LifecycleState.PROCESSING
+                reprocess_book.save(update_fields=["state", "updated_at"])
 
         if cancel_requested_for_job(job):
             return finalize_cancelled_job(job)
@@ -933,6 +1098,21 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         return job
     except Exception as exc:
         logger.exception("Submission processing failed", extra={"submission_id": str(submission.id)})
+        next_retry_count = int(retry_count or 0) + 1
+        should_retry = next_retry_count < MAX_PROCESSING_JOB_ATTEMPTS
+
+        if should_retry:
+            requeue_processing_job(
+                job,
+                retry_count=next_retry_count,
+                message=PROCESSING_RETRY_MESSAGE_TEMPLATE.format(
+                    attempt=next_retry_count,
+                    max_attempts=MAX_PROCESSING_JOB_ATTEMPTS,
+                ),
+                preserve_dispatch_state=bool(task_id or job.task_id),
+            )
+            raise
+
         submission.status = SubmissionStatus.FAILED
         submission.error_message = str(exc)
         submission.save(update_fields=["status", "error_message", "updated_at"])
@@ -943,9 +1123,20 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                 reprocess_book.state = previous_book_state
                 reprocess_book.save(update_fields=["state", "updated_at"])
         job.status = JobStatus.FAILED
+        job.task_id = ""
+        job.queue_name = ""
         job.last_error = str(exc)
         job.finished_at = timezone.now()
-        job.save(update_fields=["status", "last_error", "finished_at", "updated_at"])
+        job.save(
+            update_fields=[
+                "status",
+                "task_id",
+                "queue_name",
+                "last_error",
+                "finished_at",
+                "updated_at",
+            ]
+        )
         record_job_log(job, "error", "Submission processing failed.", {"error": str(exc)})
         raise
 
