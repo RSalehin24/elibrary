@@ -1,0 +1,22 @@
+Each book record will be called as a request. Request will have the following category:
+a. book_catalog
+b. automated
+c. user_requested
+d. incomplete
+e. failed
+f. duplicate
+
+Description of each catagory:
+a. book_catalog: These are the book records which will be fetched from the ebanglalibrary. In this case, a user will manually intiate the fetching. This initiation will be called syncing.
+  - syncing: The following behavior will be attached to syncing:
+    - syncing can be initiated: A visual presentation of sysncing has started and ongoing will be shown. like a loader which will be going on till one of the next things has happened.
+    - syncing can be paused: when paused, the progress of how far the syncing have happened will be recorded and saved. no more records will be fetched from the ebanlalibrary. when the paused button will be clicked, there will be a visual representation like chaging the color and text from ongoing to pausing for the syncing is pausing. and that representation will remain till the sync is paused (no further record are fetching) and progressed is saved. After this the initial icon  will be shown which the users see in idle state.
+    - syncing can be resumned: when resumed it will start from the begining. it will match the fetched ones with the saved ones. there is any change in the record, it will do the change. If there is a new record it will add the new one too. Then it reached the end of the saved ones, it will started fetching all the new ones.
+    - syncing will end: develop a mechanism which will be able to determine for sure that all the records are fetched for sure. and after fetching all the records the syncing will end. and the initial icon  will be shown which the users see in idle state.
+  - requests: each book record which is saved will be called a request. one categroy will be associated with a request. requests created from records of catalog will be assigned the book_catalog as their catacogory. by this requests from one category will remain separated from other categories. a request will also have many states. the first when when a request is just logged will be called an initial_state.
+  - action on intial requests: let's say the sync will be done and the initial requests will be shown in a card called "Catalog Books" card. there can be two opions that can be performed over the initial requests that are just created. user can either create books from this requests or delete this request. The first column of the request rows will be a row to select one multiple or all requests. Then user can "create_book" from the requests or user can "delete" the requests. In each of the state of the request will be changed.
+  - create_book action: if the user use create_book actions on one or multple requests, the first state changes will be that the requests will move from the "Catalog Books" card to "Queue" card. And their state will be changed from initial_state to queue state. In this card the request will wait till their terms come for processing. So in the queue, there can be as much as requests.
+  - delete action: delete action will move the request or requests from "Catalog Books" card to "Deleted" card. their state will also be changed from initial_state to deleted state.
+  - queue card: in the "Queue" card, there will be two action one is pause and another one is delete. delete will behave like before. and pause will save the progress of the selected books and move the books to a card called "Paused". Their action will also be changed to paused.
+  
+b. 
