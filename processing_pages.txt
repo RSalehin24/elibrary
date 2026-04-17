@@ -1,22 +1,379 @@
-Each book record will be called as a request. Request will have the following category:
-a. book_catalog
-b. automated
-c. user_requested
-d. incomplete
-e. failed
-f. duplicate
+================================================================================
+                        BOOK PROCESSING — PAGE SPECIFICATIONS
+================================================================================
 
-Description of each catagory:
-a. book_catalog: These are the book records which will be fetched from the ebanglalibrary. In this case, a user will manually intiate the fetching. This initiation will be called syncing.
-  - syncing: The following behavior will be attached to syncing:
-    - syncing can be initiated: A visual presentation of sysncing has started and ongoing will be shown. like a loader which will be going on till one of the next things has happened.
-    - syncing can be paused: when paused, the progress of how far the syncing have happened will be recorded and saved. no more records will be fetched from the ebanlalibrary. when the paused button will be clicked, there will be a visual representation like chaging the color and text from ongoing to pausing for the syncing is pausing. and that representation will remain till the sync is paused (no further record are fetching) and progressed is saved. After this the initial icon  will be shown which the users see in idle state.
-    - syncing can be resumned: when resumed it will start from the begining. it will match the fetched ones with the saved ones. there is any change in the record, it will do the change. If there is a new record it will add the new one too. Then it reached the end of the saved ones, it will started fetching all the new ones.
-    - syncing will end: develop a mechanism which will be able to determine for sure that all the records are fetched for sure. and after fetching all the records the syncing will end. and the initial icon  will be shown which the users see in idle state.
-  - requests: each book record which is saved will be called a request. one categroy will be associated with a request. requests created from records of catalog will be assigned the book_catalog as their catacogory. by this requests from one category will remain separated from other categories. a request will also have many states. the first when when a request is just logged will be called an initial_state.
-  - action on intial requests: let's say the sync will be done and the initial requests will be shown in a card called "Catalog Books" card. there can be two opions that can be performed over the initial requests that are just created. user can either create books from this requests or delete this request. The first column of the request rows will be a row to select one multiple or all requests. Then user can "create_book" from the requests or user can "delete" the requests. In each of the state of the request will be changed.
-  - create_book action: if the user use create_book actions on one or multple requests, the first state changes will be that the requests will move from the "Catalog Books" card to "Queue" card. And their state will be changed from initial_state to queue state. In this card the request will wait till their terms come for processing. So in the queue, there can be as much as requests.
-  - delete action: delete action will move the request or requests from "Catalog Books" card to "Deleted" card. their state will also be changed from initial_state to deleted state.
-  - queue card: in the "Queue" card, there will be two action one is pause and another one is delete. delete will behave like before. and pause will save the progress of the selected books and move the books to a card called "Paused". Their action will also be changed to paused.
-  
-b. 
+
+────────────────────────────────────────────────────────────────────────────────
+CORE DATA MODELS
+────────────────────────────────────────────────────────────────────────────────
+
+1. Book Record (book_record)
+   Sourced from eBanglaLibrary. Contains the following fields:
+
+   - Name
+   - URL
+   - Category
+   - Writer / Translator / Composer
+   - Creation Time
+   - Update Time
+   - Book Creation State
+     * "Not Created Yet" — no creation request has been submitted
+     * Any other state reflects the current book_creation_request status (see below)
+
+2. Book Creation Request (book_creation_request)
+   Created from a book_record when the user initiates book creation.
+   Possible states:
+
+   - initial      → Newly created request, pending queue
+   - queued        → Request is waiting to be processed
+   - processing    → Request is actively being processed
+   - created       → Book has been successfully created
+   - paused        → Processing was manually paused; progress is saved
+   - failed        → An error occurred during any state
+   - duplicate     → Request was identified as a duplicate of an existing record/request
+   - deleted       → Request was deleted by the user
+
+
+────────────────────────────────────────────────────────────────────────────────
+GENERAL UI RULES (APPLY TO ALL CARDS ON ALL PAGES)
+────────────────────────────────────────────────────────────────────────────────
+
+- Selection & Actions:
+  * A leftmost checkbox column allows selecting single or multiple records.
+  * While an action is being processed within a card, all selection controls
+    and action buttons are disabled for that card only. Other cards on the
+    same page remain fully interactive and are not affected.
+
+- Loaders:
+  * A loading indicator is displayed within the card where an action is
+    being processed.
+  * The loader is dismissed once the action completes or fails.
+  * Loaders in one card do not affect the display or interactivity of
+    other cards.
+
+- Search:
+  * Records can be searched by: Name, Writer, Translator, Publisher.
+
+- Filters:
+  * Records can be filtered by: Book Category, Book Creation Request Status.
+
+- Record Count:
+  * The total number of filtered/displayed records is always shown, consistent
+    with the current implementation style.
+
+
+================================================================================
+PAGE 1 — CATALOG
+================================================================================
+
+PURPOSE
+  Displays an overview of all book records synced from eBanglaLibrary.
+  Provides tools for manual and automated syncing, and allows initiating
+  book creation requests.
+
+────────────────────────────────────────
+SECTION A: Overview
+────────────────────────────────────────
+  Displays summary statistics of the full catalog (total records, counts by
+  state, etc.).
+
+────────────────────────────────────────
+SECTION B: Manual Syncing
+────────────────────────────────────────
+  The user can manually trigger a sync of book records from eBanglaLibrary.
+  The sync has the following behavior:
+
+  B1. Initiating a Sync
+      - The user starts the sync manually.
+      - A visual loader/progress indicator appears and remains active
+        until the sync ends, is paused, or encounters an error.
+
+  B2. Pausing a Sync
+      - The user can pause an ongoing sync at any time.
+      - On clicking Pause:
+        * The button text and color immediately change to indicate "Pausing..."
+        * The system finishes saving the current progress (no further records
+          are fetched from eBanglaLibrary during this phase).
+        * Once the progress is fully saved and fetching has stopped, the UI
+          returns to its idle state (same icon/state as before sync started).
+      - The saved progress records how far the sync had reached.
+
+  B3. Resuming a Sync
+      - When a paused sync is resumed, it restarts from the beginning of the
+        record list.
+      - For each record already saved locally:
+        * If the remote record has changed, the local copy is updated.
+        * If the record is unchanged, it is skipped.
+      - Once all previously saved records have been checked and reconciled,
+        the sync continues fetching new records from where it left off.
+
+  B4. Sync Completion
+      - A reliable mechanism determines when all records have been fetched
+        (e.g., the API returns an empty page or signals end-of-results).
+      - When the sync is complete, the UI returns to its idle state.
+
+────────────────────────────────────────
+SECTION C: Automated Syncing
+────────────────────────────────────────
+  Automated syncing runs the same process as manual syncing but without
+  any user interruption. It:
+  - Runs automatically on a configured schedule.
+  - Syncs all records from first to last.
+  - Compares incoming records with existing saved ones.
+  - Updates changed records and adds new ones.
+  - Requires no user interaction to start, pause, or stop.
+  - After syncing, automatically creates a book_creation_request (state:
+    initial) for every book record that does not yet have an active or
+    completed creation request (i.e., records whose Book Creation State is
+    "Not Created Yet", or whose last request reached a terminal state of
+    failed or deleted).
+
+  Book Creation Pipeline (Fully Automated):
+  Once requests are created — whether by automated sync or manual action —
+  the entire pipeline from initial to a terminal state is fully automated.
+  Requests progress through the following stages without any user intervention:
+
+      initial → queued → processing → created (terminal)
+
+  If an issue is encountered along the way, the request may instead reach
+  one of the following terminal or holding states:
+
+      - created   → Book was successfully created. (terminal)
+      - paused    → Processing was manually paused; can be resumed.
+      - failed    → An unrecoverable error occurred. (terminal until retried)
+      - duplicate → Request was flagged as a duplicate. (terminal until actioned)
+      - deleted   → Request was deleted by the user. (terminal until actioned)
+
+  No manual intervention is required for the pipeline to advance between
+  initial, queued, processing, and created states.
+
+  Configuration settings for the automated sync schedule are displayed
+  in this section.
+
+────────────────────────────────────────
+SECTION D: Book Records Table
+────────────────────────────────────────
+  Displays all synced book records. Supports Search, Filter, and Count
+  (as described in General UI Rules).
+
+  Available Action:
+  - Create Book
+    * The user selects one or more book records and clicks "Create Book."
+    * A book_creation_request is created for each selected record with
+      state: initial.
+    * While the requests are being created, all selection and action controls
+      are disabled and a loader is shown.
+    * Once all requests are created, controls are re-enabled.
+
+  Note: A book record that is already linked to an active creation request
+  (i.e., not failed or deleted) cannot be selected for creation again.
+
+
+================================================================================
+PAGE 2 — CREATE
+================================================================================
+
+PURPOSE
+  Tracks the progression of book_creation_requests from initial submission
+  through to successful book creation.
+
+────────────────────────────────────────
+OVERVIEW
+────────────────────────────────────────
+  Displays the same summary statistics as the Catalog overview, plus counts
+  specific to the four cards below.
+
+────────────────────────────────────────
+CARD A: Requests (State: initial)
+────────────────────────────────────────
+  Shows all newly created requests that have not yet been queued.
+
+  Available Action:
+  - Delete
+    * Changes the request state to: deleted.
+    * The request is removed from this card.
+
+────────────────────────────────────────
+CARD B: Queue (State: queued)
+────────────────────────────────────────
+  Requests are automatically moved here from Requests when they are queued
+  for processing.
+
+  Available Action:
+  - Delete
+    * Same behavior as in Card A.
+
+────────────────────────────────────────
+CARD C: Processing (State: processing)
+────────────────────────────────────────
+  Requests are automatically moved here from Queue when active processing begins.
+
+  Available Actions:
+  - Pause
+    * Saves the current processing progress and related data for the request.
+    * Changes state to: paused.
+    * The request moves to the Paused card on the On Hold page.
+
+  - Delete
+    * Same behavior as in Card A and B.
+
+────────────────────────────────────────
+CARD D: Created (State: created)
+────────────────────────────────────────
+  Requests appear here once processing is complete and the book has been
+  successfully created.
+
+  Available Action:
+  - Delete
+    * Changes state to: deleted.
+    * In addition to removing the request, this action also deletes the
+      associated book from the database.
+
+
+================================================================================
+PAGE 3 — ON HOLD
+================================================================================
+
+PURPOSE
+  Manages requests that have been interrupted, encountered errors,
+  been flagged as duplicates, or deleted.
+
+────────────────────────────────────────
+OVERVIEW
+────────────────────────────────────────
+  Displays counts for: Paused, Failed, Duplicate, and Deleted requests.
+
+────────────────────────────────────────
+CARD A: Paused (State: paused)
+────────────────────────────────────────
+  Requests that were paused during processing. Each paused request retains
+  information about where processing stopped and what data was saved.
+
+  Available Actions:
+  - Resume
+    * Uses the saved progress and data to re-check records from the beginning,
+      applying any updates found since the pause.
+    * After reconciling existing data, fetches remaining new records and
+      completes book creation.
+    * A "resumed" flag is attached to the request so the processing stage
+      can skip ahead efficiently using saved progress.
+    * State changes to: initial. The request moves to the Requests card
+      (Card A, Page 2) and follows the full cycle: Requests → Queue →
+      Processing → Created.
+    * A loader is shown until all selected paused requests have been
+      successfully moved to the Requests card.
+
+  - Delete
+    * Clears all saved progress and related data.
+    * Changes state to: deleted.
+
+────────────────────────────────────────
+CARD B: Failed (State: failed)
+────────────────────────────────────────
+  Requests that encountered an error at any state. No progress or data
+  is saved for failed requests.
+
+  An additional column is displayed showing the reason for failure.
+
+  Failure is detected by monitoring for:
+  - Infinite loops or repeated retries beyond a defined threshold.
+  - Inability to fetch data from eBanglaLibrary after an extended retry period.
+  - Runtime or code-level exceptions.
+  - Any other unrecoverable error condition.
+
+  Available Action:
+  - Retry
+    * Resets the request to state: initial.
+    * Moves it to the Requests card (Card A, Page 2).
+    * The full creation cycle restarts from the beginning.
+
+────────────────────────────────────────
+CARD C: Duplicate (State: duplicate)
+────────────────────────────────────────
+  Requests automatically flagged as duplicates of an existing book record
+  or book_creation_request.
+
+  Available Actions:
+  - New (Treat as New Book)
+    * A flag is saved to mark this request as explicitly non-duplicate, so
+      it is not flagged again.
+    * State changes to: initial.
+    * Moves to the Requests card and follows the full creation cycle.
+
+  - Duplicate (Confirm as Duplicate)
+    * Confirms the request is a duplicate.
+    * Links the duplicate request and its associated book record to the
+      original request.
+    * The duplicate book record stores the original's information and a
+      duplicate flag, but does not store the original request's details.
+    * The duplicate book record cannot be selected for a new creation request
+      until the original request reaches a terminal state (failed or deleted).
+
+  - Delete
+    * No progress or data is saved.
+    * State changes to: deleted.
+
+────────────────────────────────────────
+CARD D: Deleted (State: deleted)
+────────────────────────────────────────
+  All deleted book_creation_requests are shown here, regardless of
+  which page or action caused the deletion.
+
+  Available Action:
+  - Create Again
+    * Resets the request to state: initial.
+    * Moves it to the Requests card (Card A, Page 2).
+    * The full creation cycle restarts.
+
+
+================================================================================
+PAGE 4 — INCOMPLETE
+================================================================================
+
+PURPOSE
+  Tracks book records that were categorized as "incomplete" and monitors
+  their progress toward completion.
+
+────────────────────────────────────────
+SECTION A: Overview
+────────────────────────────────────────
+  Displays:
+  - Total number of incomplete book records.
+  - Number of incomplete records that have since been moved to a complete
+    category (i.e., how many have been resolved).
+
+────────────────────────────────────────
+SECTION B: Automation Settings
+────────────────────────────────────────
+  Configuration for an automated process that:
+  - Periodically checks the incomplete catalog.
+  - Detects book records that have been reclassified from incomplete
+    to another category.
+  - Updates those records accordingly without manual intervention.
+
+────────────────────────────────────────
+CARD A: Incomplete Book Records
+────────────────────────────────────────
+  Displays all book records currently in an incomplete state.
+
+  Available Actions: None (read-only).
+
+────────────────────────────────────────
+CARD B: Completed Books
+────────────────────────────────────────
+  Displays book records that were previously incomplete but have since
+  been resolved and fully created.
+
+  Available Actions:
+  - Recreate Book
+    * Resets the associated request to state: initial.
+    * Moves it to the Requests card (Card A, Page 2) for a fresh creation cycle.
+
+  - Delete
+    * Changes state to: deleted.
+    * Moves the request to the Deleted card (Card D, Page 3).
+
+
+================================================================================
+END OF SPECIFICATION
+================================================================================
