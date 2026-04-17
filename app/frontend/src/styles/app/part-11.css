@@ -246,3 +246,61 @@
   overflow: hidden;
   padding: 24px;
 }
+
+.processing-replacement-card {
+  gap: 14px;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+}
+
+.processing-replacement-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px) minmax(
+      180px,
+      240px
+    );
+  gap: 12px;
+  align-items: end;
+}
+
+.processing-replacement-toolbar label,
+.processing-automation-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.processing-replacement-toolbar input,
+.processing-replacement-toolbar select {
+  min-height: 40px;
+}
+
+.processing-active-filters,
+.processing-automation-status,
+.catalog-toolbar-sync-status {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.processing-inline-loader {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.processing-replacement-card .processing-table td strong,
+.processing-replacement-card .processing-table td span {
+  display: block;
+}
+
+.processing-replacement-card .processing-table td span {
+  max-width: 280px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.82rem;
+}

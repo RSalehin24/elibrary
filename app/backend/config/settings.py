@@ -128,6 +128,7 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.catalog",
     "apps.ingestion",
+    "apps.processing",
     "apps.access",
 ]
 

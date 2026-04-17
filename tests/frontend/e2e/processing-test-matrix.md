@@ -2,34 +2,46 @@
 
 ## User Stories
 
-1. As an operator, I need each request to appear in exactly one matching card so the queue state is unambiguous.
-2. As an operator, I need failed requests to show the failure message in the failed table row so I can scan errors without opening a side panel.
-3. As an operator, I need card actions to target only the records shown in that card so bulk actions do not affect hidden rows.
-4. As an operator, I need searches and filters to change the visible row set and counts for the active card only.
-5. As an operator, I need page-specific cards to appear only where they belong, such as failed requests on the failed page and duplicate reviews on the duplicate page.
+1. As an operator, I need catalog sync to run end to end, pause safely, resume from the beginning, and complete without leaving records behind.
+2. As an operator, I need every processing page card to isolate its own loaders, disabled controls, search, filters, and visible counts.
+3. As an operator, I need automatic request progression to keep moving across `initial`, `queued`, `processing`, and terminal states without requiring manual refreshes.
+4. As an operator, I need paused, failed, duplicate, deleted, and incomplete records to move between pages predictably with valid actions only.
+5. As an operator, I need notifications when actions complete and when the system detects duplicates or failures so I can react without inspecting every card manually.
+6. As an operator, I need long-running processing work to stop surfacing as active work once it exceeds the allowed window and be visible as a failure instead.
 
 ## Matrix
 
-| Page | Card | Primary scenario | Expected result |
+| Area | Story | Scenario | Expected result |
 | --- | --- | --- | --- |
-| My Requests | Requests | Pending/manual requests load | Pending request stays out of processing, ready, queued, stopped, and deleted cards |
-| My Requests | Processing | Active request is stopped | Request moves from Processing to Stopped |
-| My Requests | Deleted | Deleted request is requeued | Request leaves Deleted and appears in Ready |
-| Catalog | Processing/Ready/Queued/Stopped/Deleted | Seeded curation requests render | Each seeded request appears in one card only |
-| Catalog | Catalog Books | Sort control changes order | Visible catalog rows remain correct after sort change |
-| Catalog | Catalog Books | Create selected and leave the page mid-run | Create controls keep loading, selection stays disabled, and both clear only after the tracked rows reach a terminal result |
-| Catalog | Catalog Sync | Start sync | Sync control switches to an active loading state immediately after the action starts |
-| Catalog | Processing/Stopped/Deleted/Catalog Books | Stop, resume, requeue, and delete from visible rows | Each live action updates the matching card or row without manual refresh |
-| Automation | Processing/Ready/Queued/Stopped/Deleted | Seeded automation requests render | Each seeded request appears in one card only |
-| Automation | Run History | Expand/collapse and persistence | Expanded run history rises to the top and saved settings persist after reload |
-| Failed Requests | Failed Requests | Failed rows render with Errors column | Row shows failure message inline and no side log panel is rendered |
-| Failed Requests | Failed Requests search | Search by error text | Only matching failed row remains visible |
-| Deplicate Requests | Deplicate Requests | Duplicate resolution action | Duplicate row leaves duplicate card and moves into normal processing flow |
-| Incomplete Requests | Incomplete Catalog | Reprocess selected incomplete book | Reprocess action queues the selected incomplete item |
-| Incomplete Requests | Run History | Failed/stopped run details | Run history stays collapsible and failed runs expose error disclosure |
+| Catalog | Manual sync | Start sync and let it run | Sync advances through all remote pages, returns to idle automatically, shows completion status, and leaves all fetched rows in the table |
+| Catalog | Manual sync | Pause during an active sync | Pause button switches to `Pausing...`, current page finishes, progress is saved, and resume restarts reconciliation from page 1 |
+| Catalog | Records card | Create requests from selectable rows | Only eligible rows can be selected, bulk create shows a loader in the records card only, and created requests enter the pipeline |
+| Catalog | Automation | Run catalog automation | Only `not_created`, `failed`, and `deleted` records receive new initial requests, then the pipeline auto-advances them |
+| Create | Requests / Queue / Processing / Created | Card isolation | A busy card disables only its own controls while the other create-page cards remain interactive |
+| Create | Processing | Pause active work | Progress is saved, the row leaves `Processing`, and the request appears in `On Hold / Paused` |
+| Create | Created | Delete completed work | The row leaves `Created`, moves to `On Hold / Deleted`, and linked-book deletion is requested when applicable |
+| On Hold | Paused | Resume paused requests | Resume sets `isResumed`, returns the row to `Create / Requests`, and the pipeline keeps moving afterward |
+| On Hold | Failed | Retry failed requests | Retry returns the row to `Create / Requests` and clears the previous failure message |
+| On Hold | Duplicate | Confirm duplicate | Duplicate confirmation keeps the catalog row locked until the original request reaches a terminal failure or deletion state |
+| On Hold | Deleted | Create again | Deleted rows can be recreated back into `Create / Requests` without affecting unrelated cards |
+| Incomplete | Automation | Resolve incomplete records | Automation reclassifies completed records, updates overview counts, and surfaces the resolved rows in `Completed Books` |
+| Incomplete | Completed Books | Recreate or delete resolved items | Recreate sends the request back to `Create / Requests`; delete moves it to `On Hold / Deleted` |
+| Notifications | Action feedback | Create / save / sync completion | Success or info toasts appear for request creation, automation saves, sync start, sync pause, and sync completion |
+| Notifications | Terminal feedback | Duplicate, failed, stale, and created transitions | Duplicate detection shows a notice, failed requests show an alert, created requests show success, and stale processing is surfaced as failed work |
 
-## Real-Browser Coverage
+## Covered Edge Cases
 
+- Full manual sync completion with no explicit pause
+- Pause-after-current-page sync behavior
+- Automated request creation eligibility filtering
+- Duplicate confirmation locking and unlock after the original request becomes terminal
+- Stale processing timeout after 20 minutes
+- Cross-card loader and disabled-control isolation
+- Read-only incomplete rows with no actions
+- Action completion notifications plus duplicate/failure transition notifications
+
+## Automated Coverage
+
+- `tests/backend/processing/test_processing_api.py`
 - `tests/frontend/e2e/processing-pages.spec.js`
-- Uses the live frontend and backend stack with seeded deterministic data
-- Validates card ownership, counts via visible rows, search/filter behavior, and destructive/non-destructive actions
+- `tests/frontend/e2e/processing-pages-live.spec.js` for live smoke coverage when the local frontend base URL is available

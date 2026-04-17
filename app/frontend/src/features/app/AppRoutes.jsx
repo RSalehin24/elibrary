@@ -2,7 +2,6 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import AccessPage from "../../pages/AccessPage";
 import BookDetailPage from "../../pages/BookDetailPage";
 import CategoryPage from "../../pages/CategoryPage";
-import CreateBooksPage from "../../pages/CreateBooksPage";
 import CreatedBooksPage from "../../pages/CreatedBooksPage";
 import HomePage from "../../pages/HomePage";
 import LibraryPage from "../../pages/LibraryPage";
@@ -10,22 +9,25 @@ import LoginPage from "../../pages/LoginPage";
 import ManualBooksPage from "../../pages/ManualBooksPage";
 import PasswordLinkPage from "../../pages/PasswordLinkPage";
 import PasswordResetPage from "../../pages/PasswordResetPage";
-import ProcessingAutomationPage from "../../pages/ProcessingAutomationPage";
-import ProcessingCatalogBooksPage from "../../pages/ProcessingCatalogBooksPage";
-import ProcessingDuplicateRequestsPage from "../../pages/ProcessingDuplicateRequestsPage";
-import ProcessingFailedRequestsPage from "../../pages/ProcessingFailedRequestsPage";
-import ProcessingIncompleteAutomationPage from "../../pages/ProcessingIncompleteAutomationPage";
-import ProcessingMyRequestsPage from "../../pages/ProcessingMyRequestsPage";
 import ProfilePage from "../../pages/ProfilePage";
 import ReaderPage from "../../pages/ReaderPage";
 import SeriesPage from "../../pages/SeriesPage";
 import TwoFactorSetupPage from "../../pages/TwoFactorSetupPage";
 import WriterPage from "../../pages/WriterPage";
+import {
+  CatalogProcessingPage,
+  CreateProcessingPage,
+  IncompleteProcessingPage,
+  OnHoldProcessingPage,
+} from "../processing/BookProcessingPages";
 import ProtectedRoute from "./ProtectedRoute";
 
 const protectedRoutes = [
   { path: "/home", element: <HomePage /> },
-  { path: "/create", element: <CreateBooksPage /> },
+  { path: "/catalog", element: <CatalogProcessingPage /> },
+  { path: "/create", element: <CreateProcessingPage /> },
+  { path: "/on-hold", element: <OnHoldProcessingPage /> },
+  { path: "/incomplete", element: <IncompleteProcessingPage /> },
   { path: "/library", element: <LibraryPage /> },
   { path: "/categories", element: <CategoryPage /> },
   { path: "/series", element: <SeriesPage /> },
@@ -35,24 +37,6 @@ const protectedRoutes = [
   { path: "/editors", element: <WriterPage /> },
   { path: "/manual-books", element: <ManualBooksPage /> },
   { path: "/created-books", element: <CreatedBooksPage /> },
-  { path: "/processing-my-requests", element: <ProcessingMyRequestsPage /> },
-  {
-    path: "/processing-catalog-books",
-    element: <ProcessingCatalogBooksPage />,
-  },
-  { path: "/processing-automation", element: <ProcessingAutomationPage /> },
-  {
-    path: "/processing-failed-requests",
-    element: <ProcessingFailedRequestsPage />,
-  },
-  {
-    path: "/processing-duplicate-requests",
-    element: <ProcessingDuplicateRequestsPage />,
-  },
-  {
-    path: "/processing-incomplete-check",
-    element: <ProcessingIncompleteAutomationPage />,
-  },
   { path: "/books/:slug", element: <BookDetailPage /> },
   { path: "/access", element: <AccessPage /> },
   { path: "/profile", element: <ProfilePage /> },
@@ -94,11 +78,35 @@ export default function AppRoutes() {
       {protectedRoutes.map(renderProtectedRoute)}
       <Route
         path="/processing"
-        element={<Navigate to="/processing-my-requests" replace />}
+        element={<Navigate to="/catalog" replace />}
+      />
+      <Route
+        path="/processing-catalog-books"
+        element={<Navigate to="/catalog" replace />}
+      />
+      <Route
+        path="/processing-automation"
+        element={<Navigate to="/catalog" replace />}
+      />
+      <Route
+        path="/processing-my-requests"
+        element={<Navigate to="/create" replace />}
+      />
+      <Route
+        path="/processing-failed-requests"
+        element={<Navigate to="/on-hold" replace />}
+      />
+      <Route
+        path="/processing-duplicate-requests"
+        element={<Navigate to="/on-hold" replace />}
+      />
+      <Route
+        path="/processing-incomplete-check"
+        element={<Navigate to="/incomplete" replace />}
       />
       <Route
         path="/queue"
-        element={<Navigate to="/processing-my-requests" replace />}
+        element={<Navigate to="/create" replace />}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

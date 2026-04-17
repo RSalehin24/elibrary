@@ -8,33 +8,23 @@ export const bookPropertiesItems = [
 
 export const processingItems = [
   {
-    to: "/processing-catalog-books",
+    to: "/catalog",
     label: "Catalog",
     capabilityRequired: true,
   },
   {
-    to: "/processing-automation",
-    label: "Automation",
+    to: "/create",
+    label: "Create",
     capabilityRequired: true,
   },
   {
-    to: "/processing-my-requests",
-    label: "My Requests",
-    capabilityRequired: false,
-  },
-  {
-    to: "/processing-failed-requests",
-    label: "Failed Requests",
+    to: "/on-hold",
+    label: "On Hold",
     capabilityRequired: true,
   },
   {
-    to: "/processing-duplicate-requests",
-    label: "Deplicate Requests",
-    capabilityRequired: true,
-  },
-  {
-    to: "/processing-incomplete-check",
-    label: "Incomplete Requests",
+    to: "/incomplete",
+    label: "Incomplete",
     capabilityRequired: true,
   },
 ];
@@ -54,7 +44,13 @@ export function isBookPropertiesRoute(pathname) {
 }
 
 export function isProcessingRoute(pathname) {
-  return pathname.startsWith("/processing");
+  return (
+    pathname === "/catalog" ||
+    pathname === "/create" ||
+    pathname === "/on-hold" ||
+    pathname === "/incomplete" ||
+    pathname.startsWith("/processing")
+  );
 }
 
 export function authenticatedNavigation(user) {
@@ -64,7 +60,6 @@ export function authenticatedNavigation(user) {
 
   return [
     { to: "/home", label: "Home" },
-    { to: "/create", label: "Create Books" },
     ...(user.is_superuser ? [{ to: "/access", label: "Users & Access" }] : []),
   ];
 }

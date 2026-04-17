@@ -1,2296 +1,1146 @@
 import { expect, test } from "./support/playwright";
-import { ProcessingPageModel } from "./pages/processingPage";
-import { seedData } from "./support/seedData";
 
-function createCatalogSyncState(overrides = {}) {
+const PROCESSING_TIMEOUT_MS = 20 * 60 * 1000;
+
+const sessionPayload = {
+  authenticated: true,
+  user: {
+    id: "processing-user",
+    email: "processing-admin@example.com",
+    full_name: "Processing Admin",
+    is_superuser: true,
+    capabilities: ["processing:manage"],
+    totp_setup_required: false,
+  },
+};
+
+function iso(offsetMinutes = 0) {
+  return new Date(Date.UTC(2026, 3, 17, 8, offsetMinutes, 0)).toISOString();
+}
+
+function record(overrides = {}) {
   return {
-    status: "queued",
-    max_pages: 80,
-    task_id: "seed-catalog-refresh",
-    queue_name: "celery",
-    retry_count: 0,
-    refreshed_entries: 0,
-    last_error: "",
-    requested_by_email: "superadmin@example.com",
-    created_at: "2026-04-14T00:00:00Z",
-    updated_at: "2026-04-14T00:00:00Z",
-    started_at: null,
-    finished_at: null,
+    id: "record-1",
+    name: "Reusable Systems",
+    url: "https://example.test/books/reusable-systems",
+    category: "Architecture",
+    writer: "Ada Writer",
+    translator: null,
+    composer: null,
+    publisher: "North Press",
+    createdAt: iso(1),
+    updatedAt: iso(1),
+    bookCreationState: "not_created",
     ...overrides,
   };
 }
 
-function createCatalogEntriesPayload(entriesOrEntry, overrides = {}) {
-  const entries = Array.isArray(entriesOrEntry)
-    ? entriesOrEntry
-    : [entriesOrEntry];
-  const summary = {
-    total: entries.length,
-    new: 0,
-    queued: 0,
-    processing: 0,
-    stopped: 0,
-    unfinished: 0,
-    failed: 0,
-    ready: 0,
-    deleted: 0,
-  };
-
-  for (const entry of entries) {
-    const status = entry.curation_status;
-    const latestJobStatus = entry.latest_job_status || "";
-
-    if (status === "processing" && latestJobStatus === "queued") {
-      summary.queued += 1;
-    } else if (status === "processing") {
-      summary.processing += 1;
-    } else if (Object.hasOwn(summary, status)) {
-      summary[status] += 1;
-    }
-  }
-
+function request(overrides = {}) {
   return {
-    entries,
-    pagination: {
-      page: 1,
-      limit: 180,
-      total: entries.length,
-      page_count: 1,
+    id: "request-1",
+    bookRecordId: "record-1",
+    state: "initial",
+    createdAt: iso(2),
+    updatedAt: iso(2),
+    progress: null,
+    errorMessage: null,
+    isResumed: false,
+    isConfirmedNotDuplicate: false,
+    duplicateOfRequestId: null,
+    duplicateOfRecordId: null,
+    ...overrides,
+  };
+}
+
+function baseState(overrides = {}) {
+  return {
+    records: [],
+    requests: [],
+    sync: {
+      status: "idle",
+      progress: null,
+      fetchedCount: 0,
+      skippedCount: 0,
+      updatedCount: 0,
+      appendedCount: 0,
+      message: "Ready to sync.",
+      remotePages: [],
+      pageIndex: 0,
     },
-    summary,
-    sync_state: null,
+    automation: {
+      catalog: {
+        enabled: false,
+        interval: "daily",
+        time: "02:00",
+        saved: false,
+        lastRunAt: "",
+      },
+      incomplete: {
+        enabled: false,
+        interval: "daily",
+        time: "03:00",
+        saved: false,
+        lastRunAt: "",
+      },
+    },
+    ui: {
+      actionDelayMs: 80,
+      pipelineDelayMs: 500,
+    },
     ...overrides,
   };
 }
 
-async function expectRowOnlyInCard(
-  processingPage,
-  rowPattern,
-  visibleCard,
-  hiddenCards = [],
-) {
-  for (const title of [visibleCard, ...hiddenCards]) {
-    await processingPage.expandCard(title);
+async function mockAuthenticatedSession(page) {
+  await page.route("**/api/auth/session/", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(sessionPayload),
+    });
+  });
+  await page.route("**/api/csrf/", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "ok" }),
+    });
+  });
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function latestRequestForRecord(state, recordId) {
+  return state.requests
+    .filter((item) => item.bookRecordId === recordId)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+}
+
+function requestBlocksSelection(requestItem) {
+  return requestItem && !["failed", "deleted"].includes(requestItem.state);
+}
+
+function recordSelectable(state, recordItem) {
+  const recordRequests = state.requests.filter(
+    (item) => item.bookRecordId === recordItem.id,
+  );
+  const confirmedDuplicate = recordRequests.find(
+    (item) => item.state === "duplicate" && item.duplicateConfirmed,
+  );
+  if (confirmedDuplicate) {
+    const original = state.requests.find(
+      (item) => item.id === confirmedDuplicate.duplicateOfRequestId,
+    );
+    return !original || ["failed", "deleted"].includes(original.state);
   }
+  return !recordRequests.some(requestBlocksSelection);
+}
 
-  await expect(processingPage.rowInCard(visibleCard, rowPattern)).toBeVisible();
+function syncRecordStates(state) {
+  state.records = state.records.map((recordItem) => {
+    const latest = latestRequestForRecord(state, recordItem.id);
+    return {
+      selectable: recordSelectable(state, recordItem),
+      ...recordItem,
+      bookCreationState: latest?.state || recordItem.bookCreationState,
+      latestRequestId: latest?.id || null,
+      selectable: recordSelectable(state, recordItem),
+    };
+  });
+  return state;
+}
 
-  for (const title of hiddenCards) {
-    await expect(processingPage.rowInCard(title, rowPattern)).toHaveCount(0);
+function nextRequestId(state, recordId) {
+  const preferred = `request-${recordId}`;
+  if (!state.requests.some((item) => item.id === preferred)) {
+    return preferred;
+  }
+  let index = 2;
+  while (state.requests.some((item) => item.id === `${preferred}-${index}`)) {
+    index += 1;
+  }
+  return `${preferred}-${index}`;
+}
+
+function createRequestForRecord(state, recordId, stateValue = "initial") {
+  const timestamp = iso(30 + state.requests.length);
+  state.requests.push({
+    id: nextRequestId(state, recordId),
+    bookRecordId: recordId,
+    state: stateValue,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    progress: null,
+    errorMessage: null,
+    isResumed: false,
+    isConfirmedNotDuplicate: false,
+    duplicateOfRequestId: null,
+    duplicateOfRecordId: null,
+    duplicateConfirmed: false,
+  });
+}
+
+function reconcilePage(state, pageRecords) {
+  for (const incoming of pageRecords) {
+    const existing = state.records.find((item) => item.id === incoming.id);
+    if (!existing) {
+      state.records.push(incoming);
+      state.sync.appendedCount += 1;
+      continue;
+    }
+    if (existing.updatedAt !== incoming.updatedAt) {
+      Object.assign(existing, incoming, {
+        bookCreationState: existing.bookCreationState,
+      });
+      state.sync.updatedCount += 1;
+      continue;
+    }
+    state.sync.skippedCount += 1;
   }
 }
 
-async function expectRowInAnyCard(processingPage, rowPattern, cardTitles) {
-  for (const title of cardTitles) {
-    await processingPage.expandCard(title);
+function nextStateTimestamp(state) {
+  return Date.parse(state.ui?.nowIso || iso(10));
+}
+
+function applyRequestTimeouts(state) {
+  const now = nextStateTimestamp(state);
+  for (const item of state.requests) {
+    if (item.state !== "processing") {
+      continue;
+    }
+    const updatedAt = Date.parse(item.updatedAt || item.createdAt || "");
+    if (!Number.isFinite(updatedAt) || now - updatedAt <= PROCESSING_TIMEOUT_MS) {
+      continue;
+    }
+    item.state = "failed";
+    item.errorMessage =
+      item.errorMessage || "Processing exceeded 20 minutes without completing.";
+    item.updatedAt = new Date(now).toISOString();
+  }
+}
+
+function finalizeSync(state) {
+  state.sync.status = "idle";
+  state.sync.progress = null;
+  state.sync.message = `Sync complete. Updated ${state.sync.updatedCount}, Skipped ${state.sync.skippedCount}, Added ${state.sync.appendedCount}.`;
+}
+
+function advanceSyncPage(state) {
+  const pageRecords = state.sync.remotePages[state.sync.pageIndex] || [];
+  if (!pageRecords.length) {
+    finalizeSync(state);
+    return;
+  }
+  reconcilePage(state, pageRecords);
+  state.sync.fetchedCount += pageRecords.length;
+  state.sync.pageIndex += 1;
+  const nextPage = state.sync.remotePages[state.sync.pageIndex] || [];
+  if (state.sync.status === "pausing") {
+    state.sync.status = "paused";
+    state.sync.progress = {
+      savedAt: iso(99),
+      checkpoint: `page-${state.sync.pageIndex}`,
+      savedData: {
+        fetchedCount: state.sync.fetchedCount,
+        nextPageIndex: state.sync.pageIndex,
+      },
+    };
+    state.sync.message = `Saved ${state.sync.fetchedCount} ${state.sync.fetchedCount === 1 ? "record" : "records"} before pausing.`;
+    return;
   }
 
-  await expect
-    .poll(async () => {
-      for (const title of cardTitles) {
-        if (await processingPage.rowInCard(title, rowPattern).count()) {
-          return title;
+  if (!nextPage.length) {
+    finalizeSync(state);
+    return;
+  }
+
+  state.sync.message = `Fetched ${state.sync.fetchedCount} ${state.sync.fetchedCount === 1 ? "record" : "records"} so far.`;
+}
+
+async function mockProcessingApi(page, initialState) {
+  let state = syncRecordStates(clone(initialState));
+  const controller = {
+    setNowIso(nowIso) {
+      state.ui = {
+        ...state.ui,
+        nowIso,
+      };
+    },
+    updateRequest(id, updates) {
+      state.requests = state.requests.map((item) =>
+        item.id === id ? { ...item, ...updates, updatedAt: iso(900) } : item,
+      );
+      state = syncRecordStates(state);
+    },
+  };
+
+  async function fulfillState(route, extra = {}) {
+    applyRequestTimeouts(state);
+    state = syncRecordStates(state);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ...state, ...extra }),
+    });
+  }
+
+  async function delayForActions() {
+    await page.waitForTimeout(Math.max(20, state.ui?.actionDelayMs || 80));
+  }
+
+  await page.route("**/api/processing/state/", async (route) => {
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/sync/start/", async (route) => {
+    const body = route.request().postDataJSON();
+    state.sync = {
+      ...state.sync,
+      ...(body?.remotePages ? { remotePages: body.remotePages } : {}),
+      status: "syncing",
+      progress: null,
+      fetchedCount: 0,
+      skippedCount: 0,
+      updatedCount: 0,
+      appendedCount: 0,
+      pageIndex: 0,
+      message: "Syncing catalog records.",
+    };
+    await delayForActions();
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/sync/pause/", async (route) => {
+    if (state.sync.status === "syncing") {
+      state.sync.status = "pausing";
+      state.sync.message = "Pausing after the current page finishes.";
+    }
+    await delayForActions();
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/sync/advance/", async (route) => {
+    await delayForActions();
+    advanceSyncPage(state);
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/sync/resume/", async (route) => {
+    state.sync.status = "syncing";
+    state.sync.progress = null;
+    state.sync.pageIndex = 0;
+    state.sync.message = "Reconciling saved records from the beginning.";
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/records/create-requests/", async (route) => {
+    const body = route.request().postDataJSON();
+    await delayForActions();
+    for (const id of body.ids || []) {
+      const recordItem = state.records.find((item) => item.id === id);
+      if (recordItem && recordSelectable(state, recordItem)) {
+        createRequestForRecord(state, id);
+      }
+    }
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/automation/catalog/", async (route) => {
+    state.automation.catalog = {
+      ...state.automation.catalog,
+      ...route.request().postDataJSON(),
+      saved: true,
+      statusMessage: "Saved.",
+    };
+    await delayForActions();
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/automation/catalog/run/", async (route) => {
+    let createdCount = 0;
+    await delayForActions();
+    for (const recordItem of state.records) {
+      const latest = latestRequestForRecord(state, recordItem.id);
+      const latestState = latest?.state || recordItem.bookCreationState;
+      if (
+        (!latest && recordItem.bookCreationState === "not_created") ||
+        ["failed", "deleted"].includes(latestState)
+      ) {
+        createRequestForRecord(state, recordItem.id);
+        createdCount += 1;
+      }
+    }
+    state.automation.catalog.statusMessage = `Created ${createdCount} requests.`;
+    await fulfillState(route, { createdCount });
+  });
+  await page.route("**/api/processing/pipeline/advance/", async (route) => {
+    applyRequestTimeouts(state);
+    for (const item of state.requests) {
+      if (item.state === "initial") {
+        item.state = "queued";
+      } else if (item.state === "queued") {
+        item.state = "processing";
+      } else if (item.state === "processing") {
+        if (item.pipelineOutcome === "failed") {
+          item.state = "failed";
+          item.errorMessage = item.errorMessage || "Pipeline failed after retries.";
+        } else if (item.pipelineOutcome === "duplicate") {
+          item.state = "duplicate";
+        } else {
+          item.state = "created";
         }
       }
-      return "";
-    })
-    .not.toBe("");
-}
-
-function summaryValue(processingPage, cardTitle, label) {
-  return processingPage
-    .card(cardTitle)
-    .locator(".processing-summary-stat", {
-      has: processingPage.page.getByText(label, { exact: true }),
-    })
-    .locator("strong");
-}
-
-async function expectReadyCardControls(processingPage) {
-  const readyCard = processingPage.card("Ready");
-  const bulkBar = readyCard.locator(".processing-bulk-bar");
-  await expect(processingPage.cardSearchInput("Ready")).toBeVisible();
-  await expect(processingPage.cardResultCount("Ready")).toHaveText(/\d+/, {
-    timeout: 15_000,
-  });
-  await expect(bulkBar.getByRole("button", { name: "Delete" })).toBeVisible();
-  await expect(bulkBar.getByRole("button", { name: "Delete all" })).toHaveCount(0);
-}
-
-function createProcessingJob({
-  id,
-  submissionId,
-  input,
-  status,
-  origin = "user",
-  submissionStatus = status,
-  lastError = "",
-  taskId = "",
-}) {
-  return {
-    id,
-    submission_id: submissionId,
-    job_type: "create",
-    status,
-    task_id: taskId,
-    queue_name: "celery",
-    retry_count: 0,
-    cancel_requested: false,
-    submission_origin: origin,
-    submission_input: input,
-    submission_status: submissionStatus,
-    submission_resolution_status: "resolved",
-    target_book_slug: "",
-    target_book_title: "",
-    target_book_deleted: false,
-    last_error: lastError,
-    created_at: "2026-04-14T00:00:00Z",
-    updated_at: "2026-04-14T00:00:00Z",
-    started_at: status === "processing" ? "2026-04-14T00:01:00Z" : null,
-    finished_at: ["failed", "stopped", "succeeded"].includes(status)
-      ? "2026-04-14T00:05:00Z"
-      : null,
-  };
-}
-
-function createProcessingSubmission({
-  id,
-  input,
-  status,
-  origin = "user",
-  latestJob = null,
-  errorMessage = "",
-}) {
-  return {
-    id,
-    input_type: "text",
-    origin,
-    original_input: input,
-    resolved_url: "",
-    resolution_status: "resolved",
-    resolution_confidence: 1,
-    status,
-    review_state: "",
-    error_message: errorMessage,
-    linked_book_slug: "",
-    linked_book: "",
-    linked_book_deleted: false,
-    served_from_database: false,
-    canonical_submission_id: "",
-    uses_existing_request: false,
-    candidates: [],
-    latest_job: latestJob ? { ...latestJob } : null,
-    created_at: "2026-04-14T00:00:00Z",
-    updated_at: "2026-04-14T00:00:00Z",
-  };
-}
-
-async function mockMyRequestsRoutes(page) {
-  const processingJob = createProcessingJob({
-    id: "job-user-processing",
-    submissionId: "submission-user-processing",
-    input: seedData.submissions.userProcessing,
-    status: "processing",
-    taskId: "task-user-processing",
-  });
-  const stoppedJob = createProcessingJob({
-    id: "job-user-stopped",
-    submissionId: "submission-user-stopped",
-    input: seedData.submissions.userStopped,
-    status: "stopped",
-    lastError: "Seeded stop",
-  });
-  const failedJob = createProcessingJob({
-    id: "job-user-failed",
-    submissionId: "submission-user-failed",
-    input: seedData.submissions.userFailed,
-    status: "failed",
-    lastError: "Seeded failed job log entry.",
-  });
-
-  let jobs = [processingJob, stoppedJob, failedJob];
-  let submissions = [
-    createProcessingSubmission({
-      id: "submission-user-pending",
-      input: seedData.submissions.userPending,
-      status: "pending_resolution",
-    }),
-    createProcessingSubmission({
-      id: "submission-user-ready",
-      input: "E2E User Ready Submission",
-      status: "ready",
-    }),
-    createProcessingSubmission({
-      id: "submission-user-processing",
-      input: seedData.submissions.userProcessing,
-      status: "processing",
-      latestJob: processingJob,
-    }),
-    createProcessingSubmission({
-      id: "submission-user-stopped",
-      input: seedData.submissions.userStopped,
-      status: "stopped",
-      latestJob: stoppedJob,
-      errorMessage: "Seeded stop",
-    }),
-    createProcessingSubmission({
-      id: "submission-user-deleted",
-      input: seedData.submissions.userDeleted,
-      status: "deleted",
-    }),
-    createProcessingSubmission({
-      id: "submission-user-failed",
-      input: seedData.submissions.userFailed,
-      status: "failed",
-      latestJob: failedJob,
-      errorMessage: "Seeded failed job log entry.",
-    }),
-  ];
-
-  const duplicateReviews = [
-    {
-      id: "review-user-duplicate",
-      submission_id: "submission-user-duplicate",
-      submission_input: seedData.submissions.duplicateReview,
-      input_value: seedData.submissions.duplicateReview,
-      existing_book_title: "E2E Existing Duplicate Book",
-      existing_book_slug: "e2e-existing-duplicate-book",
-      existing_book_deleted: false,
-      candidate_title: seedData.submissions.duplicateReview,
-      status: "pending",
-      created_at: "2026-04-14T00:00:00Z",
-      updated_at: "2026-04-14T00:00:00Z",
-    },
-  ];
-
-  const setSubmissionReady = (submissionId, jobId, input) => {
-    const succeededJob = createProcessingJob({
-      id: jobId,
-      submissionId,
-      input,
-      status: "succeeded",
-      submissionStatus: "ready",
-      taskId: `task-${jobId}`,
-    });
-    jobs = jobs.map((job) => (job.id === jobId ? succeededJob : job));
-    if (!jobs.some((job) => job.id === jobId)) {
-      jobs = jobs.concat(succeededJob);
+      item.updatedAt = iso(200 + state.requests.indexOf(item));
     }
-    submissions = submissions.map((submission) =>
-      submission.id === submissionId
-        ? {
-            ...submission,
-            status: "ready",
-            latest_job: { ...succeededJob },
-            updated_at: "2026-04-14T00:10:00Z",
-          }
-        : submission,
-    );
-  };
-
-  await page.route("**/api/ingestion/activity/", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        can_manage_processing: true,
-        has_visible_activity: false,
-        active_scopes: [],
-      }),
-    });
+    applyRequestTimeouts(state);
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/requests/action/", async (route) => {
+    const body = route.request().postDataJSON();
+    await delayForActions();
+    for (const id of body.ids || []) {
+      const item = state.requests.find((requestItem) => requestItem.id === id);
+      if (!item) {
+        continue;
+      }
+      if (body.action === "delete") {
+        item.state = "deleted";
+        item.progress = null;
+      } else if (body.action === "pause") {
+        item.state = "paused";
+        item.progress = {
+          savedAt: iso(88),
+          checkpoint: "Paused at processing",
+          savedData: {},
+        };
+      } else if (body.action === "resume") {
+        item.state = "initial";
+        item.isResumed = true;
+      } else if (body.action === "retry") {
+        item.state = "initial";
+        item.errorMessage = null;
+      } else if (body.action === "new") {
+        item.state = "initial";
+        item.isConfirmedNotDuplicate = true;
+      } else if (body.action === "confirm_duplicate") {
+        item.state = "duplicate";
+        item.duplicateConfirmed = true;
+      } else if (body.action === "create_again" || body.action === "recreate") {
+        item.state = "initial";
+      }
+      item.updatedAt = iso(300 + state.requests.indexOf(item));
+    }
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/automation/incomplete/", async (route) => {
+    state.automation.incomplete = {
+      ...state.automation.incomplete,
+      ...route.request().postDataJSON(),
+      saved: true,
+      statusMessage: "Saved.",
+    };
+    await delayForActions();
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/automation/incomplete/run/", async (route) => {
+    let resolvedCount = 0;
+    await delayForActions();
+    for (const recordItem of state.records) {
+      if (recordItem.category === "Incomplete" && recordItem.willResolveToCategory) {
+        recordItem.category = recordItem.willResolveToCategory;
+        recordItem.wasIncomplete = true;
+        recordItem.resolvedFromIncomplete = true;
+        const latest = latestRequestForRecord(state, recordItem.id);
+        if (latest) {
+          latest.state = "created";
+        } else {
+          createRequestForRecord(state, recordItem.id, "created");
+        }
+        resolvedCount += 1;
+      }
+    }
+    state.automation.incomplete.statusMessage = `Resolved ${resolvedCount} book.`;
+    await fulfillState(route, { resolvedCount });
   });
 
-  await page.route("**/api/ingestion/jobs/**", async (route) => {
-    const url = new URL(route.request().url());
-    const method = route.request().method();
-
-    if (
-      method === "POST" &&
-      url.pathname.endsWith("/jobs/job-user-processing/stop/")
-    ) {
-      const stoppedProcessingJob = createProcessingJob({
-        id: "job-user-processing",
-        submissionId: "submission-user-processing",
-        input: seedData.submissions.userProcessing,
-        status: "stopped",
-        lastError: "Stopped by test",
-      });
-      jobs = jobs.map((job) =>
-        job.id === stoppedProcessingJob.id ? stoppedProcessingJob : job,
-      );
-      submissions = submissions.map((submission) =>
-        submission.id === "submission-user-processing"
-          ? {
-              ...submission,
-              status: "stopped",
-              latest_job: { ...stoppedProcessingJob },
-              error_message: "Stopped by test",
-              updated_at: "2026-04-14T00:06:00Z",
-            }
-          : submission,
-      );
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({}),
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      url.pathname.endsWith("/jobs/job-user-stopped/resume/")
-    ) {
-      setSubmissionReady(
-        "submission-user-stopped",
-        "job-user-stopped",
-        seedData.submissions.userStopped,
-      );
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({}),
-      });
-      return;
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(jobs),
-    });
-  });
-
-  await page.route("**/api/ingestion/submissions/**", async (route) => {
-    const url = new URL(route.request().url());
-    const method = route.request().method();
-
-    if (
-      method === "POST" &&
-      url.pathname.endsWith("/submissions/submission-user-deleted/retry/")
-    ) {
-      setSubmissionReady(
-        "submission-user-deleted",
-        "job-user-deleted-retry",
-        seedData.submissions.userDeleted,
-      );
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({}),
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      url.pathname.endsWith("/submissions/submission-user-stopped/retry/")
-    ) {
-      setSubmissionReady(
-        "submission-user-stopped",
-        "job-user-stopped",
-        seedData.submissions.userStopped,
-      );
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({}),
-      });
-      return;
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(submissions),
-    });
-  });
-
-  await page.route("**/api/ingestion/duplicate-reviews/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(duplicateReviews),
-    });
-  });
+  return controller;
 }
 
-async function mockCatalogBooksOverviewRoutes(page) {
-  const processingJob = createProcessingJob({
-    id: "job-curation-processing",
-    submissionId: "submission-curation-processing",
-    input: seedData.submissions.curationProcessing,
-    status: "processing",
-    origin: "curation",
-    taskId: "task-curation-processing",
-  });
-  const jobs = [processingJob];
-  const submissions = [
-    createProcessingSubmission({
-      id: "submission-curation-ready",
-      input: seedData.submissions.curationReady,
-      status: "ready",
-      origin: "curation",
-    }),
-    createProcessingSubmission({
-      id: "submission-curation-processing",
-      input: seedData.submissions.curationProcessing,
-      status: "processing",
-      origin: "curation",
-      latestJob: processingJob,
-    }),
-    createProcessingSubmission({
-      id: "submission-curation-queued",
-      input: seedData.submissions.curationQueued,
-      status: "queued",
-      origin: "curation",
-    }),
-    createProcessingSubmission({
-      id: "submission-curation-stopped",
-      input: seedData.submissions.curationStopped,
-      status: "stopped",
-      origin: "curation",
-      errorMessage: "Seeded stop",
-    }),
-    createProcessingSubmission({
-      id: "submission-curation-deleted",
-      input: seedData.submissions.curationDeleted,
-      status: "deleted",
-      origin: "curation",
-    }),
-  ];
-  const catalogEntries = [
-    {
-      id: "catalog-beta",
-      title: seedData.catalogEntries.beta,
-      author_line: "E2E Catalog Writer",
-      categories: "E2E Fiction",
-      source_url: "https://www.ebanglalibrary.com/books/e2e-beta-catalog-book/",
-      curation_status: "new",
-      local_book_slug: "",
-      local_book_title: "",
-      local_book_state: "",
-      latest_submission_status: "",
-      latest_job_status: "",
-      latest_job_error: "",
-      activity_at: "2026-04-14T00:02:00Z",
-      updated_at: null,
-      last_seen_at: "2026-04-14T00:02:00Z",
-    },
-    {
-      id: "catalog-alpha",
-      title: seedData.catalogEntries.alpha,
-      author_line: "E2E Catalog Writer",
-      categories: "E2E Fiction",
-      source_url: "https://www.ebanglalibrary.com/books/e2e-alpha-catalog-book/",
-      curation_status: "new",
-      local_book_slug: "",
-      local_book_title: "",
-      local_book_state: "",
-      latest_submission_status: "",
-      latest_job_status: "",
-      latest_job_error: "",
-      activity_at: "2026-04-14T00:01:00Z",
-      updated_at: null,
-      last_seen_at: "2026-04-14T00:01:00Z",
-    },
-  ];
-
-  await page.route("**/api/ingestion/activity/", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        can_manage_processing: true,
-        has_visible_activity: false,
-        active_scopes: [],
-      }),
-    });
-  });
-
-  await page.route("**/api/ingestion/jobs/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(jobs),
-    });
-  });
-
-  await page.route("**/api/ingestion/submissions/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(submissions),
-    });
-  });
-
-  await page.route("**/api/ingestion/duplicate-reviews/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([]),
-    });
-  });
-
-  await page.route("**/api/ingestion/catalog/curation-runs/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([]),
-    });
-  });
-
-  await page.route("**/api/ingestion/catalog/entries/**", async (route) => {
-    const url = new URL(route.request().url());
-    const sortedEntries =
-      url.searchParams.get("sort") === "title_asc"
-        ? [...catalogEntries].sort((first, second) =>
-            first.title.localeCompare(second.title),
-          )
-        : catalogEntries;
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(createCatalogEntriesPayload(sortedEntries)),
-    });
-  });
+async function boot(page, path, state) {
+  await mockAuthenticatedSession(page);
+  const processingApi = await mockProcessingApi(page, state);
+  await page.goto(path);
+  return processingApi;
 }
 
-function createDuplicateReview() {
-  return {
-    id: "review-user-duplicate",
-    submission_id: "submission-user-duplicate",
-    submission: {
-      id: "submission-user-duplicate",
-      original_input: seedData.submissions.duplicateReview,
-      status: "duplicate",
-    },
-    submission_input: seedData.submissions.duplicateReview,
-    input_value: seedData.submissions.duplicateReview,
-    existing_book: {
-      title: "E2E Existing Duplicate Book",
-      slug: "e2e-existing-duplicate-book",
-    },
-    existing_book_title: "E2E Existing Duplicate Book",
-    existing_book_slug: "e2e-existing-duplicate-book",
-    existing_book_deleted: false,
-    candidate_title: seedData.submissions.duplicateReview,
-    status: "pending",
-    created_at: "2026-04-14T00:00:00Z",
-    updated_at: "2026-04-14T00:00:00Z",
-  };
+function row(page, pageId, cardId, id) {
+  return page.getByTestId(`${pageId}-${cardId}-row-${id}`);
 }
 
-async function mockFailedRequestsRoutes(page) {
-  const failedJob = createProcessingJob({
-    id: "job-user-failed",
-    submissionId: "submission-user-failed",
-    input: seedData.submissions.userFailed,
-    status: "failed",
-    lastError: "Seeded failure for live-browser coverage.",
-  });
-  const processingJobs = Array.from({ length: 65 }, (_, index) =>
-    createProcessingJob({
-      id: `job-crowded-processing-${index}`,
-      submissionId: `submission-crowded-processing-${index}`,
-      input: `Crowded processing request ${index + 1}`,
-      status: "processing",
-      taskId: `crowded-processing-${index}`,
-    }),
+function checkbox(page, pageId, cardId, id) {
+  return page.getByTestId(`${pageId}-${cardId}-select-${id}`);
+}
+
+async function expectVisibleCount(page, pageId, cardId, count) {
+  await expect(page.getByTestId(`${pageId}-${cardId}-count`)).toContainText(
+    `${count}`,
   );
-  let failedJobs = [failedJob];
-  const submissions = [
-    createProcessingSubmission({
-      id: "submission-user-failed",
-      input: seedData.submissions.userFailed,
-      status: "failed",
-      latestJob: failedJob,
-      errorMessage: "Seeded failure for live-browser coverage.",
-    }),
-  ];
-  const duplicateReviews = [createDuplicateReview()];
-
-  await page.route("**/api/ingestion/activity/", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        can_manage_processing: true,
-        has_visible_activity: false,
-        active_scopes: [],
-      }),
-    });
-  });
-
-  await page.route("**/api/ingestion/jobs/**", async (route) => {
-    const url = new URL(route.request().url());
-    const method = route.request().method();
-    const isFailedRequest = url.searchParams.get("status") === "failed";
-
-    if (method === "POST" && url.pathname.endsWith("/jobs/bulk-delete/")) {
-      failedJobs = [];
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ deleted_count: 1, skipped_active: 0 }),
-      });
-      return;
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(isFailedRequest ? failedJobs : processingJobs),
-    });
-  });
-
-  await page.route("**/api/ingestion/submissions/**", async (route) => {
-    const url = new URL(route.request().url());
-    const method = route.request().method();
-
-    if (
-      method === "POST" &&
-      url.pathname.endsWith("/submissions/bulk-delete/")
-    ) {
-      failedJobs = [];
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ deleted_count: 1, skipped_active: 0 }),
-      });
-      return;
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(submissions),
-    });
-  });
-
-  await page.route("**/api/ingestion/duplicate-reviews/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(duplicateReviews),
-    });
-  });
 }
 
-async function mockDuplicateRequestsRoutes(page) {
-  let duplicateReviews = [createDuplicateReview()];
-  let submissions = [];
+test.describe("processing pages replacement", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
 
-  await page.route("**/api/ingestion/activity/", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        can_manage_processing: true,
-        has_visible_activity: false,
-        active_scopes: [],
-      }),
+  test("catalog sync, filters, record selection, and request creation", async ({
+    page,
+  }) => {
+    const existing = record({
+      id: "existing",
+      name: "Stable Local Book",
+      writer: "Local Writer",
+      publisher: "Local Press",
+      updatedAt: iso(1),
     });
-  });
-
-  await page.route("**/api/ingestion/jobs/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([]),
+    const active = record({
+      id: "active",
+      name: "Locked Processing Book",
+      category: "Science",
+      writer: "Busy Writer",
+      publisher: "Busy Press",
+      bookCreationState: "processing",
     });
-  });
-
-  await page.route("**/api/ingestion/submissions/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(submissions),
+    const remoteChanged = record({
+      id: "existing",
+      name: "Stable Local Book Revised",
+      writer: "Local Writer",
+      publisher: "Local Press",
+      updatedAt: iso(10),
     });
-  });
-
-  await page.route("**/api/ingestion/duplicate-reviews/**", async (route) => {
-    const url = new URL(route.request().url());
-    const method = route.request().method();
-
-    if (
-      method === "POST" &&
-      url.pathname.endsWith("/duplicate-reviews/review-user-duplicate/resolve/")
-    ) {
-      duplicateReviews = [];
-      submissions = [
-        createProcessingSubmission({
-          id: "submission-user-duplicate",
-          input: seedData.submissions.duplicateReview,
-          status: "queued",
-        }),
-      ];
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({}),
-      });
-      return;
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(duplicateReviews),
+    const remoteNew = record({
+      id: "new-remote",
+      name: "Fresh Remote Book",
+      category: "Poetry",
+      writer: "Remote Writer",
+      translator: "Case Translator",
+      publisher: "Remote House",
+      updatedAt: iso(11),
     });
-  });
-}
 
-async function mockIncompleteRoutes(page) {
-  const incompleteEntry = {
-    book_id: "book-incomplete",
-    book_title: seedData.books.incomplete.title,
-    book_slug: seedData.books.incomplete.slug,
-    author_line: "E2E Writer",
-    source_url: "https://www.ebanglalibrary.com/books/e2e-incomplete-catalog-book/",
-    local_categories: "অসম্পূর্ণ বই",
-    source_categories: "E2E Fiction",
-    catalog_entry_id: "catalog-incomplete",
-    removed_from_unfinished: false,
-    latest_job_error: "",
-  };
-  const failedRun = {
-    id: "run-incomplete-failed",
-    trigger: "scheduled",
-    mode: "pending",
-    status: "failed",
-    summary: {
-      queued_creates: 2,
-      queued_updates: 0,
-      skipped_ready: 0,
-    },
-    last_error: "Seeded incomplete run failure.",
-    requested_by_email: "superadmin@example.com",
-    created_at: "2026-04-14T00:00:00Z",
-    updated_at: "2026-04-14T00:05:00Z",
-    started_at: "2026-04-14T00:00:00Z",
-    finished_at: "2026-04-14T00:05:00Z",
-  };
-
-  await page.route("**/api/ingestion/activity/", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        can_manage_processing: true,
-        has_visible_activity: false,
-        active_scopes: [],
-      }),
-    });
-  });
-
-  await page.route("**/api/ingestion/jobs/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([]),
-    });
-  });
-
-  await page.route("**/api/ingestion/submissions/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([]),
-    });
-  });
-
-  await page.route("**/api/ingestion/duplicate-reviews/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([]),
-    });
-  });
-
-  await page.route("**/api/ingestion/catalog/curation-runs/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([failedRun]),
-    });
-  });
-
-  await page.route("**/api/ingestion/catalog/incomplete-check/**", async (route) => {
-    const url = new URL(route.request().url());
-    const method = route.request().method();
-
-    if (
-      method === "POST" &&
-      url.pathname.endsWith("/catalog/incomplete-check/create-books/")
-    ) {
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({}),
-      });
-      return;
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        entries: [incompleteEntry],
-        summary: {
-          total_incomplete_books: 1,
-          removed_from_unfinished: 0,
-          still_in_unfinished: 1,
-          missing_in_catalog: 0,
-          queued: 0,
-          processing: 0,
-          failed: 0,
-          stopped: 0,
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [existing, active],
+        requests: [
+          request({
+            id: "active-request",
+            bookRecordId: "active",
+            state: "processing",
+          }),
+        ],
+        sync: {
+          ...baseState().sync,
+          remotePages: [[remoteChanged], [remoteNew], []],
+        },
+        ui: {
+          ...baseState().ui,
+          syncDelayMs: 2_000,
         },
       }),
-    });
-  });
-}
+    );
 
-async function mockAutomationRoutes(page) {
-  const processingJob = createProcessingJob({
-    id: "job-automation-processing",
-    submissionId: "submission-automation-processing",
-    input: seedData.submissions.automationProcessing,
-    status: "processing",
-    origin: "automation",
-    taskId: "task-automation-processing",
-  });
-  const jobs = [processingJob];
-  const submissions = [
-    createProcessingSubmission({
-      id: "submission-automation-pending",
-      input: seedData.submissions.automationPending,
-      status: "pending_resolution",
-      origin: "automation",
-    }),
-    createProcessingSubmission({
-      id: "submission-automation-ready",
-      input: seedData.submissions.automationReady,
-      status: "ready",
-      origin: "automation",
-    }),
-    createProcessingSubmission({
-      id: "submission-automation-processing",
-      input: seedData.submissions.automationProcessing,
-      status: "processing",
-      origin: "automation",
-      latestJob: processingJob,
-    }),
-    createProcessingSubmission({
-      id: "submission-automation-queued",
-      input: seedData.submissions.automationQueued,
-      status: "queued",
-      origin: "automation",
-    }),
-    createProcessingSubmission({
-      id: "submission-automation-stopped",
-      input: seedData.submissions.automationStopped,
-      status: "stopped",
-      origin: "automation",
-      errorMessage: "Seeded stop",
-    }),
-    createProcessingSubmission({
-      id: "submission-automation-deleted",
-      input: seedData.submissions.automationDeleted,
-      status: "deleted",
-      origin: "automation",
-    }),
-  ];
-  let automationSettings = {
-    enabled: false,
-    daily_run_time: "02:00:00",
-    frequency: "daily",
-    mode: "pending",
-    refresh_max_pages: 80,
-    next_run_at: null,
-  };
-  const scheduledRun = {
-    id: "run-automation-active",
-    trigger: "scheduled",
-    mode: "pending",
-    status: "processing",
-    summary: {
-      queued_creates: 7,
-      queued_updates: 0,
-      skipped_ready: 0,
-    },
-    last_error: "",
-    requested_by_email: "superadmin@example.com",
-    created_at: "2026-04-14T00:00:00Z",
-    updated_at: "2026-04-14T00:03:00Z",
-    started_at: "2026-04-14T00:00:00Z",
-    finished_at: null,
-  };
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Catalog" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("catalog-overview-stat-records")).toContainText(
+      "2",
+    );
+    await expect(page.getByTestId("catalog-records-table")).toBeVisible();
 
-  const automationPayload = () => ({
-    settings: automationSettings,
-    latest_run: scheduledRun,
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-loader")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
+
+    await page.getByTestId("catalog-sync-pause-btn").click();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toContainText(
+      "Pausing...",
+    );
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-loader")).toHaveCount(0);
+    await expect(page.getByTestId("catalog-sync-progress")).toContainText(
+      "Saved 1 record",
+    );
+
+    await page.getByTestId("catalog-sync-resume-btn").click();
+    await expect(row(page, "catalog", "records", "new-remote")).toBeVisible();
+    await expect(row(page, "catalog", "records", "existing")).toContainText(
+      "Stable Local Book Revised",
+    );
+    await expect(page.getByTestId("catalog-sync-progress")).toContainText(
+      "Skipped 1",
+    );
+    await expect(page.getByTestId("catalog-sync-progress")).toContainText(
+      "Added 1",
+    );
+    await expect(page.getByTestId("catalog-overview-stat-records")).toContainText(
+      "3",
+    );
+
+    await page.getByTestId("catalog-records-search").fill("remote writer");
+    await expectVisibleCount(page, "catalog", "records", 1);
+    await expect(row(page, "catalog", "records", "new-remote")).toBeVisible();
+    await page.getByTestId("catalog-records-search").fill("case translator");
+    await expectVisibleCount(page, "catalog", "records", 1);
+    await page.getByTestId("catalog-records-search").fill("remote house");
+    await expectVisibleCount(page, "catalog", "records", 1);
+    await page.getByTestId("catalog-records-search").fill("");
+    await page.getByTestId("catalog-records-category-filter").selectOption("Poetry");
+    await expect(page.getByTestId("catalog-records-active-filters")).toContainText(
+      "Poetry",
+    );
+    await expectVisibleCount(page, "catalog", "records", 1);
+    await page
+      .getByTestId("catalog-records-status-filter")
+      .selectOption("not_created");
+    await expect(page.getByTestId("catalog-records-active-filters")).toContainText(
+      "Not created",
+    );
+
+    await page.getByTestId("catalog-records-category-filter").selectOption("");
+    await page.getByTestId("catalog-records-status-filter").selectOption("");
+    await expect(checkbox(page, "catalog", "records", "active")).toBeDisabled();
+    await checkbox(page, "catalog", "records", "new-remote").check();
+    await page.getByTestId("catalog-records-create-btn").click();
+    await expect(page.getByTestId("catalog-records-loader")).toBeVisible();
+    await expect(page.getByTestId("catalog-records-create-btn")).toBeDisabled();
+    await expect(page.getByTestId("catalog-records-loader")).toHaveCount(0);
+    await page.goto("/create");
+    await expect(row(page, "create", "requests", "request-new-remote")).toBeVisible();
   });
 
-  await page.route("**/api/ingestion/activity/", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        can_manage_processing: true,
-        has_visible_activity: false,
-        active_scopes: [],
+  test("manual sync completes automatically without an explicit pause", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        sync: {
+          ...baseState().sync,
+          remotePages: [
+            [record({ id: "sync-a", name: "Sync A", updatedAt: iso(21) })],
+            [record({ id: "sync-b", name: "Sync B", updatedAt: iso(22) })],
+            [],
+          ],
+        },
+        ui: {
+          ...baseState().ui,
+          syncDelayMs: 120,
+          pipelineDelayMs: 2_000,
+        },
       }),
-    });
-  });
+    );
 
-  await page.route("**/api/ingestion/jobs/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(jobs),
-    });
-  });
-
-  await page.route("**/api/ingestion/submissions/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(submissions),
-    });
-  });
-
-  await page.route("**/api/ingestion/duplicate-reviews/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([]),
-    });
-  });
-
-  await page.route("**/api/ingestion/catalog/curation-runs/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([scheduledRun]),
-    });
-  });
-
-  await page.route("**/api/ingestion/catalog/automation**", async (route) => {
-    if (route.request().method() === "PATCH") {
-      let body = {};
-      try {
-        body = JSON.parse(route.request().postData() || "{}");
-      } catch {
-        body = {};
-      }
-      automationSettings = {
-        ...automationSettings,
-        ...body,
-        daily_run_time: body.daily_run_time
-          ? `${body.daily_run_time}:00`
-          : automationSettings.daily_run_time,
-      };
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(automationPayload()),
-    });
-  });
-}
-
-test.describe("Processing Pages", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/home");
-    await page.evaluate(() => {
-      window.sessionStorage.removeItem("processing.persistent-page-state");
-    });
-    await page.goto("/home");
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-loader")).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "Sync started" })).toBeVisible();
+    await expect(row(page, "catalog", "records", "sync-a")).toBeVisible();
+    await expect(row(page, "catalog", "records", "sync-b")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-loader")).toHaveCount(0);
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+    await expect(page.getByTestId("catalog-sync-progress")).toContainText(
+      "Sync complete",
+    );
     await expect(
-      page.getByRole("heading", { name: "All Books" }),
-    ).toBeVisible({ timeout: 15_000 });
+      page.getByRole("status").filter({ hasText: "Sync complete" }),
+    ).toBeVisible();
   });
 
-  test("ready cards show search controls, result counts, and delete actions across processing pages", async ({
+  test("automated catalog sync creates eligible requests and auto-advances them", async ({
     page,
   }) => {
-    const processingPage = new ProcessingPageModel(page);
-    const readyPages = [
-      ["/processing-my-requests", "My Requests"],
-      ["/processing-catalog-books", "Catalog"],
-      ["/processing-automation", "Automation"],
-      ["/processing-incomplete-check", "Incomplete Requests"],
+    const records = [
+      record({ id: "auto-new", name: "Auto New", bookCreationState: "not_created" }),
+      record({ id: "auto-failed", name: "Auto Failed", bookCreationState: "failed" }),
+      record({ id: "auto-deleted", name: "Auto Deleted", bookCreationState: "deleted" }),
+      record({ id: "auto-created", name: "Auto Created", bookCreationState: "created" }),
+      record({ id: "auto-paused", name: "Auto Paused", bookCreationState: "paused" }),
     ];
 
-    for (const [path, heading] of readyPages) {
-      await processingPage.goto(path, heading);
-      await expectReadyCardControls(processingPage);
-    }
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records,
+        requests: [
+          request({ id: "failed-old", bookRecordId: "auto-failed", state: "failed" }),
+          request({ id: "deleted-old", bookRecordId: "auto-deleted", state: "deleted" }),
+          request({ id: "created-old", bookRecordId: "auto-created", state: "created" }),
+          request({ id: "paused-old", bookRecordId: "auto-paused", state: "paused" }),
+        ],
+      }),
+    );
+
+    await page.getByTestId("catalog-automation-enabled").check();
+    await page.getByTestId("catalog-automation-interval").selectOption("weekly");
+    await page.getByTestId("catalog-automation-time").fill("04:30");
+    await page.getByTestId("catalog-automation-save-btn").click();
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "Saved",
+    );
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-automation-loader")).toBeVisible();
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "Created 3 request",
+    );
+
+    await page.goto("/create");
+    await expect(row(page, "create", "requests", "request-auto-new")).toBeVisible();
+    await expect(row(page, "create", "queue", "request-auto-new")).toBeVisible();
+    await expect(row(page, "create", "processing", "request-auto-new")).toBeVisible();
+    await expect(row(page, "create", "created", "request-auto-new")).toBeVisible();
+    await expect(row(page, "create", "created", "request-auto-failed")).toBeVisible();
+    await expect(row(page, "create", "created", "request-auto-deleted")).toBeVisible();
+    await expect(row(page, "create", "created", "created-old")).toBeVisible();
+    await expect(row(page, "create", "paused", "paused-old")).toHaveCount(0);
   });
 
-  test("submission card filters stay isolated and only show the supported fields", async ({
+  test("card search, filters, counts, and actions stay scoped to their own cards", async ({
     page,
   }) => {
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto("/processing-my-requests", "My Requests");
-
-    await processingPage.openCardFilters("Ready");
-
-    const readyDrawer = processingPage.cardOpenFilterDrawer("Ready");
-    await expect(readyDrawer).toBeVisible();
-    await expect(processingPage.cardOpenFilterDrawer("Requests")).toHaveCount(0);
-    await expect(processingPage.cardOpenFilterDrawer("Processing")).toHaveCount(0);
-    await expect(readyDrawer.getByText("Range", { exact: true })).toBeVisible();
-    await expect(readyDrawer.getByText("Status", { exact: true })).toHaveCount(0);
-    await expect(readyDrawer.getByText("Review", { exact: true })).toHaveCount(0);
-    await expect(readyDrawer.getByText("Match", { exact: true })).toHaveCount(0);
-    await expect(readyDrawer.getByText("Input", { exact: true })).toHaveCount(0);
-    await expect(readyDrawer.locator('option[value="week"]')).toHaveText("Past Week");
-    await expect(readyDrawer.locator('option[value="month"]')).toHaveText("Past Month");
-    await expect(readyDrawer.locator('option[value="year"]')).toHaveText("Past Year");
-
-    await processingPage.openCardFilters("Requests");
-
-    const requestsDrawer = processingPage.cardOpenFilterDrawer("Requests");
-    await expect(requestsDrawer).toBeVisible();
-    await expect(processingPage.cardOpenFilterDrawer("Ready")).toHaveCount(0);
-    await expect(processingPage.cardOpenFilterDrawer("Processing")).toHaveCount(0);
-    await expect(requestsDrawer.getByText("Status", { exact: true })).toBeVisible();
-    await expect(requestsDrawer.getByText("Range", { exact: true })).toBeVisible();
-    await expect(requestsDrawer.getByText("Review", { exact: true })).toHaveCount(0);
-    await expect(requestsDrawer.getByText("Match", { exact: true })).toHaveCount(0);
-    await expect(requestsDrawer.getByText("Input", { exact: true })).toHaveCount(0);
-    await expect(requestsDrawer.locator('option[value="week"]')).toHaveText("Past Week");
-    await expect(requestsDrawer.locator('option[value="month"]')).toHaveText("Past Month");
-    await expect(requestsDrawer.locator('option[value="year"]')).toHaveText("Past Year");
-
-    await processingPage.openCardFilters("Requests");
-    await expect(processingPage.cardOpenFilterDrawer("Requests")).toHaveCount(0);
-
-    await processingPage.openCardFilters("Processing");
-
-    const processingDrawer = processingPage.cardOpenFilterDrawer("Processing");
-    await expect(processingDrawer).toBeVisible();
-    await expect(processingDrawer.getByText("Status", { exact: true })).toBeVisible();
-    await expect(processingDrawer.getByText("Range", { exact: true })).toBeVisible();
-    await expect(processingDrawer.getByText("Step", { exact: true })).toHaveCount(0);
-    await expect(processingDrawer.locator('option[value="week"]')).toHaveText("Past Week");
-    await expect(processingDrawer.locator('option[value="month"]')).toHaveText("Past Month");
-    await expect(processingDrawer.locator('option[value="year"]')).toHaveText("Past Year");
-  });
-
-  test("processing header does not show a shared-activity spinner while idle", async ({
-    page,
-  }) => {
-    await page.route("**/api/ingestion/activity/", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          can_manage_processing: true,
-          has_visible_activity: false,
-          active_scopes: [],
-        }),
-      });
-    });
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto("/processing-my-requests", "My Requests");
-
-    await expect(
-      processingPage.rowInCard("Requests", seedData.submissions.userPending),
-    ).toBeVisible();
-    await expect(processingPage.headerSpinner("My Requests")).toHaveCount(0);
-    await expect(
-      processingPage.pageHeader("My Requests").locator(".panel-header > .loading-spinner"),
-    ).toHaveCount(0);
-  });
-
-  test("processing header does not show a shared-activity spinner while activity is active", async ({
-    page,
-  }) => {
-    await page.route("**/api/ingestion/activity/", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          can_manage_processing: true,
-          has_visible_activity: true,
-          active_scopes: ["jobs", "runs"],
-        }),
-      });
-    });
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto("/processing-my-requests", "My Requests");
-
-    await expect(
-      processingPage.rowInCard("Requests", seedData.submissions.userPending),
-    ).toBeVisible();
-    await expect(processingPage.headerSpinner("My Requests")).toHaveCount(0);
-    await expect(
-      processingPage.pageHeader("My Requests").locator(".panel-header > .loading-spinner"),
-    ).toHaveCount(0);
-    await expect(
-      processingPage.pageHeader("My Requests").locator(".processing-page-title .loading-spinner"),
-    ).toHaveCount(0);
-
-    await processingPage.goto(
-      "/processing-failed-requests",
-      "Failed Requests",
+    await boot(
+      page,
+      "/create",
+      baseState({
+        records: [
+          record({ id: "initial-alpha", name: "Initial Alpha", category: "Poetry" }),
+          record({ id: "initial-beta", name: "Initial Beta", category: "Science" }),
+          record({ id: "queued-alpha", name: "Queued Alpha", category: "Poetry" }),
+          record({ id: "queued-beta", name: "Queued Beta", category: "Science" }),
+        ],
+        requests: [
+          request({ id: "initial-alpha-request", bookRecordId: "initial-alpha", state: "initial" }),
+          request({ id: "initial-beta-request", bookRecordId: "initial-beta", state: "initial" }),
+          request({ id: "queued-alpha-request", bookRecordId: "queued-alpha", state: "queued" }),
+          request({ id: "queued-beta-request", bookRecordId: "queued-beta", state: "queued" }),
+        ],
+        ui: { actionDelayMs: 400, pipelineDelayMs: 2_000 },
+      }),
     );
 
-    await expect(processingPage.headerSpinner("Failed Requests")).toHaveCount(0);
-  });
+    await expectVisibleCount(page, "create", "requests", 2);
+    await expectVisibleCount(page, "create", "queue", 2);
 
-  test("my requests keeps collapsible cards grouped, shows failed and duplicate counts, and requeues deleted requests with add-again actions", async ({
-    page,
-  }) => {
-    await mockMyRequestsRoutes(page);
+    await page.getByTestId("create-requests-search").fill("alpha");
+    await expectVisibleCount(page, "create", "requests", 1);
+    await expect(row(page, "create", "requests", "initial-alpha-request")).toBeVisible();
+    await expect(row(page, "create", "requests", "initial-beta-request")).toHaveCount(0);
+    await expectVisibleCount(page, "create", "queue", 2);
 
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto("/processing-my-requests", "My Requests");
-
-    await expect(processingPage.collapsibleStack()).toBeVisible();
-    await expect(
-      page.locator("section.processing-summary-card .processing-card-count"),
-    ).toBeVisible();
-    await expect(processingPage.cardCountPill("Deleted")).toHaveCount(0);
-    await expect(processingPage.card("Ready")).toHaveClass(
-      /processing-full-span-card/,
+    await page.getByTestId("create-queue-category-filter").selectOption("Science");
+    await expect(page.getByTestId("create-queue-active-filters")).toContainText(
+      "Science",
     );
-    await expect(processingPage.card("Failed Requests")).toHaveCount(0);
-    await expect(processingPage.card("Deplicate Requests")).toHaveCount(0);
-    await expect(summaryValue(processingPage, "My Requests Overview", "Failed")).toHaveText("1");
-    await expect(summaryValue(processingPage, "My Requests Overview", "Duplicate")).toHaveText("1");
-    await expect
-      .poll(async () => {
-        const box = await processingPage.card("Ready").boundingBox();
-        return box?.height || 0;
-      })
-      .toBeLessThan(540);
+    await expectVisibleCount(page, "create", "queue", 1);
+    await expect(row(page, "create", "queue", "queued-beta-request")).toBeVisible();
+    await expect(row(page, "create", "queue", "queued-alpha-request")).toHaveCount(0);
+    await expectVisibleCount(page, "create", "requests", 1);
 
-    await processingPage.toggleCard("Deleted");
+    await checkbox(page, "create", "queue", "queued-beta-request").check();
+    await page.getByTestId("create-queue-delete-btn").click();
+    await expect(page.getByTestId("create-queue-loader")).toBeVisible();
+    await expect(page.getByTestId("create-requests-search")).toHaveValue("alpha");
+    await expectVisibleCount(page, "create", "requests", 1);
     await expect(
-      processingPage
-        .collapsibleStack()
-        .locator("section.processing-card")
-        .first()
-        .getByRole("heading", { name: "Deleted", exact: true }),
-    ).toBeVisible();
-
-    const deletedRow = processingPage.rowInCard(
-      "Deleted",
-      seedData.submissions.userDeleted,
-    );
-
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.userDeleted,
-      "Deleted",
-      ["Requests", "Processing", "Ready", "Queued", "Stopped"],
-    );
-    await expect(deletedRow).toBeVisible();
-    await expect(
-      deletedRow.getByRole("button", { name: "Add Again to Queue" }),
-    ).toBeVisible();
-    await expect(
-      deletedRow.getByRole("button", { name: "Resume" }),
-    ).toHaveCount(0);
-
-    await deletedRow.getByRole("button", { name: "Add Again to Queue" }).click();
-    await expect(page.getByText("Request queued.")).toBeVisible();
-    await expect(
-      processingPage.rowInCard("Deleted", seedData.submissions.userDeleted),
-    ).toHaveCount(0);
-    await expect(
-      processingPage.rowInCard("Ready", seedData.submissions.userDeleted),
-    ).toBeVisible();
-  });
-
-  test("my requests processing and stopped cards perform live stop and resume actions", async ({
-    page,
-  }) => {
-    await mockMyRequestsRoutes(page);
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto("/processing-my-requests", "My Requests");
-
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.userProcessing,
-      "Processing",
-      ["Requests", "Ready", "Queued", "Stopped", "Deleted"],
-    );
-    await expect(
-      processingPage.rowInCard("Processing", seedData.submissions.userProcessing),
-    ).toBeVisible();
-    await processingPage
-      .rowActionButton("Processing", seedData.submissions.userProcessing, "Stop")
-      .click();
-
-    await expect(page.getByText("Book creation stopped.")).toBeVisible();
-
-    await processingPage.toggleCard("Stopped");
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.userStopped,
-      "Stopped",
-      ["Requests", "Processing", "Ready", "Queued", "Deleted"],
-    );
-    await expect(
-      processingPage.rowInCard("Stopped", seedData.submissions.userProcessing),
-    ).toBeVisible();
-    await expect(
-      processingPage
-        .rowInCard("Stopped", seedData.submissions.userStopped)
-        .getByText("View error"),
-    ).toBeVisible();
-
-    await processingPage
-      .rowActionButton("Stopped", seedData.submissions.userStopped, "Resume")
-      .click();
-
-    await expect(page.getByText("Book creation started.")).toBeVisible();
-    await expect(
-      processingPage.rowInCard("Stopped", seedData.submissions.userStopped),
-    ).toHaveCount(0);
-    await expect(
-      processingPage.rowInCard("Ready", seedData.submissions.userStopped),
-    ).toBeVisible();
-  });
-
-  test("catalog books sorting reorders the visible catalog rows through the live page controls", async ({
-    page,
-  }) => {
-    await mockCatalogBooksOverviewRoutes(page);
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto("/processing-catalog-books", "Catalog");
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.curationQueued,
-      "Queued",
-      ["Processing", "Ready", "Stopped", "Deleted"],
-    );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.curationDeleted,
-      "Deleted",
-      ["Processing", "Ready", "Stopped", "Queued"],
-    );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.curationStopped,
-      "Stopped",
-      ["Processing", "Ready", "Queued", "Deleted"],
-    );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.curationProcessing,
-      "Processing",
-      ["Ready", "Stopped", "Queued", "Deleted"],
-    );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.curationReady,
-      "Ready",
-      ["Processing", "Stopped", "Queued", "Deleted"],
-    );
-
-    await expect(
-      processingPage.rowInCard("Catalog Books", seedData.catalogEntries.alpha),
-    ).toBeVisible();
-    await expect(
-      processingPage.rowInCard("Catalog Books", seedData.catalogEntries.beta),
-    ).toBeVisible();
-
-    const catalogCard = processingPage.card("Catalog Books");
-    const sortSelect = catalogCard.getByRole("combobox", { name: "Sort" });
-    await sortSelect.selectOption("title_asc");
-
-    await expect(
-      sortSelect,
-    ).toHaveValue("title_asc");
-    await expect(
-      processingPage.rowInCard("Catalog Books", seedData.catalogEntries.alpha),
-    ).toBeVisible();
-    await expect(
-      processingPage.rowInCard("Catalog Books", seedData.catalogEntries.beta),
-    ).toBeVisible();
-  });
-
-  test("catalog book creation keeps loading and selection disabled until tracked rows finish", async ({
-    page,
-  }) => {
-    const processingPage = new ProcessingPageModel(page);
-    let catalogCreatePhase = "idle";
-
-    const entryBase = {
-      id: "tracked-catalog-entry",
-      title: seedData.catalogEntries.alpha,
-      author_line: "E2E Catalog Writer",
-      categories: "E2E Fiction",
-      source_url: "https://www.ebanglalibrary.com/books/e2e-alpha-catalog-book/",
-      local_book_slug: "",
-      local_book_title: "",
-      local_book_state: "",
-      activity_at: "2026-04-14T00:00:00Z",
-      updated_at: null,
-      last_seen_at: "2026-04-14T00:00:00Z",
-    };
-
-    function currentCatalogEntry() {
-      if (catalogCreatePhase === "processing") {
-        return {
-          ...entryBase,
-          curation_status: "processing",
-          latest_submission_status: "processing",
-          latest_job_status: "processing",
-          latest_job_error: "",
-        };
-      }
-
-      if (catalogCreatePhase === "failed") {
-        return {
-          ...entryBase,
-          curation_status: "failed",
-          latest_submission_status: "failed",
-          latest_job_status: "failed",
-          latest_job_error: "Seeded catalog creation failure.",
-        };
-      }
-
-      if (catalogCreatePhase === "deleted") {
-        return {
-          ...entryBase,
-          curation_status: "deleted",
-          latest_submission_status: "processing",
-          latest_job_status: "processing",
-          latest_job_error: "",
-        };
-      }
-
-      return {
-        ...entryBase,
-        curation_status: "new",
-        latest_submission_status: "",
-        latest_job_status: "",
-        latest_job_error: "",
-      };
-    }
-
-    await page.route("**/api/ingestion/activity/", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          can_manage_processing: true,
-          has_visible_activity: false,
-          active_scopes: [],
-        }),
-      });
-    });
-
-    await page.route("**/api/ingestion/catalog/entries/**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(createCatalogEntriesPayload(currentCatalogEntry())),
-      });
-    });
-
-    await page.route("**/api/ingestion/jobs/**", async (route) => {
-      const jobs =
-        catalogCreatePhase === "processing"
-          ? [
-              {
-                id: "tracked-job",
-                submission_id: "tracked-submission",
-                job_type: "create",
-                status: "processing",
-                task_id: "tracked-task",
-                queue_name: "celery",
-                retry_count: 0,
-                cancel_requested: false,
-                submission_origin: "curation",
-                submission_input: entryBase.source_url,
-                submission_status: "processing",
-                submission_resolution_status: "resolved",
-                target_book_slug: "",
-                target_book_title: "",
-                target_book_deleted: false,
-                last_error: "",
-                created_at: "2026-04-14T00:00:00Z",
-                updated_at: "2026-04-14T00:00:00Z",
-                started_at: "2026-04-14T00:00:00Z",
-                finished_at: null,
-              },
-            ]
-          : [];
-
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(jobs),
-      });
-    });
-
-    await page.route(
-      "**/api/ingestion/catalog/entries/create-books/",
-      async (route) => {
-        catalogCreatePhase = "processing";
-        await route.fulfill({
-          status: 202,
-          contentType: "application/json",
-          body: JSON.stringify({
-            queued_creates: 1,
-            queued_updates: 0,
-            skipped_ready: 0,
-            skipped_processing: 0,
-            skipped_deleted: 0,
-            skipped_missing: 0,
-            errors: [],
-          }),
-        });
-      },
-    );
-
-    await processingPage.goto("/processing-catalog-books", "Catalog");
-    await expect(
-      processingPage.rowInCard("Catalog Books", seedData.catalogEntries.alpha),
-    ).toBeVisible();
-
-    await processingPage.catalogRowCheckbox(seedData.catalogEntries.alpha).check();
-    await processingPage.catalogCreateSelectedButton().click();
-
-    await expect(
-      processingPage.catalogRowCheckbox(seedData.catalogEntries.alpha),
-    ).toBeDisabled();
-    await expect(
-      processingPage
-        .rowInCard("Catalog Books", seedData.catalogEntries.alpha)
-        .getByRole("button", { name: "Processing..." }),
-    ).toBeVisible();
-
-    await processingPage.goto("/processing-my-requests", "My Requests");
-    await processingPage.goto("/processing-catalog-books", "Catalog");
-
-    await expect(
-      processingPage.catalogRowCheckbox(seedData.catalogEntries.alpha),
-    ).toBeDisabled();
-    await expect(
-      processingPage
-        .rowInCard("Catalog Books", seedData.catalogEntries.alpha)
-        .getByRole("button", { name: "Processing..." }),
-    ).toBeVisible();
-
-    catalogCreatePhase = "deleted";
-    await page.reload();
-
-    await expect(
-      processingPage.catalogRowCheckbox(seedData.catalogEntries.alpha),
+      checkbox(page, "create", "requests", "initial-alpha-request"),
     ).toBeEnabled();
-    await expect(
-      processingPage
-        .rowInCard("Catalog Books", seedData.catalogEntries.alpha)
-        .getByRole("button", { name: "Create" }),
-    ).toBeVisible();
+    await expect(page.getByTestId("create-queue-loader")).toHaveCount(0);
   });
 
-  test("catalog sync control can stop an in-flight sync and start again later", async ({
+  test("create page cards isolate loaders and move requests between states", async ({
     page,
   }) => {
-    const processingPage = new ProcessingPageModel(page);
-    let syncState = null;
-    let syncActive = false;
-    const syncCatalogEntry = {
-      id: "catalog-sync-entry",
-      title: seedData.catalogEntries.alpha,
-      author_line: "E2E Catalog Writer",
-      categories: "E2E Fiction",
-      source_url: "https://www.ebanglalibrary.com/books/e2e-alpha-catalog-book/",
-      curation_status: "new",
-      local_book_slug: "",
-      local_book_title: "",
-      local_book_state: "",
-      latest_submission_status: "",
-      latest_job_status: "",
-      latest_job_error: "",
-      activity_at: "2026-04-14T00:00:00Z",
-      updated_at: null,
-      last_seen_at: "2026-04-14T00:00:00Z",
-    };
+    await boot(
+      page,
+      "/create",
+      baseState({
+        records: [
+          record({ id: "initial-a", name: "Initial A", category: "Poetry" }),
+          record({ id: "initial-b", name: "Initial B", category: "Poetry" }),
+          record({ id: "queued-a", name: "Queued A", category: "Science" }),
+          record({ id: "processing-a", name: "Processing A", category: "Science" }),
+          record({ id: "created-a", name: "Created A", category: "History" }),
+        ],
+        requests: [
+          request({ id: "initial-a-request", bookRecordId: "initial-a", state: "initial" }),
+          request({ id: "initial-b-request", bookRecordId: "initial-b", state: "initial" }),
+          request({ id: "queued-a-request", bookRecordId: "queued-a", state: "queued" }),
+          request({ id: "processing-a-request", bookRecordId: "processing-a", state: "processing" }),
+          request({ id: "created-a-request", bookRecordId: "created-a", state: "created" }),
+        ],
+        ui: { actionDelayMs: 400, pipelineDelayMs: 20_000 },
+      }),
+    );
 
-    await page.route("**/api/ingestion/activity/", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          can_manage_processing: true,
-          has_visible_activity: syncActive,
-          active_scopes: syncActive ? ["catalog_refresh"] : [],
-        }),
-      });
-    });
+    await expect(page.getByTestId("create-overview-stat-requests")).toContainText(
+      "2",
+    );
+    await expectVisibleCount(page, "create", "requests", 2);
+    await expectVisibleCount(page, "create", "queue", 1);
+    await expectVisibleCount(page, "create", "processing", 1);
+    await expectVisibleCount(page, "create", "created", 1);
 
-    await page.route("**/api/ingestion/catalog/entries/**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(
-          createCatalogEntriesPayload(syncCatalogEntry, {
-            sync_state: syncState,
+    await page.getByTestId("create-requests-search").fill("initial a");
+    await expectVisibleCount(page, "create", "requests", 1);
+    await page.getByTestId("create-requests-search").fill("");
+    await page.getByTestId("create-requests-category-filter").selectOption("Poetry");
+    await expect(page.getByTestId("create-requests-active-filters")).toContainText(
+      "Poetry",
+    );
+    await expectVisibleCount(page, "create", "requests", 2);
+
+    await checkbox(page, "create", "requests", "initial-a-request").check();
+    await checkbox(page, "create", "requests", "initial-b-request").check();
+    await page.getByTestId("create-requests-delete-btn").click();
+    await expect(page.getByTestId("create-requests-loader")).toBeVisible();
+    await expect(page.getByTestId("create-requests-delete-btn")).toBeDisabled();
+    await expect(checkbox(page, "create", "queue", "queued-a-request")).toBeEnabled();
+    await expect(page.getByTestId("create-requests-loader")).toHaveCount(0);
+    await expectVisibleCount(page, "create", "requests", 0);
+
+    await checkbox(page, "create", "processing", "processing-a-request").check();
+    await page.getByTestId("create-processing-pause-btn").click();
+    await expect(page.getByTestId("create-processing-loader")).toBeVisible();
+    await expect(row(page, "create", "processing", "processing-a-request")).toHaveCount(0);
+    await page.goto("/on-hold");
+    await expect(row(page, "on-hold", "paused", "processing-a-request")).toBeVisible();
+    await expect(row(page, "on-hold", "paused", "processing-a-request")).toContainText(
+      "Paused at processing",
+    );
+
+    await page.goto("/create");
+    await checkbox(page, "create", "created", "created-a-request").check();
+    await page.getByTestId("create-created-delete-btn").click();
+    await expect(row(page, "create", "created", "created-a-request")).toHaveCount(0);
+    await page.goto("/on-hold");
+    await expect(row(page, "on-hold", "deleted", "created-a-request")).toBeVisible();
+  });
+
+  test("on-hold page resumes, retries, resolves duplicates, deletes, and recreates", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/on-hold",
+      baseState({
+        records: [
+          record({ id: "paused-book", name: "Paused Book" }),
+          record({ id: "failed-book", name: "Failed Book" }),
+          record({ id: "duplicate-book", name: "Duplicate Book" }),
+          record({ id: "deleted-book", name: "Deleted Book" }),
+          record({ id: "original-book", name: "Original Book", bookCreationState: "processing" }),
+        ],
+        requests: [
+          request({
+            id: "paused-request",
+            bookRecordId: "paused-book",
+            state: "paused",
+            progress: {
+              savedAt: iso(20),
+              checkpoint: "chapter-4",
+              savedData: { chapters: 4 },
+            },
           }),
-        ),
-      });
-    });
-
-    await page.route("**/api/ingestion/catalog/refresh/", async (route) => {
-      syncActive = true;
-      syncState = createCatalogSyncState();
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify(syncState),
-      });
-    });
-    await page.route("**/api/ingestion/catalog/refresh/stop/", async (route) => {
-      syncActive = false;
-      syncState = createCatalogSyncState({
-        status: "idle",
-        task_id: "",
-        queue_name: "",
-        finished_at: "2026-04-14T00:05:00Z",
-        updated_at: "2026-04-14T00:05:00Z",
-      });
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(syncState),
-      });
-    });
-
-    await processingPage.goto("/processing-catalog-books", "Catalog");
-
-    await expect(processingPage.catalogSyncButton()).toHaveAttribute(
-      "aria-label",
-      "Sync catalog",
-    );
-    await expect(processingPage.catalogSyncStatus()).toContainText(
-      "Catalog sync idle",
+          request({
+            id: "failed-request",
+            bookRecordId: "failed-book",
+            state: "failed",
+            errorMessage: "Retry threshold exceeded",
+          }),
+          request({
+            id: "duplicate-request",
+            bookRecordId: "duplicate-book",
+            state: "duplicate",
+            duplicateOfRequestId: "original-request",
+            duplicateOfRecordId: "original-book",
+          }),
+          request({ id: "deleted-request", bookRecordId: "deleted-book", state: "deleted" }),
+          request({ id: "original-request", bookRecordId: "original-book", state: "processing" }),
+        ],
+        ui: { actionDelayMs: 120, pipelineDelayMs: 1_000 },
+      }),
     );
 
-    await processingPage.catalogSyncButton().click();
-
-    await expect
-      .poll(async () =>
-        processingPage.catalogSyncButton().getAttribute("aria-label"),
-      )
-      .toBe("Stop catalog sync");
-    await expect(processingPage.catalogSyncStatus()).toContainText(
-      "Syncing catalog",
+    await expect(page.getByTestId("on-hold-overview-stat-paused")).toContainText(
+      "1",
     );
-    await expect(
-      processingPage.catalogSyncStatus().locator(".loading-spinner"),
-    ).toBeVisible();
-
-    await processingPage.catalogSyncButton().click();
-    await expect
-      .poll(async () =>
-        processingPage.catalogSyncButton().getAttribute("aria-label"),
-      )
-      .toBe("Sync catalog");
-    await expect(processingPage.catalogSyncStatus()).toContainText(
-      "Catalog sync idle",
+    await expect(page.getByTestId("on-hold-failed-table")).toContainText(
+      "Error Reason",
+    );
+    await expect(row(page, "on-hold", "paused", "paused-request")).toContainText(
+      "chapter-4",
+    );
+    await expect(row(page, "on-hold", "failed", "failed-request")).toContainText(
+      "Retry threshold exceeded",
     );
 
-    await processingPage.catalogSyncButton().click();
-    await expect
-      .poll(async () =>
-        processingPage.catalogSyncButton().getAttribute("aria-label"),
-      )
-      .toBe("Stop catalog sync");
-    await expect(processingPage.catalogSyncStatus()).toContainText(
-      "Syncing catalog",
-    );
+    await checkbox(page, "on-hold", "paused", "paused-request").check();
+    await page.getByTestId("on-hold-paused-resume-btn").click();
+    await expect(page.getByTestId("on-hold-paused-loader")).toBeVisible();
+    await expect(row(page, "on-hold", "paused", "paused-request")).toHaveCount(0);
+    await page.goto("/create");
+    await expect(row(page, "create", "requests", "paused-request")).toBeVisible();
+
+    await page.goto("/on-hold");
+    await checkbox(page, "on-hold", "failed", "failed-request").check();
+    await page.getByTestId("on-hold-failed-retry-btn").click();
+    await expect(row(page, "on-hold", "failed", "failed-request")).toHaveCount(0);
+    await page.goto("/create");
+    await expect(row(page, "create", "requests", "failed-request")).toBeVisible();
+
+    await page.goto("/on-hold");
+    await checkbox(page, "on-hold", "duplicate", "duplicate-request").check();
+    await page.getByTestId("on-hold-duplicate-new-btn").click();
+    await expect(row(page, "on-hold", "duplicate", "duplicate-request")).toHaveCount(0);
+    await page.goto("/create");
+    await expect(row(page, "create", "requests", "duplicate-request")).toBeVisible();
+
+    await page.goto("/on-hold");
+    await checkbox(page, "on-hold", "deleted", "deleted-request").check();
+    await page.getByTestId("on-hold-deleted-create-again-btn").click();
+    await expect(row(page, "on-hold", "deleted", "deleted-request")).toHaveCount(0);
+    await page.goto("/create");
+    await expect(row(page, "create", "requests", "deleted-request")).toBeVisible();
   });
 
-  test("automation keeps run history collapsible with the expanded card first and preserves saved settings", async ({
+  test("duplicate confirmation locks catalog rows until original request is terminal", async ({
     page,
   }) => {
-    await mockAutomationRoutes(page);
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto("/processing-automation", "Automation");
-
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.automationQueued,
-      "Queued",
-      ["Automation Requests", "Processing", "Ready", "Stopped", "Deleted"],
+    const processingApi = await boot(
+      page,
+      "/on-hold",
+      baseState({
+        records: [
+          record({ id: "duplicate-book", name: "Duplicate Candidate" }),
+          record({ id: "original-book", name: "Original Candidate", bookCreationState: "processing" }),
+        ],
+        requests: [
+          request({
+            id: "duplicate-request",
+            bookRecordId: "duplicate-book",
+            state: "duplicate",
+            duplicateOfRequestId: "original-request",
+            duplicateOfRecordId: "original-book",
+          }),
+          request({ id: "original-request", bookRecordId: "original-book", state: "processing" }),
+        ],
+        ui: { actionDelayMs: 80, pipelineDelayMs: 20_000 },
+      }),
     );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.automationProcessing,
-      "Processing",
-      ["Automation Requests", "Ready", "Stopped", "Queued", "Deleted"],
-    );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.automationReady,
-      "Ready",
-      ["Automation Requests", "Processing", "Stopped", "Queued", "Deleted"],
-    );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.automationStopped,
-      "Stopped",
-      ["Automation Requests", "Processing", "Ready", "Queued", "Deleted"],
-    );
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.automationDeleted,
-      "Deleted",
-      ["Automation Requests", "Processing", "Ready", "Queued", "Stopped"],
-    );
-    await expect(
-      processingPage.rowInCard(
-        "Automation Requests",
-        seedData.submissions.automationPending,
-      ),
-    ).toBeVisible();
 
-    await processingPage.toggleCard("Run History");
-    await expect(
-      processingPage
-        .collapsibleStack()
-        .locator("section.processing-card")
-        .first()
-        .getByRole("heading", { name: "Run History", exact: true }),
-    ).toBeVisible();
-    await expect(
-      processingPage.rowInCard(
-        "Run History",
-        seedData.processing.scheduledRunActiveSummary,
-      ),
-    ).toBeVisible();
+    await checkbox(page, "on-hold", "duplicate", "duplicate-request").check();
+    await page.getByTestId("on-hold-duplicate-duplicate-btn").click();
+    await expect(row(page, "on-hold", "duplicate", "duplicate-request")).toContainText(
+      "Confirmed duplicate",
+    );
+    await page.goto("/catalog");
+    await expect(checkbox(page, "catalog", "records", "duplicate-book")).toBeDisabled();
 
-    await processingPage.saveAutomation({
-      enabled: true,
-      time: "04:30",
-      frequency: "weekly",
-      mode: "all",
-      pages: 12,
-    });
-
+    processingApi.updateRequest("original-request", { state: "failed" });
     await page.reload();
-
-    const automationCard = processingPage.card("Automation");
-    await expect(
-      automationCard.locator('.processing-switch input[type="checkbox"]'),
-    ).toBeChecked();
-    await expect(automationCard.locator('input[type="time"]')).toHaveValue(
-      "04:30",
-    );
-    await expect(automationCard.locator("select").first()).toHaveValue(
-      "weekly",
-    );
-    await expect(automationCard.locator("select").nth(1)).toHaveValue("all");
-    await expect(automationCard.locator('input[type="number"]')).toHaveValue(
-      "12",
-    );
+    await expect(checkbox(page, "catalog", "records", "duplicate-book")).toBeEnabled();
   });
 
-  test("failed requests page omits run history and shows failed-job table", async ({
+  test("incomplete page automation, read-only records, and completed-book actions", async ({
     page,
   }) => {
-    await mockFailedRequestsRoutes(page);
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto(
-      "/processing-failed-requests",
-      "Failed Requests",
+    await boot(
+      page,
+      "/incomplete",
+      baseState({
+        records: [
+          record({
+            id: "incomplete-book",
+            name: "Incomplete Book",
+            category: "Incomplete",
+            writer: "Missing Writer",
+            wasIncomplete: true,
+            willResolveToCategory: "Novel",
+          }),
+          record({
+            id: "completed-book",
+            name: "Resolved Book",
+            category: "Novel",
+            writer: "Done Writer",
+            wasIncomplete: true,
+            resolvedFromIncomplete: true,
+            bookCreationState: "created",
+          }),
+        ],
+        requests: [
+          request({
+            id: "completed-request",
+            bookRecordId: "completed-book",
+            state: "created",
+          }),
+        ],
+        ui: { actionDelayMs: 80, pipelineDelayMs: 2_000 },
+      }),
     );
-    await expect(processingPage.card("Failed Requests")).toBeVisible();
-    await expect(processingPage.card("Ready")).toHaveCount(0);
-    await expect(processingPage.card("Deplicate Requests")).toHaveCount(0);
-    await expect(summaryValue(processingPage, "Failed Requests Overview", "Failed")).toHaveText("1");
-    await expect(
-      summaryValue(processingPage, "Failed Requests Overview", "Duplicate"),
-    ).toHaveCount(0);
-    await expect(processingPage.card("Run History")).toHaveCount(0);
-    await processingPage.expandCard("Failed Requests");
-    await expect(
-      processingPage.rowInCard(
-        "Failed Requests",
-        seedData.submissions.userFailed,
-      ),
-    ).toBeVisible();
-    const failedRow = processingPage.rowInCard(
-      "Failed Requests",
-      seedData.submissions.userFailed,
+
+    await expect(page.getByTestId("incomplete-overview-stat-incomplete")).toContainText(
+      "1",
     );
-    const failedBulkBar = processingPage
-      .card("Failed Requests")
-      .locator(".processing-bulk-bar");
-
-    await expect(failedRow.getByText("Seeded failure for live-browser coverage.")).toBeVisible();
-    await expect(failedBulkBar.getByRole("button", { name: "Retry" })).toBeVisible();
-    await expect(failedBulkBar.getByRole("button", { name: "Retry all" })).toHaveCount(0);
-    await expect(failedBulkBar.getByRole("button", { name: "Delete" })).toBeVisible();
-    await expect(failedBulkBar.getByRole("button", { name: "Delete all" })).toHaveCount(0);
-    await expect(
-      processingPage
-        .card("Failed Requests")
-        .locator(".processing-requeue-error-panel"),
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("region", { name: "Failed job logs" }),
-    ).toHaveCount(0);
-    await expect(processingPage.tableRows("Failed Requests")).toHaveCount(1);
-
-    await processingPage.searchCard(
-      "Failed Requests",
-      "Seeded failure for live-browser coverage.",
+    await expect(page.getByTestId("incomplete-overview-stat-resolved")).toContainText(
+      "1",
     );
-    await expect(processingPage.tableRows("Failed Requests")).toHaveCount(1);
-    await expect(
-      processingPage.rowInCard(
-        "Failed Requests",
-        seedData.books.incomplete.title,
-      ),
-    ).toHaveCount(0);
+    await expect(row(page, "incomplete", "records", "incomplete-book")).toBeVisible();
+    await expect(page.getByTestId("incomplete-records-recreate-btn")).toHaveCount(0);
 
-    await failedRow.locator('input[type="checkbox"]').check();
-    await failedBulkBar.getByRole("button", { name: "Delete (1)" }).click();
-    await processingPage.confirmDialog();
-    await expect(summaryValue(processingPage, "Failed Requests Overview", "Failed")).toHaveText("0");
+    await page.getByTestId("incomplete-records-search").fill("missing writer");
+    await expectVisibleCount(page, "incomplete", "records", 1);
+    await page.getByTestId("incomplete-records-category-filter").selectOption("Incomplete");
+    await expect(page.getByTestId("incomplete-records-active-filters")).toContainText(
+      "Incomplete",
+    );
+
+    await page.getByTestId("incomplete-automation-enabled").check();
+    await page.getByTestId("incomplete-automation-save-btn").click();
+    await expect(page.getByTestId("incomplete-automation-status")).toContainText(
+      "Saved",
+    );
+    await page.getByTestId("incomplete-automation-run-btn").click();
+    await expect(page.getByTestId("incomplete-automation-loader")).toBeVisible();
+    await expect(row(page, "incomplete", "completed", "request-incomplete-book")).toBeVisible();
+    await expect(page.getByTestId("incomplete-overview-stat-incomplete")).toContainText(
+      "0",
+    );
+
+    await checkbox(page, "incomplete", "completed", "completed-request").check();
+    await page.getByTestId("incomplete-completed-recreate-btn").click();
+    await expect(page.getByTestId("incomplete-completed-loader")).toBeVisible();
+    await expect(row(page, "incomplete", "completed", "completed-request")).toHaveCount(0);
+    await page.goto("/create");
+    await expect(row(page, "create", "requests", "completed-request")).toBeVisible();
+
+    await page.goto("/incomplete");
+    await checkbox(page, "incomplete", "completed", "request-incomplete-book").check();
+    await page.getByTestId("incomplete-completed-delete-btn").click();
+    await expect(page.getByTestId("incomplete-completed-loader")).toBeVisible();
+    await expect(row(page, "incomplete", "completed", "request-incomplete-book")).toHaveCount(0);
+    await page.goto("/on-hold");
+    await expect(row(page, "on-hold", "deleted", "request-incomplete-book")).toBeVisible();
   });
 
-  test("deplicate requests page omits run history and resolves duplicate rows through live actions", async ({
+  test("card actions stay isolated while separate cards are busy", async ({
     page,
   }) => {
-    await mockDuplicateRequestsRoutes(page);
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto(
-      "/processing-duplicate-requests",
-      "Deplicate Requests",
+    await boot(
+      page,
+      "/on-hold",
+      baseState({
+        records: [
+          record({ id: "failed-book", name: "Slow Failed" }),
+          record({ id: "duplicate-book", name: "Fast Duplicate" }),
+        ],
+        requests: [
+          request({
+            id: "failed-request",
+            bookRecordId: "failed-book",
+            state: "failed",
+            errorMessage: "Network retries exhausted",
+          }),
+          request({
+            id: "duplicate-request",
+            bookRecordId: "duplicate-book",
+            state: "duplicate",
+          }),
+        ],
+        ui: { actionDelayMs: 700, pipelineDelayMs: 2_000 },
+      }),
     );
 
-    await expect(processingPage.card("Deplicate Requests")).toBeVisible();
-    await expect(summaryValue(processingPage, "Deplicate Requests Overview", "Duplicate")).toHaveText("1");
-    await expect(processingPage.card("Failed Requests")).toHaveCount(0);
-    await expect(processingPage.card("Run History")).toHaveCount(0);
+    await checkbox(page, "on-hold", "failed", "failed-request").check();
+    await page.getByTestId("on-hold-failed-retry-btn").click();
+    await expect(page.getByTestId("on-hold-failed-loader")).toBeVisible();
+    await expect(checkbox(page, "on-hold", "failed", "failed-request")).toBeDisabled();
+    await expect(checkbox(page, "on-hold", "duplicate", "duplicate-request")).toBeEnabled();
 
-    const duplicateRow = processingPage.rowInCard(
-      "Deplicate Requests",
-      seedData.submissions.duplicateReview,
-    );
-
-    await expectRowOnlyInCard(
-      processingPage,
-      seedData.submissions.duplicateReview,
-      "Deplicate Requests",
-      ["Processing", "Ready", "Queued", "Stopped", "Deleted"],
-    );
-    await expect(duplicateRow).toBeVisible();
-    await duplicateRow.getByRole("button", { name: "New Book" }).click();
-
-    await expect(page.getByText("New book queued.")).toBeVisible();
-    await expect(summaryValue(processingPage, "Deplicate Requests Overview", "Duplicate")).toHaveText("0");
-    await expect(
-      processingPage.rowInCard(
-        "Deplicate Requests",
-        seedData.submissions.duplicateReview,
-      ),
-    ).toHaveCount(0);
-    await expectRowInAnyCard(processingPage, seedData.submissions.duplicateReview, [
-      "Queued",
-      "Processing",
-      "Ready",
-    ]);
+    await checkbox(page, "on-hold", "duplicate", "duplicate-request").check();
+    await page.getByTestId("on-hold-duplicate-new-btn").click();
+    await expect(page.getByTestId("on-hold-duplicate-loader")).toBeVisible();
+    await expect(page.getByTestId("on-hold-failed-loader")).toBeVisible();
+    await expect(row(page, "on-hold", "duplicate", "duplicate-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "failed", "failed-request")).toHaveCount(0);
   });
 
-  test("incomplete requests keeps run history collapsible and reprocesses the selected incomplete book", async ({
+  test("processing notifications surface action completion, duplicate detection, and stale failures", async ({
     page,
   }) => {
-    await mockIncompleteRoutes(page);
-
-    const processingPage = new ProcessingPageModel(page);
-
-    await processingPage.goto(
-      "/processing-incomplete-check",
-      "Incomplete Requests",
+    const processingApi = await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [
+          record({ id: "toast-record", name: "Toast Record" }),
+          record({ id: "duplicate-record", name: "Duplicate Record" }),
+          record({ id: "failed-record", name: "Failed Record" }),
+          record({ id: "stale-record", name: "Stale Record" }),
+        ],
+        requests: [
+          request({
+            id: "duplicate-processing-request",
+            bookRecordId: "duplicate-record",
+            state: "initial",
+            updatedAt: iso(15),
+            pipelineOutcome: "duplicate",
+          }),
+          request({
+            id: "failed-processing-request",
+            bookRecordId: "failed-record",
+            state: "processing",
+            updatedAt: iso(39),
+            pipelineOutcome: "failed",
+          }),
+          request({
+            id: "stale-processing-request",
+            bookRecordId: "stale-record",
+            state: "processing",
+            updatedAt: iso(5),
+          }),
+        ],
+        ui: {
+          ...baseState().ui,
+          pipelineDelayMs: 120,
+        },
+      }),
     );
-    await processingPage.toggleCard("Run History");
+
+    processingApi.setNowIso(iso(40));
+
+    await checkbox(page, "catalog", "records", "toast-record").check();
+    await page.getByTestId("catalog-records-create-btn").click();
     await expect(
-      processingPage
-        .collapsibleStack()
-        .locator("section.processing-card")
-        .first()
-        .getByRole("heading", { name: "Run History", exact: true }),
-    ).toBeVisible();
-    await expect(
-      processingPage.rowInCard(
-        "Run History",
-        seedData.processing.scheduledRunFailedSummary,
-      ),
-    ).toBeVisible();
-    await expect(processingPage.card("Ready")).not.toHaveClass(
-      /processing-full-span-card/,
-    );
-
-    const failedRunRow = processingPage.rowInCard(
-      "Run History",
-      seedData.processing.scheduledRunFailedSummary,
-    );
-    const incompleteCard = processingPage.card("Incomplete Catalog");
-    const incompleteRow = incompleteCard
-      .locator("tbody tr", {
-        hasText: seedData.books.incomplete.title,
-      })
-      .first();
-
-    await expect(failedRunRow.getByText("View error")).toBeVisible();
-    await expect(incompleteRow).toBeVisible();
-    await processingPage.selectIncompleteBook(seedData.books.incomplete.title);
-    await processingPage.reprocessSelectedIncomplete();
-
-    await expect(page.getByText("Reprocess queued.")).toBeVisible();
-    await expect(incompleteRow).toBeVisible();
-  });
-
-  test("catalog page live actions stop, resume, requeue, and delete through the visible cards", async ({
-    page,
-  }) => {
-    const processingPage = new ProcessingPageModel(page);
-    const processingSubmissionId = "submission-processing";
-    const processingJobId = "job-processing";
-    const stoppedSubmissionId = "submission-stopped";
-    const stoppedJobId = "job-stopped";
-    const deletedSubmissionId = "submission-deleted";
-    const deletedQueuedJobId = "job-deleted-queued";
-    const catalogEntryId = "catalog-entry-beta";
-
-    let jobs = [
-      {
-        id: processingJobId,
-        submission_id: processingSubmissionId,
-        job_type: "create",
-        status: "processing",
-        task_id: "task-processing",
-        queue_name: "celery",
-        retry_count: 0,
-        cancel_requested: false,
-        submission_origin: "curation",
-        submission_input: seedData.submissions.curationProcessing,
-        submission_status: "processing",
-        submission_resolution_status: "resolved",
-        target_book_slug: "",
-        target_book_title: "",
-        target_book_deleted: false,
-        last_error: "",
-        created_at: "2026-04-14T00:00:00Z",
-        updated_at: "2026-04-14T00:00:00Z",
-        started_at: "2026-04-14T00:00:00Z",
-        finished_at: null,
-      },
-      {
-        id: stoppedJobId,
-        submission_id: stoppedSubmissionId,
-        job_type: "create",
-        status: "stopped",
-        task_id: "",
-        queue_name: "celery",
-        retry_count: 0,
-        cancel_requested: false,
-        submission_origin: "curation",
-        submission_input: seedData.submissions.curationStopped,
-        submission_status: "stopped",
-        submission_resolution_status: "resolved",
-        target_book_slug: "",
-        target_book_title: "",
-        target_book_deleted: false,
-        last_error: "Seeded stop",
-        created_at: "2026-04-14T00:00:00Z",
-        updated_at: "2026-04-14T00:00:00Z",
-        started_at: "2026-04-14T00:00:00Z",
-        finished_at: "2026-04-14T00:05:00Z",
-      },
-    ];
-    let submissions = [
-      {
-        id: processingSubmissionId,
-        input_type: "url",
-        origin: "curation",
-        original_input: seedData.submissions.curationProcessing,
-        resolved_url: "https://www.ebanglalibrary.com/books/curation-processing/",
-        resolution_status: "resolved",
-        resolution_confidence: 1,
-        status: "processing",
-        review_state: "",
-        error_message: "",
-        linked_book_slug: "",
-        linked_book: "",
-        linked_book_deleted: false,
-        served_from_database: false,
-        canonical_submission_id: "",
-        uses_existing_request: false,
-        candidates: [],
-        latest_job: { ...jobs[0] },
-        created_at: "2026-04-14T00:00:00Z",
-        updated_at: "2026-04-14T00:00:00Z",
-      },
-      {
-        id: stoppedSubmissionId,
-        input_type: "url",
-        origin: "curation",
-        original_input: seedData.submissions.curationStopped,
-        resolved_url: "https://www.ebanglalibrary.com/books/curation-stopped/",
-        resolution_status: "resolved",
-        resolution_confidence: 1,
-        status: "stopped",
-        review_state: "",
-        error_message: "Seeded stop",
-        linked_book_slug: "",
-        linked_book: "",
-        linked_book_deleted: false,
-        served_from_database: false,
-        canonical_submission_id: "",
-        uses_existing_request: false,
-        candidates: [],
-        latest_job: { ...jobs[1] },
-        created_at: "2026-04-14T00:00:00Z",
-        updated_at: "2026-04-14T00:00:00Z",
-      },
-      {
-        id: deletedSubmissionId,
-        input_type: "url",
-        origin: "curation",
-        original_input: seedData.submissions.curationDeleted,
-        resolved_url: "https://www.ebanglalibrary.com/books/curation-deleted/",
-        resolution_status: "resolved",
-        resolution_confidence: 1,
-        status: "deleted",
-        review_state: "",
-        error_message: "",
-        linked_book_slug: "",
-        linked_book: "",
-        linked_book_deleted: false,
-        served_from_database: false,
-        canonical_submission_id: "",
-        uses_existing_request: false,
-        candidates: [],
-        latest_job: null,
-        created_at: "2026-04-14T00:00:00Z",
-        updated_at: "2026-04-14T00:00:00Z",
-      },
-    ];
-    let catalogEntries = [
-      {
-        id: catalogEntryId,
-        title: seedData.catalogEntries.beta,
-        author_line: "E2E Catalog Writer",
-        categories: "E2E Fiction",
-        source_url: "https://www.ebanglalibrary.com/books/e2e-beta-catalog-book/",
-        curation_status: "new",
-        local_book_slug: "",
-        local_book_title: "",
-        local_book_state: "",
-        latest_submission_status: "",
-        latest_job_status: "",
-        latest_job_error: "",
-        activity_at: "2026-04-14T00:00:00Z",
-        updated_at: null,
-        last_seen_at: "2026-04-14T00:00:00Z",
-      },
-    ];
-
-    await page.route("**/api/ingestion/activity/", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          can_manage_processing: true,
-          has_visible_activity: false,
-          active_scopes: [],
-        }),
-      });
-    });
-
-    await page.route("**/api/ingestion/submissions/**", async (route) => {
-      const url = new URL(route.request().url());
-      const method = route.request().method();
-
-      if (
-        method === "POST" &&
-        url.pathname.endsWith(`/submissions/${stoppedSubmissionId}/retry/`)
-      ) {
-        jobs = jobs.map((job) =>
-          job.id === stoppedJobId
-            ? {
-                ...job,
-                status: "queued",
-                task_id: "task-stopped-queued",
-                submission_status: "queued",
-                finished_at: null,
-              }
-            : job,
-        );
-        const queuedJob = jobs.find((job) => job.id === stoppedJobId);
-        submissions = submissions.map((submission) =>
-          submission.id === stoppedSubmissionId
-            ? {
-                ...submission,
-                status: "queued",
-                latest_job: { ...queuedJob },
-                updated_at: "2026-04-14T00:06:00Z",
-              }
-            : submission,
-        );
-        await route.fulfill({
-          status: 202,
-          contentType: "application/json",
-          body: JSON.stringify({}),
-        });
-        return;
-      }
-
-      if (
-        method === "POST" &&
-        url.pathname.endsWith(`/submissions/${deletedSubmissionId}/retry/`)
-      ) {
-        const queuedJob = {
-          id: deletedQueuedJobId,
-          submission_id: deletedSubmissionId,
-          job_type: "create",
-          status: "queued",
-          task_id: "task-deleted-queued",
-          queue_name: "celery",
-          retry_count: 0,
-          cancel_requested: false,
-          submission_origin: "curation",
-          submission_input: seedData.submissions.curationDeleted,
-          submission_status: "queued",
-          submission_resolution_status: "resolved",
-          target_book_slug: "",
-          target_book_title: "",
-          target_book_deleted: false,
-          last_error: "",
-          created_at: "2026-04-14T00:00:00Z",
-          updated_at: "2026-04-14T00:00:00Z",
-          started_at: null,
-          finished_at: null,
-        };
-        jobs = jobs.concat(queuedJob);
-        submissions = submissions.map((submission) =>
-          submission.id === deletedSubmissionId
-            ? {
-                ...submission,
-                status: "queued",
-                latest_job: { ...queuedJob },
-                updated_at: "2026-04-14T00:10:00Z",
-              }
-            : submission,
-        );
-        await route.fulfill({
-          status: 202,
-          contentType: "application/json",
-          body: JSON.stringify({}),
-        });
-        return;
-      }
-
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(submissions),
-      });
-    });
-
-    await page.route("**/api/ingestion/jobs/**", async (route) => {
-      const url = new URL(route.request().url());
-      const method = route.request().method();
-
-      if (
-        method === "POST" &&
-        url.pathname.endsWith(`/jobs/${processingJobId}/stop/`)
-      ) {
-        jobs = jobs.map((job) =>
-          job.id === processingJobId
-            ? {
-                ...job,
-                status: "stopped",
-                task_id: "",
-                submission_status: "stopped",
-                finished_at: "2026-04-14T00:05:00Z",
-              }
-            : job,
-        );
-        const stoppedJob = jobs.find((job) => job.id === processingJobId);
-        submissions = submissions.map((submission) =>
-          submission.id === processingSubmissionId
-            ? {
-                ...submission,
-                status: "stopped",
-                latest_job: { ...stoppedJob },
-                updated_at: "2026-04-14T00:05:00Z",
-              }
-            : submission,
-        );
-        await route.fulfill({
-          status: 202,
-          contentType: "application/json",
-          body: JSON.stringify({}),
-        });
-        return;
-      }
-
-      if (
-        method === "POST" &&
-        url.pathname.endsWith(`/jobs/${stoppedJobId}/resume/`)
-      ) {
-        jobs = jobs.map((job) =>
-          job.id === stoppedJobId
-            ? {
-                ...job,
-                status: "queued",
-                task_id: "task-stopped-queued",
-                submission_status: "queued",
-                finished_at: null,
-              }
-            : job,
-        );
-        const queuedJob = jobs.find((job) => job.id === stoppedJobId);
-        submissions = submissions.map((submission) =>
-          submission.id === stoppedSubmissionId
-            ? {
-                ...submission,
-                status: "queued",
-                latest_job: { ...queuedJob },
-                updated_at: "2026-04-14T00:06:00Z",
-              }
-            : submission,
-        );
-        await route.fulfill({
-          status: 202,
-          contentType: "application/json",
-          body: JSON.stringify({}),
-        });
-        return;
-      }
-
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(jobs),
-      });
-    });
-
-    await page.route("**/api/ingestion/duplicate-reviews/**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify([]),
-      });
-    });
-
-    await page.route("**/api/ingestion/catalog/entries/**", async (route) => {
-      const url = new URL(route.request().url());
-      const method = route.request().method();
-
-      if (
-        method === "DELETE" &&
-        url.pathname.endsWith(`/catalog/entries/${catalogEntryId}/`)
-      ) {
-        catalogEntries = catalogEntries.filter((entry) => entry.id !== catalogEntryId);
-        await route.fulfill({
-          status: 204,
-          contentType: "application/json",
-          body: "",
-        });
-        return;
-      }
-
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(createCatalogEntriesPayload(catalogEntries)),
-      });
-    });
-
-    await processingPage.goto("/processing-catalog-books", "Catalog");
-
-    await expect(
-      processingPage.rowInCard("Processing", seedData.submissions.curationProcessing),
-    ).toBeVisible();
-    await processingPage
-      .rowActionButton("Processing", seedData.submissions.curationProcessing, "Stop")
-      .click();
-    await expect(page.getByText("Book creation stopped.")).toBeVisible();
-    await expect(
-      processingPage.rowInCard("Processing", seedData.submissions.curationProcessing),
-    ).toHaveCount(0);
-    await processingPage.expandCard("Stopped");
-    await expect(
-      processingPage.rowInCard("Stopped", seedData.submissions.curationProcessing),
+      page.getByRole("status").filter({ hasText: "Requests created" }),
     ).toBeVisible();
 
     await expect(
-      processingPage.rowInCard("Stopped", seedData.submissions.curationStopped),
+      page
+        .getByRole("alert")
+        .filter({ hasText: "Pipeline failed after retries." }),
     ).toBeVisible();
-    await processingPage
-      .rowActionButton("Stopped", seedData.submissions.curationStopped, "Resume")
-      .click();
-    await expect(page.getByText("Book creation started.")).toBeVisible();
     await expect(
-      processingPage.rowInCard("Stopped", seedData.submissions.curationStopped),
-    ).toHaveCount(0);
-    await processingPage.expandCard("Queued");
+      page.getByRole("status").filter({ hasText: "Duplicate detected" }),
+    ).toBeVisible();
     await expect(
-      processingPage.rowInCard("Queued", seedData.submissions.curationStopped),
+      page.getByRole("status").filter({ hasText: "Book created" }),
     ).toBeVisible();
 
-    await processingPage.expandCard("Deleted");
+    await page.goto("/on-hold");
     await expect(
-      processingPage.rowInCard("Deleted", seedData.submissions.curationDeleted),
+      row(page, "on-hold", "duplicate", "duplicate-processing-request"),
     ).toBeVisible();
-    await processingPage
-      .rowActionButton("Deleted", seedData.submissions.curationDeleted, "Add Again to Queue")
-      .click();
-    await expect(page.getByText("Request queued.")).toBeVisible();
     await expect(
-      processingPage.rowInCard("Deleted", seedData.submissions.curationDeleted),
-    ).toHaveCount(0);
+      row(page, "on-hold", "failed", "failed-processing-request"),
+    ).toContainText("Pipeline failed after retries.");
     await expect(
-      processingPage.rowInCard("Queued", seedData.submissions.curationDeleted),
-    ).toBeVisible();
-
-    const catalogRow = processingPage.rowInCard(
-      "Catalog Books",
-      seedData.catalogEntries.beta,
-    );
-    await expect(catalogRow).toBeVisible();
-    await catalogRow.getByRole("button", { name: "Delete" }).click();
-    await processingPage.confirmDialog();
-    await expect(page.getByText("Catalog row deleted.")).toBeVisible();
-    await expect(
-      processingPage.rowInCard("Catalog Books", seedData.catalogEntries.beta),
-    ).toHaveCount(0);
+      row(page, "on-hold", "failed", "stale-processing-request"),
+    ).toContainText("Processing exceeded 20 minutes without completing.");
   });
 });
