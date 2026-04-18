@@ -24,8 +24,8 @@
 | On Hold | Failed | Retry failed requests | Retry returns the row to `Create / Requests` and clears the previous failure message |
 | On Hold | Duplicate | Confirm duplicate | Duplicate confirmation keeps the catalog row locked until the original request reaches a terminal failure or deletion state |
 | On Hold | Deleted | Create again | Deleted rows can be recreated back into `Create / Requests` without affecting unrelated cards |
-| Incomplete | Automation | Resolve incomplete records | Automation reclassifies completed records, updates overview counts, and surfaces the resolved rows in `Completed Books` |
-| Incomplete | Completed Books | Recreate or delete resolved items | Recreate sends the request back to `Create / Requests`; delete moves it to `On Hold / Deleted` |
+| Incomplete | Automation | Resolve incomplete records | Automation reclassifies completed records, updates overview counts, and surfaces the resolved rows in `Updated` |
+| Incomplete | Updated | Recreate or delete resolved items | Recreate sends the request back to `Create / Requests`; delete moves it to `On Hold / Deleted` |
 | Notifications | Action feedback | Create / save / sync completion | Success or info toasts appear for request creation, automation saves, sync start, sync pause, and sync completion |
 | Notifications | Terminal feedback | Duplicate, failed, stale, and created transitions | Duplicate detection shows a notice, failed requests show an alert, created requests show success, and stale processing is surfaced as failed work |
 

@@ -36,10 +36,12 @@ export default function ProfileMenu({
   displayName,
   email,
   profileImageUrl,
+  alertsMuted = false,
   menuOpen,
   menuRef,
   onToggle,
   onClose,
+  onToggleAlerts,
   onLogout,
 }) {
   return (
@@ -50,6 +52,8 @@ export default function ProfileMenu({
         onClick={onToggle}
         aria-expanded={menuOpen}
         aria-haspopup="menu"
+        aria-label={menuOpen ? "Close profile menu" : "Open profile menu"}
+        data-testid="profile-menu-trigger"
       >
         <ProfileAvatar
           displayName={displayName}
@@ -73,6 +77,26 @@ export default function ProfileMenu({
             <NavLink to="/profile" className="profile-menu-link" onClick={onClose}>
               Profile
             </NavLink>
+            <label className="profile-menu-toggle-row">
+              <div className="profile-menu-toggle-copy">
+                <span className="profile-menu-toggle-title">Alerts</span>
+              </div>
+              <span className="profile-menu-toggle">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={!alertsMuted}
+                  onChange={onToggleAlerts}
+                  data-testid="profile-alerts-toggle"
+                />
+                <span className="profile-menu-toggle-track" aria-hidden="true">
+                  <span className="profile-menu-toggle-state">
+                    {alertsMuted ? "Off" : "On"}
+                  </span>
+                  <span className="profile-menu-toggle-thumb" />
+                </span>
+              </span>
+            </label>
             <div className="profile-menu-divider" />
             <button
               type="button"

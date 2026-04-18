@@ -12,6 +12,7 @@ from .views import (
     ProcessingStateView,
     ProcessingSyncPauseView,
     ProcessingSyncResumeView,
+    ProcessingSyncStopView,
     ProcessingSyncStartView,
 )
 
@@ -23,6 +24,7 @@ urlpatterns = [
     path("sync/pause/", ProcessingSyncPauseView.as_view(), name="processing-sync-pause"),
     path("sync/advance/", ProcessingSyncAdvanceView.as_view(), name="processing-sync-advance"),
     path("sync/resume/", ProcessingSyncResumeView.as_view(), name="processing-sync-resume"),
+    path("sync/stop/", ProcessingSyncStopView.as_view(), name="processing-sync-stop"),
     path("records/create-requests/", ProcessingRecordCreateRequestsView.as_view(), name="processing-record-create-requests"),
     path("requests/action/", ProcessingRequestActionView.as_view(), name="processing-request-action"),
     path("automation/catalog/", ProcessingCatalogAutomationView.as_view(), name="processing-catalog-automation"),

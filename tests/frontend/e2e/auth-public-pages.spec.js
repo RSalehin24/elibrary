@@ -4,6 +4,49 @@ import { AuthPageModel } from "./pages/authPage";
 test.describe("Public Auth Pages", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
+  test("login page does not request processing state or show restart/auth toasts", async ({
+    page,
+  }) => {
+    const authPage = new AuthPageModel(page);
+    let processingStateRequests = 0;
+
+    await page.route("**/api/auth/session/", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ authenticated: false, user: null }),
+      });
+    });
+    await page.route("**/api/csrf/", async (route) => {
+      await route.fulfill({ status: 204, body: "" });
+    });
+    await page.route("**/api/processing/state/", async (route) => {
+      processingStateRequests += 1;
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail: "Authentication credentials were not provided.",
+        }),
+      });
+    });
+
+    await authPage.gotoLogin();
+    await page.waitForTimeout(250);
+
+    expect(processingStateRequests).toBe(0);
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: "The application has restarted. Please log in again." }),
+    ).toHaveCount(0);
+    await expect(
+      page
+        .getByRole("alert")
+        .filter({ hasText: "Authentication credentials were not provided." }),
+    ).toHaveCount(0);
+  });
+
   test("sign in requires complete credentials and shows live email feedback", async ({
     page,
   }) => {

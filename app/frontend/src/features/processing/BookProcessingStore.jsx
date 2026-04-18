@@ -7,11 +7,18 @@ import {
   useRef,
   useState,
 } from "react";
+import { useLocation } from "react-router-dom";
 import { apiFetch } from "../../api/client";
+import { useSession } from "../../hooks/useSession";
+import { isProcessingRoute } from "../layout/navigation";
 import { useToast } from "../../hooks/useToast";
 import { ACTIVE_REQUEST_STATES } from "./types";
 
 const ProcessingPagesContext = createContext(null);
+const AGGREGATED_NOTIFICATION_WINDOW_MS = 2 * 60 * 1000;
+const SYNC_RUN_MODE_MANUAL = "manual";
+const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
+const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
 
 const DEFAULT_SYNC_STATE = {
   status: "idle",
@@ -23,24 +30,25 @@ const DEFAULT_SYNC_STATE = {
   message: "Ready to sync.",
   remotePages: [],
   pageIndex: 0,
+  runMode: SYNC_RUN_MODE_MANUAL,
 };
 
 const DEFAULT_AUTOMATION_STATE = {
   catalog: {
     enabled: false,
-    interval: "daily",
-    time: "02:00",
-    saved: false,
-    lastRunAt: null,
-    statusMessage: "Not configured.",
-  },
-  incomplete: {
-    enabled: false,
-    interval: "daily",
+    interval: "weekly",
     time: "03:00",
     saved: false,
     lastRunAt: null,
-    statusMessage: "Not configured.",
+    statusMessage: "",
+  },
+  incomplete: {
+    enabled: false,
+    interval: "weekly",
+    time: "03:00",
+    saved: false,
+    lastRunAt: null,
+    statusMessage: "",
   },
 };
 
@@ -82,6 +90,54 @@ function normalizeState(payload) {
 
 function buildRecordMap(records) {
   return new Map(records.map((record) => [record.id, record]));
+}
+
+function syncCompletionCopy(previousState, nextState) {
+  const runMode = previousState.sync?.runMode || SYNC_RUN_MODE_MANUAL;
+  if (runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+    return {
+      title: "Catalog automation finished",
+      description:
+        nextState.automation?.catalog?.statusMessage ||
+        nextState.sync?.message ||
+        "Automated catalog sync completed.",
+    };
+  }
+  if (runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+    return {
+      title: "Incomplete automation finished",
+      description:
+        nextState.automation?.incomplete?.statusMessage ||
+        nextState.sync?.message ||
+        "Incomplete catalog sync completed.",
+    };
+  }
+  return {
+    title: "Sync complete",
+    description: nextState.sync?.message || "Catalog sync completed.",
+  };
+}
+
+function syncPausedCopy(nextState) {
+  const runMode = nextState.sync?.runMode || SYNC_RUN_MODE_MANUAL;
+  if (runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+    return {
+      title: "Catalog automation paused",
+      description:
+        nextState.sync?.message || "Automated catalog sync progress was saved.",
+    };
+  }
+  if (runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+    return {
+      title: "Incomplete automation paused",
+      description:
+        nextState.sync?.message || "Incomplete catalog sync progress was saved.",
+    };
+  }
+  return {
+    title: "Sync paused",
+    description: nextState.sync?.message || "Catalog sync progress was saved.",
+  };
 }
 
 function requestTimestamp(request) {
@@ -168,6 +224,8 @@ function notifyStateTransitions(previousState, nextState, toast) {
         changed.failed.length === 1
           ? firstError
           : `${countLabel(changed.failed.length, "request")} failed. ${firstError}`,
+      groupKey: "processing-failed",
+      holdOpenMs: AGGREGATED_NOTIFICATION_WINDOW_MS,
     });
   }
 
@@ -181,6 +239,22 @@ function notifyStateTransitions(previousState, nextState, toast) {
         changed.duplicate.length === 1
           ? `${describeRequestNames(changed.duplicate, records)} needs duplicate review.`
           : `${countLabel(changed.duplicate.length, "request")} need duplicate review.`,
+      groupKey: "processing-duplicate",
+      holdOpenMs: AGGREGATED_NOTIFICATION_WINDOW_MS,
+      soundType: "error",
+    });
+  }
+
+  const previousHasActiveRequests = previousState.requests?.some((request) =>
+    ACTIVE_REQUEST_STATES.includes(request.state),
+  );
+  const nextHasActiveRequests = nextState.requests?.some((request) =>
+    ACTIVE_REQUEST_STATES.includes(request.state),
+  );
+  if (previousHasActiveRequests && !nextHasActiveRequests) {
+    toast.success({
+      title: "Pipeline complete",
+      description: "All requests reached a terminal or holding state.",
     });
   }
 
@@ -195,18 +269,15 @@ function notifyStateTransitions(previousState, nextState, toast) {
     previousSyncStatus !== "idle" &&
     nextSyncStatus === "idle"
   ) {
-    toast.success({
-      title: "Sync complete",
-      description: nextState.sync?.message || "Catalog sync completed.",
-    });
+    if (String(nextState.sync?.message || "").toLowerCase().includes("stopped")) {
+      return;
+    }
+    toast.success(syncCompletionCopy(previousState, nextState));
     return;
   }
 
   if (nextSyncStatus === "paused") {
-    toast.info({
-      title: "Sync paused",
-      description: nextState.sync?.message || "Catalog sync progress was saved.",
-    });
+    toast.info(syncPausedCopy(nextState));
   }
 }
 
@@ -284,7 +355,12 @@ export function BookProcessingProvider({ children }) {
   const [busyCards, setBusyCards] = useState({});
   const stateRef = useRef(state);
   const hasAppliedInitialStateRef = useRef(false);
+  const location = useLocation();
+  const { authenticated, loading } = useSession();
   const toast = useToast();
+  const processingRouteActive = isProcessingRoute(location.pathname);
+  const canLoadProcessingState =
+    processingRouteActive && authenticated && !loading;
 
   useEffect(() => {
     stateRef.current = state;
@@ -313,14 +389,19 @@ export function BookProcessingProvider({ children }) {
       const message = loadError.message || "Unable to load processing state.";
       setLoaded(true);
       setError(message);
-      toast.error(message);
+      if (![401, 403].includes(loadError?.status)) {
+        toast.error(message);
+      }
       throw loadError;
     }
   }, [applyServerState, toast]);
 
   useEffect(() => {
+    if (!canLoadProcessingState) {
+      return;
+    }
     loadState().catch(() => {});
-  }, [loadState]);
+  }, [canLoadProcessingState, loadState]);
 
   const runCardAction = useCallback(
     async (cardId, request, options = {}) => {
@@ -341,7 +422,9 @@ export function BookProcessingProvider({ children }) {
           actionError.message ||
           "Unable to complete the action.";
         setError(message);
-        toast.error(message);
+        if (![401, 403].includes(actionError?.status)) {
+          toast.error(message);
+        }
         return null;
       } finally {
         setBusyCards((current) => {
@@ -411,6 +494,23 @@ export function BookProcessingProvider({ children }) {
     [runCardAction],
   );
 
+  const stopSync = useCallback(
+    (cardId = "catalog-sync") =>
+      runCardAction(
+        cardId,
+        () => apiFetch("/processing/sync/stop/", { method: "POST" }),
+        {
+          onSuccess: (_, nextState, nextToast) =>
+            nextToast.info({
+              title: "Sync stopped",
+              description:
+                nextState?.sync?.message || "The active sync was stopped.",
+            }),
+        },
+      ),
+    [runCardAction],
+  );
+
   const createRequestsForRecords = useCallback(
     (recordIds) =>
       runCardAction(
@@ -425,12 +525,12 @@ export function BookProcessingProvider({ children }) {
             if (payload?.createdCount) {
               nextToast.success({
                 title: "Requests created",
-              description: `${countLabel(payload.createdCount, "request")} entered the pipeline.`,
-            });
-            return;
-          }
-          nextToast.info({
-            title: "No requests created",
+                description: `${countLabel(payload.createdCount, "request")} entered the pipeline.`,
+              });
+              return;
+            }
+            nextToast.info({
+              title: "No requests created",
               description: "The selected records already have active requests.",
             });
           },
@@ -442,7 +542,7 @@ export function BookProcessingProvider({ children }) {
   const saveCatalogAutomation = useCallback(
     (form) =>
       runCardAction(
-        "catalog-automation",
+        "catalog-automation-save",
         () =>
           apiFetch("/processing/automation/catalog/", {
             method: "POST",
@@ -462,31 +562,44 @@ export function BookProcessingProvider({ children }) {
   const runCatalogAutomation = useCallback(
     () =>
       runCardAction(
-        "catalog-automation",
+        "catalog-automation-run",
         () => apiFetch("/processing/automation/catalog/run/", { method: "POST" }),
         {
-          onSuccess: (payload, __, nextToast) => {
-            if (payload?.createdCount) {
-              nextToast.success({
-                title: "Catalog automation finished",
-              description: `${countLabel(payload.createdCount, "request")} entered the pipeline.`,
-            });
-            return;
-          }
-          nextToast.info({
-            title: "Catalog automation finished",
-              description: "No eligible records were found.",
-            });
-          },
+          onSuccess: (_, __, nextToast) =>
+            nextToast.info({
+              title: "Catalog automation started",
+              description: "Automated catalog sync is running.",
+            }),
         },
       ),
     [runCardAction],
   );
 
+  const pauseCatalogAutomation = useCallback(
+    () =>
+      runCardAction(
+        "catalog-automation-run",
+        () => apiFetch("/processing/sync/pause/", { method: "POST" }),
+        {
+          onSuccess: (_, __, nextToast) =>
+            nextToast.info({
+              title: "Catalog automation pausing",
+              description: "Automated catalog sync will pause after the current page.",
+            }),
+        },
+      ),
+    [runCardAction],
+  );
+
+  const stopCatalogAutomation = useCallback(
+    () => stopSync("catalog-automation-run"),
+    [stopSync],
+  );
+
   const saveIncompleteAutomation = useCallback(
     (form) =>
       runCardAction(
-        "incomplete-automation",
+        "incomplete-automation-save",
         () =>
           apiFetch("/processing/automation/incomplete/", {
             method: "POST",
@@ -506,25 +619,40 @@ export function BookProcessingProvider({ children }) {
   const runIncompleteAutomation = useCallback(
     () =>
       runCardAction(
-        "incomplete-automation",
+        "incomplete-automation-run",
         () => apiFetch("/processing/automation/incomplete/run/", { method: "POST" }),
         {
-          onSuccess: (payload, __, nextToast) => {
-            if (payload?.resolvedCount) {
-              nextToast.success({
-                title: "Incomplete automation finished",
-              description: `${countLabel(payload.resolvedCount, "book")} moved out of Incomplete.`,
-            });
-            return;
-          }
-          nextToast.info({
-            title: "Incomplete automation finished",
-              description: "No incomplete records were resolved.",
+          onSuccess: (_, __, nextToast) => {
+            nextToast.info({
+              title: "Incomplete automation started",
+              description: "Incomplete catalog sync is running.",
             });
           },
         },
       ),
     [runCardAction],
+  );
+
+  const pauseIncompleteAutomation = useCallback(
+    () =>
+      runCardAction(
+        "incomplete-automation-run",
+        () => apiFetch("/processing/sync/pause/", { method: "POST" }),
+        {
+          onSuccess: (_, __, nextToast) =>
+            nextToast.info({
+              title: "Incomplete automation pausing",
+              description:
+                "Incomplete catalog sync will pause after the current batch.",
+            }),
+        },
+      ),
+    [runCardAction],
+  );
+
+  const stopIncompleteAutomation = useCallback(
+    () => stopSync("incomplete-automation-run"),
+    [stopSync],
   );
 
   const applyRequestAction = useCallback(
@@ -599,6 +727,10 @@ export function BookProcessingProvider({ children }) {
   );
 
   useEffect(() => {
+    if (!canLoadProcessingState) {
+      return undefined;
+    }
+
     const activeSync =
       state.sync.status === "syncing" || state.sync.status === "pausing";
     if (!activeSync) {
@@ -620,9 +752,19 @@ export function BookProcessingProvider({ children }) {
     return () => {
       window.clearInterval(timerId);
     };
-  }, [applyServerState, state.sync.status, state.ui?.syncDelayMs, toast]);
+  }, [
+    applyServerState,
+    canLoadProcessingState,
+    state.sync.status,
+    state.ui?.syncDelayMs,
+    toast,
+  ]);
 
   useEffect(() => {
+    if (!canLoadProcessingState) {
+      return undefined;
+    }
+
     const hasActiveRequests = state.requests.some((request) =>
       ACTIVE_REQUEST_STATES.includes(request.state),
     );
@@ -645,7 +787,13 @@ export function BookProcessingProvider({ children }) {
     return () => {
       window.clearInterval(timerId);
     };
-  }, [applyServerState, state.requests, state.ui?.pipelineDelayMs, toast]);
+  }, [
+    applyServerState,
+    canLoadProcessingState,
+    state.requests,
+    state.ui?.pipelineDelayMs,
+    toast,
+  ]);
 
   const recordMap = useMemo(() => buildRecordMap(state.records), [state.records]);
 
@@ -663,9 +811,12 @@ export function BookProcessingProvider({ children }) {
       startCatalogSync,
       pauseCatalogSync,
       resumeCatalogSync,
+      stopSync,
       createRequestsForRecords,
       saveCatalogAutomation,
       runCatalogAutomation,
+      pauseCatalogAutomation,
+      stopCatalogAutomation,
       deleteRequests,
       pauseRequests,
       resumePausedRequests,
@@ -675,6 +826,8 @@ export function BookProcessingProvider({ children }) {
       createAgainRequests,
       saveIncompleteAutomation,
       runIncompleteAutomation,
+      pauseIncompleteAutomation,
+      stopIncompleteAutomation,
       recreateCompletedRequests,
     }),
     [
@@ -688,6 +841,8 @@ export function BookProcessingProvider({ children }) {
       loadState,
       markDuplicateRequestsAsNew,
       pauseCatalogSync,
+      pauseCatalogAutomation,
+      pauseIncompleteAutomation,
       pauseRequests,
       recordMap,
       recreateCompletedRequests,
@@ -698,6 +853,9 @@ export function BookProcessingProvider({ children }) {
       runIncompleteAutomation,
       saveCatalogAutomation,
       saveIncompleteAutomation,
+      stopCatalogAutomation,
+      stopIncompleteAutomation,
+      stopSync,
       startCatalogSync,
       state,
     ],

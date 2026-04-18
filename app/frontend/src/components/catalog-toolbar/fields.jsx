@@ -10,7 +10,13 @@ export function renderField(field, filters, setFilters) {
   const value = filters[field.key] ?? "";
   if (field.type === "select") {
     return (
-      <select value={value} onChange={(event) => setFilters({ ...filters, [field.key]: event.target.value })}>
+      <select
+        value={value}
+        onChange={(event) =>
+          setFilters({ ...filters, [field.key]: event.target.value })
+        }
+        data-testid={field.testId}
+      >
         {(field.options || []).map((option) => (
           <option key={`${field.key}-${option.value}`} value={option.value}>
             {option.label}
@@ -25,6 +31,7 @@ export function renderField(field, filters, setFilters) {
       value={value}
       placeholder={field.placeholder || ""}
       onChange={(event) => setFilters({ ...filters, [field.key]: event.target.value })}
+      data-testid={field.testId}
     />
   );
 }

@@ -29,7 +29,12 @@ export default function ToastViewport({ toasts, onDismiss }) {
   return (
     <div className="toast-viewport" aria-live="polite" aria-atomic="true">
       {toasts.map((toast) => (
-        <article key={toast.id} className={`toast toast-${toast.type}`} role={toast.type === "error" ? "alert" : "status"}>
+        <article
+          key={toast.id}
+          className={`toast toast-${toast.type}`}
+          role={toast.type === "error" ? "alert" : "status"}
+          data-testid={`notification-toast-${toast.id}`}
+        >
           <div className="toast-accent" aria-hidden="true" />
           <div className="toast-icon-shell" aria-hidden="true">
             <ToastIcon type={toast.type} />

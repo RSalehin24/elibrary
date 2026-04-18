@@ -167,6 +167,26 @@
   gap: 20px;
 }
 
+.processing-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: stretch;
+}
+
+.processing-card-grid--catalog {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.processing-card-grid > .processing-card {
+  height: 100%;
+  min-width: 0;
+}
+
+.processing-card-span-full {
+  grid-column: 1 / -1;
+}
+
 .processing-page.is-actions-locked .processing-bulk-bar button,
 .processing-page.is-actions-locked .table-actions button,
 .processing-page.is-actions-locked .processing-card-toolbar button {
@@ -239,34 +259,60 @@
   min-height: 0;
   gap: 14px;
   grid-template-rows: auto auto;
+  padding-top: 18px;
+  padding-bottom: 18px;
 }
 
 .processing-card-head,
-.processing-bulk-bar {
+.processing-bulk-bar,
+.processing-card-footer {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: nowrap;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .processing-card-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .processing-card-head {
   position: relative;
   z-index: 1;
   justify-content: space-between;
+  align-items: center;
+  min-height: 40px;
+}
+
+.processing-list-card .processing-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
 }
 
 .processing-card-head-meta {
-  display: flex;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  align-self: center;
+}
+
+.processing-card-head-meta h2 {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  min-height: 38px;
+}
+
+.processing-card-head-controls {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
   min-width: 0;
 }
 
@@ -274,6 +320,47 @@
   flex: 1 1 320px;
   min-width: min(100%, 320px);
   margin-left: auto;
+}
+
+.processing-card-head-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 460px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+  align-self: center;
+}
+
+.processing-card-head-tools .catalog-search-row {
+  width: 100%;
+  max-width: 100%;
+}
+
+.processing-card-footer {
+  justify-content: space-between;
+}
+
+.processing-card-footer--sync {
+  justify-content: center;
+}
+
+.processing-card-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 280px;
+  min-width: min(100%, 280px);
+  flex-wrap: wrap;
+}
+
+.processing-card-status--stack {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  text-align: center;
 }
 
 .processing-page-header {

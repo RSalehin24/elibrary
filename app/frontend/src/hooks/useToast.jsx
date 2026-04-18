@@ -1,99 +1,60 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import ToastViewport from "../components/ToastViewport";
+import {
+  createNotificationSoundPlayer,
+  readNotificationSoundMuted,
+  writeNotificationSoundMuted,
+} from "../utils/notificationAudio";
+import { createToastManager } from "../utils/toastManager";
 
 const ToastContext = createContext(null);
-const DEFAULT_TOAST_COPY = {
-  success: {
-    title: "Success",
-    description: "The action completed."
-  },
-  error: {
-    title: "Something went wrong",
-    description: "Please try again."
-  },
-  info: {
-    title: "Notice",
-    description: ""
-  }
-};
-
-function cleanToastText(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeToast(input, fallbackType = "info") {
-  const defaults = DEFAULT_TOAST_COPY[fallbackType] || DEFAULT_TOAST_COPY.info;
-
-  if (typeof input === "string") {
-    return {
-      title: defaults.title,
-      description: cleanToastText(input) || defaults.description,
-      type: fallbackType
-    };
-  }
-
-  const title = cleanToastText(input?.title || input?.message);
-  const description = cleanToastText(input?.description);
-
-  return {
-    title: title || defaults.title,
-    description: description || (!title ? defaults.description : ""),
-    type: input?.type || fallbackType
-  };
-}
 
 export function ToastProvider({ children }) {
-  const [toasts, setToasts] = useState([]);
-  const timersRef = useRef(new Map());
-
-  const dismiss = useCallback((id) => {
-    const timer = timersRef.current.get(id);
-    if (timer) {
-      window.clearTimeout(timer);
-      timersRef.current.delete(id);
-    }
-    setToasts((current) => current.filter((toast) => toast.id !== id));
-  }, []);
-
-  const push = useCallback(
-    (input, fallbackType = "info") => {
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const toast = {
-        id,
-        ...normalizeToast(input, fallbackType)
-      };
-
-      setToasts((current) => [...current, toast]);
-      const timer = window.setTimeout(() => dismiss(id), 3600);
-      timersRef.current.set(id, timer);
-      return id;
-    },
-    [dismiss]
+  const [manager] = useState(() =>
+    createToastManager({
+      initialMuted: readNotificationSoundMuted(globalThis?.localStorage),
+      playSound: createNotificationSoundPlayer(),
+    }),
   );
+  const [snapshot, setSnapshot] = useState(() => manager.getState());
+
+  useEffect(() => manager.subscribe(setSnapshot), [manager]);
+
+  useEffect(() => {
+    writeNotificationSoundMuted(globalThis?.localStorage, snapshot.muted);
+  }, [snapshot.muted]);
 
   useEffect(
     () => () => {
-      timersRef.current.forEach((timer) => window.clearTimeout(timer));
-      timersRef.current.clear();
+      manager.destroy();
     },
-    []
+    [manager],
   );
 
   const value = useMemo(
     () => ({
-      show: push,
-      info: (input) => push(input, "info"),
-      success: (input) => push(input, "success"),
-      error: (input) => push(input, "error"),
-      dismiss
+      show: (input) => manager.push(input),
+      info: (input) => manager.push(input, "info"),
+      success: (input) => manager.push(input, "success"),
+      error: (input) => manager.push(input, "error"),
+      dismiss: manager.dismiss,
+      muted: snapshot.muted,
+      setMuted: (value) => manager.setMuted(value),
+      toggleMuted: () => manager.toggleMuted(),
     }),
-    [dismiss, push]
+    [manager, snapshot.muted],
   );
 
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <ToastViewport toasts={toasts} onDismiss={dismiss} />
+      <ToastViewport toasts={snapshot.toasts} onDismiss={manager.dismiss} />
     </ToastContext.Provider>
   );
 }

@@ -50,6 +50,10 @@
   .processing-col-request,
   .processing-col-select,
   .processing-col-status,
+  .processing-col-book-wide,
+  .processing-col-contributors-wide,
+  .processing-col-details,
+  .processing-col-updated,
   .processing-col-type,
   .processing-col-time,
   .processing-col-book,
@@ -90,6 +94,16 @@
   .toolbar-action-cluster,
   .toolbar-icon-button {
     width: 100%;
+  }
+
+  .processing-icon-button--manual {
+    width: 58px;
+    min-width: 58px;
+  }
+
+  .processing-icon-button--automation {
+    width: 30px;
+    min-width: 30px;
   }
 
   .catalog-toolbar-secondary {

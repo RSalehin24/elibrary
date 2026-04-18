@@ -31,6 +31,7 @@ from .services import (
     run_catalog_automation,
     run_incomplete_automation,
     start_sync,
+    stop_sync,
     sync_record_state,
     update_automation_settings,
 )
@@ -85,7 +86,8 @@ class ProcessingSyncStartView(APIView):
     def post(self, request):
         serializer = SyncStartSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        start_sync(serializer.validated_data.get("remotePages", []))
+        remote_pages = serializer.validated_data.get("remotePages")
+        start_sync(remote_pages or None)
         return Response(state_payload())
 
 
@@ -110,6 +112,14 @@ class ProcessingSyncResumeView(APIView):
 
     def post(self, request):
         resume_sync()
+        return Response(state_payload())
+
+
+class ProcessingSyncStopView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def post(self, request):
+        stop_sync()
         return Response(state_payload())
 
 
@@ -164,17 +174,13 @@ class ProcessingCatalogAutomationRunView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
-        created = run_catalog_automation()
-        payload = state_payload()
-        payload["createdCount"] = len(created)
-        return Response(payload)
+        run_catalog_automation()
+        return Response(state_payload())
 
 
 class ProcessingIncompleteAutomationRunView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
-        resolved = run_incomplete_automation()
-        payload = state_payload()
-        payload["resolvedCount"] = len(resolved)
-        return Response(payload)
+        run_incomplete_automation()
+        return Response(state_payload())

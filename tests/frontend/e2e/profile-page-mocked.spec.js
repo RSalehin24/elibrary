@@ -116,7 +116,33 @@ async function openProfileEditor(page) {
 }
 
 test.describe("Profile Page TOTP Notifications", () => {
-  test.use({ storageState: { cookies: [], origins: [] } });
+  test("alerts toggle is shown in the profile dropdown and persists locally", async ({
+    page,
+  }) => {
+    await installProfileRoutes(page);
+    await page.goto("/");
+    await page.evaluate(() => {
+      window.localStorage.removeItem("app.notifications.muted");
+    });
+
+    await page.goto("/profile");
+    await expect(
+      page.getByRole("heading", { name: "Profile", exact: true }),
+    ).toBeVisible();
+
+    await page.getByTestId("profile-menu-trigger").click();
+    await expect(page.getByTestId("profile-alerts-toggle")).toBeChecked();
+    await page.getByTestId("profile-alerts-toggle").click();
+    await expect(page.getByTestId("profile-alerts-toggle")).not.toBeChecked();
+
+    await page.reload();
+
+    await expect(
+      page.getByRole("heading", { name: "Profile", exact: true }),
+    ).toBeVisible();
+    await page.getByTestId("profile-menu-trigger").click();
+    await expect(page.getByTestId("profile-alerts-toggle")).not.toBeChecked();
+  });
 
   test("setup and cancel do not create toast notifications", async ({ page }) => {
     await installProfileRoutes(page);

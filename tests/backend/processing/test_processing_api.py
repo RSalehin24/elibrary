@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import time, timedelta
 
 import pytest
 from django.utils import timezone
@@ -6,7 +6,13 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.catalog.models import Book
 from apps.ingestion.models import SourceCatalogEntry
-from apps.processing.models import BookCreationRequest, BookRecord
+from apps.processing.models import (
+    BookCreationRequest,
+    BookRecord,
+    ProcessingAutomationKind,
+    ProcessingAutomationSettings,
+)
+from apps.processing.services import get_sync_state
 
 
 def login_processing_admin(client, email="processing-admin@example.com"):
@@ -152,6 +158,67 @@ def test_processing_sync_uses_persisted_source_catalog_when_no_remote_pages(clie
 
 
 @pytest.mark.django_db
+def test_processing_state_returns_weekly_automation_defaults_without_placeholder(client):
+    login_processing_admin(client)
+
+    response = client.get("/api/processing/state/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["automation"]["catalog"]["interval"] == "weekly"
+    assert payload["automation"]["catalog"]["time"] == "03:00:00"
+    assert payload["automation"]["catalog"]["statusMessage"] == ""
+    assert payload["automation"]["incomplete"]["interval"] == "weekly"
+    assert payload["automation"]["incomplete"]["time"] == "03:00:00"
+    assert payload["automation"]["incomplete"]["statusMessage"] == ""
+
+
+@pytest.mark.django_db
+def test_processing_state_normalizes_legacy_automation_defaults(client):
+    login_processing_admin(client)
+    ProcessingAutomationSettings.objects.create(
+        kind=ProcessingAutomationKind.CATALOG,
+        enabled=False,
+        interval="daily",
+        time=time(2, 0),
+        saved=False,
+        status_message="Not configured.",
+    )
+    ProcessingAutomationSettings.objects.create(
+        kind=ProcessingAutomationKind.INCOMPLETE,
+        enabled=False,
+        interval="daily",
+        time=time(3, 0),
+        saved=False,
+        status_message="Not configured.",
+    )
+
+    response = client.get("/api/processing/state/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["automation"]["catalog"]["interval"] == "weekly"
+    assert payload["automation"]["catalog"]["time"] == "03:00:00"
+    assert payload["automation"]["catalog"]["statusMessage"] == ""
+    assert payload["automation"]["incomplete"]["interval"] == "weekly"
+    assert payload["automation"]["incomplete"]["time"] == "03:00:00"
+    assert payload["automation"]["incomplete"]["statusMessage"] == ""
+
+    catalog = ProcessingAutomationSettings.objects.get(
+        kind=ProcessingAutomationKind.CATALOG
+    )
+    incomplete = ProcessingAutomationSettings.objects.get(
+        kind=ProcessingAutomationKind.INCOMPLETE
+    )
+    assert catalog.interval == "weekly"
+    assert catalog.time == time(3, 0)
+    assert catalog.status_message == ""
+    assert incomplete.interval == "weekly"
+    assert incomplete.time == time(3, 0)
+    assert incomplete.status_message == ""
+
+
+@pytest.mark.django_db
 def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requests(client):
     login_processing_admin(client)
     BookRecord.objects.create(
@@ -191,7 +258,16 @@ def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requ
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["createdCount"] == 2
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
     assert BookRecord.objects.filter(pk="new-record").exists()
     assert BookRecord.objects.get(pk="existing-record").name == "Existing Record Revised"
     assert BookCreationRequest.objects.filter(
@@ -202,6 +278,46 @@ def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requ
         book_record_id="new-record",
         state="initial",
     ).exists()
+    assert payload["automation"]["catalog"]["statusMessage"] == "Created 2 requests."
+
+
+@pytest.mark.django_db
+def test_catalog_automation_can_pause_and_stop_active_sync(client):
+    login_processing_admin(client)
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [
+        [record_payload("auto-page-1", name="Automation Page One")],
+        [record_payload("auto-page-2", name="Automation Page Two")],
+        [],
+    ]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "pausing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+
+    response = client.post("/api/processing/sync/stop/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["message"] == "Automated catalog sync stopped."
+    assert payload["automation"]["catalog"]["statusMessage"] == "Automated catalog sync stopped."
 
 
 @pytest.mark.django_db
@@ -433,7 +549,7 @@ def test_automation_and_incomplete_resolution_are_persisted(client):
         id="incomplete-record",
         name="Incomplete Record",
         url="https://example.test/books/incomplete-record",
-        category="Incomplete",
+        category="অসম্পূর্ণ বই",
         writer="Writer",
         publisher="Press",
         was_incomplete=True,
@@ -448,6 +564,12 @@ def test_automation_and_incomplete_resolution_are_persisted(client):
     assert response.status_code == 200
     response = client.post("/api/processing/automation/catalog/run/", content_type="application/json")
     assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
     assert BookCreationRequest.objects.filter(book_record_id="auto-new", state="initial").exists()
     assert not BookCreationRequest.objects.filter(book_record_id="auto-created", state="initial").exists()
 
@@ -458,6 +580,12 @@ def test_automation_and_incomplete_resolution_are_persisted(client):
     )
     assert response.status_code == 200
     response = client.post("/api/processing/automation/incomplete/run/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "incomplete_automation"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
     assert response.status_code == 200
     incomplete.refresh_from_db()
     assert incomplete.category == "Novel"

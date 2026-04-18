@@ -1,6 +1,15 @@
 import { expect, test } from "./support/playwright";
 
 const PROCESSING_TIMEOUT_MS = 20 * 60 * 1000;
+const SYNC_RUN_MODE_MANUAL = "manual";
+const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
+const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
+const INCOMPLETE_CATEGORY_KEYWORDS = [
+  "incomplete",
+  "unfinished",
+  "অসম্পূর্ণ",
+  "অসম্পূর্ণ বই",
+];
 
 const sessionPayload = {
   authenticated: true,
@@ -66,18 +75,19 @@ function baseState(overrides = {}) {
       message: "Ready to sync.",
       remotePages: [],
       pageIndex: 0,
+      runMode: SYNC_RUN_MODE_MANUAL,
     },
     automation: {
       catalog: {
         enabled: false,
-        interval: "daily",
-        time: "02:00",
+        interval: "weekly",
+        time: "03:00",
         saved: false,
         lastRunAt: "",
       },
       incomplete: {
         enabled: false,
-        interval: "daily",
+        interval: "weekly",
         time: "03:00",
         saved: false,
         lastRunAt: "",
@@ -110,6 +120,13 @@ async function mockAuthenticatedSession(page) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function categoryIsIncomplete(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return INCOMPLETE_CATEGORY_KEYWORDS.some((keyword) =>
+    normalized.includes(keyword.toLowerCase()),
+  );
 }
 
 function latestRequestForRecord(state, recordId) {
@@ -226,11 +243,84 @@ function finalizeSync(state) {
   state.sync.status = "idle";
   state.sync.progress = null;
   state.sync.message = `Sync complete. Updated ${state.sync.updatedCount}, Skipped ${state.sync.skippedCount}, Added ${state.sync.appendedCount}.`;
+  state.sync.runMode = SYNC_RUN_MODE_MANUAL;
+}
+
+function completeCatalogAutomation(state) {
+  let createdCount = 0;
+  for (const recordItem of state.records) {
+    const latest = latestRequestForRecord(state, recordItem.id);
+    const latestState = latest?.state || recordItem.bookCreationState;
+    if (
+      (!latest && recordItem.bookCreationState === "not_created") ||
+      ["failed", "deleted"].includes(latestState)
+    ) {
+      createRequestForRecord(state, recordItem.id);
+      createdCount += 1;
+    }
+  }
+  state.automation.catalog.statusMessage = `Created ${createdCount} requests.`;
+  state.sync.status = "idle";
+  state.sync.progress = null;
+  state.sync.runMode = SYNC_RUN_MODE_MANUAL;
+  state.sync.message = `Automated catalog sync complete. Updated ${state.sync.updatedCount}, Skipped ${state.sync.skippedCount}, Added ${state.sync.appendedCount}.`;
+}
+
+function completeIncompleteAutomation(state) {
+  let resolvedCount = 0;
+  for (const recordItem of state.records) {
+    if (
+      !categoryIsIncomplete(recordItem.category) ||
+      !recordItem.willResolveToCategory ||
+      recordItem.resolvedFromIncomplete
+    ) {
+      continue;
+    }
+    recordItem.category = recordItem.willResolveToCategory;
+    recordItem.wasIncomplete = true;
+    recordItem.resolvedFromIncomplete = true;
+    const latest = latestRequestForRecord(state, recordItem.id);
+    if (latest) {
+      latest.state = "created";
+    } else {
+      createRequestForRecord(state, recordItem.id, "created");
+    }
+    resolvedCount += 1;
+  }
+  state.automation.incomplete.statusMessage = `Resolved ${resolvedCount} ${resolvedCount === 1 ? "book" : "books"}.`;
+  state.sync.status = "idle";
+  state.sync.progress = null;
+  state.sync.runMode = SYNC_RUN_MODE_MANUAL;
+  state.sync.message = `Incomplete catalog sync complete. Resolved ${resolvedCount} ${resolvedCount === 1 ? "book" : "books"}.`;
 }
 
 function advanceSyncPage(state) {
+  if (state.sync.runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+    if (state.sync.status === "pausing") {
+      state.sync.status = "paused";
+      state.sync.progress = {
+        savedAt: iso(99),
+        checkpoint: `page-${state.sync.pageIndex}`,
+        runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+        savedData: {
+          runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+          fetchedCount: state.sync.fetchedCount,
+          nextPageIndex: state.sync.pageIndex,
+        },
+      };
+      state.sync.message = `Saved progress for ${state.sync.fetchedCount} ${state.sync.fetchedCount === 1 ? "record" : "records"} before pausing.`;
+      return;
+    }
+    completeIncompleteAutomation(state);
+    return;
+  }
+
   const pageRecords = state.sync.remotePages[state.sync.pageIndex] || [];
   if (!pageRecords.length) {
+    if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+      completeCatalogAutomation(state);
+      return;
+    }
     finalizeSync(state);
     return;
   }
@@ -243,7 +333,9 @@ function advanceSyncPage(state) {
     state.sync.progress = {
       savedAt: iso(99),
       checkpoint: `page-${state.sync.pageIndex}`,
+      runMode: state.sync.runMode,
       savedData: {
+        runMode: state.sync.runMode,
         fetchedCount: state.sync.fetchedCount,
         nextPageIndex: state.sync.pageIndex,
       },
@@ -253,6 +345,10 @@ function advanceSyncPage(state) {
   }
 
   if (!nextPage.length) {
+    if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+      completeCatalogAutomation(state);
+      return;
+    }
     finalizeSync(state);
     return;
   }
@@ -300,13 +396,21 @@ async function mockProcessingApi(page, initialState) {
       ...state.sync,
       ...(body?.remotePages ? { remotePages: body.remotePages } : {}),
       status: "syncing",
-      progress: null,
+      progress: {
+        runMode: SYNC_RUN_MODE_MANUAL,
+        savedData: {
+          runMode: SYNC_RUN_MODE_MANUAL,
+          nextPageIndex: 0,
+          fetchedCount: 0,
+        },
+      },
       fetchedCount: 0,
       skippedCount: 0,
       updatedCount: 0,
       appendedCount: 0,
       pageIndex: 0,
       message: "Syncing catalog records.",
+      runMode: SYNC_RUN_MODE_MANUAL,
     };
     await delayForActions();
     await fulfillState(route);
@@ -326,9 +430,32 @@ async function mockProcessingApi(page, initialState) {
   });
   await page.route("**/api/processing/sync/resume/", async (route) => {
     state.sync.status = "syncing";
-    state.sync.progress = null;
+    state.sync.progress = {
+      runMode: state.sync.runMode || SYNC_RUN_MODE_MANUAL,
+      savedData: {
+        runMode: state.sync.runMode || SYNC_RUN_MODE_MANUAL,
+        nextPageIndex: 0,
+        fetchedCount: state.sync.fetchedCount,
+      },
+    };
     state.sync.pageIndex = 0;
     state.sync.message = "Reconciling saved records from the beginning.";
+    await fulfillState(route);
+  });
+  await page.route("**/api/processing/sync/stop/", async (route) => {
+    state.sync.status = "idle";
+    state.sync.progress = null;
+    if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+      state.automation.catalog.statusMessage = "Automated catalog sync stopped.";
+      state.sync.message = "Automated catalog sync stopped.";
+    } else if (state.sync.runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+      state.automation.incomplete.statusMessage = "Incomplete catalog sync stopped.";
+      state.sync.message = "Incomplete catalog sync stopped.";
+    } else {
+      state.sync.message = "Catalog sync stopped.";
+    }
+    state.sync.runMode = SYNC_RUN_MODE_MANUAL;
+    await delayForActions();
     await fulfillState(route);
   });
   await page.route("**/api/processing/records/create-requests/", async (route) => {
@@ -353,21 +480,29 @@ async function mockProcessingApi(page, initialState) {
     await fulfillState(route);
   });
   await page.route("**/api/processing/automation/catalog/run/", async (route) => {
-    let createdCount = 0;
     await delayForActions();
-    for (const recordItem of state.records) {
-      const latest = latestRequestForRecord(state, recordItem.id);
-      const latestState = latest?.state || recordItem.bookCreationState;
-      if (
-        (!latest && recordItem.bookCreationState === "not_created") ||
-        ["failed", "deleted"].includes(latestState)
-      ) {
-        createRequestForRecord(state, recordItem.id);
-        createdCount += 1;
-      }
-    }
-    state.automation.catalog.statusMessage = `Created ${createdCount} requests.`;
-    await fulfillState(route, { createdCount });
+    state.sync = {
+      ...state.sync,
+      status: "syncing",
+      progress: {
+        runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+        savedData: {
+          runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+          nextPageIndex: 0,
+          fetchedCount: 0,
+        },
+      },
+      fetchedCount: 0,
+      skippedCount: 0,
+      updatedCount: 0,
+      appendedCount: 0,
+      pageIndex: 0,
+      remotePages: state.sync.remotePages?.length ? state.sync.remotePages : [[]],
+      message: "Automated catalog sync is running.",
+      runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    };
+    state.automation.catalog.statusMessage = "Automated catalog sync is running.";
+    await fulfillState(route);
   });
   await page.route("**/api/processing/pipeline/advance/", async (route) => {
     applyRequestTimeouts(state);
@@ -439,24 +574,29 @@ async function mockProcessingApi(page, initialState) {
     await fulfillState(route);
   });
   await page.route("**/api/processing/automation/incomplete/run/", async (route) => {
-    let resolvedCount = 0;
     await delayForActions();
-    for (const recordItem of state.records) {
-      if (recordItem.category === "Incomplete" && recordItem.willResolveToCategory) {
-        recordItem.category = recordItem.willResolveToCategory;
-        recordItem.wasIncomplete = true;
-        recordItem.resolvedFromIncomplete = true;
-        const latest = latestRequestForRecord(state, recordItem.id);
-        if (latest) {
-          latest.state = "created";
-        } else {
-          createRequestForRecord(state, recordItem.id, "created");
-        }
-        resolvedCount += 1;
-      }
-    }
-    state.automation.incomplete.statusMessage = `Resolved ${resolvedCount} book.`;
-    await fulfillState(route, { resolvedCount });
+    state.sync = {
+      ...state.sync,
+      status: "syncing",
+      progress: {
+        runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+        savedData: {
+          runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+          nextPageIndex: 0,
+          fetchedCount: 0,
+        },
+      },
+      fetchedCount: 0,
+      skippedCount: 0,
+      updatedCount: 0,
+      appendedCount: 0,
+      pageIndex: 0,
+      remotePages: [[]],
+      message: "Incomplete catalog sync is running.",
+      runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+    };
+    state.automation.incomplete.statusMessage = "Incomplete catalog sync is running.";
+    await fulfillState(route);
   });
 
   return controller;
@@ -473,8 +613,110 @@ function row(page, pageId, cardId, id) {
   return page.getByTestId(`${pageId}-${cardId}-row-${id}`);
 }
 
+function card(page, pageId, cardId) {
+  return page.getByTestId(`${pageId}-${cardId}-card`);
+}
+
 function checkbox(page, pageId, cardId, id) {
   return page.getByTestId(`${pageId}-${cardId}-select-${id}`);
+}
+
+async function automationControlHeights(page, pageId) {
+  return page.evaluate((targetPageId) => {
+    const runButton = document.querySelector(
+      `[data-testid="${targetPageId}-automation-run-btn"]`,
+    );
+    const toggle = document
+      .querySelector(`[data-testid="${targetPageId}-automation-enabled"]`)
+      ?.closest(".processing-switch");
+
+    if (!runButton || !toggle) {
+      return null;
+    }
+
+    return {
+      button: Math.round(runButton.getBoundingClientRect().height),
+      toggle: Math.round(toggle.getBoundingClientRect().height),
+    };
+  }, pageId);
+}
+
+async function openCardFilters(page, pageId, cardId) {
+  await card(page, pageId, cardId)
+    .getByRole("button", { name: /^Filters/ })
+    .click();
+}
+
+async function installNotificationAudioSpy(page) {
+  await page.addInitScript(() => {
+    const events = [];
+    window.__notificationSoundEvents = events;
+
+    class FakeGainNode {
+      constructor() {
+        this.gain = {
+          setValueAtTime() {},
+          linearRampToValueAtTime() {},
+          exponentialRampToValueAtTime() {},
+        };
+      }
+
+      connect() {}
+    }
+
+    class FakeOscillatorNode {
+      constructor() {
+        this.type = "sine";
+        this.frequencyValue = 0;
+        this.frequency = {
+          setValueAtTime: (value) => {
+            this.frequencyValue = value;
+          },
+        };
+      }
+
+      connect() {}
+
+      start(startTime = 0) {
+        events.push({
+          frequency: this.frequencyValue,
+          startTime,
+          type: this.type,
+        });
+      }
+
+      stop() {}
+    }
+
+    class FakeAudioContext {
+      constructor() {
+        this.currentTime = 0;
+        this.destination = {};
+        this.state = "running";
+      }
+
+      createOscillator() {
+        return new FakeOscillatorNode();
+      }
+
+      createGain() {
+        return new FakeGainNode();
+      }
+
+      resume() {
+        return Promise.resolve();
+      }
+    }
+
+    window.AudioContext = FakeAudioContext;
+    window.webkitAudioContext = FakeAudioContext;
+  });
+}
+
+async function notificationSoundEventCount(page) {
+  return page.evaluate(
+    () => (window.__notificationSoundEvents || []).length,
+  );
 }
 
 async function expectVisibleCount(page, pageId, cardId, count) {
@@ -525,7 +767,7 @@ test.describe("processing pages replacement", () => {
       page,
       "/catalog",
       baseState({
-        records: [existing, active],
+        records: [active, existing],
         requests: [
           request({
             id: "active-request",
@@ -551,14 +793,36 @@ test.describe("processing pages replacement", () => {
       "2",
     );
     await expect(page.getByTestId("catalog-records-table")).toBeVisible();
+    await expect(page.getByTestId("catalog-automation-interval")).toHaveValue("weekly");
+    await expect(page.getByTestId("catalog-automation-time")).toHaveValue("03:00");
+    await expect(page.getByTestId("catalog-automation-status")).toHaveCount(0);
+    expect(await automationControlHeights(page, "catalog")).toEqual({
+      button: 30,
+      toggle: 30,
+    });
+    await expect(
+      page.locator('[data-testid="catalog-records-table"] tbody tr').first(),
+    ).toContainText("Stable Local Book");
+    await expect(page.getByTestId("catalog-sync-start-btn")).toHaveCSS(
+      "width",
+      "58px",
+    );
+    await expect(page.getByTestId("catalog-sync-start-btn")).toHaveCSS(
+      "height",
+      "58px",
+    );
 
     await page.getByTestId("catalog-sync-start-btn").click();
     await expect(page.getByTestId("catalog-sync-loader")).toBeVisible();
-    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
 
     await page.getByTestId("catalog-sync-pause-btn").click();
-    await expect(page.getByTestId("catalog-sync-pause-btn")).toContainText(
-      "Pausing...",
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "pausing",
     );
     await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
     await expect(page.getByTestId("catalog-sync-loader")).toHaveCount(0);
@@ -577,6 +841,12 @@ test.describe("processing pages replacement", () => {
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
       "Added 1",
     );
+    await expect(page.getByTestId("catalog-sync-progress-summary")).toHaveText(
+      "Sync complete.",
+    );
+    await expect(page.getByTestId("catalog-sync-progress-details")).toHaveText(
+      "Updated 1, Skipped 1, Added 1.",
+    );
     await expect(page.getByTestId("catalog-overview-stat-records")).toContainText(
       "3",
     );
@@ -589,6 +859,7 @@ test.describe("processing pages replacement", () => {
     await page.getByTestId("catalog-records-search").fill("remote house");
     await expectVisibleCount(page, "catalog", "records", 1);
     await page.getByTestId("catalog-records-search").fill("");
+    await openCardFilters(page, "catalog", "records");
     await page.getByTestId("catalog-records-category-filter").selectOption("Poetry");
     await expect(page.getByTestId("catalog-records-active-filters")).toContainText(
       "Poetry",
@@ -610,7 +881,14 @@ test.describe("processing pages replacement", () => {
     await expect(page.getByTestId("catalog-records-create-btn")).toBeDisabled();
     await expect(page.getByTestId("catalog-records-loader")).toHaveCount(0);
     await page.goto("/create");
-    await expect(row(page, "create", "requests", "request-new-remote")).toBeVisible();
+    await expect(
+      page
+        .getByTestId("create-requests-row-request-new-remote")
+        .or(page.getByTestId("create-queue-row-request-new-remote"))
+        .or(page.getByTestId("create-processing-row-request-new-remote"))
+        .or(page.getByTestId("create-created-row-request-new-remote"))
+        .first(),
+    ).toBeVisible();
   });
 
   test("manual sync completes automatically without an explicit pause", async ({
@@ -639,6 +917,10 @@ test.describe("processing pages replacement", () => {
     await page.getByTestId("catalog-sync-start-btn").click();
     await expect(page.getByTestId("catalog-sync-loader")).toBeVisible();
     await expect(page.getByRole("status").filter({ hasText: "Sync started" })).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
     await expect(row(page, "catalog", "records", "sync-a")).toBeVisible();
     await expect(row(page, "catalog", "records", "sync-b")).toBeVisible();
     await expect(page.getByTestId("catalog-sync-loader")).toHaveCount(0);
@@ -686,6 +968,10 @@ test.describe("processing pages replacement", () => {
 
     await page.getByTestId("catalog-automation-run-btn").click();
     await expect(page.getByTestId("catalog-automation-loader")).toBeVisible();
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      /syncing|idle/,
+    );
     await expect(page.getByTestId("catalog-automation-status")).toContainText(
       "Created 3 request",
     );
@@ -733,6 +1019,7 @@ test.describe("processing pages replacement", () => {
     await expect(row(page, "create", "requests", "initial-beta-request")).toHaveCount(0);
     await expectVisibleCount(page, "create", "queue", 2);
 
+    await openCardFilters(page, "create", "queue");
     await page.getByTestId("create-queue-category-filter").selectOption("Science");
     await expect(page.getByTestId("create-queue-active-filters")).toContainText(
       "Science",
@@ -789,6 +1076,7 @@ test.describe("processing pages replacement", () => {
     await page.getByTestId("create-requests-search").fill("initial a");
     await expectVisibleCount(page, "create", "requests", 1);
     await page.getByTestId("create-requests-search").fill("");
+    await openCardFilters(page, "create", "requests");
     await page.getByTestId("create-requests-category-filter").selectOption("Poetry");
     await expect(page.getByTestId("create-requests-active-filters")).toContainText(
       "Poetry",
@@ -991,10 +1279,24 @@ test.describe("processing pages replacement", () => {
       "1",
     );
     await expect(row(page, "incomplete", "records", "incomplete-book")).toBeVisible();
+    await expect(page.getByTestId("incomplete-automation-interval")).toHaveValue(
+      "weekly",
+    );
+    await expect(page.getByTestId("incomplete-automation-time")).toHaveValue("03:00");
+    await expect(page.getByTestId("incomplete-automation-status")).toHaveCount(0);
+    expect(await automationControlHeights(page, "incomplete")).toEqual({
+      button: 30,
+      toggle: 30,
+    });
+    await expect(page.getByTestId("incomplete-records-select-all")).toHaveCount(0);
+    await expect(
+      page.getByTestId("incomplete-records-select-incomplete-book"),
+    ).toHaveCount(0);
     await expect(page.getByTestId("incomplete-records-recreate-btn")).toHaveCount(0);
 
     await page.getByTestId("incomplete-records-search").fill("missing writer");
     await expectVisibleCount(page, "incomplete", "records", 1);
+    await openCardFilters(page, "incomplete", "records");
     await page.getByTestId("incomplete-records-category-filter").selectOption("Incomplete");
     await expect(page.getByTestId("incomplete-records-active-filters")).toContainText(
       "Incomplete",
@@ -1007,6 +1309,9 @@ test.describe("processing pages replacement", () => {
     );
     await page.getByTestId("incomplete-automation-run-btn").click();
     await expect(page.getByTestId("incomplete-automation-loader")).toBeVisible();
+    await expect(
+      page.getByTestId("incomplete-automation-run-btn"),
+    ).toHaveAttribute("data-state", /syncing|idle/);
     await expect(row(page, "incomplete", "completed", "request-incomplete-book")).toBeVisible();
     await expect(page.getByTestId("incomplete-overview-stat-incomplete")).toContainText(
       "0",
@@ -1026,6 +1331,54 @@ test.describe("processing pages replacement", () => {
     await expect(row(page, "incomplete", "completed", "request-incomplete-book")).toHaveCount(0);
     await page.goto("/on-hold");
     await expect(row(page, "on-hold", "deleted", "request-incomplete-book")).toBeVisible();
+  });
+
+  test("notifications play sounds and profile menu mute suppresses audio while keeping toasts visible", async ({
+    page,
+  }) => {
+    await installNotificationAudioSpy(page);
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [
+          record({ id: "sound-record", name: "Sound Record" }),
+          record({ id: "failed-record", name: "Failed Record" }),
+        ],
+        requests: [
+          request({
+            id: "failed-request",
+            bookRecordId: "failed-record",
+            state: "failed",
+            errorMessage: "Retry threshold exceeded",
+          }),
+        ],
+        ui: {
+          ...baseState().ui,
+          pipelineDelayMs: 20_000,
+        },
+      }),
+    );
+
+    await checkbox(page, "catalog", "records", "sound-record").check();
+    await page.getByTestId("catalog-records-create-btn").click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Requests created" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("notification-mute-toggle")).toHaveCount(0);
+    const initialSoundCount = await notificationSoundEventCount(page);
+    expect(initialSoundCount).toBeGreaterThan(0);
+
+    await page.getByTestId("profile-menu-trigger").click();
+    await page.getByTestId("profile-alerts-toggle").click();
+    await expect(page.getByTestId("profile-alerts-toggle")).not.toBeChecked();
+
+    await page.getByTestId("catalog-automation-enabled").check();
+    await page.getByTestId("catalog-automation-save-btn").click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Catalog automation saved" }),
+    ).toBeVisible();
+    await expect(await notificationSoundEventCount(page)).toBe(initialSoundCount);
   });
 
   test("card actions stay isolated while separate cards are busy", async ({

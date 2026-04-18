@@ -556,10 +556,10 @@ Purpose: Track book records in an incomplete state and monitor their resolution.
   [ ] Saving settings persists the configuration.
   [ ] When automation runs, it detects book records reclassified from incomplete
       to another category and updates them accordingly.
-  [ ] Records that have been reclassified appear in Card B (Completed Books).
+  [ ] Records that have been reclassified appear in Card B (Updated).
   [ ] Notification + sound plays when the automation run completes.
 
-── Card A: Incomplete Book Records ──────
+── Card A: Incomplete ───────────────────
   Tests:
   [ ] All records currently in incomplete state are displayed.
   [ ] NO checkbox column rendered — this card has no actions (read-only).
@@ -568,7 +568,7 @@ Purpose: Track book records in an incomplete state and monitor their resolution.
   [ ] Filter by category and request status — scoped to this card.
   [ ] Record count is correct and updates with search/filter.
 
-── Card B: Completed Books ──────────────
+── Card B: Updated ──────────────────────
   Tests:
   [ ] Only records previously incomplete but now resolved are shown.
   [ ] Checkbox column is present (card has actions).

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { CatalogSearchRow } from "../../components/CatalogToolbar";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { renderField } from "../../components/catalog-toolbar/fields.jsx";
 import {
   latestRequestForRecord,
   useBookProcessing,
@@ -7,6 +9,15 @@ import {
 import { REQUEST_STATE_LABELS } from "./types";
 
 const SEARCH_PLACEHOLDER = "Search name, writer, translator, or publisher";
+const SYNC_RUN_MODE_MANUAL = "manual";
+const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
+const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
+const INCOMPLETE_CATEGORY_KEYWORDS = [
+  "incomplete",
+  "unfinished",
+  "অসম্পূর্ণ",
+  "অসম্পূর্ণ বই",
+];
 
 function formatDate(value) {
   if (!value) {
@@ -28,6 +39,27 @@ function formatDate(value) {
 
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function isIncompleteCategory(value) {
+  const normalized = normalizeText(value);
+  return INCOMPLETE_CATEGORY_KEYWORDS.some((keyword) =>
+    normalized.includes(keyword.toLowerCase()),
+  );
+}
+
+function splitSyncMessage(message) {
+  const trimmed = String(message || "").trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const parts = trimmed.match(/^(.+?[.!?])\s+(.+)$/);
+  if (!parts) {
+    return [trimmed];
+  }
+
+  return [parts[1], parts[2]];
 }
 
 function uniqueOptions(values) {
@@ -82,13 +114,81 @@ function OverviewStat({ testId, label, value }) {
   );
 }
 
+function PlayIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M6.5 4.5v11l8.75-5.5-8.75-5.5Z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M6.25 4.75h2.75v10.5H6.25zM11 4.75h2.75v10.5H11z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M5.75 5.75h8.5v8.5h-8.5z" />
+    </svg>
+  );
+}
+
+function IconOnlyActionButton({
+  testId,
+  label,
+  icon,
+  state = "idle",
+  disabled = false,
+  onClick,
+  className = "",
+}) {
+  const visualStateClass =
+    state === "pausing"
+      ? " is-pending"
+      : state === "running" || state === "syncing"
+        ? " is-running"
+        : "";
+
+  return (
+    <button
+      type="button"
+      className={`toolbar-icon-button toolbar-icon-button-accent is-icon-only processing-icon-button${visualStateClass}${className ? ` ${className}` : ""}`}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid={testId}
+      data-state={state}
+    >
+      <span className="toolbar-icon-button-art">{icon}</span>
+      <span className="toolbar-icon-button-text">{label}</span>
+    </button>
+  );
+}
+
 function PageFrame({ pageId, title, children }) {
   return (
     <div className="processing-page page-stack" data-testid={`${pageId}-page`}>
       <section className="detail-card processing-page-header">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Book processing</p>
             <h1>{title}</h1>
           </div>
         </div>
@@ -140,12 +240,43 @@ function ActiveFilters({ pageId, cardId, categoryFilter, statusFilter }) {
     labels.push(REQUEST_STATE_LABELS[statusFilter] || statusFilter);
   }
 
+  if (!labels.length) {
+    return null;
+  }
+
   return (
     <div
       className="processing-active-filters"
       data-testid={`${pageId}-${cardId}-active-filters`}
     >
-      {labels.length ? `Active filters: ${labels.join(", ")}` : "No active filters"}
+      {labels.map((label) => (
+        <span key={label} className="processing-active-filter-chip">
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ContributorsCell({ row }) {
+  const items = [
+    { label: "Writer", value: row.writer },
+    { label: "Translator", value: row.translator },
+    { label: "Publisher", value: row.publisher },
+  ].filter((item) => item.value);
+
+  if (!items.length) {
+    return <span className="processing-table-muted">-</span>;
+  }
+
+  return (
+    <div className="processing-contributors-list">
+      {items.map((item) => (
+        <div key={item.label} className="processing-contributor-entry">
+          <span className="processing-contributor-label">{item.label}</span>
+          <span>{item.value}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -161,11 +292,17 @@ function ProcessingDataCard({
   readOnly = false,
   detailsLabel = "Details",
   emptyLabel = "No records.",
+  className = "",
+  fullSpan = false,
 }) {
   const [selectedIds, setSelectedIds] = useState([]);
-  const [query, setQuery] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [filters, setFilters] = useState({
+    q: "",
+    category: "",
+    status: "",
+  });
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const showSelectionColumn = actions.length > 0 && !readOnly;
 
   const categoryOptions = useMemo(
     () => uniqueOptions(rows.map((row) => row.category)),
@@ -175,9 +312,40 @@ function ProcessingDataCard({
     () => uniqueOptions(rows.map((row) => row.status)),
     [rows],
   );
+  const filterFields = useMemo(
+    () => [
+      {
+        key: "category",
+        label: "Category",
+        testId: `${pageId}-${cardId}-category-filter`,
+        type: "select",
+        options: [
+          { value: "", label: "All categories" },
+          ...categoryOptions.map((category) => ({
+            value: category,
+            label: category,
+          })),
+        ],
+      },
+      {
+        key: "status",
+        label: "Status",
+        testId: `${pageId}-${cardId}-status-filter`,
+        type: "select",
+        options: [
+          { value: "", label: "All statuses" },
+          ...statusOptions.map((status) => ({
+            value: status,
+            label: REQUEST_STATE_LABELS[status] || status,
+          })),
+        ],
+      },
+    ],
+    [cardId, categoryOptions, pageId, statusOptions],
+  );
   const visibleRows = useMemo(
-    () => filterRows(rows, query, categoryFilter, statusFilter),
-    [categoryFilter, query, rows, statusFilter],
+    () => filterRows(rows, filters.q, filters.category, filters.status),
+    [filters.category, filters.q, filters.status, rows],
   );
 
   useEffect(() => {
@@ -218,103 +386,90 @@ function ProcessingDataCard({
 
   return (
     <section
-      className="detail-card processing-card processing-list-card processing-replacement-card"
+      className={`detail-card processing-card processing-list-card processing-replacement-card${
+        fullSpan ? " processing-card-span-full" : ""
+      }${className ? ` ${className}` : ""}`}
       data-testid={`${pageId}-${cardId}-card`}
     >
       <div className="processing-card-head">
         <div className="processing-card-head-meta">
           <h2>{title}</h2>
-          {description ? <p>{description}</p> : null}
         </div>
-        <span
-          className="processing-card-count"
-          data-testid={`${pageId}-${cardId}-count`}
-        >
-          {visibleRows.length} {visibleRows.length === 1 ? "record" : "records"}
-        </span>
+        <div className="processing-card-head-tools">
+          <CatalogSearchRow
+            filters={filters}
+            setFilters={setFilters}
+            fields={filterFields}
+            defaultFilters={{ q: "", category: "", status: "" }}
+            filtersExpanded={filtersExpanded}
+            setFiltersExpanded={setFiltersExpanded}
+            searchPlaceholder={SEARCH_PLACEHOLDER}
+            resultCount={String(visibleRows.length)}
+            resultCountTestId={`${pageId}-${cardId}-count`}
+            searchTestId={`${pageId}-${cardId}-search`}
+            drawerId={`${pageId}-${cardId}-filters`}
+            compact
+            className="catalog-search-row--processing-card"
+            onSearchClear={(nextFilters) => setFilters(nextFilters)}
+            buttonsDisabled={busy}
+          />
+        </div>
       </div>
 
-      <div className="processing-card-toolbar processing-replacement-toolbar">
-        <label className="catalog-search-field">
-          <span>Search</span>
-          <input
-            type="search"
-            placeholder={SEARCH_PLACEHOLDER}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            data-testid={`${pageId}-${cardId}-search`}
-          />
-        </label>
-        <label className="catalog-toolbar-select">
-          <span>Book Category</span>
-          <select
-            value={categoryFilter}
-            onChange={(event) => setCategoryFilter(event.target.value)}
-            data-testid={`${pageId}-${cardId}-category-filter`}
-          >
-            <option value="">All categories</option>
-            {categoryOptions.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="catalog-toolbar-select">
-          <span>Request Status</span>
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-            data-testid={`${pageId}-${cardId}-status-filter`}
-          >
-            <option value="">All statuses</option>
-            {statusOptions.map((status) => (
-              <option key={status} value={status}>
-                {REQUEST_STATE_LABELS[status] || status}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div
+        id={`${pageId}-${cardId}-filters`}
+        className={`catalog-filter-drawer processing-filter-drawer${
+          filtersExpanded ? " is-open" : ""
+        }`}
+        aria-hidden={filtersExpanded ? "false" : "true"}
+      >
+        <div className="catalog-filter-grid processing-filter-grid">
+          {filterFields.map((field) => (
+            <label key={field.key} className="catalog-filter-field">
+              <span className="fact-label">{field.label}</span>
+              {renderField(field, filters, setFilters)}
+            </label>
+          ))}
+        </div>
       </div>
       <ActiveFilters
         pageId={pageId}
         cardId={cardId}
-        categoryFilter={categoryFilter}
-        statusFilter={statusFilter}
+        categoryFilter={filters.category}
+        statusFilter={filters.status}
       />
 
-      {actions.length ? (
+      {actions.length || busy ? (
         <div className="processing-bulk-bar">
-          {actions.map((action) => (
-            <button
-              key={action.id}
-              type="button"
-              className={action.danger ? "ghost-button danger-button" : "primary-button"}
-              disabled={busy || selectedRows.length === 0}
-              onClick={() => runAction(action)}
-              data-testid={`${pageId}-${cardId}-${action.id}-btn`}
-            >
-              {action.label}
-              {selectedRows.length ? ` (${selectedRows.length})` : ""}
-            </button>
-          ))}
-          {busy ? (
-            <span
-              className="processing-inline-loader"
-              data-testid={`${pageId}-${cardId}-loader`}
-            >
-              <LoadingSpinner size={14} /> Working
-            </span>
+          <div className="processing-bulk-status">
+            {busy ? (
+              <span
+                className="processing-inline-loader"
+                data-testid={`${pageId}-${cardId}-loader`}
+              >
+                <LoadingSpinner size={14} /> Working
+              </span>
+            ) : null}
+          </div>
+          {actions.length ? (
+            <div className="processing-bulk-actions">
+              {actions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  className={
+                    action.danger ? "ghost-button danger-button" : "primary-button"
+                  }
+                  disabled={busy || selectedRows.length === 0}
+                  onClick={() => runAction(action)}
+                  data-testid={`${pageId}-${cardId}-${action.id}-btn`}
+                >
+                  {action.label}
+                  {selectedRows.length ? ` (${selectedRows.length})` : ""}
+                </button>
+              ))}
+            </div>
           ) : null}
-        </div>
-      ) : busy ? (
-        <div className="processing-bulk-bar">
-          <span
-            className="processing-inline-loader"
-            data-testid={`${pageId}-${cardId}-loader`}
-          >
-            <LoadingSpinner size={14} /> Working
-          </span>
         </div>
       ) : null}
 
@@ -325,8 +480,8 @@ function ProcessingDataCard({
         >
           <thead>
             <tr>
-              <th className="processing-col-select">
-                {!readOnly ? (
+              {showSelectionColumn ? (
+                <th className="processing-col-select">
                   <input
                     type="checkbox"
                     className="processing-checkbox"
@@ -336,16 +491,14 @@ function ProcessingDataCard({
                     onChange={(event) => toggleAll(event.target.checked)}
                     data-testid={`${pageId}-${cardId}-select-all`}
                   />
-                ) : null}
-              </th>
-              <th>Book</th>
-              <th>Category</th>
-              <th>Writer</th>
-              <th>Translator</th>
-              <th>Publisher</th>
-              <th>Status</th>
-              <th>{detailsLabel}</th>
-              <th>Updated</th>
+                </th>
+              ) : null}
+              <th className="processing-col-book-wide">Book</th>
+              <th className="processing-col-contributors-wide">Credits</th>
+              <th className="processing-col-category">Category</th>
+              <th className="processing-col-status">Status</th>
+              <th className="processing-col-details">{detailsLabel}</th>
+              <th className="processing-col-updated">Updated</th>
             </tr>
           </thead>
           <tbody>
@@ -355,8 +508,8 @@ function ProcessingDataCard({
                   key={row.id}
                   data-testid={`${pageId}-${cardId}-row-${row.id}`}
                 >
-                  <td className="processing-col-select">
-                    {!readOnly ? (
+                  {showSelectionColumn ? (
+                    <td className="processing-col-select">
                       <input
                         type="checkbox"
                         className="processing-checkbox"
@@ -368,24 +521,38 @@ function ProcessingDataCard({
                         }
                         data-testid={`${pageId}-${cardId}-select-${row.id}`}
                       />
-                    ) : null}
+                    </td>
+                  ) : null}
+                  <td className="processing-col-book-wide">
+                    <div className="processing-table-primary">
+                      <strong>{row.title}</strong>
+                      {row.url ? (
+                        <span className="processing-table-secondary">
+                          {row.url}
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
-                  <td>
-                    <strong>{row.title}</strong>
-                    {row.url ? <span>{row.url}</span> : null}
+                  <td className="processing-col-contributors-wide">
+                    <ContributorsCell row={row} />
                   </td>
-                  <td>{row.category || "Uncategorized"}</td>
-                  <td>{row.writer || "Unknown"}</td>
-                  <td>{row.translator || "None"}</td>
-                  <td>{row.publisher || "Unknown"}</td>
-                  <td>{REQUEST_STATE_LABELS[row.status] || row.status}</td>
-                  <td>{row.details || "Ready"}</td>
-                  <td>{formatDate(row.updatedAt)}</td>
+                  <td className="processing-col-category">
+                    {row.category || "Uncategorized"}
+                  </td>
+                  <td className="processing-col-status">
+                    {REQUEST_STATE_LABELS[row.status] || row.status}
+                  </td>
+                  <td className="processing-col-details">
+                    {row.details || "Ready"}
+                  </td>
+                  <td className="processing-col-updated">
+                    {formatDate(row.updatedAt)}
+                  </td>
                 </tr>
               ))
             ) : (
               <tr>
-                <td colSpan={9}>{emptyLabel}</td>
+                <td colSpan={showSelectionColumn ? 7 : 6}>{emptyLabel}</td>
               </tr>
             )}
           </tbody>
@@ -446,11 +613,15 @@ function useRequestRows(states) {
 function AutomationPanel({
   pageId,
   title,
-  description,
   automation,
-  busy,
+  sync,
+  saving = false,
+  running = false,
   onSave,
   onRun,
+  onPause,
+  onStop,
+  className = "",
 }) {
   const [form, setForm] = useState({
     enabled: automation.enabled,
@@ -466,109 +637,168 @@ function AutomationPanel({
     });
   }, [automation.enabled, automation.interval, automation.time]);
 
+  const runMode =
+    pageId === "catalog"
+      ? SYNC_RUN_MODE_CATALOG_AUTOMATION
+      : SYNC_RUN_MODE_INCOMPLETE_AUTOMATION;
+  const runLabel =
+    pageId === "catalog"
+      ? "automated catalog sync"
+      : "incomplete catalog sync";
+  const ownsSync = sync.status !== "idle" && sync.runMode === runMode;
+  const blockedByOtherSync = sync.status !== "idle" && sync.runMode !== runMode;
+  const isRunning = ownsSync && (sync.status === "syncing" || sync.status === "pausing");
+  const isPausing = ownsSync && sync.status === "pausing";
+  const isPaused = ownsSync && sync.status === "paused";
+  const busy = saving || running;
+  const controlsDisabled = busy || ownsSync || blockedByOtherSync;
+  const statusMessage = ownsSync ? sync.message || "" : automation.statusMessage || "";
+
+  const runControl = isPaused
+    ? {
+        label: `Stop ${runLabel}`,
+        icon: <StopIcon />,
+        state: "paused",
+        disabled: busy,
+        onClick: onStop,
+      }
+    : isRunning
+      ? {
+          label: isPausing ? `Pausing ${runLabel}` : `Pause ${runLabel}`,
+          icon: <PauseIcon />,
+          state: isPausing ? "pausing" : "syncing",
+          disabled: busy || isPausing,
+          onClick: onPause,
+        }
+      : {
+          label: `Run ${runLabel}`,
+          icon: <PlayIcon />,
+          state: "idle",
+          disabled: busy || blockedByOtherSync,
+          onClick: onRun,
+        };
+
   return (
     <section
-      className="detail-card processing-card processing-replacement-card"
+      className={`detail-card processing-card processing-replacement-card processing-settings-card${
+        className ? ` ${className}` : ""
+      }`}
       data-testid={`${pageId}-automation-card`}
     >
-      <div className="processing-card-head">
+      <div className="processing-card-head processing-card-head--settings">
         <div className="processing-card-head-meta">
           <h2>{title}</h2>
-          <p>{description}</p>
         </div>
-        {busy ? (
-          <span
-            className="processing-inline-loader"
-            data-testid={`${pageId}-automation-loader`}
-          >
-            <LoadingSpinner size={14} /> Saving
-          </span>
-        ) : null}
-      </div>
-      <div className="processing-automation-grid">
-        <label className="processing-switch">
-          <input
-            type="checkbox"
-            checked={form.enabled}
-            disabled={busy}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                enabled: event.target.checked,
-              }))
-            }
-            data-testid={`${pageId}-automation-enabled`}
+        <div className="processing-card-head-controls">
+          <IconOnlyActionButton
+            testId={`${pageId}-automation-run-btn`}
+            label={runControl.label}
+            icon={runControl.icon}
+            state={runControl.state}
+            disabled={runControl.disabled}
+            onClick={runControl.onClick}
+            className="processing-icon-button--automation"
           />
-          <span className="processing-switch-track">
-            <span className="processing-switch-state">
-              {form.enabled ? "Enabled" : "Disabled"}
+          <label className="processing-switch">
+            <input
+              type="checkbox"
+              checked={form.enabled}
+              disabled={controlsDisabled}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  enabled: event.target.checked,
+                }))
+              }
+              data-testid={`${pageId}-automation-enabled`}
+            />
+            <span className="processing-switch-track">
+              <span className="processing-switch-state">
+                {form.enabled ? "On" : "Off"}
+              </span>
+              <span className="processing-switch-thumb" />
             </span>
-            <span className="processing-switch-thumb" />
+          </label>
+        </div>
+      </div>
+      <div className="processing-automation-row">
+        <label className="processing-automation-field">
+          <span className="processing-automation-field-label">Interval</span>
+          <span className="processing-automation-field-control processing-automation-field-control--select">
+            <select
+              className="processing-automation-input"
+              value={form.interval}
+              disabled={controlsDisabled}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  interval: event.target.value,
+                }))
+              }
+              data-testid={`${pageId}-automation-interval`}
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Bi-weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
           </span>
         </label>
-        <label>
-          Interval
-          <select
-            value={form.interval}
-            disabled={busy}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                interval: event.target.value,
-              }))
-            }
-            data-testid={`${pageId}-automation-interval`}
+        <label className="processing-automation-field">
+          <span className="processing-automation-field-label">Time</span>
+          <span className="processing-automation-field-control processing-automation-field-control--time">
+            <input
+              className="processing-automation-input processing-automation-time-input"
+              type="time"
+              value={form.time}
+              disabled={controlsDisabled}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, time: event.target.value }))
+              }
+              data-testid={`${pageId}-automation-time`}
+            />
+          </span>
+        </label>
+        <div className="processing-automation-save-slot">
+          <button
+            type="button"
+            className="primary-button"
+            disabled={controlsDisabled}
+            onClick={() => onSave(form)}
+            data-testid={`${pageId}-automation-save-btn`}
           >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="biweekly">Bi-weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-        </label>
-        <label>
-          Time
-          <input
-            type="time"
-            value={form.time}
-            disabled={busy}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, time: event.target.value }))
-            }
-            data-testid={`${pageId}-automation-time`}
-          />
-        </label>
+            Save
+          </button>
+        </div>
       </div>
-      <div className="processing-card-actions">
-        <button
-          type="button"
-          className="primary-button"
-          disabled={busy}
-          onClick={() => onSave(form)}
-          data-testid={`${pageId}-automation-save-btn`}
-        >
-          Save Settings
-        </button>
-        <button
-          type="button"
-          className="ghost-button"
-          disabled={busy}
-          onClick={onRun}
-          data-testid={`${pageId}-automation-run-btn`}
-        >
-          Run Automation
-        </button>
-        <span
-          className="processing-automation-status"
-          data-testid={`${pageId}-automation-status`}
-        >
-          {automation.statusMessage || (automation.saved ? "Saved." : "Not configured.")}
-        </span>
-      </div>
+      {busy || statusMessage ? (
+        <div className="processing-card-footer">
+          <div className="processing-card-status">
+            {busy || isRunning ? (
+              <span
+                className="processing-inline-loader"
+                data-testid={`${pageId}-automation-loader`}
+              >
+                <LoadingSpinner size={14} />{" "}
+                {saving ? "Saving" : isPausing ? "Pausing" : isRunning ? "Running" : ""}
+              </span>
+            ) : null}
+            {statusMessage ? (
+              <span
+                className="processing-automation-status"
+                data-testid={`${pageId}-automation-status`}
+              >
+                {statusMessage}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function CatalogSyncPanel() {
+function CatalogSyncPanel({ className = "" }) {
   const [pauseRequested, setPauseRequested] = useState(false);
   const {
     state,
@@ -579,8 +809,15 @@ function CatalogSyncPanel() {
   } = useBookProcessing();
   const sync = state.sync;
   const syncBusy = Boolean(busyCards["catalog-sync"]);
-  const isSyncing = syncBusy || sync.status === "syncing" || sync.status === "pausing";
-  const isPausing = pauseRequested || sync.status === "pausing";
+  const manualOwnsSync =
+    sync.runMode === SYNC_RUN_MODE_MANUAL && sync.status !== "idle";
+  const automationOwnsSync =
+    sync.runMode !== SYNC_RUN_MODE_MANUAL && sync.status !== "idle";
+  const isSyncing =
+    manualOwnsSync &&
+    (sync.status === "syncing" || sync.status === "pausing");
+  const isPausing = manualOwnsSync && (pauseRequested || sync.status === "pausing");
+  const syncMessageLines = splitSyncMessage(sync.message);
 
   useEffect(() => {
     if (!isSyncing) {
@@ -593,59 +830,90 @@ function CatalogSyncPanel() {
     await pauseCatalogSync();
   }
 
+  const control =
+    sync.status === "paused"
+      ? {
+          testId: "catalog-sync-resume-btn",
+          label: "Resume sync",
+          icon: <PlayIcon />,
+          state: "paused",
+          disabled: syncBusy,
+          onClick: resumeCatalogSync,
+        }
+      : isSyncing
+        ? {
+            testId: "catalog-sync-pause-btn",
+            label: isPausing ? "Pausing sync" : "Pause sync",
+            icon: <PauseIcon />,
+            state: isPausing ? "pausing" : "syncing",
+            disabled: isPausing,
+            onClick: handlePauseSync,
+          }
+        : {
+            testId: "catalog-sync-start-btn",
+            label: "Start sync",
+            icon: <PlayIcon />,
+            state: "idle",
+            disabled: syncBusy || automationOwnsSync,
+            onClick: startCatalogSync,
+          };
+
   return (
-    <section className="detail-card processing-card processing-replacement-card">
+    <section
+      className={`detail-card processing-card processing-replacement-card processing-settings-card${
+        className ? ` ${className}` : ""
+      }`}
+      data-testid="catalog-sync-card"
+    >
       <div className="processing-card-head">
         <div className="processing-card-head-meta">
-          <h2>Manual Syncing</h2>
-          <p>Fetch source catalog records and reconcile them with local records.</p>
+          <h2>Manual</h2>
         </div>
-        {isSyncing ? (
-          <span
-            className="processing-inline-loader"
-            data-testid="catalog-sync-loader"
-          >
-            <LoadingSpinner size={14} /> Syncing
-          </span>
-        ) : null}
       </div>
-      <div className="processing-card-actions">
-        <button
-          type="button"
-          className="primary-button"
-          disabled={isSyncing}
-          onClick={startCatalogSync}
-          data-testid="catalog-sync-start-btn"
-        >
-          Start Sync
-        </button>
-        {isSyncing ? (
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={isPausing}
-            onClick={handlePauseSync}
-            data-testid="catalog-sync-pause-btn"
+      <div className="processing-sync-body">
+        <IconOnlyActionButton
+          testId={control.testId}
+          label={control.label}
+          icon={control.icon}
+          state={control.state}
+          disabled={control.disabled}
+          onClick={control.onClick}
+          className="processing-icon-button--manual"
+        />
+      </div>
+      <div className="processing-card-footer processing-card-footer--sync">
+        <div className="processing-card-status processing-card-status--stack">
+          {syncBusy || isSyncing ? (
+            <span
+              className="processing-inline-loader"
+              data-testid="catalog-sync-loader"
+            >
+              <LoadingSpinner size={14} /> {isPausing ? "Pausing" : "Syncing"}
+            </span>
+          ) : null}
+          <span
+            className="catalog-toolbar-sync-status"
+            data-testid="catalog-sync-progress"
           >
-            {isPausing ? "Pausing..." : "Pause"}
-          </button>
-        ) : null}
-        {sync.status === "paused" ? (
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={resumeCatalogSync}
-            data-testid="catalog-sync-resume-btn"
-          >
-            Resume
-          </button>
-        ) : null}
-        <span
-          className="catalog-toolbar-sync-status"
-          data-testid="catalog-sync-progress"
-        >
-          {sync.message}
-        </span>
+            {syncMessageLines.map((line, index) => (
+              <span
+                key={`${sync.status}-${index}-${line}`}
+                className={`catalog-toolbar-sync-status-line${
+                  index === 0
+                    ? " catalog-toolbar-sync-status-line--summary"
+                    : " catalog-toolbar-sync-status-line--details"
+                }`}
+                data-testid={
+                  index === 0
+                    ? "catalog-sync-progress-summary"
+                    : "catalog-sync-progress-details"
+                }
+              >
+                {line}
+              </span>
+            ))}
+          </span>
+        </div>
       </div>
     </section>
   );
@@ -661,17 +929,27 @@ export function CatalogProcessingPage() {
     createRequestsForRecords,
     saveCatalogAutomation,
     runCatalogAutomation,
+    pauseCatalogAutomation,
+    stopCatalogAutomation,
   } = useBookProcessing();
+  const catalogAutomationSaving = Boolean(busyCards["catalog-automation-save"]);
+  const catalogAutomationRunning = Boolean(busyCards["catalog-automation-run"]);
 
   const rows = useMemo(
     () =>
-      records.map((record) =>
-        recordRow(
-          record,
-          latestRequestForRecord(requests, record.id),
-          isRecordSelectable(record),
-        ),
-      ),
+      records
+        .map((record) =>
+          recordRow(
+            record,
+            latestRequestForRecord(requests, record.id),
+            isRecordSelectable(record),
+          ),
+        )
+        .sort((left, right) => {
+          const leftPriority = left.status === "not_created" ? 0 : 1;
+          const rightPriority = right.status === "not_created" ? 0 : 1;
+          return leftPriority - rightPriority;
+        }),
     [isRecordSelectable, records, requests],
   );
   const activeCount = requests.filter((request) =>
@@ -704,16 +982,22 @@ export function CatalogProcessingPage() {
           { id: "on-hold", label: "On Hold", value: holdCount },
         ]}
       />
-      <CatalogSyncPanel />
-      <AutomationPanel
-        pageId="catalog"
-        title="Automated Syncing"
-        description="Save the schedule and run the same reconciliation used by manual sync."
-        automation={state.automation.catalog}
-        busy={Boolean(busyCards["catalog-automation"])}
-        onSave={saveCatalogAutomation}
-        onRun={runCatalogAutomation}
-      />
+      <div className="processing-card-grid processing-card-grid--catalog">
+        <CatalogSyncPanel className="processing-catalog-sync-card" />
+        <AutomationPanel
+          pageId="catalog"
+          title="Automation"
+          automation={state.automation.catalog}
+          sync={state.sync}
+          saving={catalogAutomationSaving}
+          running={catalogAutomationRunning}
+          onSave={saveCatalogAutomation}
+          onRun={runCatalogAutomation}
+          onPause={pauseCatalogAutomation}
+          onStop={stopCatalogAutomation}
+          className="processing-catalog-automation-card"
+        />
+      </div>
       <ProcessingDataCard
         pageId="catalog"
         cardId="records"
@@ -721,6 +1005,7 @@ export function CatalogProcessingPage() {
         description="Synced catalog records ready for book creation."
         rows={rows}
         busy={Boolean(busyCards["catalog-records"])}
+        className="processing-catalog-card processing-catalog-records-card"
         actions={[
           {
             id: "create",
@@ -783,68 +1068,70 @@ export function CreateProcessingPage() {
           },
         ]}
       />
-      <CreateCard
-        cardId="requests"
-        title="Requests"
-        description="New book creation requests."
-        states={["initial"]}
-        actions={[
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) => deleteRequests("create-requests", ids),
-          },
-        ]}
-      />
-      <CreateCard
-        cardId="queue"
-        title="Queue"
-        description="Requests waiting for the processor."
-        states={["queued"]}
-        actions={[
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) => deleteRequests("create-queue", ids),
-          },
-        ]}
-      />
-      <CreateCard
-        cardId="processing"
-        title="Processing"
-        description="Requests currently being built."
-        states={["processing"]}
-        actions={[
-          {
-            id: "pause",
-            label: "Pause",
-            onAction: (ids) => pauseRequests("create-processing", ids),
-          },
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) => deleteRequests("create-processing", ids),
-          },
-        ]}
-      />
-      <CreateCard
-        cardId="created"
-        title="Created"
-        description="Completed books."
-        states={["created"]}
-        actions={[
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) =>
-              deleteRequests("create-created", ids, { deleteBook: true }),
-          },
-        ]}
-      />
+      <div className="processing-card-grid">
+        <CreateCard
+          cardId="requests"
+          title="Requests"
+          description="New book creation requests."
+          states={["initial"]}
+          actions={[
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) => deleteRequests("create-requests", ids),
+            },
+          ]}
+        />
+        <CreateCard
+          cardId="queue"
+          title="Queue"
+          description="Requests waiting for the processor."
+          states={["queued"]}
+          actions={[
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) => deleteRequests("create-queue", ids),
+            },
+          ]}
+        />
+        <CreateCard
+          cardId="processing"
+          title="Processing"
+          description="Requests currently being built."
+          states={["processing"]}
+          actions={[
+            {
+              id: "pause",
+              label: "Pause",
+              onAction: (ids) => pauseRequests("create-processing", ids),
+            },
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) => deleteRequests("create-processing", ids),
+            },
+          ]}
+        />
+        <CreateCard
+          cardId="created"
+          title="Created"
+          description="Completed books."
+          states={["created"]}
+          actions={[
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) =>
+                deleteRequests("create-created", ids, { deleteBook: true }),
+            },
+          ]}
+        />
+      </div>
     </PageFrame>
   );
 }
@@ -915,84 +1202,86 @@ export function OnHoldProcessingPage() {
           },
         ]}
       />
-      <OnHoldCard
-        cardId="paused"
-        title="Paused"
-        description="Requests with saved progress."
-        states={["paused"]}
-        actions={[
-          {
-            id: "resume",
-            label: "Resume",
-            onAction: (ids) => resumePausedRequests("on-hold-paused", ids),
-          },
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) => deleteRequests("on-hold-paused", ids),
-          },
-        ]}
-      />
-      <OnHoldCard
-        cardId="failed"
-        title="Failed"
-        description="Requests that need retry or deletion."
-        states={["failed"]}
-        detailsLabel="Error Reason"
-        actions={[
-          {
-            id: "retry",
-            label: "Retry",
-            onAction: (ids) => retryFailedRequests("on-hold-failed", ids),
-          },
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) => deleteRequests("on-hold-failed", ids),
-          },
-        ]}
-      />
-      <OnHoldCard
-        cardId="duplicate"
-        title="Duplicate"
-        description="Requests waiting on duplicate resolution."
-        states={["duplicate"]}
-        actions={[
-          {
-            id: "new",
-            label: "New",
-            onAction: (ids) =>
-              markDuplicateRequestsAsNew("on-hold-duplicate", ids),
-          },
-          {
-            id: "duplicate",
-            label: "Duplicate",
-            onAction: (ids) =>
-              confirmDuplicateRequests("on-hold-duplicate", ids),
-          },
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) => deleteRequests("on-hold-duplicate", ids),
-          },
-        ]}
-      />
-      <OnHoldCard
-        cardId="deleted"
-        title="Deleted"
-        description="Deleted requests available for recreation."
-        states={["deleted"]}
-        actions={[
-          {
-            id: "create-again",
-            label: "Create Again",
-            onAction: (ids) => createAgainRequests("on-hold-deleted", ids),
-          },
-        ]}
-      />
+      <div className="processing-card-grid">
+        <OnHoldCard
+          cardId="paused"
+          title="Paused"
+          description="Requests with saved progress."
+          states={["paused"]}
+          actions={[
+            {
+              id: "resume",
+              label: "Resume",
+              onAction: (ids) => resumePausedRequests("on-hold-paused", ids),
+            },
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) => deleteRequests("on-hold-paused", ids),
+            },
+          ]}
+        />
+        <OnHoldCard
+          cardId="failed"
+          title="Failed"
+          description="Requests that need retry or deletion."
+          states={["failed"]}
+          detailsLabel="Error Reason"
+          actions={[
+            {
+              id: "retry",
+              label: "Retry",
+              onAction: (ids) => retryFailedRequests("on-hold-failed", ids),
+            },
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) => deleteRequests("on-hold-failed", ids),
+            },
+          ]}
+        />
+        <OnHoldCard
+          cardId="duplicate"
+          title="Duplicate"
+          description="Requests waiting on duplicate resolution."
+          states={["duplicate"]}
+          actions={[
+            {
+              id: "new",
+              label: "New",
+              onAction: (ids) =>
+                markDuplicateRequestsAsNew("on-hold-duplicate", ids),
+            },
+            {
+              id: "duplicate",
+              label: "Duplicate",
+              onAction: (ids) =>
+                confirmDuplicateRequests("on-hold-duplicate", ids),
+            },
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) => deleteRequests("on-hold-duplicate", ids),
+            },
+          ]}
+        />
+        <OnHoldCard
+          cardId="deleted"
+          title="Deleted"
+          description="Deleted requests available for recreation."
+          states={["deleted"]}
+          actions={[
+            {
+              id: "create-again",
+              label: "Create Again",
+              onAction: (ids) => createAgainRequests("on-hold-deleted", ids),
+            },
+          ]}
+        />
+      </div>
     </PageFrame>
   );
 }
@@ -1006,16 +1295,24 @@ export function IncompleteProcessingPage() {
     busyCards,
     saveIncompleteAutomation,
     runIncompleteAutomation,
+    pauseIncompleteAutomation,
+    stopIncompleteAutomation,
     recreateCompletedRequests,
     deleteRequests,
   } = useBookProcessing();
+  const incompleteAutomationSaving = Boolean(
+    busyCards["incomplete-automation-save"],
+  );
+  const incompleteAutomationRunning = Boolean(
+    busyCards["incomplete-automation-run"],
+  );
 
   const incompleteRows = useMemo(
     () =>
       records
         .filter(
           (record) =>
-            normalizeText(record.category) === "incomplete" &&
+            (record.wasIncomplete || isIncompleteCategory(record.category)) &&
             !record.resolvedFromIncomplete,
         )
         .map((record) => recordRow(record, latestRequestForRecord(requests, record.id), false)),
@@ -1048,52 +1345,58 @@ export function IncompleteProcessingPage() {
           },
           {
             id: "resolved",
-            label: "Resolved",
+            label: "Updated",
             value: records.filter(
               (record) => record.wasIncomplete && record.resolvedFromIncomplete,
             ).length,
           },
         ]}
       />
-      <AutomationPanel
-        pageId="incomplete"
-        title="Automation Settings"
-        description="Detect incomplete records that moved into a completed category."
-        automation={state.automation.incomplete}
-        busy={Boolean(busyCards["incomplete-automation"])}
-        onSave={saveIncompleteAutomation}
-        onRun={runIncompleteAutomation}
-      />
-      <ProcessingDataCard
-        pageId="incomplete"
-        cardId="records"
-        title="Incomplete Book Records"
-        description="Records currently classified as incomplete."
-        rows={incompleteRows}
-        readOnly
-      />
-      <ProcessingDataCard
-        pageId="incomplete"
-        cardId="completed"
-        title="Completed Books"
-        description="Records resolved by incomplete automation."
-        rows={completedRows}
-        busy={Boolean(busyCards["incomplete-completed"])}
-        actions={[
-          {
-            id: "recreate",
-            label: "Recreate Book",
-            onAction: (ids) =>
-              recreateCompletedRequests("incomplete-completed", ids),
-          },
-          {
-            id: "delete",
-            label: "Delete",
-            danger: true,
-            onAction: (ids) => deleteRequests("incomplete-completed", ids),
-          },
-        ]}
-      />
+      <div className="processing-card-grid">
+        <AutomationPanel
+          pageId="incomplete"
+          title="Automation"
+          automation={state.automation.incomplete}
+          sync={state.sync}
+          saving={incompleteAutomationSaving}
+          running={incompleteAutomationRunning}
+          onSave={saveIncompleteAutomation}
+          onRun={runIncompleteAutomation}
+          onPause={pauseIncompleteAutomation}
+          onStop={stopIncompleteAutomation}
+          className="processing-card-span-full processing-incomplete-automation-card"
+        />
+        <ProcessingDataCard
+          pageId="incomplete"
+          cardId="records"
+          title="Incomplete"
+          description="Records currently classified as incomplete."
+          rows={incompleteRows}
+          readOnly
+        />
+        <ProcessingDataCard
+          pageId="incomplete"
+          cardId="completed"
+          title="Updated"
+          description="Records resolved by incomplete automation."
+          rows={completedRows}
+          busy={Boolean(busyCards["incomplete-completed"])}
+          actions={[
+            {
+              id: "recreate",
+              label: "Recreate Book",
+              onAction: (ids) =>
+                recreateCompletedRequests("incomplete-completed", ids),
+            },
+            {
+              id: "delete",
+              label: "Delete",
+              danger: true,
+              onAction: (ids) => deleteRequests("incomplete-completed", ids),
+            },
+          ]}
+        />
+      </div>
     </PageFrame>
   );
 }

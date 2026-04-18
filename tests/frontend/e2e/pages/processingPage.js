@@ -188,13 +188,13 @@ export class ProcessingPageModel {
   }
 
   async selectIncompleteBook(title) {
-    await this.card("Incomplete Catalog")
+    await this.card("Incomplete")
       .getByLabel(`Select ${title}`)
       .check();
   }
 
   async reprocessSelectedIncomplete() {
-    await this.card("Incomplete Catalog")
+    await this.card("Incomplete")
       .getByRole("button", { name: "Reprocess selected" })
       .click();
   }

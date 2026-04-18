@@ -7,7 +7,7 @@ from .models import (
     ProcessingAutomationSettings,
     ProcessingSyncState,
 )
-from .services import latest_request_for_record, record_is_selectable
+from .services import latest_request_for_record, record_is_selectable, sync_run_mode
 
 
 class BookRecordSerializer(serializers.ModelSerializer):
@@ -94,6 +94,7 @@ class ProcessingSyncStateSerializer(serializers.ModelSerializer):
     appendedCount = serializers.IntegerField(source="appended_count")
     remotePages = serializers.JSONField(source="remote_pages")
     pageIndex = serializers.IntegerField(source="page_index")
+    runMode = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcessingSyncState
@@ -107,7 +108,11 @@ class ProcessingSyncStateSerializer(serializers.ModelSerializer):
             "message",
             "remotePages",
             "pageIndex",
+            "runMode",
         ]
+
+    def get_runMode(self, obj):
+        return sync_run_mode(obj)
 
 
 class ProcessingAutomationSettingsSerializer(serializers.ModelSerializer):

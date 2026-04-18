@@ -21,6 +21,8 @@ export function CatalogSearchRow({
   buttonsDisabled = false,
   actionsExtra = null,
   showFilterToggle = true,
+  resultCountTestId = undefined,
+  searchTestId = undefined,
 }) {
   const activeFilterCount = countActiveFilters(filters, fields, defaultFilters);
   const rowClassName = `catalog-search-row${compact ? " catalog-search-row--compact" : ""}${className ? ` ${className}` : ""}`;
@@ -61,6 +63,7 @@ export function CatalogSearchRow({
           }}
           placeholder={searchPlaceholder}
           autoComplete="off"
+          data-testid={searchTestId}
         />
       </label>
       <div className="catalog-search-actions">
@@ -82,6 +85,7 @@ export function CatalogSearchRow({
           <span
             className={`catalog-result-count${resultCountLoading ? " is-loading" : ""}`}
             aria-label={resultCountLoading ? "Loading results" : `${resultCount} results`}
+            data-testid={resultCountTestId}
           >
             {resultCountLoading ? <LoadingSpinner size={14} /> : resultCount}
           </span>

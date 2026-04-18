@@ -124,7 +124,7 @@
 }
 
 .processing-table {
-  min-width: 860px;
+  min-width: 980px;
   table-layout: fixed;
 }
 
@@ -212,6 +212,30 @@
 
 .processing-col-action {
   width: 20%;
+}
+
+.processing-table .processing-col-book-wide {
+  width: 21%;
+}
+
+.processing-table .processing-col-contributors-wide {
+  width: 21%;
+}
+
+.processing-table .processing-col-category {
+  width: 14%;
+}
+
+.processing-table .processing-col-status {
+  width: 13%;
+}
+
+.processing-table .processing-col-details {
+  width: 16%;
+}
+
+.processing-table .processing-col-updated {
+  width: 15%;
 }
 
 .processing-catalog-table .processing-col-request {

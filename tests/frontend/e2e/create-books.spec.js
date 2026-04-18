@@ -82,19 +82,19 @@ async function mockCreateProcessingApi(page) {
     automation: {
       catalog: {
         enabled: false,
-        interval: "daily",
-        time: "02:00",
-        saved: false,
-        lastRunAt: null,
-        statusMessage: "Not configured.",
-      },
-      incomplete: {
-        enabled: false,
-        interval: "daily",
+        interval: "weekly",
         time: "03:00",
         saved: false,
         lastRunAt: null,
-        statusMessage: "Not configured.",
+        statusMessage: "",
+      },
+      incomplete: {
+        enabled: false,
+        interval: "weekly",
+        time: "03:00",
+        saved: false,
+        lastRunAt: null,
+        statusMessage: "",
       },
     },
     ui: {

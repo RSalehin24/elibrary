@@ -29,6 +29,68 @@ function liveSmokeData() {
       updatedAt: now,
       bookCreationState: "not_created",
     },
+    manualA: {
+      id: `live-manual-a-${suffix}`,
+      name: `Live Manual Sync A ${suffix}`,
+      url: `https://example.test/live-manual-a-${suffix}`,
+      category: "Smoke",
+      writer: "Manual Writer",
+      translator: null,
+      composer: null,
+      publisher: "Live Press",
+      updatedAt: now,
+      bookCreationState: "not_created",
+    },
+    manualB: {
+      id: `live-manual-b-${suffix}`,
+      name: `Live Manual Sync B ${suffix}`,
+      url: `https://example.test/live-manual-b-${suffix}`,
+      category: "Smoke",
+      writer: "Manual Writer",
+      translator: null,
+      composer: null,
+      publisher: "Live Press",
+      updatedAt: now,
+      bookCreationState: "not_created",
+    },
+    automationA: {
+      id: `live-automation-a-${suffix}`,
+      name: `Live Automation Sync A ${suffix}`,
+      url: `https://example.test/live-automation-a-${suffix}`,
+      category: "Smoke",
+      writer: "Automation Writer",
+      translator: null,
+      composer: null,
+      publisher: "Live Press",
+      updatedAt: now,
+      bookCreationState: "not_created",
+    },
+    automationB: {
+      id: `live-automation-b-${suffix}`,
+      name: `Live Automation Sync B ${suffix}`,
+      url: `https://example.test/live-automation-b-${suffix}`,
+      category: "Smoke",
+      writer: "Automation Writer",
+      translator: null,
+      composer: null,
+      publisher: "Live Press",
+      updatedAt: now,
+      bookCreationState: "not_created",
+    },
+    incomplete: {
+      id: `live-incomplete-${suffix}`,
+      name: `Live Incomplete Catalog Book ${suffix}`,
+      url: `https://example.test/live-incomplete-${suffix}`,
+      category: "অসম্পূর্ণ বই",
+      writer: "Incomplete Writer",
+      translator: null,
+      composer: null,
+      publisher: "Live Press",
+      updatedAt: now,
+      bookCreationState: "not_created",
+      wasIncomplete: true,
+      willResolveToCategory: "Novel",
+    },
   };
 }
 
@@ -106,6 +168,20 @@ async function seedLiveProcessingState(page, smoke) {
   });
 }
 
+async function seedIdleRemotePages(page, remotePages) {
+  await processingPost(page, "/processing/sync/start/", { remotePages });
+  await processingPost(page, "/processing/sync/stop/");
+}
+
+function repeatedAutomationPages(smoke, count = 12) {
+  return [
+    ...Array.from({ length: count }, (_, index) => [
+      index % 2 === 0 ? smoke.automationA : smoke.automationB,
+    ]),
+    [],
+  ];
+}
+
 test.describe("processing replacement live smoke", () => {
   test.beforeEach(async ({ page }) => {
     await loginSuperAdminThroughApi(page);
@@ -140,7 +216,99 @@ test.describe("processing replacement live smoke", () => {
     ).toBeVisible();
 
     await page.goto("/incomplete");
-    await expect(page.getByRole("heading", { name: "Incomplete", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Incomplete", exact: true, level: 1 }),
+    ).toBeVisible();
+  });
+
+  test("manual and automated catalog sync use real backend state and gate the controls", async ({
+    page,
+  }) => {
+    const smoke = liveSmokeData();
+
+    await seedIdleRemotePages(page, [[smoke.manualA], [smoke.manualB], []]);
+    await page.goto("/catalog");
+
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+    await expect(page.getByTestId(`catalog-records-row-${smoke.manualA.id}`)).toBeVisible();
+    await expect(page.getByTestId(`catalog-records-row-${smoke.manualB.id}`)).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeVisible();
+
+    await seedIdleRemotePages(page, repeatedAutomationPages(smoke));
+    await page.reload();
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      /pausing|paused/,
+    );
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "paused",
+    );
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "stopped",
+    );
+
+    await seedIdleRemotePages(page, repeatedAutomationPages(smoke));
+    await page.reload();
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
+    await expect(page.getByTestId(`catalog-records-row-${smoke.automationA.id}`)).toBeVisible();
+    await expect(page.getByTestId(`catalog-records-row-${smoke.automationB.id}`)).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+
+    await page.goto("/create");
+    await expect(
+      page
+        .getByTestId(`create-requests-row-request-${smoke.automationA.id}`)
+        .or(page.getByTestId(`create-queue-row-request-${smoke.automationA.id}`))
+        .or(page.getByTestId(`create-processing-row-request-${smoke.automationA.id}`))
+        .or(page.getByTestId(`create-created-row-request-${smoke.automationA.id}`))
+        .first(),
+    ).toBeVisible();
+  });
+
+  test("incomplete automation resolves real incomplete-category records", async ({
+    page,
+  }) => {
+    const smoke = liveSmokeData();
+
+    await processingPost(page, "/processing/sync/start/", {
+      remotePages: [[smoke.incomplete], []],
+    });
+    await processingPost(page, "/processing/sync/advance/");
+
+    await page.goto("/incomplete");
+    await expect(
+      page.getByRole("heading", { name: "Incomplete", exact: true, level: 1 }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId(`incomplete-records-row-${smoke.incomplete.id}`),
+    ).toBeVisible();
+
+    await page.getByTestId("incomplete-automation-run-btn").click();
+    await expect(page.getByTestId("incomplete-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+    await expect(
+      page.getByTestId(`incomplete-completed-row-request-${smoke.incomplete.id}`),
+    ).toBeVisible();
   });
 
   test("legacy processing URLs redirect to replacement pages", async ({ page }) => {

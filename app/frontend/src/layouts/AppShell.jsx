@@ -10,12 +10,14 @@ import {
   processingItems,
 } from "../features/layout/navigation";
 import { useSession } from "../hooks/useSession";
+import { useToast } from "../hooks/useToast";
 import { hasCapability } from "../utils/capabilities";
 
 export default function AppShell({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { authenticated, user, logout } = useSession();
+  const toast = useToast();
   const isReaderRoute = location.pathname === "/reader";
   const isCreatePasswordRoute = location.pathname === "/create-password";
   const isTotpSetupRoute = location.pathname === "/two-factor-setup";
@@ -174,10 +176,12 @@ export default function AppShell({ children }) {
                     displayName={displayName}
                     email={user?.email}
                     profileImageUrl={user?.profile_image_url}
+                    alertsMuted={toast.muted}
                     menuOpen={menuOpen}
                     menuRef={profileMenuRef}
                     onToggle={() => setMenuOpen((current) => !current)}
                     onClose={() => setMenuOpen(false)}
+                    onToggleAlerts={toast.toggleMuted}
                     onLogout={async () => {
                       setMenuOpen(false);
                       await logout();
