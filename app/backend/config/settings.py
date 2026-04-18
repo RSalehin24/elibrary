@@ -90,7 +90,7 @@ for origin in {normalized_origin(FRONTEND_BASE_URL), normalized_origin(PUBLIC_AP
 
 if DEBUG:
     for host in ("localhost", "127.0.0.1"):
-        for port in range(5173, 5181):
+        for port in range(5173, 5182):
             origin = f"http://{host}:{port}"
             append_unique(CSRF_TRUSTED_ORIGINS, origin)
             append_unique(CORS_ALLOWED_ORIGINS, origin)
@@ -234,6 +234,8 @@ CELERY_BROKER_URL = env("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
 CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", APP_ENV != "production")
 CELERY_TASK_EAGER_PROPAGATES = True
+PROCESSING_USE_LIVE_SYNC = env_bool("PROCESSING_USE_LIVE_SYNC", True)
+PROCESSING_INLINE_PIPELINE_ADVANCE = env_bool("PROCESSING_INLINE_PIPELINE_ADVANCE", False)
 
 BREVO_API_KEY = env("BREVO_API_KEY", "")
 EMAIL_BACKEND = env(

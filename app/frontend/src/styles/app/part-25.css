@@ -202,17 +202,21 @@
     justify-content: flex-end;
   }
 
-  .processing-list-card .processing-card-head {
-    grid-template-columns: auto minmax(0, 1fr);
+  .processing-list-card .processing-card-head.processing-card-head--list {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .processing-card-head-line {
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .processing-card-head-inline-tools {
     justify-content: flex-start;
-    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .processing-card-head-search {
+    width: 100%;
   }
 
   .processing-list-card .processing-card-head-tools {

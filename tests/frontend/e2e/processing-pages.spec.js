@@ -358,7 +358,11 @@ function advanceSyncPage(state) {
 
 async function mockProcessingApi(page, initialState) {
   let state = syncRecordStates(clone(initialState));
+  let lastSyncStartBody = null;
   const controller = {
+    getLastSyncStartBody() {
+      return clone(lastSyncStartBody);
+    },
     setNowIso(nowIso) {
       state.ui = {
         ...state.ui,
@@ -392,6 +396,7 @@ async function mockProcessingApi(page, initialState) {
   });
   await page.route("**/api/processing/sync/start/", async (route) => {
     const body = route.request().postDataJSON();
+    lastSyncStartBody = body;
     state.sync = {
       ...state.sync,
       ...(body?.remotePages ? { remotePages: body.remotePages } : {}),
@@ -904,6 +909,37 @@ test.describe("processing pages replacement", () => {
     ).toBeVisible();
   });
 
+  test("catalog records show bangla source urls as decoded text", async ({
+    page,
+  }) => {
+    const encodedUrl =
+      "https://www.ebanglalibrary.com/books/%E0%A6%85%E0%A6%97%E0%A7%8D%E0%A6%A8%E0%A6%BF%E0%A6%AA%E0%A6%B0%E0%A7%80%E0%A6%95%E0%A7%8D%E0%A6%B7%E0%A6%BE-%E0%A6%86%E0%A6%B6%E0%A6%BE%E0%A6%AA%E0%A7%82%E0%A6%B0%E0%A7%8D%E0%A6%A3%E0%A6%BE/";
+    const decodedUrl =
+      "https://www.ebanglalibrary.com/books/অগ্নিপরীক্ষা-আশাপূর্ণা/";
+    const encodedFragment =
+      "%E0%A6%85%E0%A6%97%E0%A7%8D%E0%A6%A8%E0%A6%BF%E0%A6%AA%E0%A6%B0";
+
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [
+          record({
+            id: "bangla-record",
+            name: "অগ্নিপরীক্ষা",
+            url: encodedUrl,
+            category: "উপন্যাস",
+            writer: "আশাপূর্ণা দেবী",
+          }),
+        ],
+      }),
+    );
+
+    const banglaRow = row(page, "catalog", "records", "bangla-record");
+    await expect(banglaRow).toContainText(decodedUrl);
+    await expect(banglaRow).not.toContainText(encodedFragment);
+  });
+
   test("manual sync completes automatically without an explicit pause", async ({
     page,
   }) => {
@@ -944,6 +980,31 @@ test.describe("processing pages replacement", () => {
     await expect(
       page.getByRole("status").filter({ hasText: "Sync complete" }),
     ).toBeVisible();
+  });
+
+  test("manual sync does not repost incomplete automation page ids", async ({
+    page,
+  }) => {
+    const processingApi = await boot(
+      page,
+      "/catalog",
+      baseState({
+        sync: {
+          ...baseState().sync,
+          message: "Incomplete catalog sync complete. Resolved 1 book.",
+          remotePages: [["stale-incomplete-record"], []],
+        },
+        ui: {
+          ...baseState().ui,
+          syncDelayMs: 5_000,
+        },
+      }),
+    );
+
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-loader")).toBeVisible();
+
+    expect(processingApi.getLastSyncStartBody()?.remotePages).toBeUndefined();
   });
 
   test("automated catalog sync creates eligible requests and auto-advances them", async ({
@@ -1292,6 +1353,19 @@ test.describe("processing pages replacement", () => {
       "1",
     );
     await expect(row(page, "incomplete", "records", "incomplete-book")).toBeVisible();
+    await expect(page.getByTestId("incomplete-records-table")).toBeVisible();
+    await expect(
+      page.locator('[data-testid="incomplete-records-table"] thead'),
+    ).toContainText("Name");
+    await expect(
+      page.locator('[data-testid="incomplete-records-table"] thead'),
+    ).toContainText("URL");
+    await expect(
+      page.locator('[data-testid="incomplete-records-table"] thead'),
+    ).not.toContainText("Book");
+    await expect(
+      page.locator('[data-testid="incomplete-records-table"] tbody tr').first(),
+    ).toContainText("https://example.test/books/reusable-systems");
     await expect(page.getByTestId("incomplete-automation-interval")).toHaveValue(
       "weekly",
     );

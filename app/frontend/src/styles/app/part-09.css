@@ -294,11 +294,9 @@
   align-items: center;
 }
 
-.processing-card-head--list {
+.processing-list-card .processing-card-head.processing-card-head--list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
 }
 
 .processing-card-head-meta {
@@ -319,10 +317,12 @@
 }
 
 .processing-card-head-line {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
+  width: 100%;
 }
 
 .processing-card-head-controls {
@@ -362,8 +362,7 @@
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
-  margin-left: auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .processing-card-head-search {

@@ -927,6 +927,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
     job = ProcessingJob.objects.select_related("submission", "submission__submitter", "book").get(pk=job_id)
     submission = job.submission
     reprocess_book = None
+    skip_duplicate_checks = bool((submission.raw_payload or {}).get("skip_duplicate_checks"))
     if job.status == JobStatus.SUCCEEDED:
         return job
     if job.status == JobStatus.CANCELLED:
@@ -976,7 +977,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                 "source_page_metadata": source_page_metadata["raw_data"],
             }
             submission.save(update_fields=["raw_payload", "updated_at"])
-        source_duplicate = None if reprocess_book else find_existing_book_by_source_url(normalized_url)
+        source_duplicate = None if reprocess_book or skip_duplicate_checks else find_existing_book_by_source_url(normalized_url)
         if source_duplicate:
             fulfill_submission_with_existing_book(
                 submission,
@@ -1018,7 +1019,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
         record_job_log(job, "info", "Scraped source content.", {"title": scraped_data.get("book_title", "")})
         if cancel_requested_for_job(job):
             return finalize_cancelled_job(job)
-        exact_title_duplicate = None if reprocess_book else find_exact_existing_book(scraped_data)
+        exact_title_duplicate = None if reprocess_book or skip_duplicate_checks else find_exact_existing_book(scraped_data)
         if exact_title_duplicate:
             fulfill_submission_with_existing_book(
                 submission,
@@ -1046,7 +1047,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             job.save(update_fields=["book", "status", "finished_at", "updated_at"])
             return job
 
-        metadata_duplicate = None if reprocess_book else detect_metadata_duplicate(scraped_data)
+        metadata_duplicate = None if reprocess_book or skip_duplicate_checks else detect_metadata_duplicate(scraped_data)
         if metadata_duplicate:
             submission.duplicate_of_book = metadata_duplicate
             submission.status = SubmissionStatus.DUPLICATE

@@ -27,20 +27,19 @@ from .services import (
     get_sync_state,
     mark_stale_processing_requests,
     pause_sync,
+    refresh_processing_state,
     resume_sync,
     run_catalog_automation,
     run_incomplete_automation,
     start_sync,
     stop_sync,
-    sync_record_state,
     update_automation_settings,
 )
 
 
 def state_payload():
     mark_stale_processing_requests()
-    for record in BookRecord.objects.prefetch_related("creation_requests"):
-        sync_record_state(record)
+    refresh_processing_state()
 
     return {
         "records": BookRecordSerializer(
@@ -129,7 +128,10 @@ class ProcessingRecordCreateRequestsView(APIView):
     def post(self, request):
         serializer = BulkIdsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        created = create_requests_for_record_ids(serializer.validated_data["ids"])
+        created = create_requests_for_record_ids(
+            serializer.validated_data["ids"],
+            actor=request.user,
+        )
         payload = state_payload()
         payload["createdCount"] = len(created)
         return Response(payload)
@@ -145,6 +147,7 @@ class ProcessingRequestActionView(APIView):
             serializer.validated_data["ids"],
             serializer.validated_data["action"],
             delete_book=serializer.validated_data["deleteBook"],
+            actor=request.user,
         )
         payload = state_payload()
         payload["changedCount"] = len(changed)

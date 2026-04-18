@@ -62,6 +62,24 @@ const DEFAULT_STATE = {
   },
 };
 
+function isCatalogRemotePage(page) {
+  return (
+    Array.isArray(page) &&
+    page.every(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        !Array.isArray(item),
+    )
+  );
+}
+
+function catalogRemotePages(remotePages) {
+  return Array.isArray(remotePages) && remotePages.every(isCatalogRemotePage)
+    ? remotePages
+    : [];
+}
+
 function normalizeState(payload) {
   const state = payload && typeof payload === "object" ? payload : {};
   return {
@@ -443,13 +461,14 @@ export function BookProcessingProvider({ children }) {
   );
 
   const startCatalogSync = useCallback(
-    () =>
-      runCardAction(
+    () => {
+      const remotePages = catalogRemotePages(stateRef.current.sync.remotePages);
+      return runCardAction(
         "catalog-sync",
         () =>
           apiFetch("/processing/sync/start/", {
             method: "POST",
-            body: { remotePages: stateRef.current.sync.remotePages || [] },
+            body: remotePages.length ? { remotePages } : {},
           }),
         {
           onSuccess: (_, __, nextToast) =>
@@ -458,7 +477,8 @@ export function BookProcessingProvider({ children }) {
               description: "Catalog sync is running.",
             }),
         },
-      ),
+      );
+    },
     [runCardAction],
   );
 

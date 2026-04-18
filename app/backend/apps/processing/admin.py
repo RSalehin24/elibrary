@@ -34,6 +34,7 @@ class BookRecordAdmin(admin.ModelAdmin):
         "resolved_from_incomplete",
         "is_duplicate",
     )
+    raw_id_fields = ("linked_book", "duplicate_of_record", "source_catalog_entry")
     readonly_fields = ("created_at", "updated_at")
 
 
@@ -42,6 +43,7 @@ class BookCreationRequestAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "book_record",
+        "origin",
         "state",
         "is_resumed",
         "is_confirmed_not_duplicate",
@@ -50,6 +52,7 @@ class BookCreationRequestAdmin(admin.ModelAdmin):
     search_fields = ("id", "book_record__id", "book_record__name", "error_message")
     list_filter = (
         "state",
+        "origin",
         "is_resumed",
         "is_confirmed_not_duplicate",
         "duplicate_confirmed",
@@ -59,6 +62,7 @@ class BookCreationRequestAdmin(admin.ModelAdmin):
         "duplicate_of_request",
         "duplicate_of_record",
         "linked_book",
+        "submission",
     )
     readonly_fields = ("created_at", "updated_at")
 
@@ -72,9 +76,10 @@ class ProcessingSyncStateAdmin(admin.ModelAdmin):
         "fetched_count",
         "updated_count",
         "appended_count",
+        "task_id",
         "updated_at",
     )
-    search_fields = ("singleton_key", "message")
+    search_fields = ("singleton_key", "message", "task_id", "queue_name", "last_error")
     list_filter = ("status",)
     readonly_fields = ("created_at", "updated_at")
 

@@ -1,7 +1,10 @@
+import re
+
 from django.db.models import Exists, OuterRef, Q, Subquery
 from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.catalog.models import Book, BookRecordType, ContributorRole
+from apps.common.text import normalize_catalog_text
 from apps.ingestion.models import BookSubmission
 
 
@@ -13,6 +16,24 @@ CONTRIBUTOR_ROLE_BY_PAGE = {
     "compilers": ContributorRole.COMPILER,
     "editors": ContributorRole.EDITOR,
 }
+FLEXIBLE_SEPARATOR_REGEX = r"[\s\-.–—(){}\[\],:;/'\"_|]*"
+
+
+def separator_flexible_pattern(normalized_query):
+    tokens = [re.escape(token) for token in normalized_query.split() if token]
+    if len(tokens) < 2:
+        return ""
+    return FLEXIBLE_SEPARATOR_REGEX.join(tokens)
+
+
+def normalized_text_search_clause(raw_query, normalized_query, *, raw_lookup, normalized_lookup=""):
+    clause = Q(**{f"{raw_lookup}__icontains": raw_query})
+    if normalized_lookup and normalized_query:
+        clause |= Q(**{f"{normalized_lookup}__contains": normalized_query})
+    flexible_pattern = separator_flexible_pattern(normalized_query)
+    if flexible_pattern:
+        clause |= Q(**{f"{raw_lookup}__iregex": flexible_pattern})
+    return clause
 
 
 def apply_created_at_filters(queryset, request):
@@ -54,15 +75,45 @@ def filtered_book_queryset(queryset, request, *, default_record_type):
 
     query = request.query_params.get("q", "").strip()
     if query:
+        normalized_query = normalize_catalog_text(query)
         submission_query = Q(linked_submissions__original_input__icontains=query)
+        if normalized_query:
+            submission_query |= Q(linked_submissions__normalized_input__contains=normalized_query)
         if ownership == "mine":
             submission_query &= Q(linked_submissions__submitter=request.user)
-        queryset = queryset.filter(Q(catalog_code__icontains=query) | Q(title__icontains=query) | Q(book_contributors__contributor__name__icontains=query) | Q(book_contributors__contributor__catalog_code__icontains=query) | Q(book_series__series__name__icontains=query) | Q(book_categories__category__name__icontains=query) | Q(book_categories__category__catalog_code__icontains=query) | submission_query)
+        queryset = queryset.filter(
+            Q(catalog_code__icontains=query)
+            | normalized_text_search_clause(
+                query,
+                normalized_query,
+                raw_lookup="title",
+                normalized_lookup="normalized_title",
+            )
+            | normalized_text_search_clause(
+                query,
+                normalized_query,
+                raw_lookup="book_contributors__contributor__name",
+                normalized_lookup="book_contributors__contributor__normalized_name",
+            )
+            | Q(book_contributors__contributor__catalog_code__icontains=query)
+            | normalized_text_search_clause(
+                query,
+                normalized_query,
+                raw_lookup="book_series__series__name",
+                normalized_lookup="book_series__series__normalized_name",
+            )
+            | normalized_text_search_clause(
+                query,
+                normalized_query,
+                raw_lookup="book_categories__category__name",
+                normalized_lookup="book_categories__category__normalized_name",
+            )
+            | Q(book_categories__category__catalog_code__icontains=query)
+            | submission_query
+        )
 
     filter_map = {
         "book_code": {"catalog_code__icontains": None},
-        "series": {"book_series__series__name__icontains": None},
-        "category": {"book_categories__category__name__icontains": None},
         "category_code": {"book_categories__category__catalog_code": None},
         "category_slug": {"book_categories__category__slug": None},
         "state": {"state": None},
@@ -76,18 +127,57 @@ def filtered_book_queryset(queryset, request, *, default_record_type):
             field = next(iter(filters))
             queryset = queryset.filter(**{field: value})
 
+    series = request.query_params.get("series", "").strip()
+    if series:
+        queryset = queryset.filter(
+            normalized_text_search_clause(
+                series,
+                normalize_catalog_text(series),
+                raw_lookup="book_series__series__name",
+                normalized_lookup="book_series__series__normalized_name",
+            )
+        )
+
+    category = request.query_params.get("category", "").strip()
+    if category:
+        queryset = queryset.filter(
+            normalized_text_search_clause(
+                category,
+                normalize_catalog_text(category),
+                raw_lookup="book_categories__category__name",
+                normalized_lookup="book_categories__category__normalized_name",
+            )
+        )
+
     author = request.query_params.get("author", "").strip() or request.query_params.get("writer", "").strip()
     if author:
-        queryset = queryset.filter(book_contributors__role=ContributorRole.AUTHOR, book_contributors__contributor__name__icontains=author)
+        queryset = queryset.filter(book_contributors__role=ContributorRole.AUTHOR).filter(
+            normalized_text_search_clause(
+                author,
+                normalize_catalog_text(author),
+                raw_lookup="book_contributors__contributor__name",
+                normalized_lookup="book_contributors__contributor__normalized_name",
+            )
+        )
     for param, filters in {
         "writer_code": {"book_contributors__role": ContributorRole.AUTHOR, "book_contributors__contributor__catalog_code": None},
         "writer_slug": {"book_contributors__role": ContributorRole.AUTHOR, "book_contributors__contributor__slug": None},
-        "contributor": {"book_contributors__contributor__name__icontains": None},
+        "contributor": {},
     }.items():
         value = request.query_params.get(param, "").strip()
         if value:
-            resolved = {key: (value if current is None else current) for key, current in filters.items()}
-            queryset = queryset.filter(**resolved)
+            if param == "contributor":
+                queryset = queryset.filter(
+                    normalized_text_search_clause(
+                        value,
+                        normalize_catalog_text(value),
+                        raw_lookup="book_contributors__contributor__name",
+                        normalized_lookup="book_contributors__contributor__normalized_name",
+                    )
+                )
+            else:
+                resolved = {key: (value if current is None else current) for key, current in filters.items()}
+                queryset = queryset.filter(**resolved)
 
     contributor_role = request.query_params.get("contributor_role", "").strip()
     for param, field in {

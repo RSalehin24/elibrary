@@ -1,10 +1,28 @@
+import logging
+import os
+import sys
+import uuid
 from datetime import timedelta, time as time_type
+from types import SimpleNamespace
+from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
+from bs4 import BeautifulSoup
+from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from apps.catalog.models import Book
-from apps.common.models import LifecycleState, ReviewState
+from apps.catalog.services import find_existing_book_by_source_url
+from apps.ingestion.models import SourceCatalogEntry, SubmissionOrigin
+from apps.ingestion.pipeline.scraper_support.network import create_session_with_retries
+from apps.ingestion.services.normalization import promote_leading_front_matter
+from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_with_host_fallback
+from apps.ingestion.services.resolution_support import (
+    fetch_source_page_metadata,
+    upsert_source_catalog_entry,
+)
+from apps.ingestion.services.submissions_support.persistence import export_payload_from_book
 
 from .models import (
     BookCreationRequest,
@@ -16,7 +34,19 @@ from .models import (
     ProcessingSyncState,
     ProcessingSyncStatus,
 )
+from .source import (
+    capture_source_page_metadata,
+    detect_metadata_duplicate,
+    find_exact_existing_book,
+    generate_exports,
+    normalize_source_url,
+    persist_scraped_book,
+    scrape_book,
+    sync_assets,
+)
 
+
+logger = logging.getLogger(__name__)
 
 SYNC_RUN_MODE_MANUAL = "manual"
 SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation"
@@ -38,8 +68,13 @@ ACTIVE_STATES = {
     BookCreationRequestState.QUEUED,
     BookCreationRequestState.PROCESSING,
 }
+SYNC_ACTIVE_STATUSES = {
+    ProcessingSyncStatus.SYNCING,
+    ProcessingSyncStatus.PAUSING,
+}
 PROCESSING_STALE_AFTER = timedelta(minutes=20)
 PROCESSING_STALE_MESSAGE = "Processing exceeded 20 minutes without completing."
+MAX_PROCESSING_REQUEST_ATTEMPTS = 3
 DEFAULT_AUTOMATION_INTERVAL = "weekly"
 DEFAULT_AUTOMATION_TIME = time_type(3, 0)
 LEGACY_AUTOMATION_STATUS_MESSAGE = "Not configured."
@@ -57,11 +92,25 @@ def category_is_incomplete(value):
 def sync_run_mode(state):
     progress = state.progress if isinstance(state.progress, dict) else {}
     saved_data = progress.get("savedData") if isinstance(progress.get("savedData"), dict) else {}
-    return (
-        progress.get("runMode")
-        or saved_data.get("runMode")
-        or SYNC_RUN_MODE_MANUAL
+    return progress.get("runMode") or saved_data.get("runMode") or SYNC_RUN_MODE_MANUAL
+
+
+def should_run_processing_jobs_inline():
+    return bool(
+        settings.CELERY_TASK_ALWAYS_EAGER
+        or getattr(settings, "PROCESSING_INLINE_PIPELINE_ADVANCE", False)
+        or os.environ.get("PYTEST_CURRENT_TEST")
     )
+
+
+def should_enqueue_processing_work():
+    return not should_run_processing_jobs_inline()
+
+
+def sync_uses_live_fetch(state):
+    progress = state.progress if isinstance(state.progress, dict) else {}
+    saved_data = progress.get("savedData") if isinstance(progress.get("savedData"), dict) else {}
+    return bool(saved_data.get("liveFetch"))
 
 
 def sync_run_label(run_mode):
@@ -95,7 +144,7 @@ def sync_pause_message(run_mode):
     return "Pausing after the current page finishes."
 
 
-def build_sync_progress(run_mode, *, next_page_index=0, fetched_count=0, saved_at=None):
+def build_sync_progress(run_mode, *, next_page_index=0, fetched_count=0, saved_at=None, live_fetch=False):
     payload = {
         "runMode": run_mode,
         "checkpoint": f"page-{next_page_index}",
@@ -105,6 +154,8 @@ def build_sync_progress(run_mode, *, next_page_index=0, fetched_count=0, saved_a
             "nextPageIndex": next_page_index,
         },
     }
+    if live_fetch:
+        payload["savedData"]["liveFetch"] = True
     if saved_at:
         payload["savedAt"] = saved_at
     return payload
@@ -112,19 +163,19 @@ def build_sync_progress(run_mode, *, next_page_index=0, fetched_count=0, saved_a
 
 def update_automation_run_status(run_mode, message, *, last_run_at=None):
     if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
-        settings = get_automation_settings(ProcessingAutomationKind.CATALOG)
+        automation_settings = get_automation_settings(ProcessingAutomationKind.CATALOG)
     elif run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
-        settings = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
+        automation_settings = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
     else:
         return None
 
     update_fields = ["status_message", "updated_at"]
-    settings.status_message = message
+    automation_settings.status_message = message
     if last_run_at is not None:
-        settings.last_run_at = last_run_at
+        automation_settings.last_run_at = last_run_at
         update_fields.append("last_run_at")
-    settings.save(update_fields=update_fields)
-    return settings
+    automation_settings.save(update_fields=update_fields)
+    return automation_settings
 
 
 def get_sync_state():
@@ -135,29 +186,29 @@ def get_sync_state():
     return state
 
 
-def normalize_automation_settings(settings):
+def normalize_automation_settings(automation_settings):
     update_fields = []
 
-    if not settings.saved:
-        if settings.interval != DEFAULT_AUTOMATION_INTERVAL:
-            settings.interval = DEFAULT_AUTOMATION_INTERVAL
+    if not automation_settings.saved:
+        if automation_settings.interval != DEFAULT_AUTOMATION_INTERVAL:
+            automation_settings.interval = DEFAULT_AUTOMATION_INTERVAL
             update_fields.append("interval")
-        if settings.time != DEFAULT_AUTOMATION_TIME:
-            settings.time = DEFAULT_AUTOMATION_TIME
+        if automation_settings.time != DEFAULT_AUTOMATION_TIME:
+            automation_settings.time = DEFAULT_AUTOMATION_TIME
             update_fields.append("time")
 
-    if settings.status_message == LEGACY_AUTOMATION_STATUS_MESSAGE:
-        settings.status_message = ""
+    if automation_settings.status_message == LEGACY_AUTOMATION_STATUS_MESSAGE:
+        automation_settings.status_message = ""
         update_fields.append("status_message")
 
     if update_fields:
-        settings.save(update_fields=[*update_fields, "updated_at"])
+        automation_settings.save(update_fields=[*update_fields, "updated_at"])
 
-    return settings
+    return automation_settings
 
 
 def get_automation_settings(kind):
-    settings, _ = ProcessingAutomationSettings.objects.get_or_create(
+    automation_settings, _ = ProcessingAutomationSettings.objects.get_or_create(
         kind=kind,
         defaults={
             "enabled": False,
@@ -166,17 +217,27 @@ def get_automation_settings(kind):
             "status_message": "",
         },
     )
-    return normalize_automation_settings(settings)
+    return normalize_automation_settings(automation_settings)
 
 
 def latest_request_for_record(record):
     return record.creation_requests.order_by("-updated_at", "-created_at").first()
 
 
+def linked_book_for_remote_url(url):
+    try:
+        normalized_url = normalize_source_url(url)
+    except ValueError:
+        return None
+    return find_existing_book_by_source_url(normalized_url)
+
+
 def sync_record_state(record):
     latest_request = latest_request_for_record(record)
     if latest_request:
         next_state = latest_request.state
+    elif record.linked_book_id:
+        next_state = BookCreationState.CREATED
     elif record.book_creation_state not in BookCreationState.values:
         next_state = BookCreationState.NOT_CREATED
     else:
@@ -212,11 +273,69 @@ def normalize_remote_record(payload):
         "composer": str(payload.get("composer") or ""),
         "publisher": str(payload.get("publisher") or ""),
         "updatedAt": timestamp,
-        "bookCreationState": str(payload.get("bookCreationState") or payload.get("book_creation_state") or BookCreationState.NOT_CREATED),
+        "bookCreationState": str(
+            payload.get("bookCreationState")
+            or payload.get("book_creation_state")
+            or BookCreationState.NOT_CREATED
+        ),
         "wasIncomplete": bool(was_incomplete),
-        "resolvedFromIncomplete": bool(payload.get("resolvedFromIncomplete") or payload.get("resolved_from_incomplete")),
-        "willResolveToCategory": str(payload.get("willResolveToCategory") or payload.get("will_resolve_to_category") or ""),
+        "resolvedFromIncomplete": bool(
+            payload.get("resolvedFromIncomplete") or payload.get("resolved_from_incomplete")
+        ),
+        "willResolveToCategory": str(
+            payload.get("willResolveToCategory")
+            or payload.get("will_resolve_to_category")
+            or ""
+        ),
     }
+
+
+def is_catalog_remote_page(page):
+    return isinstance(page, list) and all(isinstance(item, dict) for item in page)
+
+
+def catalog_remote_pages(remote_pages):
+    if isinstance(remote_pages, list) and all(is_catalog_remote_page(page) for page in remote_pages):
+        return remote_pages
+    return []
+
+
+def source_catalog_entry_payload(entry):
+    raw_data = entry.raw_data or {}
+    category = (
+        raw_data.get("category")
+        or raw_data.get("resolvedCategory")
+        or raw_data.get("resolved_category")
+        or "Uncategorized"
+    )
+    parsed = urlparse((entry.source_url or "").strip())
+    return {
+        "id": str(entry.id),
+        "name": entry.title,
+        "url": entry.source_url,
+        "displayUrl": unquote(entry.source_url or ""),
+        "displayPath": unquote(parsed.path).strip("/") or parsed.netloc,
+        "category": category,
+        "writer": entry.author_line,
+        "translator": raw_data.get("translator") or "",
+        "composer": raw_data.get("composer") or "",
+        "publisher": raw_data.get("publisher") or "",
+        "updatedAt": entry.updated_at.isoformat(),
+        "wasIncomplete": category_is_incomplete(category),
+        "willResolveToCategory": raw_data.get("willResolveToCategory")
+        or raw_data.get("will_resolve_to_category")
+        or raw_data.get("resolvedCategory")
+        or raw_data.get("resolved_category")
+        or "",
+    }
+
+
+def is_valid_uuid_string(value):
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return True
 
 
 def upsert_remote_records(records):
@@ -226,9 +345,19 @@ def upsert_remote_records(records):
 
     for raw_record in records:
         data = normalize_remote_record(raw_record)
-        if not data["id"] or not data["url"]:
+        if not data["url"]:
             continue
 
+        source_entry_filters = Q(source_url=data["url"])
+        if is_valid_uuid_string(data["id"]):
+            source_entry_filters |= Q(pk=data["id"])
+        source_entry = SourceCatalogEntry.objects.filter(source_entry_filters).order_by("-updated_at").first()
+        linked_book = linked_book_for_remote_url(data["url"])
+        desired_state = (
+            data["bookCreationState"]
+            if data["bookCreationState"] in BookCreationState.values
+            else BookCreationState.CREATED if linked_book else BookCreationState.NOT_CREATED
+        )
         defaults = {
             "name": data["name"],
             "url": data["url"],
@@ -237,31 +366,43 @@ def upsert_remote_records(records):
             "translator": data["translator"],
             "composer": data["composer"],
             "publisher": data["publisher"],
+            "book_creation_state": desired_state,
+            "linked_book": linked_book,
+            "source_catalog_entry": source_entry,
             "was_incomplete": data["wasIncomplete"],
             "resolved_from_incomplete": data["resolvedFromIncomplete"],
             "will_resolve_to_category": data["willResolveToCategory"],
         }
-        record, created = BookRecord.objects.get_or_create(
-            id=data["id"],
-            defaults={
-                **defaults,
-                "book_creation_state": data["bookCreationState"]
-                if data["bookCreationState"] in BookCreationState.values
-                else BookCreationState.NOT_CREATED,
-            },
+
+        record = (
+            BookRecord.objects.select_related("linked_book")
+            .filter(Q(pk=data["id"]) | Q(url=data["url"]))
+            .order_by("id")
+            .first()
         )
-        if created:
+        if record is None:
+            preferred_id = data["id"] or None
+            create_kwargs = dict(defaults)
+            if preferred_id and not BookRecord.objects.filter(pk=preferred_id).exists():
+                create_kwargs["id"] = preferred_id
+            BookRecord.objects.create(**create_kwargs)
             appended_count += 1
             continue
 
-        changed = any(getattr(record, field) != value for field, value in defaults.items())
-        if changed:
-            for field, value in defaults.items():
-                setattr(record, field, value)
-            record.save(update_fields=[*defaults.keys(), "updated_at"])
+        changed_fields = [
+            field_name
+            for field_name, value in defaults.items()
+            if getattr(record, field_name) != value
+        ]
+        if changed_fields:
+            for field_name in changed_fields:
+                setattr(record, field_name, defaults[field_name])
+            record.save(update_fields=[*changed_fields, "updated_at"])
             updated_count += 1
         else:
             skipped_count += 1
+
+        sync_record_state(record)
 
     return {
         "skipped_count": skipped_count,
@@ -271,33 +412,11 @@ def upsert_remote_records(records):
 
 
 def source_catalog_remote_pages(page_size=100):
-    from apps.ingestion.models import SourceCatalogEntry
-
     entries = SourceCatalogEntry.objects.order_by("title", "id")
     pages = []
     current_page = []
     for entry in entries.iterator(chunk_size=page_size):
-        raw_data = entry.raw_data or {}
-        category = raw_data.get("category") or "Uncategorized"
-        current_page.append(
-            {
-                "id": str(entry.id),
-                "name": entry.title,
-                "url": entry.source_url,
-                "category": category,
-                "writer": entry.author_line,
-                "translator": raw_data.get("translator") or "",
-                "composer": raw_data.get("composer") or "",
-                "publisher": raw_data.get("publisher") or "",
-                "updatedAt": entry.updated_at.isoformat(),
-                "wasIncomplete": category_is_incomplete(category),
-                "willResolveToCategory": raw_data.get("willResolveToCategory")
-                or raw_data.get("will_resolve_to_category")
-                or raw_data.get("resolvedCategory")
-                or raw_data.get("resolved_category")
-                or "",
-            }
-        )
+        current_page.append(source_catalog_entry_payload(entry))
         if len(current_page) >= page_size:
             pages.append(current_page)
             current_page = []
@@ -341,25 +460,113 @@ def reconcile_remote_pages(remote_pages):
     }
 
 
+def should_dispatch_live_sync(remote_pages, run_mode):
+    return (
+        bool(getattr(settings, "PROCESSING_USE_LIVE_SYNC", False))
+        and not settings.CELERY_TASK_ALWAYS_EAGER
+        and "pytest" not in sys.modules
+        and not os.environ.get("PYTEST_CURRENT_TEST")
+        and not remote_pages
+        and run_mode in {SYNC_RUN_MODE_MANUAL, SYNC_RUN_MODE_CATALOG_AUTOMATION}
+    )
+
+
+def dispatch_sync_task(sync_state, *, force=False):
+    from .tasks import run_processing_sync_task
+
+    sync_state.refresh_from_db(fields=["status", "task_id", "queue_name", "updated_at"])
+    if sync_state.status not in SYNC_ACTIVE_STATUSES:
+        return sync_state
+    if not force and sync_state.task_id:
+        return sync_state
+
+    assigned_task_id = str(uuid4())
+    sync_state.task_id = assigned_task_id
+    sync_state.queue_name = "celery"
+    sync_state.last_error = ""
+    sync_state.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
+
+    try:
+        async_result = run_processing_sync_task.apply_async(
+            args=[sync_state.singleton_key],
+            task_id=assigned_task_id,
+        )
+        dispatched_task_id = getattr(async_result, "id", assigned_task_id) or assigned_task_id
+        if dispatched_task_id != assigned_task_id:
+            sync_state.task_id = dispatched_task_id
+            sync_state.save(update_fields=["task_id", "updated_at"])
+    except Exception as exc:
+        logger.warning("Processing sync task dispatch failed.", exc_info=True)
+        sync_state.task_id = ""
+        sync_state.queue_name = "inline-fallback"
+        sync_state.last_error = str(exc)
+        sync_state.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
+        run_processing_sync(singleton_key=sync_state.singleton_key, task_id="")
+    return sync_state
+
+
+def fetch_live_catalog_page(resolver, page_number):
+    response = get_with_host_fallback(
+        resolver.session,
+        CATALOG_URL,
+        params=resolver.archive_query_params(page_number=page_number),
+        timeout=30,
+    )
+    response.raise_for_status()
+    page_entries = resolver.parse_catalog_page(BeautifulSoup(response.text, "html.parser"))
+
+    normalized_entries = []
+    for entry in page_entries:
+        enriched_entry = dict(entry)
+        try:
+            metadata = fetch_source_page_metadata(entry["source_url"], session=resolver.session)
+            enriched_entry = {
+                **metadata,
+                "raw_data": {
+                    **(entry.get("raw_data") or {}),
+                    **(metadata.get("raw_data") or {}),
+                },
+            }
+        except Exception:
+            logger.warning(
+                "Catalog metadata enrichment failed for %s; falling back to archive metadata.",
+                entry.get("source_url", ""),
+                exc_info=True,
+            )
+        stored_entry = upsert_source_catalog_entry(enriched_entry)
+        normalized_entries.append(source_catalog_entry_payload(stored_entry))
+    return normalized_entries
+
+
 def start_sync(remote_pages=None, *, run_mode=SYNC_RUN_MODE_MANUAL):
-    if remote_pages is None:
-        remote_pages = []
-    elif not isinstance(remote_pages, list):
-        remote_pages = []
-    if not remote_pages and run_mode == SYNC_RUN_MODE_MANUAL:
-        remote_pages = source_catalog_remote_pages()
+    if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
+        if remote_pages is None:
+            remote_pages = incomplete_automation_pages()
+        elif not isinstance(remote_pages, list):
+            remote_pages = incomplete_automation_pages()
+    else:
+        remote_pages = catalog_remote_pages(remote_pages)
+        if not remote_pages and SourceCatalogEntry.objects.exists():
+            remote_pages = source_catalog_remote_pages()
+
+    live_fetch = should_dispatch_live_sync(remote_pages, run_mode)
     state = get_sync_state()
     state.remote_pages = remote_pages
     state.status = ProcessingSyncStatus.SYNCING
-    state.progress = build_sync_progress(run_mode)
+    state.progress = build_sync_progress(run_mode, live_fetch=live_fetch)
     state.page_index = 0
     state.fetched_count = 0
     state.skipped_count = 0
     state.updated_count = 0
     state.appended_count = 0
     state.message = sync_start_message(run_mode)
+    state.task_id = ""
+    state.queue_name = ""
+    state.last_error = ""
     state.save()
     update_automation_run_status(run_mode, state.message)
+    if live_fetch:
+        dispatch_sync_task(state, force=True)
     return state
 
 
@@ -372,6 +579,7 @@ def pause_sync():
             run_mode,
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
+            live_fetch=sync_uses_live_fetch(state),
         )
         state.message = sync_pause_message(run_mode)
         state.save(update_fields=["status", "progress", "message", "updated_at"])
@@ -382,21 +590,40 @@ def pause_sync():
 def resume_sync():
     state = get_sync_state()
     run_mode = sync_run_mode(state)
+    live_fetch = sync_uses_live_fetch(state)
+    if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
+        state.remote_pages = incomplete_automation_pages()
     state.status = ProcessingSyncStatus.SYNCING
     state.progress = build_sync_progress(
         run_mode,
         next_page_index=0,
         fetched_count=state.fetched_count,
+        live_fetch=live_fetch,
     )
     state.page_index = 0
+    state.task_id = ""
+    state.queue_name = ""
     if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
         state.message = "Restarting automated catalog sync from the beginning."
     elif run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         state.message = "Restarting incomplete catalog sync from the beginning."
     else:
         state.message = "Reconciling saved records from the beginning."
-    state.save(update_fields=["status", "progress", "page_index", "message", "updated_at"])
+    state.save(
+        update_fields=[
+            "remote_pages",
+            "status",
+            "progress",
+            "page_index",
+            "task_id",
+            "queue_name",
+            "message",
+            "updated_at",
+        ]
+    )
     update_automation_run_status(run_mode, state.message)
+    if live_fetch and not settings.CELERY_TASK_ALWAYS_EAGER:
+        dispatch_sync_task(state, force=True)
     return state
 
 
@@ -412,11 +639,15 @@ def stop_sync():
     run_mode = sync_run_mode(state)
     state.status = ProcessingSyncStatus.IDLE
     state.progress = None
+    state.task_id = ""
+    state.queue_name = ""
     state.message = f"{sync_run_label(run_mode)} stopped."
     state.save(
         update_fields=[
             "status",
             "progress",
+            "task_id",
+            "queue_name",
             "message",
             "updated_at",
         ]
@@ -428,6 +659,8 @@ def stop_sync():
 def finalize_sync(state, *, message=None):
     state.status = ProcessingSyncStatus.IDLE
     state.progress = None
+    state.task_id = ""
+    state.queue_name = ""
     state.message = message or (
         f"Sync complete. Updated {state.updated_count}, "
         f"Skipped {state.skipped_count}, Added {state.appended_count}."
@@ -436,6 +669,8 @@ def finalize_sync(state, *, message=None):
         update_fields=[
             "status",
             "progress",
+            "task_id",
+            "queue_name",
             "message",
             "page_index",
             "fetched_count",
@@ -445,6 +680,29 @@ def finalize_sync(state, *, message=None):
             "updated_at",
         ]
     )
+    return state
+
+
+def fail_sync(state, error):
+    run_mode = sync_run_mode(state)
+    state.status = ProcessingSyncStatus.IDLE
+    state.progress = None
+    state.task_id = ""
+    state.queue_name = ""
+    state.last_error = str(error)
+    state.message = f"{sync_run_label(run_mode)} failed: {error}"
+    state.save(
+        update_fields=[
+            "status",
+            "progress",
+            "task_id",
+            "queue_name",
+            "last_error",
+            "message",
+            "updated_at",
+        ]
+    )
+    update_automation_run_status(run_mode, state.message)
     return state
 
 
@@ -460,7 +718,7 @@ def complete_catalog_automation(state):
             BookCreationRequestState.DELETED,
         }
         if eligible:
-            created.append(create_request_for_record(record))
+            created.append(create_request_for_record(record, origin=SubmissionOrigin.AUTOMATION))
 
     finished_at = timezone.now()
     update_automation_run_status(
@@ -515,6 +773,7 @@ def resolve_incomplete_records(record_ids):
                 id=next_request_id(request_id_for_record(record)),
                 book_record=record,
                 state=BookCreationRequestState.CREATED,
+                origin=SubmissionOrigin.AUTOMATION,
             )
         resolved.append(record)
     return resolved
@@ -557,8 +816,12 @@ def advance_catalog_sync_once(state, run_mode):
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
             saved_at=timezone.now().isoformat(),
+            live_fetch=sync_uses_live_fetch(state),
         )
-        state.message = f"Saved {state.fetched_count} {'record' if state.fetched_count == 1 else 'records'} before pausing."
+        state.message = (
+            f"Saved {state.fetched_count} "
+            f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
+        )
         update_automation_run_status(run_mode, state.message)
     elif not next_page:
         if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
@@ -569,6 +832,7 @@ def advance_catalog_sync_once(state, run_mode):
             run_mode,
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
+            live_fetch=sync_uses_live_fetch(state),
         )
         state.message = sync_progress_message(run_mode, state.fetched_count)
     state.save()
@@ -614,18 +878,92 @@ def advance_incomplete_sync_once(state):
     return state
 
 
-def advance_sync_once():
-    state = get_sync_state()
-    if state.status not in {
-        ProcessingSyncStatus.SYNCING,
-        ProcessingSyncStatus.PAUSING,
-    }:
+def run_processing_sync(singleton_key="default", task_id=""):
+    state = ProcessingSyncState.objects.get(singleton_key=singleton_key)
+    if task_id and state.task_id and state.task_id != task_id:
+        return state
+    if state.status not in SYNC_ACTIVE_STATUSES:
         return state
 
     run_mode = sync_run_mode(state)
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         return advance_incomplete_sync_once(state)
-    return advance_catalog_sync_once(state, run_mode)
+    if not sync_uses_live_fetch(state):
+        return advance_catalog_sync_once(state, run_mode)
+
+    resolver = TitleResolver(session=create_session_with_retries())
+    seen_urls = set()
+    page_signatures = set()
+
+    try:
+        while True:
+            state.refresh_from_db()
+            if task_id and state.task_id and state.task_id != task_id:
+                return state
+            if state.status not in SYNC_ACTIVE_STATUSES:
+                return state
+
+            page_number = state.page_index + 1
+            page = fetch_live_catalog_page(resolver, page_number)
+            unique_page = []
+            for item in page:
+                source_url = item.get("url")
+                if not source_url or source_url in seen_urls:
+                    continue
+                seen_urls.add(source_url)
+                unique_page.append(item)
+
+            signature = tuple(item["url"] for item in unique_page[:5])
+            if not unique_page or signature in page_signatures:
+                if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
+                    return complete_catalog_automation(state)
+                return finalize_sync(state)
+
+            page_signatures.add(signature)
+            result = upsert_remote_records(unique_page)
+            state.fetched_count += len(unique_page)
+            state.skipped_count += result["skipped_count"]
+            state.updated_count += result["updated_count"]
+            state.appended_count += result["appended_count"]
+            state.page_index += 1
+
+            if state.status == ProcessingSyncStatus.PAUSING:
+                state.status = ProcessingSyncStatus.PAUSED
+                state.progress = build_sync_progress(
+                    run_mode,
+                    next_page_index=state.page_index,
+                    fetched_count=state.fetched_count,
+                    saved_at=timezone.now().isoformat(),
+                    live_fetch=True,
+                )
+                state.message = (
+                    f"Saved {state.fetched_count} "
+                    f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
+                )
+                state.save()
+                update_automation_run_status(run_mode, state.message)
+                return state
+
+            state.progress = build_sync_progress(
+                run_mode,
+                next_page_index=state.page_index,
+                fetched_count=state.fetched_count,
+                live_fetch=True,
+            )
+            state.message = sync_progress_message(run_mode, state.fetched_count)
+            state.save()
+    except Exception as exc:
+        logger.exception("Live processing sync failed.", extra={"task_id": task_id})
+        return fail_sync(state, exc)
+
+
+def advance_sync_once():
+    state = get_sync_state()
+    if state.status not in SYNC_ACTIVE_STATUSES:
+        return state
+    if state.task_id and not settings.CELERY_TASK_ALWAYS_EAGER:
+        return state
+    return run_processing_sync(singleton_key=state.singleton_key, task_id=state.task_id)
 
 
 def request_id_for_record(record):
@@ -639,16 +977,6 @@ def next_request_id(preferred_id):
     while BookCreationRequest.objects.filter(pk=f"{preferred_id}-{index}").exists():
         index += 1
     return f"{preferred_id}-{index}"
-
-
-def create_request_for_record(record, state=BookCreationRequestState.INITIAL):
-    request = BookCreationRequest.objects.create(
-        id=next_request_id(request_id_for_record(record)),
-        book_record=record,
-        state=state,
-    )
-    sync_record_state(record)
-    return request
 
 
 def request_blocks_record_selection(request):
@@ -674,169 +1002,68 @@ def record_is_selectable(record):
             BookCreationRequestState.FAILED,
             BookCreationRequestState.DELETED,
         }
+    if record.linked_book_id and not requests:
+        return False
     return not any(request_blocks_record_selection(request) for request in requests)
 
 
-def create_requests_for_record_ids(record_ids):
+def enqueue_request_processing(processing_request):
+    from .tasks import kickoff_book_creation_request_task
+
+    try:
+        kickoff_book_creation_request_task.apply_async(args=[str(processing_request.id)])
+    except Exception:
+        logger.warning(
+            "Processing request kickoff dispatch failed for %s.",
+            processing_request.id,
+            exc_info=True,
+        )
+
+
+def create_request_for_record(record, state=BookCreationRequestState.INITIAL, origin=SubmissionOrigin.CURATION):
+    processing_request = BookCreationRequest.objects.create(
+        id=next_request_id(request_id_for_record(record)),
+        book_record=record,
+        state=state,
+        origin=origin,
+    )
+    sync_record_state(record)
+    if state == BookCreationRequestState.INITIAL and should_enqueue_processing_work():
+        enqueue_request_processing(processing_request)
+    return processing_request
+
+
+def create_requests_for_record_ids(record_ids, *, actor=None, origin=SubmissionOrigin.CURATION):
     created = []
-    for record in BookRecord.objects.filter(pk__in=record_ids):
+    for record in BookRecord.objects.filter(pk__in=record_ids).order_by("name", "id"):
         if not record_is_selectable(record):
             continue
-        created.append(create_request_for_record(record))
+        created.append(create_request_for_record(record, origin=origin))
     return created
 
 
-def ensure_book_for_request(request):
-    if request.linked_book_id:
-        return request.linked_book
-
-    record = request.book_record
-    book = Book.objects.create(
-        title=record.name,
-        state=LifecycleState.READY,
-        review_state=ReviewState.PENDING,
-        source_site="processing",
-        raw_scraped_metadata={
-            "processing_record_id": request.book_record_id,
-            "source_url": record.url,
-            "category": record.category,
-            "writer": record.writer,
-            "translator": record.translator,
-            "publisher": record.publisher,
-        },
-    )
-    request.linked_book = book
-    request.book_record.linked_book = book
-    request.save(update_fields=["linked_book", "updated_at"])
-    request.book_record.save(update_fields=["linked_book", "updated_at"])
-    return book
-
-
-def advance_pipeline_once():
-    advanced = 0
-    for request in BookCreationRequest.objects.filter(state__in=ACTIVE_STATES).order_by("created_at", "id"):
-        if (
-            request.state == BookCreationRequestState.PROCESSING
-            and request.updated_at <= timezone.now() - PROCESSING_STALE_AFTER
-        ):
-            request.state = BookCreationRequestState.FAILED
-            request.error_message = request.error_message or PROCESSING_STALE_MESSAGE
-            request.save()
-            sync_record_state(request.book_record)
-            advanced += 1
-            continue
-        if request.state == BookCreationRequestState.INITIAL:
-            request.state = BookCreationRequestState.QUEUED
-        elif request.state == BookCreationRequestState.QUEUED:
-            request.state = BookCreationRequestState.PROCESSING
-        elif request.state == BookCreationRequestState.PROCESSING:
-            outcome = request.pipeline_outcome or BookCreationRequestState.CREATED
-            if outcome == BookCreationRequestState.FAILED:
-                request.state = BookCreationRequestState.FAILED
-                request.error_message = request.error_message or "Pipeline failed after retries."
-            elif outcome == BookCreationRequestState.DUPLICATE:
-                request.state = BookCreationRequestState.DUPLICATE
-            elif outcome == BookCreationRequestState.PAUSED:
-                request.state = BookCreationRequestState.PAUSED
-                request.progress = {
-                    "savedAt": timezone.now().isoformat(),
-                    "checkpoint": "Pipeline checkpoint",
-                    "savedData": {},
-                }
-            else:
-                request.state = BookCreationRequestState.CREATED
-                ensure_book_for_request(request)
-        request.save()
-        sync_record_state(request.book_record)
-        advanced += 1
-    return advanced
-
-
-def mark_stale_processing_requests():
-    stale_requests = list(
-        BookCreationRequest.objects.filter(state=BookCreationRequestState.PROCESSING).select_related("book_record")
-    )
-    marked = []
-    cutoff = timezone.now() - PROCESSING_STALE_AFTER
-    for request in stale_requests:
-        if request.updated_at > cutoff:
-            continue
-        request.state = BookCreationRequestState.FAILED
-        request.error_message = request.error_message or PROCESSING_STALE_MESSAGE
-        request.save(update_fields=["state", "error_message", "updated_at"])
-        sync_record_state(request.book_record)
-        marked.append(request)
-    return marked
-
-
-def apply_request_action(request_ids, action, *, delete_book=False):
-    requests = list(BookCreationRequest.objects.filter(pk__in=request_ids).select_related("book_record", "linked_book"))
-    for request in requests:
-        if action == "delete":
-            request.state = BookCreationRequestState.DELETED
-            request.progress = None
-            request.error_message = ""
-            if delete_book and request.linked_book and request.linked_book.deleted_at is None:
-                request.linked_book.soft_delete()
-        elif action == "pause":
-            request.state = BookCreationRequestState.PAUSED
-            request.progress = {
-                "savedAt": timezone.now().isoformat(),
-                "checkpoint": "Paused at processing",
-                "savedData": {"source": "processing-card"},
-            }
-        elif action == "resume":
-            request.state = BookCreationRequestState.INITIAL
-            request.is_resumed = True
-        elif action == "retry":
-            request.state = BookCreationRequestState.INITIAL
-            request.error_message = ""
-        elif action == "new":
-            request.state = BookCreationRequestState.INITIAL
-            request.is_confirmed_not_duplicate = True
-        elif action == "confirm_duplicate":
-            request.state = BookCreationRequestState.DUPLICATE
-            request.duplicate_confirmed = True
-            if not request.duplicate_of_request:
-                request.duplicate_of_request = (
-                    BookCreationRequest.objects.exclude(pk=request.pk).order_by("-updated_at").first()
-                )
-            if not request.duplicate_of_record_id and request.duplicate_of_request:
-                request.duplicate_of_record = request.duplicate_of_request.book_record
-            request.book_record.is_duplicate = True
-            request.book_record.duplicate_of_record = request.duplicate_of_record
-            request.book_record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
-        elif action in {"create_again", "recreate"}:
-            request.state = BookCreationRequestState.INITIAL
-            request.progress = None
-            request.error_message = ""
-        else:
-            continue
-        request.save()
-    sync_records_for_requests(requests)
-    return requests
-
-
 def update_automation_settings(kind, payload):
-    settings = get_automation_settings(kind)
-    settings.enabled = bool(payload.get("enabled", settings.enabled))
-    settings.interval = str(payload.get("interval") or settings.interval)
+    automation_settings = get_automation_settings(kind)
+    automation_settings.enabled = bool(payload.get("enabled", automation_settings.enabled))
+    automation_settings.interval = str(payload.get("interval") or automation_settings.interval)
     raw_time = payload.get("time")
     if raw_time:
         if isinstance(raw_time, time_type):
-            settings.time = raw_time
+            automation_settings.time = raw_time
         else:
             hours, minutes = str(raw_time).split(":", 1)
-            settings.time = time_type(int(hours), int(minutes))
-    settings.saved = True
-    settings.status_message = "Saved."
-    settings.save()
-    return settings
+            automation_settings.time = time_type(int(hours), int(minutes))
+    automation_settings.saved = True
+    automation_settings.status_message = "Saved."
+    automation_settings.save()
+    return automation_settings
 
 
 def run_catalog_automation():
     sync_state = get_sync_state()
-    remote_pages = sync_state.remote_pages if sync_state.remote_pages else source_catalog_remote_pages()
+    remote_pages = catalog_remote_pages(sync_state.remote_pages)
+    if settings.CELERY_TASK_ALWAYS_EAGER and not remote_pages:
+        remote_pages = source_catalog_remote_pages()
     return start_sync(remote_pages, run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION)
 
 
@@ -853,3 +1080,611 @@ def reset_processing_data():
     BookRecord.objects.all().delete()
     ProcessingSyncState.objects.all().delete()
     ProcessingAutomationSettings.objects.all().delete()
+
+
+PROCESSING_SOURCE_METADATA_CHECKPOINT = "source-metadata"
+PROCESSING_SCRAPED_CONTENT_CHECKPOINT = "scraped-content"
+
+
+def _request_progress(processing_request):
+    return processing_request.progress if isinstance(processing_request.progress, dict) else {}
+
+
+def _request_saved_data(processing_request):
+    progress = _request_progress(processing_request)
+    saved_data = progress.get("savedData")
+    return saved_data if isinstance(saved_data, dict) else {}
+
+
+def _reload_processing_request(request_id):
+    return (
+        BookCreationRequest.objects.select_related("book_record", "linked_book")
+        .get(pk=request_id)
+    )
+
+
+def _update_record_from_source_metadata(record, metadata):
+    if not isinstance(metadata, dict):
+        return record
+
+    source_entry = upsert_source_catalog_entry(metadata)
+    raw_data = metadata.get("raw_data") if isinstance(metadata.get("raw_data"), dict) else {}
+    desired_values = {
+        "name": metadata.get("title") or record.name,
+        "writer": metadata.get("author_line") or record.writer,
+        "category": raw_data.get("category") or record.category,
+        "translator": raw_data.get("translator") or record.translator,
+        "composer": raw_data.get("composer") or record.composer,
+        "publisher": raw_data.get("publisher") or record.publisher,
+        "source_catalog_entry": source_entry,
+    }
+    update_fields = [
+        field_name
+        for field_name, value in desired_values.items()
+        if getattr(record, field_name) != value
+    ]
+    if update_fields:
+        for field_name in update_fields:
+            setattr(record, field_name, desired_values[field_name])
+        record.save(update_fields=[*update_fields, "updated_at"])
+    return record
+
+
+def _build_processing_progress(checkpoint, saved_data):
+    return {
+        "savedAt": timezone.now().isoformat(),
+        "checkpoint": checkpoint,
+        "savedData": saved_data if isinstance(saved_data, dict) else {},
+    }
+
+
+def _save_paused_processing_progress(request_id, checkpoint, saved_data):
+    processing_request = _reload_processing_request(request_id)
+    if processing_request.state != BookCreationRequestState.PAUSED:
+        return processing_request
+
+    processing_request.progress = _build_processing_progress(checkpoint, saved_data)
+    processing_request.error_message = ""
+    processing_request.save(update_fields=["progress", "error_message", "updated_at"])
+    sync_record_state(processing_request.book_record)
+    return processing_request
+
+
+def _duplicate_targets(existing_book, processing_request):
+    target_request = (
+        BookCreationRequest.objects.filter(linked_book=existing_book)
+        .exclude(pk=processing_request.pk)
+        .order_by("-updated_at", "-created_at")
+        .first()
+    )
+    if target_request:
+        return target_request, target_request.book_record
+
+    target_record = (
+        BookRecord.objects.filter(linked_book=existing_book)
+        .exclude(pk=processing_request.book_record_id)
+        .order_by("-updated_at", "-created_at")
+        .first()
+    )
+    return None, target_record
+
+
+def _mark_request_duplicate(processing_request, existing_book):
+    processing_request = _reload_processing_request(processing_request.id)
+    target_request, target_record = _duplicate_targets(existing_book, processing_request)
+    processing_request.state = BookCreationRequestState.DUPLICATE
+    processing_request.linked_book = existing_book
+    processing_request.duplicate_of_request = target_request
+    processing_request.duplicate_of_record = target_record
+    processing_request.error_message = ""
+    processing_request.save(
+        update_fields=[
+            "state",
+            "linked_book",
+            "duplicate_of_request",
+            "duplicate_of_record",
+            "error_message",
+            "updated_at",
+        ]
+    )
+
+    record = processing_request.book_record
+    record.linked_book = existing_book
+    record.is_duplicate = True
+    record.duplicate_of_record = target_record
+    record.save(update_fields=["linked_book", "is_duplicate", "duplicate_of_record", "updated_at"])
+    sync_record_state(record)
+    return processing_request
+
+
+def _persist_processing_book(processing_request, normalized_url, scraped_data):
+    submission_stub = SimpleNamespace(resolved_url=normalized_url)
+    target_book = (
+        processing_request.linked_book
+        if processing_request.linked_book_id and processing_request.linked_book and processing_request.linked_book.deleted_at is None
+        else None
+    )
+    book = persist_scraped_book(submission_stub, None, scraped_data, target_book=target_book)
+    export_payload = export_payload_from_book(book, scraped_data)
+    generate_exports(export_payload)
+    sync_assets(book, None, export_payload)
+    return book
+
+
+def _finalize_processing_request(processing_request, book, scraped_data):
+    processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state == BookCreationRequestState.DELETED:
+        if book.deleted_at is None:
+            book.soft_delete()
+        sync_record_state(processing_request.book_record)
+        return processing_request
+    if processing_request.state == BookCreationRequestState.PAUSED:
+        _save_paused_processing_progress(
+            processing_request.id,
+            PROCESSING_SCRAPED_CONTENT_CHECKPOINT,
+            {
+                "scrapedData": scraped_data if isinstance(scraped_data, dict) else {},
+                "linkedBookId": str(book.id),
+            },
+        )
+        return _reload_processing_request(processing_request.id)
+
+    processing_request.state = BookCreationRequestState.CREATED
+    processing_request.linked_book = book
+    processing_request.error_message = ""
+    processing_request.progress = None
+    processing_request.save(
+        update_fields=["state", "linked_book", "error_message", "progress", "updated_at"]
+    )
+    record = processing_request.book_record
+    record_update_fields = []
+    if record.linked_book_id != book.id:
+        record.linked_book = book
+        record_update_fields.append("linked_book")
+    if record.is_duplicate:
+        record.is_duplicate = False
+        record_update_fields.append("is_duplicate")
+    if record.duplicate_of_record_id:
+        record.duplicate_of_record = None
+        record_update_fields.append("duplicate_of_record")
+    if record_update_fields:
+        record.save(update_fields=[*record_update_fields, "updated_at"])
+    sync_record_state(record)
+    return processing_request
+
+
+def _normalize_scraped_payload(scraped_data):
+    promoted_book_info, cleaned_main_content = promote_leading_front_matter(
+        scraped_data.get("book_info", ""),
+        scraped_data.get("main_content", ""),
+    )
+    return {
+        **scraped_data,
+        "book_info": promoted_book_info,
+        "main_content": cleaned_main_content,
+    }
+
+
+def _processing_request_duplicate_check(processing_request, scraped_data):
+    if processing_request.is_confirmed_not_duplicate:
+        return None
+
+    exact_title_duplicate = find_exact_existing_book(scraped_data)
+    if exact_title_duplicate:
+        return exact_title_duplicate
+
+    metadata_duplicate = detect_metadata_duplicate(scraped_data)
+    if metadata_duplicate:
+        return metadata_duplicate
+
+    return None
+
+
+def _saved_scraped_data_for_resume(processing_request):
+    saved_data = _request_saved_data(processing_request)
+    checkpoint = _request_progress(processing_request).get("checkpoint") or ""
+    scraped_data = saved_data.get("scrapedData")
+    if not processing_request.is_resumed:
+        return None
+    if checkpoint != PROCESSING_SCRAPED_CONTENT_CHECKPOINT:
+        return None
+    if isinstance(scraped_data, dict):
+        return scraped_data
+
+    logger.warning(
+        "Saved processing progress for request %s is corrupted. Falling back to a full restart.",
+        processing_request.id,
+    )
+    return None
+
+
+def _process_request_once(processing_request):
+    processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state in TERMINAL_STATES or processing_request.state == BookCreationRequestState.PAUSED:
+        sync_record_state(processing_request.book_record)
+        return processing_request
+
+    normalized_url = normalize_source_url(processing_request.book_record.url)
+    source_metadata = capture_source_page_metadata(normalized_url)
+    if source_metadata:
+        _update_record_from_source_metadata(processing_request.book_record, source_metadata)
+
+    processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state == BookCreationRequestState.DELETED:
+        sync_record_state(processing_request.book_record)
+        return processing_request
+    if processing_request.state == BookCreationRequestState.PAUSED:
+        return _save_paused_processing_progress(
+            processing_request.id,
+            PROCESSING_SOURCE_METADATA_CHECKPOINT,
+            {"sourceMetadata": source_metadata or {}},
+        )
+
+    if not processing_request.is_confirmed_not_duplicate:
+        source_duplicate = find_existing_book_by_source_url(normalized_url)
+        if source_duplicate:
+            return _mark_request_duplicate(processing_request, source_duplicate)
+
+    scraped_data = _saved_scraped_data_for_resume(processing_request)
+    if scraped_data is None:
+        scraped_data = scrape_book(normalized_url)
+        if not isinstance(scraped_data, dict):
+            raise ValueError(
+                f"Source scraping returned no content for {normalized_url}. "
+                "Verify the source URL is valid and publicly reachable."
+            )
+    scraped_data = _normalize_scraped_payload(scraped_data)
+
+    processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state == BookCreationRequestState.DELETED:
+        sync_record_state(processing_request.book_record)
+        return processing_request
+    if processing_request.state == BookCreationRequestState.PAUSED:
+        return _save_paused_processing_progress(
+            processing_request.id,
+            PROCESSING_SCRAPED_CONTENT_CHECKPOINT,
+            {"scrapedData": scraped_data},
+        )
+
+    duplicate_book = _processing_request_duplicate_check(
+        processing_request,
+        scraped_data,
+    )
+    if duplicate_book:
+        return _mark_request_duplicate(processing_request, duplicate_book)
+
+    book = _persist_processing_book(processing_request, normalized_url, scraped_data)
+    return _finalize_processing_request(processing_request, book, scraped_data)
+
+
+def _fail_processing_request(processing_request, error):
+    processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state in {
+        BookCreationRequestState.DELETED,
+        BookCreationRequestState.PAUSED,
+    }:
+        sync_record_state(processing_request.book_record)
+        return processing_request
+
+    processing_request.state = BookCreationRequestState.FAILED
+    processing_request.error_message = str(error)
+    processing_request.save(update_fields=["state", "error_message", "updated_at"])
+    sync_record_state(processing_request.book_record)
+    return processing_request
+
+
+def _run_processing_request(processing_request):
+    last_error = None
+    for _attempt in range(MAX_PROCESSING_REQUEST_ATTEMPTS):
+        try:
+            return _process_request_once(processing_request)
+        except Exception as exc:
+            last_error = exc
+            logger.exception(
+                "Processing request %s failed.",
+                processing_request.id,
+            )
+            reloaded = _reload_processing_request(processing_request.id)
+            if reloaded.state in {
+                BookCreationRequestState.DELETED,
+                BookCreationRequestState.PAUSED,
+            }:
+                return reloaded
+    return _fail_processing_request(processing_request, last_error or PROCESSING_STALE_MESSAGE)
+
+
+def _transition_request_state(request_id, from_state, to_state):
+    with transaction.atomic():
+        processing_request = (
+            BookCreationRequest.objects.select_for_update().get(pk=request_id)
+        )
+        if processing_request.state != from_state:
+            return processing_request
+        processing_request.state = to_state
+        if to_state == BookCreationRequestState.PROCESSING:
+            processing_request.error_message = ""
+        processing_request.save(update_fields=["state", "error_message", "updated_at"])
+        sync_record_state(processing_request.book_record)
+        return processing_request
+
+
+def kickoff_request_processing(request_id, actor=None):
+    processing_request = _reload_processing_request(request_id)
+    if processing_request.state == BookCreationRequestState.INITIAL:
+        processing_request = _transition_request_state(
+            request_id,
+            BookCreationRequestState.INITIAL,
+            BookCreationRequestState.QUEUED,
+        )
+    if processing_request.state == BookCreationRequestState.QUEUED:
+        processing_request = _transition_request_state(
+            request_id,
+            BookCreationRequestState.QUEUED,
+            BookCreationRequestState.PROCESSING,
+        )
+    if processing_request.state == BookCreationRequestState.PROCESSING:
+        return _run_processing_request(processing_request)
+    sync_record_state(processing_request.book_record)
+    return processing_request
+
+
+def refresh_processing_state():
+    for record in BookRecord.objects.order_by("name", "id"):
+        sync_record_state(record)
+
+
+def mark_stale_processing_requests():
+    cutoff = timezone.now() - PROCESSING_STALE_AFTER
+    stale_requests = list(
+        BookCreationRequest.objects.filter(
+            state=BookCreationRequestState.PROCESSING,
+            updated_at__lt=cutoff,
+        ).select_related("book_record")
+    )
+    recovered = []
+    for processing_request in stale_requests:
+        processing_request.state = BookCreationRequestState.QUEUED
+        processing_request.error_message = ""
+        processing_request.save(update_fields=["state", "error_message", "updated_at"])
+        sync_record_state(processing_request.book_record)
+        recovered.append(processing_request)
+        if should_enqueue_processing_work():
+            enqueue_request_processing(processing_request)
+    return recovered
+
+
+def apply_delete_action(processing_request, *, delete_book=False):
+    processing_request = _reload_processing_request(processing_request.id)
+    if delete_book and processing_request.linked_book and processing_request.linked_book.deleted_at is None:
+        processing_request.linked_book.soft_delete()
+
+    processing_request.state = BookCreationRequestState.DELETED
+    processing_request.progress = None
+    processing_request.error_message = ""
+    processing_request.save(update_fields=["state", "progress", "error_message", "updated_at"])
+    sync_record_state(processing_request.book_record)
+    return processing_request
+
+
+def apply_pause_action(processing_request):
+    processing_request = _reload_processing_request(processing_request.id)
+    saved_data = _request_saved_data(processing_request)
+    processing_request.state = BookCreationRequestState.PAUSED
+    processing_request.progress = _build_processing_progress(
+        _request_progress(processing_request).get("checkpoint") or "Pause requested",
+        saved_data,
+    )
+    processing_request.error_message = ""
+    processing_request.save(update_fields=["state", "progress", "error_message", "updated_at"])
+    sync_record_state(processing_request.book_record)
+    return processing_request
+
+
+def apply_resume_action(processing_request, *, actor=None):
+    processing_request = _reload_processing_request(processing_request.id)
+    processing_request.state = BookCreationRequestState.INITIAL
+    processing_request.is_resumed = True
+    processing_request.error_message = ""
+    processing_request.save(update_fields=["state", "is_resumed", "error_message", "updated_at"])
+    sync_record_state(processing_request.book_record)
+    if should_enqueue_processing_work():
+        enqueue_request_processing(processing_request)
+    return processing_request
+
+
+def apply_retry_action(processing_request, *, actor=None):
+    processing_request = _reload_processing_request(processing_request.id)
+    processing_request.state = BookCreationRequestState.INITIAL
+    processing_request.error_message = ""
+    processing_request.progress = None
+    processing_request.duplicate_confirmed = False
+    processing_request.save(
+        update_fields=[
+            "state",
+            "error_message",
+            "progress",
+            "duplicate_confirmed",
+            "updated_at",
+        ]
+    )
+    record = processing_request.book_record
+    if record.is_duplicate or record.duplicate_of_record_id:
+        record.is_duplicate = False
+        record.duplicate_of_record = None
+        record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
+    sync_record_state(record)
+    if should_enqueue_processing_work():
+        enqueue_request_processing(processing_request)
+    return processing_request
+
+
+def apply_new_action(processing_request, *, actor=None):
+    processing_request = _reload_processing_request(processing_request.id)
+    processing_request.state = BookCreationRequestState.INITIAL
+    processing_request.is_confirmed_not_duplicate = True
+    processing_request.duplicate_confirmed = False
+    processing_request.duplicate_of_request = None
+    processing_request.duplicate_of_record = None
+    processing_request.linked_book = None
+    processing_request.error_message = ""
+    processing_request.progress = None
+    processing_request.save(
+        update_fields=[
+            "state",
+            "is_confirmed_not_duplicate",
+            "duplicate_confirmed",
+            "duplicate_of_request",
+            "duplicate_of_record",
+            "linked_book",
+            "error_message",
+            "progress",
+            "updated_at",
+        ]
+    )
+    record = processing_request.book_record
+    record.linked_book = None
+    record.is_duplicate = False
+    record.duplicate_of_record = None
+    record.save(
+        update_fields=["linked_book", "is_duplicate", "duplicate_of_record", "updated_at"]
+    )
+    sync_record_state(record)
+    if should_enqueue_processing_work():
+        enqueue_request_processing(processing_request)
+    return processing_request
+
+
+def apply_confirm_duplicate_action(processing_request):
+    processing_request = _reload_processing_request(processing_request.id)
+    target_request = processing_request.duplicate_of_request
+    if processing_request.duplicate_of_record_id and not target_request:
+        target_request = (
+            BookCreationRequest.objects.filter(book_record_id=processing_request.duplicate_of_record_id)
+            .exclude(pk=processing_request.pk)
+            .order_by("-updated_at", "-created_at")
+            .first()
+        )
+    processing_request.state = BookCreationRequestState.DUPLICATE
+    processing_request.duplicate_confirmed = True
+    if target_request:
+        processing_request.duplicate_of_request = target_request
+        processing_request.duplicate_of_record = target_request.book_record
+    processing_request.save(
+        update_fields=[
+            "state",
+            "duplicate_confirmed",
+            "duplicate_of_request",
+            "duplicate_of_record",
+            "updated_at",
+        ]
+    )
+
+    if processing_request.duplicate_of_record_id:
+        processing_request.book_record.is_duplicate = True
+        processing_request.book_record.duplicate_of_record = processing_request.duplicate_of_record
+        processing_request.book_record.save(
+            update_fields=["is_duplicate", "duplicate_of_record", "updated_at"]
+        )
+    sync_record_state(processing_request.book_record)
+    return processing_request
+
+
+def apply_recreate_action(processing_request, *, actor=None):
+    processing_request = _reload_processing_request(processing_request.id)
+    processing_request.state = BookCreationRequestState.INITIAL
+    processing_request.progress = None
+    processing_request.error_message = ""
+    processing_request.duplicate_confirmed = False
+    processing_request.save(
+        update_fields=[
+            "state",
+            "progress",
+            "error_message",
+            "duplicate_confirmed",
+            "updated_at",
+        ]
+    )
+    record = processing_request.book_record
+    if record.is_duplicate or record.duplicate_of_record_id:
+        record.is_duplicate = False
+        record.duplicate_of_record = None
+        record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
+    sync_record_state(record)
+    if should_enqueue_processing_work():
+        enqueue_request_processing(processing_request)
+    return processing_request
+
+
+def advance_pipeline_once():
+    advanced = 0
+    advanced += len(mark_stale_processing_requests())
+
+    initial_request = (
+        BookCreationRequest.objects.filter(state=BookCreationRequestState.INITIAL)
+        .order_by("created_at", "id")
+        .first()
+    )
+    if initial_request:
+        _transition_request_state(
+            initial_request.id,
+            BookCreationRequestState.INITIAL,
+            BookCreationRequestState.QUEUED,
+        )
+        return advanced + 1
+
+    queued_request = (
+        BookCreationRequest.objects.filter(state=BookCreationRequestState.QUEUED)
+        .order_by("created_at", "id")
+        .first()
+    )
+    if queued_request:
+        if should_run_processing_jobs_inline():
+            _transition_request_state(
+                queued_request.id,
+                BookCreationRequestState.QUEUED,
+                BookCreationRequestState.PROCESSING,
+            )
+        else:
+            enqueue_request_processing(queued_request)
+        return advanced + 1
+
+    processing_request = (
+        BookCreationRequest.objects.filter(state=BookCreationRequestState.PROCESSING)
+        .order_by("created_at", "id")
+        .first()
+    )
+    if processing_request and should_run_processing_jobs_inline():
+        _run_processing_request(processing_request)
+        return advanced + 1
+
+    refresh_processing_state()
+    return advanced
+
+
+def apply_request_action(request_ids, action, *, delete_book=False, actor=None):
+    requests = list(
+        BookCreationRequest.objects.filter(pk__in=request_ids)
+        .select_related("book_record", "linked_book")
+        .order_by("created_at", "id")
+    )
+    changed = []
+    for processing_request in requests:
+        if action == "delete":
+            apply_delete_action(processing_request, delete_book=delete_book)
+        elif action == "pause":
+            apply_pause_action(processing_request)
+        elif action == "resume":
+            apply_resume_action(processing_request, actor=actor)
+        elif action == "retry":
+            apply_retry_action(processing_request, actor=actor)
+        elif action == "new":
+            apply_new_action(processing_request, actor=actor)
+        elif action == "confirm_duplicate":
+            apply_confirm_duplicate_action(processing_request)
+        elif action in {"create_again", "recreate"}:
+            apply_recreate_action(processing_request, actor=actor)
+        else:
+            continue
+        changed.append(processing_request)
+    sync_records_for_requests(changed)
+    return changed

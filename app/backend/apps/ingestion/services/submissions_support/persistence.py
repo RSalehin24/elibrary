@@ -70,12 +70,16 @@ def persist_scraped_book(
     cleaned_dedication_html = clean_extracted_dedication_html_fn(scraped_data.get("dedication", ""))
     cover_source_url = scraped_data.get("cover") or ""
     normalized_submission_source_url = normalize_source_url_fn(submission.resolved_url)
+    raw_scraped_metadata = {
+        **normalized["raw_strings"],
+        "source_url": submission.resolved_url,
+    }
 
     def apply_scraped_fields(book):
         book.deleted_at = None
         book.state = LifecycleState.READY
         book.review_state = ReviewState.PENDING
-        book.raw_scraped_metadata = normalized["raw_strings"]
+        book.raw_scraped_metadata = raw_scraped_metadata
         book.raw_scrape_payload = scraped_data
         book.main_content_html = scraped_data.get("main_content", "")
         book.book_info_html = scraped_data.get("book_info", "")
@@ -94,7 +98,7 @@ def persist_scraped_book(
             "title": scraped_data["book_title"],
             "state": LifecycleState.READY,
             "review_state": ReviewState.PENDING,
-            "raw_scraped_metadata": normalized["raw_strings"],
+            "raw_scraped_metadata": raw_scraped_metadata,
             "raw_scrape_payload": scraped_data,
             "main_content_html": scraped_data.get("main_content", ""),
             "book_info_html": scraped_data.get("book_info", ""),
@@ -122,7 +126,7 @@ def persist_scraped_book(
             "book": book,
             "source_url": submission.resolved_url,
             "source_title": scraped_data.get("book_title", ""),
-            "raw_metadata": normalized["raw_strings"],
+            "raw_metadata": raw_scraped_metadata,
         },
     )
     MetadataVersion.objects.create(book=book, snapshot=scraped_data, source="scrape")

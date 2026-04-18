@@ -116,6 +116,36 @@ def test_catalog_book_list_supports_paginated_responses(client):
 
 
 @pytest.mark.django_db
+def test_catalog_book_search_supports_normalized_bangla_queries(client):
+    user = User.objects.create_user(email="bangla-search-reader@example.com", password="strong-password-123")
+    book = Book.objects.create(title="অ-আ-ক-খুনের কাঁটা", state="ready", review_state="approved")
+    replace_book_relations(
+        book,
+        contributors=[{"name": "নারায়ণ সান্যাল", "role": "author"}],
+        series_names=["পি. কে. বাসু - কাঁটা সিরিজ"],
+        category_names=["গোয়েন্দা (ডিটেকটিভ)"],
+    )
+    client.force_login(user)
+
+    title_response = client.get("/api/catalog/books/", {"record_type": "all", "q": "অ আ ক খুনের কাঁটা"})
+    series_response = client.get(
+        "/api/catalog/books/",
+        {"record_type": "all", "series": "পি কে বাসু কাঁটা সিরিজ"},
+    )
+    category_response = client.get(
+        "/api/catalog/books/",
+        {"record_type": "all", "category": "গোয়েন্দা ডিটেকটিভ"},
+    )
+
+    assert title_response.status_code == 200
+    assert {entry["slug"] for entry in title_response.json()} == {book.slug}
+    assert series_response.status_code == 200
+    assert {entry["slug"] for entry in series_response.json()} == {book.slug}
+    assert category_response.status_code == 200
+    assert {entry["slug"] for entry in category_response.json()} == {book.slug}
+
+
+@pytest.mark.django_db
 def test_catalog_book_list_avoids_loading_heavy_content_columns(client):
     user = User.objects.create_user(email="catalog-reader@example.com", password="strong-password-123")
     Book.objects.create(

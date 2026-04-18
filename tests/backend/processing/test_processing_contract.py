@@ -1,5 +1,6 @@
 import pytest
 from django.contrib import admin
+from django.conf import settings
 from django.test import RequestFactory
 
 from apps.accounts.models import User
@@ -149,8 +150,15 @@ def test_processing_models_are_registered_in_admin_with_core_fields():
 
 def test_processing_related_celery_tasks_are_discoverable():
     celery_app.loader.import_default_modules()
+    assert "apps.processing.tasks.run_processing_sync_task" in celery_app.tasks
+    assert "apps.processing.tasks.kickoff_book_creation_request_task" in celery_app.tasks
     assert "apps.ingestion.tasks.run_catalog_automation_schedule_task" in celery_app.tasks
     assert "apps.ingestion.tasks.recover_stale_processing_jobs_task" in celery_app.tasks
+
+
+def test_debug_frontend_origin_range_includes_live_dev_port_5181():
+    assert "http://127.0.0.1:5181" in settings.CSRF_TRUSTED_ORIGINS
+    assert "http://localhost:5181" in settings.CORS_ALLOWED_ORIGINS
 
 
 @pytest.mark.django_db

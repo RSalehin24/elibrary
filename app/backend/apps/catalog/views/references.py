@@ -4,8 +4,14 @@ from rest_framework.permissions import IsAuthenticated
 
 from apps.catalog.models import BookRecordType, Category, Contributor, ContributorRole, Series
 from apps.catalog.serializers import CategoryListSerializer, ContributorListSerializer, SeriesListSerializer
+from apps.common.text import normalize_catalog_text
 
-from .shared import CONTRIBUTOR_ROLE_BY_PAGE, apply_created_at_filters, requested_record_type
+from .shared import (
+    CONTRIBUTOR_ROLE_BY_PAGE,
+    apply_created_at_filters,
+    normalized_text_search_clause,
+    requested_record_type,
+)
 
 
 def annotate_reference_counts(queryset, relation, *, record_type, contributor_role=None):
@@ -38,7 +44,15 @@ class CategoryListView(generics.ListAPIView):
         queryset = annotate_reference_counts(Category.objects.all(), "books", record_type=requested_record_type(self.request, BookRecordType.DIGITAL))
         query = self.request.query_params.get("q", "").strip()
         if query:
-            queryset = queryset.filter(Q(name__icontains=query) | Q(catalog_code__icontains=query))
+            queryset = queryset.filter(
+                normalized_text_search_clause(
+                    query,
+                    normalize_catalog_text(query),
+                    raw_lookup="name",
+                    normalized_lookup="normalized_name",
+                )
+                | Q(catalog_code__icontains=query)
+            )
         queryset = apply_created_at_filters(queryset, self.request).filter(book_count__gt=0)
         sort_field = {"catalog_code": "catalog_code", "-catalog_code": "-catalog_code", "name": "name", "-name": "-name", "created_at": "created_at", "-created_at": "-created_at", "book_count": "book_count", "-book_count": "-book_count"}.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
         return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "name")
@@ -52,7 +66,14 @@ class SeriesListView(generics.ListAPIView):
         queryset = annotate_reference_counts(Series.objects.all(), "books", record_type=requested_record_type(self.request, BookRecordType.DIGITAL))
         query = self.request.query_params.get("q", "").strip()
         if query:
-            queryset = queryset.filter(name__icontains=query)
+            queryset = queryset.filter(
+                normalized_text_search_clause(
+                    query,
+                    normalize_catalog_text(query),
+                    raw_lookup="name",
+                    normalized_lookup="normalized_name",
+                )
+            )
         queryset = apply_created_at_filters(queryset, self.request).filter(book_count__gt=0)
         sort_field = {"name": "name", "-name": "-name", "created_at": "created_at", "-created_at": "-created_at", "book_count": "book_count", "-book_count": "-book_count"}.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
         return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "name")
@@ -72,7 +93,15 @@ class ContributorListView(generics.ListAPIView):
         queryset = annotate_reference_counts(Contributor.objects.filter(book_contributions__role=role).distinct(), "book_contributions__book", record_type=requested_record_type(self.request, BookRecordType.DIGITAL), contributor_role=role)
         query = self.request.query_params.get("q", "").strip()
         if query:
-            queryset = queryset.filter(Q(name__icontains=query) | Q(catalog_code__icontains=query))
+            queryset = queryset.filter(
+                normalized_text_search_clause(
+                    query,
+                    normalize_catalog_text(query),
+                    raw_lookup="name",
+                    normalized_lookup="normalized_name",
+                )
+                | Q(catalog_code__icontains=query)
+            )
         queryset = apply_created_at_filters(queryset, self.request).filter(book_count__gt=0)
         sort_field = {"catalog_code": "catalog_code", "-catalog_code": "-catalog_code", "name": "name", "-name": "-name", "created_at": "created_at", "-created_at": "-created_at", "book_count": "book_count", "-book_count": "-book_count"}.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
         return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "name")

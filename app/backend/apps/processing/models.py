@@ -78,6 +78,13 @@ class BookRecord(TimeStampedModel):
         null=True,
         related_name="duplicate_records",
     )
+    source_catalog_entry = models.ForeignKey(
+        "ingestion.SourceCatalogEntry",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="processing_records",
+    )
 
     class Meta:
         ordering = ["name", "id"]
@@ -99,6 +106,16 @@ class BookCreationRequest(TimeStampedModel):
         max_length=32,
         choices=BookCreationRequestState.choices,
         default=BookCreationRequestState.INITIAL,
+        db_index=True,
+    )
+    origin = models.CharField(
+        max_length=16,
+        choices=[
+            ("user", "User"),
+            ("curation", "Source curation"),
+            ("automation", "Daily automation"),
+        ],
+        default="curation",
         db_index=True,
     )
     progress = models.JSONField(blank=True, null=True)
@@ -127,6 +144,13 @@ class BookCreationRequest(TimeStampedModel):
         null=True,
         related_name="processing_creation_requests",
     )
+    submission = models.OneToOneField(
+        "ingestion.BookSubmission",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="processing_request",
+    )
     pipeline_outcome = models.CharField(max_length=32, default=BookCreationRequestState.CREATED)
 
     class Meta:
@@ -151,6 +175,9 @@ class ProcessingSyncState(TimeStampedModel):
     updated_count = models.PositiveIntegerField(default=0)
     appended_count = models.PositiveIntegerField(default=0)
     message = models.CharField(max_length=500, default="Ready to sync.")
+    task_id = models.CharField(max_length=255, blank=True)
+    queue_name = models.CharField(max_length=100, blank=True)
+    last_error = models.TextField(blank=True)
 
     class Meta:
         ordering = ["singleton_key"]

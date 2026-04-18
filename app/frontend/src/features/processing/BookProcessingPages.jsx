@@ -48,6 +48,22 @@ function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function decodeUrlForDisplay(value) {
+  const url = String(value || "").trim();
+  if (!url) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(url);
+  } catch {
+    return url;
+  }
+}
+
+function recordDisplayUrl(record) {
+  return record?.displayUrl || decodeUrlForDisplay(record?.url);
+}
+
 function isIncompleteCategory(value) {
   const normalized = normalizeText(value);
   return INCOMPLETE_CATEGORY_KEYWORDS.some((keyword) =>
@@ -98,9 +114,12 @@ function requestDetails(request) {
 }
 
 function recordSearchText(record, request) {
+  const displayUrl = recordDisplayUrl(record);
   return [
     record?.name,
     record?.url,
+    displayUrl,
+    record?.displayPath,
     record?.writer,
     record?.translator,
     record?.publisher,
@@ -425,6 +444,24 @@ function ProcessingDataCard({
           <div className="processing-card-head-meta">
             <h2>{title}</h2>
           </div>
+          <div className="processing-card-head-search">
+            <label
+              className="catalog-search-field processing-search-field"
+              aria-label={SEARCH_PLACEHOLDER}
+            >
+              <span className="catalog-search-icon">
+                <SearchIcon />
+              </span>
+              <input
+                type="search"
+                value={filters.q || ""}
+                onChange={handleQueryChange}
+                placeholder={SEARCH_PLACEHOLDER}
+                autoComplete="off"
+                data-testid={`${pageId}-${cardId}-search`}
+              />
+            </label>
+          </div>
           <div className="processing-card-head-inline-tools">
             <button
               type="button"
@@ -452,24 +489,6 @@ function ProcessingDataCard({
               {visibleRows.length}
             </span>
           </div>
-        </div>
-        <div className="processing-card-head-search">
-          <label
-            className="catalog-search-field processing-search-field"
-            aria-label={SEARCH_PLACEHOLDER}
-          >
-            <span className="catalog-search-icon">
-              <SearchIcon />
-            </span>
-            <input
-              type="search"
-              value={filters.q || ""}
-              onChange={handleQueryChange}
-              placeholder={SEARCH_PLACEHOLDER}
-              autoComplete="off"
-              data-testid={`${pageId}-${cardId}-search`}
-            />
-          </label>
         </div>
       </div>
 
@@ -596,7 +615,9 @@ function ProcessingDataCard({
                       </td>
                       <td className="processing-col-url">
                         {row.url ? (
-                          <span className="processing-table-link">{row.url}</span>
+                          <span className="processing-table-link">
+                            {row.displayUrl || row.url}
+                          </span>
                         ) : (
                           <span className="processing-table-muted">-</span>
                         )}
@@ -608,7 +629,7 @@ function ProcessingDataCard({
                         <strong>{row.title}</strong>
                         {row.url ? (
                           <span className="processing-table-secondary">
-                            {row.url}
+                            {row.displayUrl || row.url}
                           </span>
                         ) : null}
                       </div>
@@ -651,6 +672,8 @@ function recordRow(record, request, selectable = true) {
     request,
     title: record.name,
     url: record.url,
+    displayUrl: recordDisplayUrl(record),
+    displayPath: record?.displayPath || "",
     category: record.category,
     writer: record.writer,
     translator: record.translator,
@@ -1454,6 +1477,7 @@ export function IncompleteProcessingPage() {
           title="Incomplete"
           description="Records currently classified as incomplete."
           rows={incompleteRows}
+          bookColumnMode="split"
           readOnly
         />
         <ProcessingDataCard

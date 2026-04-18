@@ -6,11 +6,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from apps.ingestion.models import SourceCatalogEntry
-from apps.ingestion.services.legacy_adapter import (
-    ALLOWED_HOSTS,
-    normalize_text,
-    texts_are_similar,
-)
+from apps.ingestion.pipeline.scraper_support.network import ALLOWED_SOURCE_HOSTS
+from apps.ingestion.pipeline.scraper_support.text import normalize_text, texts_are_similar
 from apps.ingestion.services.resolution_support import (
     ARCHIVE_MAX_PAGES,
     CATALOG_URL,
@@ -28,6 +25,7 @@ from apps.ingestion.services.resolution_support import (
 
 
 logger = logging.getLogger(__name__)
+ALLOWED_HOSTS = ALLOWED_SOURCE_HOSTS
 
 
 def resolve_host_with_dns_fallback(host): return support_resolve_host_with_dns_fallback(host)

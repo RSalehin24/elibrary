@@ -47,29 +47,59 @@ def create_session_with_retries(retries=3, backoff_factor=1):
     return session
 
 
+def decode_html_response(response):
+    raw_content = getattr(response, "content", b"")
+    if isinstance(raw_content, str):
+        return raw_content
+    if not raw_content:
+        return getattr(response, "text", "")
+
+    encoding = (
+        getattr(response, "encoding", None)
+        or requests.utils.get_encoding_from_headers(getattr(response, "headers", {}) or {})
+        or getattr(response, "apparent_encoding", None)
+        or "utf-8"
+    )
+    try:
+        return raw_content.decode(encoding, errors="replace")
+    except (AttributeError, LookupError, TypeError):
+        return raw_content.decode("utf-8", errors="replace")
+
+
 def get_soup(url, max_retries=3):
     """Fetch URL and return BeautifulSoup object with retry logic."""
-    session = create_session_with_retries(retries=max_retries)
+    from apps.ingestion.services.resolution_support_network import get_with_host_fallback
 
-    for attempt in range(max_retries):
-        try:
-            response = session.get(url, headers=HEADERS, timeout=30)
-            if response.status_code == 200:
-                return BeautifulSoup(response.text, "html.parser")
-            print(f"Failed to fetch {url} ({response.status_code})")
-            return None
-        except requests.exceptions.SSLError as error:
-            print(f"SSL Error (attempt {attempt + 1}/{max_retries}): {error}")
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 5
-                print(f"Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
-        except requests.exceptions.RequestException as error:
-            print(f"Request error (attempt {attempt + 1}/{max_retries}): {error}")
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 3
-                print(f"Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
+    session = create_session_with_retries(retries=max_retries)
+    try:
+        for attempt in range(max_retries):
+            try:
+                response = get_with_host_fallback(
+                    session,
+                    url,
+                    headers=HEADERS,
+                    timeout=30,
+                )
+                if response.status_code == 200:
+                    return BeautifulSoup(decode_html_response(response), "html.parser")
+                print(f"Failed to fetch {url} ({response.status_code})")
+                return None
+            except requests.exceptions.SSLError as error:
+                print(f"SSL Error (attempt {attempt + 1}/{max_retries}): {error}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5
+                    print(f"Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+            except requests.exceptions.RequestException as error:
+                print(f"Request error (attempt {attempt + 1}/{max_retries}): {error}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 3
+                    print(f"Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+    finally:
+        close = getattr(session, "close", None)
+        if callable(close):
+            close()
 
     print(f"Failed to fetch {url} after {max_retries} attempts")
     return None

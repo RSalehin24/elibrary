@@ -1,3 +1,5 @@
+from urllib.parse import unquote, urlparse
+
 from rest_framework import serializers
 
 from .models import (
@@ -14,6 +16,8 @@ class BookRecordSerializer(serializers.ModelSerializer):
     bookCreationState = serializers.CharField(source="book_creation_state")
     createdAt = serializers.DateTimeField(source="created_at")
     updatedAt = serializers.DateTimeField(source="updated_at")
+    displayUrl = serializers.SerializerMethodField()
+    displayPath = serializers.SerializerMethodField()
     wasIncomplete = serializers.BooleanField(source="was_incomplete")
     resolvedFromIncomplete = serializers.BooleanField(source="resolved_from_incomplete")
     willResolveToCategory = serializers.CharField(source="will_resolve_to_category")
@@ -29,6 +33,8 @@ class BookRecordSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "url",
+            "displayUrl",
+            "displayPath",
             "category",
             "writer",
             "translator",
@@ -54,11 +60,19 @@ class BookRecordSerializer(serializers.ModelSerializer):
         request = latest_request_for_record(obj)
         return request.id if request else None
 
+    def get_displayUrl(self, obj):
+        return unquote(obj.url or "")
+
+    def get_displayPath(self, obj):
+        parsed = urlparse((obj.url or "").strip())
+        return unquote(parsed.path).strip("/") or parsed.netloc
+
 
 class BookCreationRequestSerializer(serializers.ModelSerializer):
     bookRecordId = serializers.CharField(source="book_record_id")
     createdAt = serializers.DateTimeField(source="created_at")
     updatedAt = serializers.DateTimeField(source="updated_at")
+    progress = serializers.SerializerMethodField()
     errorMessage = serializers.CharField(source="error_message", allow_blank=True)
     isResumed = serializers.BooleanField(source="is_resumed")
     isConfirmedNotDuplicate = serializers.BooleanField(source="is_confirmed_not_duplicate")
@@ -85,6 +99,11 @@ class BookCreationRequestSerializer(serializers.ModelSerializer):
             "linkedBookId",
             "pipeline_outcome",
         ]
+
+    def get_progress(self, obj):
+        if obj.state != BookCreationRequest.State.PAUSED:
+            return None
+        return obj.progress
 
 
 class ProcessingSyncStateSerializer(serializers.ModelSerializer):

@@ -4,7 +4,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from apps.ingestion.models import SourceCatalogEntry
-from apps.ingestion.services.legacy_adapter import normalize_source_url, normalize_text
+from apps.ingestion.pipeline.scraper_support.network import normalize_source_url
+from apps.ingestion.pipeline.scraper_support.text import normalize_text
 from apps.ingestion.services.resolution_support_hosts import SEARCH_HEADERS
 from apps.ingestion.services.resolution_support_network import get_with_host_fallback
 
@@ -94,4 +95,3 @@ def upsert_source_catalog_entry(metadata):
         defaults=metadata,
     )
     return entry
-

@@ -1,11 +1,13 @@
+import time as time_module
 from datetime import time, timedelta
+from pathlib import Path
 
 import pytest
 from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.catalog.models import Book
-from apps.ingestion.models import SourceCatalogEntry
+from apps.ingestion.models import BookSubmission, ProcessingJob, SourceCatalogEntry
 from apps.processing.models import (
     BookCreationRequest,
     BookRecord,
@@ -199,6 +201,37 @@ def test_processing_state_returns_weekly_automation_defaults_without_placeholder
 
 
 @pytest.mark.django_db
+def test_processing_state_exposes_decoded_bangla_display_urls(client):
+    login_processing_admin(client)
+    encoded_url = (
+        "https://www.ebanglalibrary.com/books/"
+        "%E0%A6%85%E0%A6%97%E0%A7%8D%E0%A6%A8%E0%A6%BF%E0%A6%AA%E0%A6%B0"
+        "%E0%A7%80%E0%A6%95%E0%A7%8D%E0%A6%B7%E0%A6%BE-%E0%A6%86%E0%A6%B6"
+        "%E0%A6%BE%E0%A6%AA%E0%A7%82%E0%A6%B0%E0%A7%8D%E0%A6%A3%E0%A6%BE/"
+    )
+    record = BookRecord.objects.create(
+        id="bangla-link-record",
+        name="অগ্নিপরীক্ষা",
+        url=encoded_url,
+        category="উপন্যাস",
+        writer="আশাপূর্ণা দেবী",
+        publisher="বাংলা লাইব্রেরি",
+    )
+
+    response = client.get("/api/processing/state/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    entry = next(item for item in payload["records"] if item["id"] == record.id)
+    assert entry["url"] == encoded_url
+    assert (
+        entry["displayUrl"]
+        == "https://www.ebanglalibrary.com/books/অগ্নিপরীক্ষা-আশাপূর্ণা/"
+    )
+    assert entry["displayPath"] == "books/অগ্নিপরীক্ষা-আশাপূর্ণা"
+
+
+@pytest.mark.django_db
 def test_processing_state_normalizes_legacy_automation_defaults(client):
     login_processing_admin(client)
     ProcessingAutomationSettings.objects.create(
@@ -346,16 +379,103 @@ def test_catalog_automation_can_pause_and_stop_active_sync(client):
 
 
 @pytest.mark.django_db
-def test_processing_create_requests_and_pipeline_are_backend_owned(client):
+def test_catalog_automation_ignores_incomplete_remote_pages_shape(client):
+    login_processing_admin(client)
+    entry = SourceCatalogEntry.objects.create(
+        source_url="https://example.test/books/catalog-fallback-record",
+        title="Catalog Fallback Record",
+        author_line="Source Author",
+        normalized_title="catalog fallback record",
+        normalized_display="catalog fallback record source author",
+        raw_data={"category": "Fallback Category", "publisher": "Source Publisher"},
+    )
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [["stale-incomplete-record"], []]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
+    assert BookRecord.objects.filter(pk=str(entry.id)).exists()
+    assert BookCreationRequest.objects.filter(
+        book_record_id=str(entry.id),
+        state="initial",
+    ).exists()
+    assert payload["automation"]["catalog"]["statusMessage"] == "Created 1 request."
+
+
+@pytest.mark.django_db
+def test_processing_create_requests_and_pipeline_are_backend_owned(client, monkeypatch, tmp_path):
     login_processing_admin(client)
     record = BookRecord.objects.create(
         id="request-record",
         name="Request Record",
-        url="https://example.test/books/request-record",
+        url="https://www.ebanglalibrary.com/books/request-record/",
         category="Fiction",
         writer="Writer One",
         translator="Translator One",
         publisher="Example Press",
+    )
+
+    sample = {
+        "book_title": "Request Record",
+        "author": "Writer One",
+        "series": "",
+        "book_type": "Fiction",
+        "cover": "book_cover.jpg",
+        "main_content": "<p>Request record body</p>",
+        "book_info": "<p>অনুবাদ: Translator One</p>",
+        "dedication": "",
+        "toc": [{"title": "Chapter 1", "type": "lesson", "has_content": True}],
+        "content_items": [
+            {
+                "title": "Chapter 1",
+                "content": "<p>Request record body</p>",
+                "type": "lesson",
+                "parent": None,
+            }
+        ],
+        "output_folder": str(tmp_path),
+    }
+
+    def fake_generate_exports(book_data):
+        output_dir = Path(book_data["output_folder"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "book.html").write_text("<html><body>book</body></html>", encoding="utf-8")
+        (output_dir / "Request Record.epub").write_bytes(b"epub-bytes")
+        (output_dir / "book_cover.jpg").write_bytes(b"cover-bytes")
+
+    monkeypatch.setattr(
+        "apps.processing.services.capture_source_page_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.find_existing_book_by_source_url",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr("apps.processing.services.scrape_book", lambda _url: sample, raising=False)
+    monkeypatch.setattr(
+        "apps.processing.services.generate_exports",
+        fake_generate_exports,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.create_submission_records",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy submission flow should not be used by /api/processing")
+        ),
     )
 
     response = client.post(
@@ -369,29 +489,30 @@ def test_processing_create_requests_and_pipeline_are_backend_owned(client):
     assert request.state == BookCreationRequest.State.INITIAL
     assert BookRecord.objects.get(pk=record.pk).book_creation_state == "initial"
 
-    for _ in range(3):
+    for _ in range(20):
         response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
         assert response.status_code == 200
+        request.refresh_from_db()
+        if request.state == BookCreationRequest.State.CREATED:
+            break
+        time_module.sleep(0.25)
 
     request.refresh_from_db()
     record.refresh_from_db()
     assert request.state == BookCreationRequest.State.CREATED
     assert record.book_creation_state == "created"
+    assert request.submission_id is None
     assert request.linked_book is not None
+    assert BookSubmission.objects.count() == 0
+    assert ProcessingJob.objects.count() == 0
     created_book = Book.objects.get(pk=request.linked_book_id, deleted_at__isnull=True)
     assert created_book.title == "Request Record"
-    assert created_book.raw_scraped_metadata == {
-        "processing_record_id": "request-record",
-        "source_url": "https://example.test/books/request-record",
-        "category": "Fiction",
-        "writer": "Writer One",
-        "translator": "Translator One",
-        "publisher": "Example Press",
-    }
+    assert created_book.raw_scraped_metadata["source_url"] == "https://www.ebanglalibrary.com/books/request-record/"
+    assert record.linked_book_id == created_book.id
 
 
 @pytest.mark.django_db
-def test_processing_state_marks_stale_processing_requests_as_failed(client):
+def test_processing_state_recovers_stale_processing_requests(client):
     login_processing_admin(client)
     record = BookRecord.objects.create(
         id="stale-processing-record",
@@ -417,12 +538,79 @@ def test_processing_state_marks_stale_processing_requests_as_failed(client):
     payload = response.json()
     stale_request.refresh_from_db()
     record.refresh_from_db()
-    assert stale_request.state == "failed"
-    assert stale_request.error_message == "Processing exceeded 20 minutes without completing."
-    assert record.book_creation_state == "failed"
+    assert stale_request.state == "queued"
+    assert stale_request.error_message == ""
+    assert record.book_creation_state == "queued"
     row = next(item for item in payload["requests"] if item["id"] == stale_request.id)
-    assert row["state"] == "failed"
-    assert row["errorMessage"] == "Processing exceeded 20 minutes without completing."
+    assert row["state"] == "queued"
+    assert row["errorMessage"] == ""
+
+
+@pytest.mark.django_db
+def test_processing_duplicate_detection_is_backend_owned(client, monkeypatch):
+    login_processing_admin(client)
+    existing_book = Book.objects.create(title="Existing Request Record", state="ready")
+    original_record = BookRecord.objects.create(
+        id="original-record",
+        name="Original Request Record",
+        url="https://www.ebanglalibrary.com/books/original-request-record/",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+        book_creation_state="created",
+        linked_book=existing_book,
+    )
+    original_request = BookCreationRequest.objects.create(
+        id="original-request",
+        book_record=original_record,
+        state="created",
+        linked_book=existing_book,
+    )
+    duplicate_record = BookRecord.objects.create(
+        id="duplicate-record",
+        name="Duplicate Request Record",
+        url="https://www.ebanglalibrary.com/books/duplicate-request-record/",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+    )
+
+    monkeypatch.setattr(
+        "apps.processing.services.find_existing_book_by_source_url",
+        lambda *_args, **_kwargs: existing_book,
+    )
+    monkeypatch.setattr(
+        "apps.ingestion.services.submissions.create_submission_records",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy submission flow should not be used by duplicate detection")
+        ),
+    )
+
+    response = client.post(
+        "/api/processing/records/create-requests/",
+        {"ids": [duplicate_record.id]},
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    duplicate_request = BookCreationRequest.objects.get(book_record=duplicate_record)
+
+    for _ in range(10):
+        response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
+        assert response.status_code == 200
+        duplicate_request.refresh_from_db()
+        if duplicate_request.state == BookCreationRequest.State.DUPLICATE:
+            break
+        time_module.sleep(0.1)
+
+    duplicate_request.refresh_from_db()
+    duplicate_record.refresh_from_db()
+    assert duplicate_request.state == "duplicate"
+    assert duplicate_request.submission_id is None
+    assert duplicate_request.duplicate_of_request_id == original_request.id
+    assert duplicate_request.duplicate_of_record_id == original_record.id
+    assert duplicate_record.book_creation_state == "duplicate"
+    assert BookSubmission.objects.count() == 0
+    assert ProcessingJob.objects.count() == 0
 
 
 @pytest.mark.django_db
@@ -557,6 +745,61 @@ def test_duplicate_confirmation_locks_record_until_original_terminal(client):
     response = client.get("/api/processing/state/")
     row = next(item for item in response.json()["records"] if item["id"] == duplicate_record.id)
     assert row["selectable"] is True
+
+
+@pytest.mark.django_db
+def test_duplicate_new_action_clears_duplicate_locking_and_restarts_request(client):
+    login_processing_admin(client)
+    existing_book = Book.objects.create(title="Existing Book", state="ready")
+    original_record = BookRecord.objects.create(
+        id="original-record",
+        name="Original",
+        url="https://example.test/books/original",
+        category="Fiction",
+        writer="Writer",
+        publisher="Press",
+        book_creation_state="created",
+        linked_book=existing_book,
+    )
+    duplicate_record = BookRecord.objects.create(
+        id="duplicate-record",
+        name="Duplicate",
+        url="https://example.test/books/duplicate",
+        category="Fiction",
+        writer="Writer",
+        publisher="Press",
+        book_creation_state="duplicate",
+        linked_book=existing_book,
+        is_duplicate=True,
+        duplicate_of_record=original_record,
+    )
+    duplicate_request = BookCreationRequest.objects.create(
+        id="duplicate-request",
+        book_record=duplicate_record,
+        state="duplicate",
+        linked_book=existing_book,
+        duplicate_of_record=original_record,
+    )
+
+    response = client.post(
+        "/api/processing/requests/action/",
+        {"ids": [duplicate_request.id], "action": "new"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    duplicate_request.refresh_from_db()
+    duplicate_record.refresh_from_db()
+    assert duplicate_request.state == "initial"
+    assert duplicate_request.is_confirmed_not_duplicate is True
+    assert duplicate_request.duplicate_confirmed is False
+    assert duplicate_request.duplicate_of_request_id is None
+    assert duplicate_request.duplicate_of_record_id is None
+    assert duplicate_request.linked_book_id is None
+    assert duplicate_record.book_creation_state == "initial"
+    assert duplicate_record.linked_book_id is None
+    assert duplicate_record.is_duplicate is False
+    assert duplicate_record.duplicate_of_record_id is None
 
 
 @pytest.mark.django_db

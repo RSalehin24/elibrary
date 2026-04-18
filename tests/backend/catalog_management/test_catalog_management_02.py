@@ -105,6 +105,33 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
 
 
 @pytest.mark.django_db
+def test_reference_listing_search_supports_normalized_bangla_queries(client):
+    user = User.objects.create_user(email="reference-search-reader@example.com", password="strong-password-123")
+    writer = get_or_create_contributor("ড. মুহম্মদ শহীদুল্লাহ")
+    series = get_or_create_series("অ-আ সিরিজ")
+    category = get_or_create_category("ভাষা-বিজ্ঞান")
+    book = Book.objects.create(title="বাংলা ভাষার বই", state="ready", review_state="approved")
+    replace_book_relations(
+        book,
+        contributors=[{"name": writer.name, "role": "author"}],
+        series_names=[series.name],
+        category_names=[category.name],
+    )
+    client.force_login(user)
+
+    writer_response = client.get("/api/catalog/writers/", {"record_type": "all", "q": "ড মুহম্মদ শহীদুল্লাহ"})
+    series_response = client.get("/api/catalog/series/", {"record_type": "all", "q": "অ আ সিরিজ"})
+    category_response = client.get("/api/catalog/categories/", {"record_type": "all", "q": "ভাষা বিজ্ঞান"})
+
+    assert writer_response.status_code == 200
+    assert [entry["name"] for entry in writer_response.json()] == [writer.name]
+    assert series_response.status_code == 200
+    assert [entry["name"] for entry in series_response.json()] == [series.name]
+    assert category_response.status_code == 200
+    assert [entry["name"] for entry in category_response.json()] == [category.name]
+
+
+@pytest.mark.django_db
 def test_manual_book_creation_uses_manual_listing_and_stays_hidden_from_default_book_page(client):
     user = User.objects.create_user(email="manual-reader@example.com", password="strong-password-123")
     client.force_login(user)

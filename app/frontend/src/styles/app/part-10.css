@@ -2,20 +2,26 @@
   animation: none;
 }
 
-.processing-search-field {
+.catalog-search-field.processing-search-field {
+  display: flex;
+  align-items: center;
   width: 100%;
   min-width: 0;
+  height: 38px;
   min-height: 38px;
   padding-left: 40px;
   padding-right: 14px;
+  box-sizing: border-box;
 }
 
-.processing-search-field .catalog-search-icon {
+.catalog-search-field.processing-search-field .catalog-search-icon {
   left: 14px;
 }
 
-.processing-search-field input {
-  min-height: 36px;
+.catalog-search-field.processing-search-field input {
+  height: 38px;
+  min-height: 38px;
+  line-height: 38px;
   font-size: 0.88rem;
 }
 
