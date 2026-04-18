@@ -218,6 +218,14 @@
   width: 21%;
 }
 
+.processing-table .processing-col-name {
+  width: 18%;
+}
+
+.processing-table .processing-col-url {
+  width: 20%;
+}
+
 .processing-table .processing-col-contributors-wide {
   width: 21%;
 }

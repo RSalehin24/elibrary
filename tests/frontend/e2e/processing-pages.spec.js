@@ -756,6 +756,7 @@ test.describe("processing pages replacement", () => {
     const remoteNew = record({
       id: "new-remote",
       name: "Fresh Remote Book",
+      url: "https://example.test/books/fresh-remote",
       category: "Poetry",
       writer: "Remote Writer",
       translator: "Case Translator",
@@ -793,6 +794,12 @@ test.describe("processing pages replacement", () => {
       "2",
     );
     await expect(page.getByTestId("catalog-records-table")).toBeVisible();
+    await expect(
+      page.locator('[data-testid="catalog-records-table"] thead'),
+    ).toContainText("Name");
+    await expect(
+      page.locator('[data-testid="catalog-records-table"] thead'),
+    ).toContainText("URL");
     await expect(page.getByTestId("catalog-automation-interval")).toHaveValue("weekly");
     await expect(page.getByTestId("catalog-automation-time")).toHaveValue("03:00");
     await expect(page.getByTestId("catalog-automation-status")).toHaveCount(0);
@@ -854,6 +861,12 @@ test.describe("processing pages replacement", () => {
     await page.getByTestId("catalog-records-search").fill("remote writer");
     await expectVisibleCount(page, "catalog", "records", 1);
     await expect(row(page, "catalog", "records", "new-remote")).toBeVisible();
+    await page
+      .getByTestId("catalog-records-search")
+      .fill("fresh-remote");
+    await expectVisibleCount(page, "catalog", "records", 1);
+    await page.getByTestId("catalog-records-search").fill("poetry");
+    await expectVisibleCount(page, "catalog", "records", 1);
     await page.getByTestId("catalog-records-search").fill("case translator");
     await expectVisibleCount(page, "catalog", "records", 1);
     await page.getByTestId("catalog-records-search").fill("remote house");

@@ -294,6 +294,13 @@
   align-items: center;
 }
 
+.processing-card-head--list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
 .processing-card-head-meta {
   display: grid;
   gap: 4px;
@@ -305,6 +312,17 @@
   display: inline-flex;
   align-items: center;
   min-height: 38px;
+}
+
+.processing-card-head--list .processing-card-head-meta h2 {
+  white-space: nowrap;
+}
+
+.processing-card-head-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
 .processing-card-head-controls {
@@ -336,6 +354,21 @@
 .processing-card-head-tools .catalog-search-row {
   width: 100%;
   max-width: 100%;
+}
+
+.processing-card-head-inline-tools {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.processing-card-head-search {
+  width: 100%;
+  min-width: 0;
 }
 
 .processing-card-footer {

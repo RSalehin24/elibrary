@@ -125,6 +125,29 @@ async function processingPost(page, path, body = {}) {
   return result.text ? JSON.parse(result.text) : null;
 }
 
+async function processingGet(page, path) {
+  const result = await page.evaluate(async ({ requestPath }) => {
+    const response = await fetch(`/api${requestPath}`, {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+    const text = await response.text();
+    return {
+      ok: response.ok,
+      status: response.status,
+      text,
+    };
+  }, { requestPath: path });
+
+  if (!result.ok) {
+    throw new Error(`Processing API ${path} failed with ${result.status}: ${result.text}`);
+  }
+  return result.text ? JSON.parse(result.text) : null;
+}
+
 async function loginSuperAdminThroughApi(page) {
   const credentials = getSuperAdminCredentials();
   await page.goto("/");
@@ -219,6 +242,37 @@ test.describe("processing replacement live smoke", () => {
     await expect(
       page.getByRole("heading", { name: "Incomplete", exact: true, level: 1 }),
     ).toBeVisible();
+  });
+
+  test("real catalog record creation reaches a created book with linked metadata", async ({
+    page,
+  }) => {
+    const smoke = liveSmokeData();
+
+    await processingPost(page, "/processing/sync/start/", {
+      remotePages: [[smoke.catalog], []],
+    });
+    await processingPost(page, "/processing/sync/advance/");
+
+    await page.goto("/catalog");
+    await page.getByTestId(`catalog-records-select-${smoke.catalog.id}`).check();
+    await page.getByTestId("catalog-records-create-btn").click();
+    await expect(page.getByTestId("catalog-records-loader")).toHaveCount(0);
+
+    for (let step = 0; step < 3; step += 1) {
+      await processingPost(page, "/processing/pipeline/advance/");
+    }
+
+    await page.goto("/create");
+    await expect(
+      page.getByTestId(`create-created-row-request-${smoke.catalog.id}`),
+    ).toBeVisible();
+
+    const payload = await processingGet(page, "/processing/state/");
+    const createdRequest = payload.requests.find(
+      (item) => item.id === `request-${smoke.catalog.id}`,
+    );
+    expect(createdRequest?.linkedBookId).toBeTruthy();
   });
 
   test("manual and automated catalog sync use real backend state and gate the controls", async ({

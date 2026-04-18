@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { CatalogSearchRow } from "../../components/CatalogToolbar";
 import LoadingSpinner from "../../components/LoadingSpinner";
-import { renderField } from "../../components/catalog-toolbar/fields.jsx";
+import {
+  countActiveFilters,
+  renderField,
+} from "../../components/catalog-toolbar/fields.jsx";
+import {
+  FilterIcon,
+  SearchIcon,
+} from "../../components/catalog-toolbar/icons.jsx";
 import {
   latestRequestForRecord,
   useBookProcessing,
 } from "./BookProcessingStore";
 import { REQUEST_STATE_LABELS } from "./types";
 
-const SEARCH_PLACEHOLDER = "Search name, writer, translator, or publisher";
+const SEARCH_PLACEHOLDER =
+  "Search name, URL, category, writer, translator, or publisher";
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
@@ -93,6 +100,7 @@ function requestDetails(request) {
 function recordSearchText(record, request) {
   return [
     record?.name,
+    record?.url,
     record?.writer,
     record?.translator,
     record?.publisher,
@@ -294,6 +302,7 @@ function ProcessingDataCard({
   emptyLabel = "No records.",
   className = "",
   fullSpan = false,
+  bookColumnMode = "combined",
 }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [filters, setFilters] = useState({
@@ -303,6 +312,15 @@ function ProcessingDataCard({
   });
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const showSelectionColumn = actions.length > 0 && !readOnly;
+  const splitBookColumn = bookColumnMode === "split";
+  const defaultFilters = useMemo(
+    () => ({
+      q: "",
+      category: "",
+      status: "",
+    }),
+    [],
+  );
 
   const categoryOptions = useMemo(
     () => uniqueOptions(rows.map((row) => row.category)),
@@ -343,10 +361,16 @@ function ProcessingDataCard({
     ],
     [cardId, categoryOptions, pageId, statusOptions],
   );
+  const activeFilterCount = useMemo(
+    () => countActiveFilters(filters, filterFields, defaultFilters),
+    [defaultFilters, filterFields, filters],
+  );
   const visibleRows = useMemo(
     () => filterRows(rows, filters.q, filters.category, filters.status),
     [filters.category, filters.q, filters.status, rows],
   );
+  const visibleColumnCount = (showSelectionColumn ? 1 : 0) +
+    (splitBookColumn ? 7 : 6);
 
   useEffect(() => {
     const visibleIds = new Set(visibleRows.map((row) => row.id));
@@ -384,6 +408,11 @@ function ProcessingDataCard({
     }
   }
 
+  function handleQueryChange(event) {
+    const nextQuery = event.target.value;
+    setFilters((current) => ({ ...current, q: nextQuery }));
+  }
+
   return (
     <section
       className={`detail-card processing-card processing-list-card processing-replacement-card${
@@ -391,28 +420,56 @@ function ProcessingDataCard({
       }${className ? ` ${className}` : ""}`}
       data-testid={`${pageId}-${cardId}-card`}
     >
-      <div className="processing-card-head">
-        <div className="processing-card-head-meta">
-          <h2>{title}</h2>
+      <div className="processing-card-head processing-card-head--list">
+        <div className="processing-card-head-line">
+          <div className="processing-card-head-meta">
+            <h2>{title}</h2>
+          </div>
+          <div className="processing-card-head-inline-tools">
+            <button
+              type="button"
+              className={`catalog-filter-toggle${
+                filtersExpanded ? " is-active" : ""
+              }`}
+              onClick={() => setFiltersExpanded((current) => !current)}
+              aria-expanded={filtersExpanded}
+              aria-controls={`${pageId}-${cardId}-filters`}
+              disabled={busy}
+            >
+              <FilterIcon />
+              <span>Filters</span>
+              {activeFilterCount ? (
+                <span className="catalog-filter-count">
+                  {activeFilterCount}
+                </span>
+              ) : null}
+            </button>
+            <span
+              className="catalog-result-count"
+              aria-label={`${visibleRows.length} results`}
+              data-testid={`${pageId}-${cardId}-count`}
+            >
+              {visibleRows.length}
+            </span>
+          </div>
         </div>
-        <div className="processing-card-head-tools">
-          <CatalogSearchRow
-            filters={filters}
-            setFilters={setFilters}
-            fields={filterFields}
-            defaultFilters={{ q: "", category: "", status: "" }}
-            filtersExpanded={filtersExpanded}
-            setFiltersExpanded={setFiltersExpanded}
-            searchPlaceholder={SEARCH_PLACEHOLDER}
-            resultCount={String(visibleRows.length)}
-            resultCountTestId={`${pageId}-${cardId}-count`}
-            searchTestId={`${pageId}-${cardId}-search`}
-            drawerId={`${pageId}-${cardId}-filters`}
-            compact
-            className="catalog-search-row--processing-card"
-            onSearchClear={(nextFilters) => setFilters(nextFilters)}
-            buttonsDisabled={busy}
-          />
+        <div className="processing-card-head-search">
+          <label
+            className="catalog-search-field processing-search-field"
+            aria-label={SEARCH_PLACEHOLDER}
+          >
+            <span className="catalog-search-icon">
+              <SearchIcon />
+            </span>
+            <input
+              type="search"
+              value={filters.q || ""}
+              onChange={handleQueryChange}
+              placeholder={SEARCH_PLACEHOLDER}
+              autoComplete="off"
+              data-testid={`${pageId}-${cardId}-search`}
+            />
+          </label>
         </div>
       </div>
 
@@ -493,7 +550,14 @@ function ProcessingDataCard({
                   />
                 </th>
               ) : null}
-              <th className="processing-col-book-wide">Book</th>
+              {splitBookColumn ? (
+                <>
+                  <th className="processing-col-name">Name</th>
+                  <th className="processing-col-url">URL</th>
+                </>
+              ) : (
+                <th className="processing-col-book-wide">Book</th>
+              )}
               <th className="processing-col-contributors-wide">Credits</th>
               <th className="processing-col-category">Category</th>
               <th className="processing-col-status">Status</th>
@@ -523,16 +587,33 @@ function ProcessingDataCard({
                       />
                     </td>
                   ) : null}
-                  <td className="processing-col-book-wide">
-                    <div className="processing-table-primary">
-                      <strong>{row.title}</strong>
-                      {row.url ? (
-                        <span className="processing-table-secondary">
-                          {row.url}
-                        </span>
-                      ) : null}
-                    </div>
-                  </td>
+                  {splitBookColumn ? (
+                    <>
+                      <td className="processing-col-name">
+                        <div className="processing-table-primary">
+                          <strong>{row.title}</strong>
+                        </div>
+                      </td>
+                      <td className="processing-col-url">
+                        {row.url ? (
+                          <span className="processing-table-link">{row.url}</span>
+                        ) : (
+                          <span className="processing-table-muted">-</span>
+                        )}
+                      </td>
+                    </>
+                  ) : (
+                    <td className="processing-col-book-wide">
+                      <div className="processing-table-primary">
+                        <strong>{row.title}</strong>
+                        {row.url ? (
+                          <span className="processing-table-secondary">
+                            {row.url}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                  )}
                   <td className="processing-col-contributors-wide">
                     <ContributorsCell row={row} />
                   </td>
@@ -552,7 +633,7 @@ function ProcessingDataCard({
               ))
             ) : (
               <tr>
-                <td colSpan={showSelectionColumn ? 7 : 6}>{emptyLabel}</td>
+                <td colSpan={visibleColumnCount}>{emptyLabel}</td>
               </tr>
             )}
           </tbody>
@@ -1006,6 +1087,7 @@ export function CatalogProcessingPage() {
         rows={rows}
         busy={Boolean(busyCards["catalog-records"])}
         className="processing-catalog-card processing-catalog-records-card"
+        bookColumnMode="split"
         actions={[
           {
             id: "create",

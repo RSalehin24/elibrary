@@ -238,6 +238,13 @@
   font-size: 0.82rem;
 }
 
+.processing-table-link {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .processing-catalog-sync-card {
   width: clamp(176px, 18vw, 212px);
 }

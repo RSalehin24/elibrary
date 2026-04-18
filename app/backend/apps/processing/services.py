@@ -690,14 +690,19 @@ def ensure_book_for_request(request):
     if request.linked_book_id:
         return request.linked_book
 
+    record = request.book_record
     book = Book.objects.create(
-        title=request.book_record.name,
+        title=record.name,
         state=LifecycleState.READY,
         review_state=ReviewState.PENDING,
         source_site="processing",
         raw_scraped_metadata={
             "processing_record_id": request.book_record_id,
-            "source_url": request.book_record.url,
+            "source_url": record.url,
+            "category": record.category,
+            "writer": record.writer,
+            "translator": record.translator,
+            "publisher": record.publisher,
         },
     )
     request.linked_book = book

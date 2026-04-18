@@ -60,10 +60,23 @@ def test_processing_sync_persists_records_and_reconciles_resume(client):
                     record_payload(
                         "existing-record",
                         name="Existing Revised",
+                        url="https://example.test/books/existing-revised",
                         category="Updated",
+                        writer="Updated Writer",
+                        translator="Updated Translator",
+                        publisher="Updated Press",
                     )
                 ],
-                [record_payload("new-record", name="New Record")],
+                [
+                    record_payload(
+                        "new-record",
+                        name="New Record",
+                        category="Poetry",
+                        writer="Remote Writer",
+                        translator="Remote Translator",
+                        publisher="Remote Press",
+                    )
+                ],
                 [],
             ]
         },
@@ -82,7 +95,13 @@ def test_processing_sync_persists_records_and_reconciles_resume(client):
     payload = response.json()
     assert payload["sync"]["status"] == "syncing"
     assert payload["sync"]["updatedCount"] == 1
-    assert BookRecord.objects.get(pk="existing-record").name == "Existing Revised"
+    existing = BookRecord.objects.get(pk="existing-record")
+    assert existing.name == "Existing Revised"
+    assert existing.url == "https://example.test/books/existing-revised"
+    assert existing.category == "Updated"
+    assert existing.writer == "Updated Writer"
+    assert existing.translator == "Updated Translator"
+    assert existing.publisher == "Updated Press"
 
     response = client.post("/api/processing/sync/pause/", content_type="application/json")
 
@@ -98,7 +117,13 @@ def test_processing_sync_persists_records_and_reconciles_resume(client):
     assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 2
     assert payload["sync"]["updatedCount"] == 1
     assert payload["sync"]["appendedCount"] == 1
-    assert BookRecord.objects.filter(pk="new-record").exists()
+    new_record = BookRecord.objects.get(pk="new-record")
+    assert new_record.name == "New Record"
+    assert new_record.url == "https://example.test/books/new-record"
+    assert new_record.category == "Poetry"
+    assert new_record.writer == "Remote Writer"
+    assert new_record.translator == "Remote Translator"
+    assert new_record.publisher == "Remote Press"
 
     response = client.post("/api/processing/sync/resume/", content_type="application/json")
 
@@ -329,6 +354,7 @@ def test_processing_create_requests_and_pipeline_are_backend_owned(client):
         url="https://example.test/books/request-record",
         category="Fiction",
         writer="Writer One",
+        translator="Translator One",
         publisher="Example Press",
     )
 
@@ -352,7 +378,16 @@ def test_processing_create_requests_and_pipeline_are_backend_owned(client):
     assert request.state == BookCreationRequest.State.CREATED
     assert record.book_creation_state == "created"
     assert request.linked_book is not None
-    assert Book.objects.filter(pk=request.linked_book_id, deleted_at__isnull=True).exists()
+    created_book = Book.objects.get(pk=request.linked_book_id, deleted_at__isnull=True)
+    assert created_book.title == "Request Record"
+    assert created_book.raw_scraped_metadata == {
+        "processing_record_id": "request-record",
+        "source_url": "https://example.test/books/request-record",
+        "category": "Fiction",
+        "writer": "Writer One",
+        "translator": "Translator One",
+        "publisher": "Example Press",
+    }
 
 
 @pytest.mark.django_db
