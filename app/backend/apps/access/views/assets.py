@@ -1,6 +1,7 @@
 import logging
 
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import EmailMessage, get_connection
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -10,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.kindle import validate_kindle_email_address
 from apps.catalog.models import Book, GeneratedAssetType
 from apps.common.permissions import user_can_download_book_assets, user_can_view_book_cover
 
@@ -24,6 +26,18 @@ from .shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def valid_kindle_delivery_addresses(values):
+    normalized = []
+    for value in values:
+        if not str(value or "").strip():
+            continue
+        try:
+            normalized.append(validate_kindle_email_address(value))
+        except DjangoValidationError:
+            continue
+    return normalized
 
 
 class BookAssetDownloadView(APIView):
@@ -59,11 +73,9 @@ class BookSendToKindleView(APIView):
         if not user_can_download_book_assets(request.user, book):
             raise PermissionDenied("You do not have download access for this book.")
 
-        kindle_emails = [
-            str(email or "").strip().lower()
-            for email in (request.user.kindle_emails or [])
-            if str(email or "").strip()
-        ]
+        kindle_emails = valid_kindle_delivery_addresses(
+            request.user.kindle_emails or [],
+        )
         if not kindle_emails:
             return Response(
                 {

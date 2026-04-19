@@ -12,11 +12,11 @@ const profilePayload = {
   is_superuser: false,
 };
 
-function sessionPayload({ totpEnabled = false } = {}) {
+function sessionPayload({ totpEnabled = false, profile = profilePayload } = {}) {
   return {
     authenticated: true,
     user: {
-      ...profilePayload,
+      ...profile,
       totp_enabled: totpEnabled,
       totp_required: false,
       totp_setup_required: false,
@@ -34,10 +34,11 @@ function twoFactorStatus({ enabled = false, pendingSetup = false } = {}) {
   };
 }
 
-async function installProfileRoutes(page) {
+async function installProfileRoutes(page, options = {}) {
+  const { profile: profileOverrides = {} } = options;
   let totpEnabled = false;
   let pendingSetup = false;
-  let currentProfile = { ...profilePayload };
+  let currentProfile = { ...profilePayload, ...profileOverrides };
 
   await page.route("**/api/csrf/", async (route) => {
     await route.fulfill({ status: 204, body: "" });
@@ -46,7 +47,7 @@ async function installProfileRoutes(page) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(sessionPayload({ totpEnabled })),
+      body: JSON.stringify(sessionPayload({ totpEnabled, profile: currentProfile })),
     });
   });
   await page.route("**/api/auth/profile/", async (route) => {
@@ -201,16 +202,62 @@ test.describe("Profile Page TOTP Notifications", () => {
     await installProfileRoutes(page);
     await openProfileEditor(page);
 
-    await page.getByRole("button", { name: "Expand" }).nth(1).click();
-    await page
-      .getByLabel("Kindle Email Addresses")
-      .fill("reader@kindle.com\nshared@free.kindle.com");
+    const kindleSection = page
+      .getByRole("heading", { name: "Kindle Mails" })
+      .locator("xpath=ancestor::section[1]");
+
+    await kindleSection.getByRole("button", { name: "Expand" }).click();
+    await expect(
+      page.getByText(
+        "In Amazon Personal Document Settings, allow library-sender@example.com in the Approved Personal Document E-mail List.",
+      ),
+    ).toBeVisible();
+    await page.getByLabel("Kindle Email 1").fill("reader@kindle.com");
+    await page.getByRole("button", { name: "Add Kindle Email" }).click();
+    await page.getByLabel("Kindle Email 2").fill("shared@kindle.com");
     await page.getByRole("button", { name: "Save Changes" }).click();
 
-    await expect(page.getByRole("status")).toContainText("Profile updated.");
-    await expect(page.getByText("shared@free.kindle.com")).toBeVisible();
+    await expect(page.locator(".toast")).toContainText("Profile updated.");
+    await expect(page.getByText("reader@kindle.com", { exact: true })).toBeVisible();
+    await expect(page.getByText("shared@kindle.com")).toBeVisible();
+  });
+
+  test("kindle mails require a valid Kindle address before another field can be added", async ({
+    page,
+  }) => {
+    await installProfileRoutes(page, {
+      profile: {
+        kindle_emails: [],
+      },
+    });
+    await openProfileEditor(page);
+
+    const kindleSection = page
+      .getByRole("heading", { name: "Kindle Mails" })
+      .locator("xpath=ancestor::section[1]");
+    const addButton = page.getByRole("button", { name: "Add Kindle Email" });
+
+    await kindleSection.getByRole("button", { name: "Expand" }).click();
+    await expect(addButton).toBeDisabled();
+
+    await page.getByLabel("Kindle Email 1").fill("reader");
+    await expect(page.getByText("Enter a valid email address.")).toBeVisible();
+    await expect(addButton).toBeDisabled();
+
+    await page.getByLabel("Kindle Email 1").fill("reader@example.com");
     await expect(
-      page.getByText("library-sender@example.com", { exact: false }).first(),
+      page.getByText(
+        "Use a Kindle email ending in @kindle.com.",
+      ),
     ).toBeVisible();
+    await expect(addButton).toBeDisabled();
+
+    await page.getByLabel("Kindle Email 1").fill("reader@kindle.com");
+    await expect(page.getByText("Kindle email looks good.")).toBeVisible();
+    await expect(addButton).toBeEnabled();
+
+    await addButton.click();
+    await expect(page.getByLabel("Kindle Email 2")).toBeVisible();
+    await expect(addButton).toBeDisabled();
   });
 });

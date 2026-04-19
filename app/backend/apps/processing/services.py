@@ -121,6 +121,22 @@ def sync_run_mode(state):
     return progress.get("runMode") or saved_data.get("runMode") or SYNC_RUN_MODE_MANUAL
 
 
+def sync_state_task_payload(state):
+    return {
+        "singleton_key": state.singleton_key,
+        "status": state.status,
+        "progress": state.progress,
+        "remote_pages": state.remote_pages,
+        "page_index": state.page_index,
+        "fetched_count": state.fetched_count,
+        "skipped_count": state.skipped_count,
+        "updated_count": state.updated_count,
+        "appended_count": state.appended_count,
+        "message": state.message,
+        "run_mode": sync_run_mode(state),
+    }
+
+
 def should_run_processing_jobs_inline():
     return bool(
         settings.CELERY_TASK_ALWAYS_EAGER
@@ -161,11 +177,17 @@ def sync_start_message(run_mode):
     return "Syncing catalog records."
 
 
+def catalog_record_total_message():
+    total_records = BookRecord.objects.count()
+    label = "book record" if total_records == 1 else "book records"
+    return f"Catalog now has {total_records} {label}."
+
+
 def sync_progress_message(run_mode, processed_count):
     label = "record" if processed_count == 1 else "records"
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         return f"Processed {processed_count} incomplete {label} so far."
-    return f"Fetched {processed_count} {label} so far."
+    return catalog_record_total_message()
 
 
 def sync_pause_message(run_mode):
@@ -880,10 +902,7 @@ def advance_catalog_sync_once(state, run_mode):
             saved_at=timezone.now().isoformat(),
             live_fetch=sync_uses_live_fetch(state),
         )
-        state.message = (
-            f"Saved {state.fetched_count} "
-            f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
-        )
+        state.message = f"Sync progress saved. {catalog_record_total_message()}"
         update_automation_run_status(run_mode, state.message)
     elif latest_status != ProcessingSyncStatus.SYNCING:
         return ProcessingSyncState.objects.get(pk=state.pk)
@@ -1004,10 +1023,7 @@ def run_processing_sync(singleton_key="default", task_id=""):
                     saved_at=timezone.now().isoformat(),
                     live_fetch=True,
                 )
-                state.message = (
-                    f"Saved {state.fetched_count} "
-                    f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
-                )
+                state.message = f"Sync progress saved. {catalog_record_total_message()}"
                 state.save()
                 update_automation_run_status(run_mode, state.message)
                 return state

@@ -1,16 +1,45 @@
 import { useEffect, useMemo, useState } from "react";
 import { authApi } from "../api/client";
+import EmailInputFeedback from "../components/EmailInputFeedback";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import TwoFactorSetupPanel from "../components/TwoFactorSetupPanel";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import {
+  KINDLE_EMAIL_INVALID_MESSAGE,
+  getKindleEmailValidationState,
+} from "../utils/email";
 
 const emptySetup = {
   provisioning_uri: "",
   secret: "",
   qr_svg: "",
 };
+
+function kindleEmailFieldsFromProfile(emails) {
+  if (!Array.isArray(emails) || !emails.length) {
+    return [""];
+  }
+  return emails.map((email) => String(email || ""));
+}
+
+function serializeKindleEmails(emails) {
+  if (!Array.isArray(emails)) {
+    return "";
+  }
+  return emails
+    .map((email) => String(email || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function kindleEmailInvalidMessage(validationState) {
+  if (validationState?.baseEmailLooksValid) {
+    return KINDLE_EMAIL_INVALID_MESSAGE;
+  }
+  return "Enter a valid email address.";
+}
 
 function initialsForUser(value) {
   return (
@@ -51,7 +80,7 @@ export default function ProfilePage() {
   const [profileImageFile, setProfileImageFile] = useState(null);
   const [profileImagePreview, setProfileImagePreview] = useState("");
   const [removeProfileImage, setRemoveProfileImage] = useState(false);
-  const [kindleEmailsText, setKindleEmailsText] = useState("");
+  const [kindleEmails, setKindleEmails] = useState([""]);
   const [kindleSectionOpen, setKindleSectionOpen] = useState(false);
   const [passwordSectionOpen, setPasswordSectionOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -86,7 +115,9 @@ export default function ProfilePage() {
         setProfileImageFile(null);
         setProfileImagePreview(profilePayload.profile_image_url || "");
         setRemoveProfileImage(false);
-        setKindleEmailsText((profilePayload.kindle_emails || []).join("\n"));
+        setKindleEmails(
+          kindleEmailFieldsFromProfile(profilePayload.kindle_emails || []),
+        );
         setKindleSectionOpen(false);
         setPasswordSectionOpen(false);
         setCurrentPassword("");
@@ -110,7 +141,9 @@ export default function ProfilePage() {
     setProfileImageFile(null);
     setProfileImagePreview(sourceProfile?.profile_image_url || "");
     setRemoveProfileImage(false);
-    setKindleEmailsText((sourceProfile?.kindle_emails || []).join("\n"));
+    setKindleEmails(
+      kindleEmailFieldsFromProfile(sourceProfile?.kindle_emails || []),
+    );
     setKindleSectionOpen(false);
     setPasswordSectionOpen(false);
     setCurrentPassword("");
@@ -134,11 +167,35 @@ export default function ProfilePage() {
     setIsEditing(false);
   }
 
+  function updateKindleEmail(index, value) {
+    setKindleEmails((current) =>
+      current.map((email, currentIndex) =>
+        currentIndex === index ? value : email,
+      ),
+    );
+  }
+
+  function addKindleEmailField() {
+    setKindleEmails((current) => [...current, ""]);
+  }
+
+  function removeKindleEmailField(index) {
+    setKindleEmails((current) => {
+      const next = current.filter((_, currentIndex) => currentIndex !== index);
+      return next.length ? next : [""];
+    });
+  }
+
   async function saveProfile(event) {
     event.preventDefault();
     const hasPasswordChanges = Boolean(
       currentPassword || newPassword || confirmNewPassword,
     );
+    const firstInvalidKindleEmail = kindleEmails
+      .map((email) => getKindleEmailValidationState(email))
+      .find((validationState) =>
+        validationState.hasEmailInput && !validationState.emailLooksValid,
+      );
 
     if (hasPasswordChanges && !currentPassword) {
       toast.error("Enter your current password to change it.");
@@ -152,6 +209,10 @@ export default function ProfilePage() {
       toast.error("The new password fields must match.");
       return;
     }
+    if (firstInvalidKindleEmail) {
+      toast.error(kindleEmailInvalidMessage(firstInvalidKindleEmail));
+      return;
+    }
 
     try {
       setSavingProfile(true);
@@ -163,7 +224,7 @@ export default function ProfilePage() {
       if (removeProfileImage) {
         body.append("remove_profile_image", "true");
       }
-      body.append("kindle_emails_text", kindleEmailsText);
+      body.append("kindle_emails_text", serializeKindleEmails(kindleEmails));
       if (hasPasswordChanges) {
         body.append("current_password", currentPassword);
         body.append("new_password", newPassword);
@@ -304,6 +365,20 @@ export default function ProfilePage() {
   const roleLabel = roleLabelForProfile(profile);
   const kindleSenderEmail = profile?.kindle_sender_email || "the app sender email";
   const configuredKindleEmails = profile?.kindle_emails || [];
+  const serializedKindleEmails = serializeKindleEmails(kindleEmails);
+  const kindleEmailValidationStates = useMemo(
+    () => kindleEmails.map((email) => getKindleEmailValidationState(email)),
+    [kindleEmails],
+  );
+  const hasInvalidKindleEmail = kindleEmailValidationStates.some(
+    (validationState) =>
+      validationState.hasEmailInput && !validationState.emailLooksValid,
+  );
+  const canAddKindleEmail =
+    kindleEmailValidationStates.length > 0 &&
+    kindleEmailValidationStates.every(
+      (validationState) => validationState.emailLooksValid,
+    );
   const hasPasswordChanges = Boolean(
     currentPassword || newPassword || confirmNewPassword,
   );
@@ -312,7 +387,7 @@ export default function ProfilePage() {
       fullName.trim() !== (profile?.full_name || "") ||
       Boolean(profileImageFile) ||
       removeProfileImage ||
-      kindleEmailsText.trim() !== (profile?.kindle_emails || []).join("\n") ||
+      serializedKindleEmails !== (profile?.kindle_emails || []).join("\n") ||
       hasPasswordChanges,
     [
       fullName,
@@ -320,7 +395,7 @@ export default function ProfilePage() {
       profile?.kindle_emails,
       profileImageFile,
       removeProfileImage,
-      kindleEmailsText,
+      serializedKindleEmails,
       hasPasswordChanges,
     ],
   );
@@ -389,11 +464,15 @@ export default function ProfilePage() {
               </div>
               <div className="settings-row">
                 <span>Kindle Mails</span>
-                <strong>
-                  {configuredKindleEmails.length
-                    ? `${configuredKindleEmails.length} configured`
-                    : "Not set"}
-                </strong>
+                {configuredKindleEmails.length ? (
+                  <strong className="profile-multi-line-value">
+                    {configuredKindleEmails.map((email) => (
+                      <span key={email}>{email}</span>
+                    ))}
+                  </strong>
+                ) : (
+                  <strong>Not set</strong>
+                )}
               </div>
             </div>
           </div>
@@ -589,22 +668,97 @@ export default function ProfilePage() {
 
                 {kindleSectionOpen ? (
                   <div className="profile-password-panel">
-                    <label className="field-span-full">
-                      <span className="fact-label">Kindle Email Addresses</span>
-                      <textarea
-                        value={kindleEmailsText}
-                        onChange={(event) =>
-                          setKindleEmailsText(event.target.value)
-                        }
-                        rows={5}
-                        placeholder="yourname@kindle.com&#10;shared-kindle@free.kindle.com"
-                      />
-                    </label>
                     <p className="form-helper-text">
-                      Enter one Kindle email per line. In Amazon Personal
-                      Document Settings, allow <strong>{kindleSenderEmail}</strong>{" "}
-                      in the Approved Personal Document E-mail List.
+                      In Amazon Personal Document Settings, allow{" "}
+                      <strong>{kindleSenderEmail}</strong> in the Approved
+                      Personal Document E-mail List. Enter one Kindle email in
+                      each field below.
                     </p>
+                    <div className="profile-kindle-email-list">
+                      {kindleEmails.map((email, index) => {
+                        const validationState =
+                          kindleEmailValidationStates[index];
+
+                        return (
+                          <div
+                            key={`kindle-email-${index}`}
+                            className="profile-kindle-email-row"
+                          >
+                            <div className="profile-kindle-email-field">
+                              <input
+                                type="email"
+                                value={email}
+                                onChange={(event) =>
+                                  updateKindleEmail(index, event.target.value)
+                                }
+                                inputMode="email"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                placeholder="yourname@kindle.com"
+                                aria-label={`Kindle Email ${index + 1}`}
+                                aria-describedby={
+                                  validationState?.hasEmailInput
+                                    ? `profile-kindle-email-feedback-${index}`
+                                    : undefined
+                                }
+                                aria-invalid={
+                                  validationState?.hasEmailInput &&
+                                  !validationState.emailLooksValid
+                                    ? "true"
+                                    : undefined
+                                }
+                              />
+                              {validationState?.hasEmailInput ? (
+                                <EmailInputFeedback
+                                  id={`profile-kindle-email-feedback-${index}`}
+                                  validationState={validationState}
+                                  invalidMessage={kindleEmailInvalidMessage(
+                                    validationState,
+                                  )}
+                                  validMessage="Kindle email looks good."
+                                />
+                              ) : null}
+                            </div>
+                            {kindleEmails.length > 1 ? (
+                              <button
+                                type="button"
+                                className="icon-button danger-button profile-kindle-email-delete"
+                                onClick={() => removeKindleEmailField(index)}
+                                aria-label={`Delete email ${index + 1}`}
+                                title={`Delete email ${index + 1}`}
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <path
+                                    d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 7h2v7h-2v-7Zm4 0h2v7h-2v-7ZM7 10h2v7H7v-7Zm-1 10h12l1-13H5l1 13Z"
+                                    fill="currentColor"
+                                  />
+                                </svg>
+                              </button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="profile-kindle-email-actions">
+                      <button
+                        type="button"
+                        className="icon-button profile-kindle-email-add"
+                        onClick={addKindleEmailField}
+                        disabled={!canAddKindleEmail}
+                        aria-label="Add Kindle Email"
+                        title="Add Kindle Email"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M12 5v14M5 12h14"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.2"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                 ) : null}
               </section>
@@ -613,7 +767,9 @@ export default function ProfilePage() {
                 <button
                   type="submit"
                   className="primary-button"
-                  disabled={savingProfile || !hasProfileChanges}
+                  disabled={
+                    savingProfile || !hasProfileChanges || hasInvalidKindleEmail
+                  }
                 >
                   {savingProfile ? "Saving..." : "Save Changes"}
                 </button>

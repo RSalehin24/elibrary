@@ -1,3 +1,4 @@
+import json
 import time as time_module
 from datetime import time, timedelta
 from pathlib import Path
@@ -18,7 +19,10 @@ from apps.processing.models import (
     ProcessingSyncStatus,
 )
 from apps.processing.services import dispatch_sync_task, get_sync_state
-from apps.processing.tasks import kickoff_book_creation_request_task
+from apps.processing.tasks import (
+    kickoff_book_creation_request_task,
+    run_processing_sync_task,
+)
 
 
 def login_processing_admin(client, email="processing-admin@example.com"):
@@ -545,6 +549,13 @@ def test_catalog_automation_can_pause_and_stop_active_sync(client):
     assert payload["sync"]["status"] == "paused"
     assert payload["sync"]["runMode"] == "catalog_automation"
 
+    response = client.post("/api/processing/sync/resume/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+    assert payload["sync"]["message"] == "Restarting automated catalog sync from the beginning."
+
     response = client.post("/api/processing/sync/stop/", content_type="application/json")
     assert response.status_code == 200
     payload = response.json()
@@ -652,6 +663,69 @@ def test_incomplete_sync_honors_pause_requested_during_batch_advance(client, mon
     assert payload["sync"]["updatedCount"] == 1
     assert BookRecord.objects.get(pk="mid-incomplete-a").resolved_from_incomplete is True
     assert BookRecord.objects.get(pk="mid-incomplete-b").resolved_from_incomplete is False
+
+
+@pytest.mark.django_db
+def test_incomplete_automation_can_pause_resume_and_complete(client):
+    login_processing_admin(client)
+    BookRecord.objects.create(
+        id="resume-incomplete-a",
+        name="Resume Incomplete A",
+        url="https://example.test/books/resume-incomplete-a",
+        category="অসম্পূর্ণ বই",
+        writer="Writer One",
+        publisher="Example Press",
+        was_incomplete=True,
+        resolved_from_incomplete=False,
+        will_resolve_to_category="Novel",
+    )
+    BookRecord.objects.create(
+        id="resume-incomplete-b",
+        name="Resume Incomplete B",
+        url="https://example.test/books/resume-incomplete-b",
+        category="অসম্পূর্ণ বই",
+        writer="Writer Two",
+        publisher="Example Press",
+        was_incomplete=True,
+        resolved_from_incomplete=False,
+        will_resolve_to_category="Novel",
+    )
+
+    response = client.post(
+        "/api/processing/automation/incomplete/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [["resume-incomplete-a"], ["resume-incomplete-b"], []]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "pausing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["runMode"] == "incomplete_automation"
+    assert BookRecord.objects.get(pk="resume-incomplete-a").resolved_from_incomplete is True
+    assert BookRecord.objects.get(pk="resume-incomplete-b").resolved_from_incomplete is False
+
+    response = client.post("/api/processing/sync/resume/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "incomplete_automation"
+    assert payload["sync"]["message"] == "Restarting incomplete catalog sync from the beginning."
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["message"] == "Incomplete catalog sync complete. Resolved 2 books."
+    assert BookRecord.objects.get(pk="resume-incomplete-b").resolved_from_incomplete is True
 
 
 @pytest.mark.django_db
@@ -811,6 +885,57 @@ def test_processing_task_handles_missing_request_gracefully(monkeypatch):
         "submission_id": "",
         "missing": True,
     }
+
+
+@pytest.mark.django_db
+def test_processing_sync_task_returns_json_safe_sync_snapshot(monkeypatch):
+    sync_state = get_sync_state()
+    remote_pages = [[record_payload("task-sync-record")], []]
+    sync_state.status = ProcessingSyncStatus.PAUSED
+    sync_state.progress = {
+        "runMode": "catalog_automation",
+        "savedData": {
+            "runMode": "catalog_automation",
+            "nextPageIndex": 2,
+            "fetchedCount": 3,
+        },
+    }
+    sync_state.remote_pages = remote_pages
+    sync_state.page_index = 2
+    sync_state.fetched_count = 3
+    sync_state.skipped_count = 1
+    sync_state.updated_count = 2
+    sync_state.appended_count = 1
+    sync_state.message = "Sync progress saved."
+    sync_state.save(
+        update_fields=[
+            "status",
+            "progress",
+            "remote_pages",
+            "page_index",
+            "fetched_count",
+            "skipped_count",
+            "updated_count",
+            "appended_count",
+            "message",
+            "updated_at",
+        ]
+    )
+
+    monkeypatch.setattr(
+        "apps.processing.tasks.run_processing_sync",
+        lambda **_kwargs: sync_state,
+    )
+
+    result = run_processing_sync_task.run("default")
+
+    assert result["singleton_key"] == "default"
+    assert result["status"] == "paused"
+    assert result["run_mode"] == "catalog_automation"
+    assert result["page_index"] == 2
+    assert result["fetched_count"] == 3
+    assert result["remote_pages"] == remote_pages
+    json.dumps(result)
 
 
 @pytest.mark.django_db

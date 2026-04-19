@@ -39,6 +39,67 @@
   min-height: 32px;
 }
 
+.profile-multi-line-value {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  text-align: right;
+}
+
+.profile-kindle-email-list {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-kindle-email-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  gap: 8px;
+  align-items: start;
+}
+
+.profile-kindle-email-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.profile-kindle-email-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.profile-kindle-email-add,
+.profile-kindle-email-delete {
+  width: 52px;
+  min-width: 52px;
+  min-height: 44px;
+  height: 44px;
+  padding: 0;
+}
+
+.profile-kindle-email-delete {
+  align-self: start;
+}
+
+.profile-kindle-email-add svg,
+.profile-kindle-email-delete svg {
+  width: 22px;
+  height: 22px;
+}
+
+.profile-kindle-email-add {
+  font-size: 1.55rem;
+  color: #ecfff6;
+  border-color: rgba(11, 61, 46, 0.42);
+  background: linear-gradient(180deg, #135b45 0%, #0b3d2e 100%);
+  box-shadow: 0 10px 18px rgba(12, 47, 36, 0.18);
+}
+
+.profile-kindle-email-delete {
+  font-size: 1.45rem;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

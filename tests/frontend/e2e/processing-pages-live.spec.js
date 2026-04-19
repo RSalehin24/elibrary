@@ -315,6 +315,15 @@ function repeatedAutomationPages(smoke, count = 12) {
   ];
 }
 
+function repeatedIncompleteRecords(smoke, count = 120) {
+  return Array.from({ length: count }, (_, index) => ({
+    ...smoke.incomplete,
+    id: `${smoke.incomplete.id}-${index + 1}`,
+    name: `${smoke.incomplete.name} ${index + 1}`,
+    url: `${smoke.incomplete.url}-${index + 1}`,
+  }));
+}
+
 test.describe("processing replacement live smoke", () => {
   test.beforeEach(async ({ page }) => {
     await loginSuperAdminThroughApi(page);
@@ -518,14 +527,14 @@ test.describe("processing replacement live smoke", () => {
         description: "manual sync to pause while away from processing pages",
       },
     );
-    expect(pausedSummary.sync.message).toContain("before pausing");
+    expect(pausedSummary.sync.message).toContain("Catalog now has");
 
     await page.getByRole("button", { name: "Processing" }).click();
     await page.getByRole("link", { name: "Catalog", exact: true }).click();
 
     await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
-      "Saved",
+      "Catalog now has",
     );
   });
 
@@ -562,6 +571,57 @@ test.describe("processing replacement live smoke", () => {
     );
     expect(automationA.row.recordId).toBe(smoke.automationA.id);
     expect(automationB.row.recordId).toBe(smoke.automationB.id);
+  });
+
+  test("catalog automation can pause and resume with the real backend", async ({
+    page,
+  }) => {
+    const smoke = liveSmokeData();
+
+    await seedIdleRemotePages(page, repeatedAutomationPages(smoke, 14));
+    await page.goto("/catalog");
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      /pausing|paused/,
+    );
+
+    await waitForProcessingSummary(
+      page,
+      (payload) =>
+        payload.sync?.status === "paused" &&
+        payload.sync?.runMode === "catalog_automation",
+      { description: "catalog automation to pause" },
+    );
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "paused",
+    );
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await waitForProcessingSummary(
+      page,
+      (payload) =>
+        payload.sync?.status === "syncing" &&
+        payload.sync?.runMode === "catalog_automation",
+      { description: "catalog automation to resume" },
+    );
+
+    const completedSummary = await waitForProcessingSummary(
+      page,
+      (payload) =>
+        payload.sync?.status === "idle" &&
+        payload.automation?.catalog?.statusMessage?.includes("Created"),
+      { attempts: 80, delayMs: 250, description: "catalog automation to finish" },
+    );
+    expect(completedSummary.automation.catalog.statusMessage).toContain("Created");
   });
 
   test("incomplete automation resolves real incomplete-category records", async ({
@@ -605,6 +665,66 @@ test.describe("processing replacement live smoke", () => {
     await expect(
       page.getByTestId(`${location.card}-row-${location.row.id}`),
     ).toBeVisible();
+  });
+
+  test("incomplete automation can pause and resume with the real backend", async ({
+    page,
+  }) => {
+    const smoke = liveSmokeData();
+    const incompleteRecords = repeatedIncompleteRecords(smoke, 120);
+
+    await processingPost(page, "/processing/sync/start/", {
+      remotePages: [incompleteRecords, []],
+    });
+    await processingPost(page, "/processing/sync/advance/");
+    await processingPost(page, "/processing/sync/stop/");
+
+    await page.goto("/incomplete");
+    await page.getByTestId("incomplete-records-search").fill(smoke.incomplete.name);
+    await expect(
+      page.getByTestId(`incomplete-records-row-${incompleteRecords[0].id}`),
+    ).toBeVisible();
+
+    await page.getByTestId("incomplete-automation-run-btn").click();
+    await expect(
+      page.getByTestId("incomplete-automation-run-btn"),
+    ).toHaveAttribute("data-state", "syncing");
+
+    await page.getByTestId("incomplete-automation-run-btn").click();
+    await expect(
+      page.getByTestId("incomplete-automation-run-btn"),
+    ).toHaveAttribute("data-state", /pausing|paused/);
+
+    await waitForProcessingSummary(
+      page,
+      (payload) =>
+        payload.sync?.status === "paused" &&
+        payload.sync?.runMode === "incomplete_automation",
+      { description: "incomplete automation to pause" },
+    );
+    await expect(
+      page.getByTestId("incomplete-automation-run-btn"),
+    ).toHaveAttribute("data-state", "paused");
+
+    await page.getByTestId("incomplete-automation-run-btn").click();
+    await waitForProcessingSummary(
+      page,
+      (payload) =>
+        payload.sync?.status === "syncing" &&
+        payload.sync?.runMode === "incomplete_automation",
+      { description: "incomplete automation to resume" },
+    );
+
+    const completedSummary = await waitForProcessingSummary(
+      page,
+      (payload) =>
+        payload.sync?.status === "idle" &&
+        payload.automation?.incomplete?.statusMessage?.includes("Resolved"),
+      { attempts: 80, delayMs: 250, description: "incomplete automation to finish" },
+    );
+    expect(completedSummary.automation.incomplete.statusMessage).toContain(
+      "Resolved",
+    );
   });
 
   test("legacy processing URLs redirect to replacement pages", async ({

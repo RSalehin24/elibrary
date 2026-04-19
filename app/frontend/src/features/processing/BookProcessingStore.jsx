@@ -836,6 +836,26 @@ export function BookProcessingProvider({ children }) {
     [stopSync],
   );
 
+  const resumeCatalogAutomation = useCallback(
+    () =>
+      runSyncControlAction(
+        "catalog-automation-run",
+        () =>
+          apiFetch(processingSummaryPath("/processing/sync/resume/"), {
+            method: "POST",
+          }),
+        {
+          onSuccess: (_, __, nextToast) =>
+            nextToast.info({
+              title: "Catalog automation resumed",
+              description:
+                "Automated catalog sync restarted from the beginning.",
+            }),
+        },
+      ),
+    [runSyncControlAction],
+  );
+
   const saveIncompleteAutomation = useCallback(
     (form) =>
       runCardAction(
@@ -905,6 +925,26 @@ export function BookProcessingProvider({ children }) {
   const stopIncompleteAutomation = useCallback(
     () => stopSync("incomplete-automation-run"),
     [stopSync],
+  );
+
+  const resumeIncompleteAutomation = useCallback(
+    () =>
+      runSyncControlAction(
+        "incomplete-automation-run",
+        () =>
+          apiFetch(processingSummaryPath("/processing/sync/resume/"), {
+            method: "POST",
+          }),
+        {
+          onSuccess: (_, __, nextToast) =>
+            nextToast.info({
+              title: "Incomplete automation resumed",
+              description:
+                "Incomplete catalog sync restarted from the remaining records.",
+            }),
+        },
+      ),
+    [runSyncControlAction],
   );
 
   const applyRequestAction = useCallback(
@@ -1090,6 +1130,7 @@ export function BookProcessingProvider({ children }) {
       saveCatalogAutomation,
       runCatalogAutomation,
       pauseCatalogAutomation,
+      resumeCatalogAutomation,
       stopCatalogAutomation,
       deleteRequests,
       pauseRequests,
@@ -1101,6 +1142,7 @@ export function BookProcessingProvider({ children }) {
       saveIncompleteAutomation,
       runIncompleteAutomation,
       pauseIncompleteAutomation,
+      resumeIncompleteAutomation,
       stopIncompleteAutomation,
       recreateCompletedRequests,
     }),
@@ -1117,10 +1159,12 @@ export function BookProcessingProvider({ children }) {
       markDuplicateRequestsAsNew,
       pauseCatalogSync,
       pauseCatalogAutomation,
+      resumeCatalogAutomation,
       pauseIncompleteAutomation,
       pauseRequests,
       recreateCompletedRequests,
       resumeCatalogSync,
+      resumeIncompleteAutomation,
       resumePausedRequests,
       retryFailedRequests,
       runCatalogAutomation,

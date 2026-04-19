@@ -574,6 +574,10 @@ function completeIncompleteAutomation(state) {
   state.sync.message = `Incomplete catalog sync complete. Resolved ${resolvedCount} ${resolvedCount === 1 ? "book" : "books"}.`;
 }
 
+function catalogRecordCountMessage(state) {
+  return `Catalog now has ${state.records.length} ${state.records.length === 1 ? "book record" : "book records"}.`;
+}
+
 function advanceSyncPage(state) {
   if (state.sync.runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
     if (state.sync.status === "pausing") {
@@ -620,7 +624,7 @@ function advanceSyncPage(state) {
         nextPageIndex: state.sync.pageIndex,
       },
     };
-    state.sync.message = `Saved ${state.sync.fetchedCount} ${state.sync.fetchedCount === 1 ? "record" : "records"} before pausing.`;
+    state.sync.message = `Sync progress saved. ${catalogRecordCountMessage(state)}`;
     return;
   }
 
@@ -633,7 +637,7 @@ function advanceSyncPage(state) {
     return;
   }
 
-  state.sync.message = `Fetched ${state.sync.fetchedCount} ${state.sync.fetchedCount === 1 ? "record" : "records"} so far.`;
+  state.sync.message = catalogRecordCountMessage(state);
 }
 
 async function mockProcessingApi(page, initialState) {
@@ -763,17 +767,27 @@ async function mockProcessingApi(page, initialState) {
     await fulfillState(route);
   });
   await page.route("**/api/processing/sync/resume/**", async (route) => {
+    const runMode = state.sync.runMode || SYNC_RUN_MODE_MANUAL;
     state.sync.status = "syncing";
     state.sync.progress = {
-      runMode: state.sync.runMode || SYNC_RUN_MODE_MANUAL,
+      runMode,
       savedData: {
-        runMode: state.sync.runMode || SYNC_RUN_MODE_MANUAL,
+        runMode,
         nextPageIndex: 0,
         fetchedCount: state.sync.fetchedCount,
       },
     };
     state.sync.pageIndex = 0;
-    state.sync.message = "Reconciling saved records from the beginning.";
+    if (runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+      state.sync.message = "Restarting automated catalog sync from the beginning.";
+      state.automation.catalog.statusMessage = state.sync.message;
+    } else if (runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+      state.sync.message = "Restarting incomplete catalog sync from the beginning.";
+      state.automation.incomplete.statusMessage = state.sync.message;
+    } else {
+      state.sync.message = "Reconciling saved records from the beginning.";
+    }
+    await delayForActions();
     await fulfillState(route);
   });
   await page.route("**/api/processing/sync/stop/**", async (route) => {
@@ -1199,7 +1213,7 @@ test.describe("processing pages replacement", () => {
     await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
     await expect(page.getByTestId("catalog-sync-loader")).toHaveCount(0);
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
-      "Saved 1 record",
+      "Catalog now has 2 book records",
     );
 
     await page.getByTestId("catalog-sync-resume-btn").click();
@@ -1335,7 +1349,7 @@ test.describe("processing pages replacement", () => {
       timeout: 1_200,
     });
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
-      "Saved 1 record",
+      "Catalog now has 1 book record",
       { timeout: 1_200 },
     );
   });
@@ -1701,6 +1715,49 @@ test.describe("processing pages replacement", () => {
     await expect(row(page, "create", "created", "request-auto-deleted")).toBeVisible();
     await expect(row(page, "create", "created", "created-old")).toBeVisible();
     await expect(row(page, "create", "paused", "paused-old")).toHaveCount(0);
+  });
+
+  test("catalog automation exposes resume after pausing", async ({ page }) => {
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        sync: {
+          ...baseState().sync,
+          status: "paused",
+          runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+          fetchedCount: 3,
+          progress: {
+            runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+            savedData: {
+              runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+              nextPageIndex: 2,
+              fetchedCount: 3,
+            },
+          },
+          message: "Sync progress saved. Catalog now has 3 book records.",
+        },
+      }),
+    );
+
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "paused",
+    );
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "aria-label",
+      "Resume automated catalog sync",
+    );
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "Restarting automated catalog sync from the beginning.",
+    );
   });
 
   test("create cards show only status-scoped rows and remove the details column", async ({
@@ -2357,6 +2414,49 @@ test.describe("processing pages replacement", () => {
     await expect(row(page, "incomplete", "completed", "request-incomplete-book")).toHaveCount(0);
     await page.goto("/on-hold");
     await expect(row(page, "on-hold", "deleted", "request-incomplete-book")).toBeVisible();
+  });
+
+  test("incomplete automation exposes resume after pausing", async ({ page }) => {
+    await boot(
+      page,
+      "/incomplete",
+      baseState({
+        sync: {
+          ...baseState().sync,
+          status: "paused",
+          runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+          fetchedCount: 6,
+          progress: {
+            runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+            savedData: {
+              runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+              nextPageIndex: 1,
+              fetchedCount: 6,
+            },
+          },
+          message: "Saved progress for 6 records before pausing.",
+        },
+      }),
+    );
+
+    await expect(page.getByTestId("incomplete-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "paused",
+    );
+    await expect(page.getByTestId("incomplete-automation-run-btn")).toHaveAttribute(
+      "aria-label",
+      "Resume incomplete catalog sync",
+    );
+
+    await page.getByTestId("incomplete-automation-run-btn").click();
+
+    await expect(page.getByTestId("incomplete-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+    await expect(page.getByTestId("incomplete-automation-status")).toContainText(
+      "Restarting incomplete catalog sync from the beginning.",
+    );
   });
 
   test("notifications play sounds and profile menu mute suppresses audio while keeping toasts visible", async ({

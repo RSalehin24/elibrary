@@ -6,7 +6,9 @@ import {
   getAccountAccessLabels,
 } from "../../../app/frontend/src/features/access/utils.js";
 import {
+  getKindleEmailValidationState,
   getEmailValidationState,
+  isValidKindleEmail,
   isValidEmail,
   normalizeEmail,
 } from "../../../app/frontend/src/utils/email.js";
@@ -31,6 +33,38 @@ test("getEmailValidationState reports the normalized value and validity", () => 
     normalizedEmail: "invalid-address",
     hasEmailInput: true,
     emailLooksValid: false,
+  });
+});
+
+test("isValidKindleEmail accepts Kindle domains and rejects other addresses", () => {
+  assert.equal(isValidKindleEmail("reader@kindle.com"), true);
+  assert.equal(isValidKindleEmail(" reader@kindle.com "), true);
+  assert.equal(isValidKindleEmail("reader@free.kindle.com"), false);
+  assert.equal(isValidKindleEmail("reader@example.com"), false);
+  assert.equal(isValidKindleEmail("reader"), false);
+});
+
+test("getKindleEmailValidationState layers Kindle-only checks on top of email validation", () => {
+  assert.deepEqual(getKindleEmailValidationState(" reader@kindle.com "), {
+    normalizedEmail: "reader@kindle.com",
+    hasEmailInput: true,
+    emailLooksValid: true,
+    baseEmailLooksValid: true,
+    kindleDomainLooksValid: true,
+  });
+  assert.deepEqual(getKindleEmailValidationState("reader@example.com"), {
+    normalizedEmail: "reader@example.com",
+    hasEmailInput: true,
+    emailLooksValid: false,
+    baseEmailLooksValid: true,
+    kindleDomainLooksValid: false,
+  });
+  assert.deepEqual(getKindleEmailValidationState("reader"), {
+    normalizedEmail: "reader",
+    hasEmailInput: true,
+    emailLooksValid: false,
+    baseEmailLooksValid: false,
+    kindleDomainLooksValid: false,
   });
 });
 

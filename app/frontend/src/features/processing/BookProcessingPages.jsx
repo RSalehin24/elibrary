@@ -1146,6 +1146,7 @@ function AutomationPanel({
   onSave,
   onRun,
   onPause,
+  onResume,
   onStop,
   className = "",
 }) {
@@ -1233,11 +1234,14 @@ function AutomationPanel({
 
   const runControl = isPaused
     ? {
-        label: `Stop ${runLabel}`,
-        icon: <StopIcon />,
+        label:
+          pageId === "catalog"
+            ? "Resume automated catalog sync"
+            : "Resume incomplete catalog sync",
+        icon: <PlayIcon />,
         state: "paused",
         disabled: busy,
-        onClick: onStop,
+        onClick: onResume,
       }
     : isRunning
       ? {
@@ -1543,6 +1547,7 @@ export function CatalogProcessingPage() {
     saveCatalogAutomation,
     runCatalogAutomation,
     pauseCatalogAutomation,
+    resumeCatalogAutomation,
     stopCatalogAutomation,
   } = useBookProcessing();
   const catalogAutomationSaving = Boolean(busyCards["catalog-automation-save"]);
@@ -1590,6 +1595,7 @@ export function CatalogProcessingPage() {
           onSave={saveCatalogAutomation}
           onRun={runCatalogAutomation}
           onPause={pauseCatalogAutomation}
+          onResume={resumeCatalogAutomation}
           onStop={stopCatalogAutomation}
           className="processing-catalog-automation-card"
         />
@@ -1913,6 +1919,7 @@ export function IncompleteProcessingPage() {
     saveIncompleteAutomation,
     runIncompleteAutomation,
     pauseIncompleteAutomation,
+    resumeIncompleteAutomation,
     stopIncompleteAutomation,
     recreateCompletedRequests,
     deleteRequests,
@@ -1955,6 +1962,7 @@ export function IncompleteProcessingPage() {
           onSave={saveIncompleteAutomation}
           onRun={runIncompleteAutomation}
           onPause={pauseIncompleteAutomation}
+          onResume={resumeIncompleteAutomation}
           onStop={stopIncompleteAutomation}
           className="processing-card-span-full processing-incomplete-automation-card"
         />

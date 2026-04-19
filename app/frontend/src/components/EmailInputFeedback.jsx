@@ -36,10 +36,12 @@ function EmailFeedbackIcon({ valid }) {
 export default function EmailInputFeedback({
   email,
   id,
+  validationState,
   invalidMessage = "Enter a valid email address.",
   validMessage = "Email looks good.",
 }) {
-  const { hasEmailInput, emailLooksValid } = getEmailValidationState(email);
+  const { hasEmailInput, emailLooksValid } =
+    validationState ?? getEmailValidationState(email);
 
   if (!hasEmailInput) {
     return null;

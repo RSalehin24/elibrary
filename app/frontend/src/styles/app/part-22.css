@@ -191,6 +191,13 @@
   grid-column: 1 / -1;
 }
 
+@media (max-width: 720px) {
+  .profile-multi-line-value {
+    justify-items: start;
+    text-align: left;
+  }
+}
+
 .editorial-panel h3 {
   margin: 0;
 }

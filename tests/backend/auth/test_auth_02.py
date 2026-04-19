@@ -100,7 +100,7 @@ def test_profile_exposes_and_updates_kindle_emails(settings, client):
         "/api/auth/profile/",
         data=json.dumps(
             {
-                "kindle_emails_text": "reader@kindle.com\nreader@free.kindle.com\nreader@kindle.com",
+                "kindle_emails_text": "reader@kindle.com\nreader-two@kindle.com\nreader@kindle.com",
             }
         ),
         content_type="application/json",
@@ -110,10 +110,35 @@ def test_profile_exposes_and_updates_kindle_emails(settings, client):
     user.refresh_from_db()
     assert user.kindle_emails == [
         "reader@kindle.com",
-        "reader@free.kindle.com",
+        "reader-two@kindle.com",
     ]
     assert response.json()["kindle_emails"] == user.kindle_emails
     assert response.json()["kindle_sender_email"] == "library-sender@example.com"
+
+
+@pytest.mark.django_db
+def test_profile_rejects_non_kindle_email_addresses(client):
+    user = User.objects.create_user(
+        email="kindle-profile-invalid@example.com",
+        password="strong-password-123",
+        full_name="Kindle User",
+    )
+    client.force_login(user)
+
+    response = client.patch(
+        "/api/auth/profile/",
+        data=json.dumps(
+            {
+                "kindle_emails_text": "reader@example.com",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["kindle_emails"] == [
+        "Enter a Kindle email ending in @kindle.com."
+    ]
 
 
 @pytest.mark.django_db

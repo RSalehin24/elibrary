@@ -1,8 +1,8 @@
 from django.contrib.auth.password_validation import validate_password
-from django.core.validators import validate_email
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from apps.accounts.kindle import validate_kindle_email_address
 from apps.accounts.models import User
 
 
@@ -26,7 +26,7 @@ def normalize_kindle_emails(raw_value):
         if not email:
             continue
         try:
-            validate_email(email)
+            email = validate_kindle_email_address(email)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(
                 {"kindle_emails": list(exc.messages)}

@@ -205,7 +205,7 @@ def test_book_can_be_sent_to_all_configured_kindle_emails(tmp_path, client):
     user = User.objects.create_user(
         email="kindle-reader@example.com",
         password="strong-password-123",
-        kindle_emails=["reader-one@kindle.com", "reader-two@free.kindle.com"],
+        kindle_emails=["reader-one@kindle.com", "reader-two@kindle.com"],
     )
     book = Book.objects.create(title="Kindle Delivery Book", state="ready", review_state="approved")
     epub_path = Path(tmp_path) / "kindle-delivery.epub"
@@ -233,6 +233,38 @@ def test_book_can_be_sent_to_all_configured_kindle_emails(tmp_path, client):
     assert {message.to[0] for message in mail.outbox} == set(user.kindle_emails)
     assert all(message.from_email == "kindle-sender@example.com" for message in mail.outbox)
     assert all(message.attachments[0][0] == "Kindle Delivery Book.epub" for message in mail.outbox)
+
+
+@pytest.mark.django_db
+def test_send_to_kindle_ignores_invalid_legacy_domains(tmp_path, client):
+    user = User.objects.create_user(
+        email="kindle-reader-legacy@example.com",
+        password="strong-password-123",
+        kindle_emails=["reader-one@kindle.com", "reader-two@example.com"],
+    )
+    book = Book.objects.create(title="Kindle Delivery Legacy", state="ready", review_state="approved")
+    epub_path = Path(tmp_path) / "kindle-delivery-legacy.epub"
+    epub_path.write_bytes(b"epub")
+
+    GeneratedAsset.objects.create(
+        book=book,
+        asset_type=GeneratedAssetType.EPUB,
+        status=GeneratedAssetStatus.READY,
+        legacy_path=str(epub_path),
+        content_type="application/epub+zip",
+        file_size=epub_path.stat().st_size,
+    )
+    PermissionGrant.objects.create(user=user, book=book, scope=PermissionScope.DOWNLOAD_FILE)
+    client.force_login(user)
+
+    response = client.post(f"/api/access/books/{book.slug}/send-to-kindle/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deliveredEmails"] == ["reader-one@kindle.com"]
+    assert payload["failedEmails"] == []
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].to == ["reader-one@kindle.com"]
 
 
 @pytest.mark.django_db
