@@ -57,6 +57,8 @@ function request(overrides = {}) {
     isConfirmedNotDuplicate: false,
     duplicateOfRequestId: null,
     duplicateOfRecordId: null,
+    linkedBookId: null,
+    linkedBookSlug: null,
     ...overrides,
   };
 }
@@ -239,6 +241,264 @@ function applyRequestTimeouts(state) {
   }
 }
 
+function requestDetails(item) {
+  const checkpoint = item?.progress?.checkpoint || item?.progressCheckpoint || "";
+  if (checkpoint) {
+    return checkpoint;
+  }
+  if (item?.errorMessage) {
+    return item.errorMessage;
+  }
+  if (item?.duplicateConfirmed) {
+    return "Confirmed duplicate";
+  }
+  if (item?.isConfirmedNotDuplicate) {
+    return "Confirmed new";
+  }
+  if (item?.isResumed) {
+    return "Resumed from saved progress";
+  }
+  return "";
+}
+
+function decodeUrlForDisplay(value) {
+  const url = String(value || "").trim();
+  if (!url) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(url);
+  } catch {
+    return url;
+  }
+}
+
+function rowFromRecord(state, recordItem) {
+  const latest = latestRequestForRecord(state, recordItem.id);
+  return {
+    id: recordItem.id,
+    recordId: recordItem.id,
+    requestId: latest?.id || null,
+    title: recordItem.name,
+    url: recordItem.url,
+    displayUrl: recordItem.displayUrl || decodeUrlForDisplay(recordItem.url),
+    displayPath: recordItem.displayPath || "",
+    category: recordItem.category,
+    writer: recordItem.writer,
+    translator: recordItem.translator,
+    publisher: recordItem.publisher,
+    status: latest?.state || recordItem.bookCreationState || "not_created",
+    updatedAt: latest?.updatedAt || recordItem.updatedAt,
+    selectable: recordSelectable(state, recordItem),
+    progressCheckpoint: latest?.progress?.checkpoint || "",
+    progressSavedAt: latest?.progress?.savedAt || "",
+    errorMessage: latest?.errorMessage || "",
+    isResumed: Boolean(latest?.isResumed),
+    isConfirmedNotDuplicate: Boolean(latest?.isConfirmedNotDuplicate),
+    linkedBookId: latest?.linkedBookId || recordItem.linkedBookId || null,
+    linkedBookSlug: latest?.linkedBookSlug || recordItem.linkedBookSlug || null,
+    duplicateOfRequestId: latest?.duplicateOfRequestId || null,
+    duplicateOfRecordId: latest?.duplicateOfRecordId || null,
+    duplicateConfirmed: Boolean(latest?.duplicateConfirmed),
+  };
+}
+
+function rowFromRequest(state, requestItem) {
+  const recordItem = state.records.find((item) => item.id === requestItem.bookRecordId);
+  if (!recordItem) {
+    return null;
+  }
+  return {
+    ...rowFromRecord(state, recordItem),
+    id: requestItem.id,
+    requestId: requestItem.id,
+    status: requestItem.state,
+    updatedAt: requestItem.updatedAt,
+    selectable: true,
+    progressCheckpoint: requestItem.progress?.checkpoint || "",
+    progressSavedAt: requestItem.progress?.savedAt || "",
+    errorMessage: requestItem.errorMessage || "",
+    isResumed: Boolean(requestItem.isResumed),
+    isConfirmedNotDuplicate: Boolean(requestItem.isConfirmedNotDuplicate),
+    linkedBookId: requestItem.linkedBookId || recordItem.linkedBookId || null,
+    linkedBookSlug: requestItem.linkedBookSlug || recordItem.linkedBookSlug || null,
+    duplicateOfRequestId: requestItem.duplicateOfRequestId || null,
+    duplicateOfRecordId: requestItem.duplicateOfRecordId || null,
+    duplicateConfirmed: Boolean(requestItem.duplicateConfirmed),
+  };
+}
+
+function tableRowsForCard(state, card) {
+  if (card === "catalog-records") {
+    return [...state.records]
+      .map((recordItem) => rowFromRecord(state, recordItem))
+      .sort((left, right) => {
+        const leftPriority = left.status === "not_created" ? 0 : 1;
+        const rightPriority = right.status === "not_created" ? 0 : 1;
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
+        }
+        return left.title.localeCompare(right.title);
+      });
+  }
+
+  const stateMap = {
+    "create-requests": ["initial"],
+    "create-queue": ["queued"],
+    "create-processing": ["processing"],
+    "create-created": ["created"],
+    "on-hold-paused": ["paused"],
+    "on-hold-failed": ["failed"],
+    "on-hold-duplicate": ["duplicate"],
+    "on-hold-deleted": ["deleted"],
+  };
+
+  if (stateMap[card]) {
+    return state.requests
+      .filter((item) => stateMap[card].includes(item.state))
+      .map((item) => rowFromRequest(state, item))
+      .filter(Boolean);
+  }
+
+  if (card === "incomplete-records") {
+    return state.records
+      .filter(
+        (recordItem) =>
+          (recordItem.wasIncomplete || categoryIsIncomplete(recordItem.category)) &&
+          !recordItem.resolvedFromIncomplete,
+      )
+      .map((recordItem) => ({
+        ...rowFromRecord(state, recordItem),
+        selectable: false,
+      }));
+  }
+
+  if (card === "incomplete-completed") {
+    return state.requests
+      .filter((item) => item.state === "created")
+      .map((item) => rowFromRequest(state, item))
+      .filter((item) => {
+        const recordItem = state.records.find((record) => record.id === item.recordId);
+        return recordItem?.wasIncomplete && recordItem?.resolvedFromIncomplete;
+      });
+  }
+
+  return [];
+}
+
+function processingSummary(state) {
+  const counts = state.requests.reduce((result, item) => {
+    result[item.state] = (result[item.state] || 0) + 1;
+    return result;
+  }, {});
+  const latestFailedMessage =
+    state.requests.find((item) => item.state === "failed" && item.errorMessage)
+      ?.errorMessage || "";
+
+  return {
+    catalog: {
+      records: state.records.length,
+      notCreated: state.records.filter(
+        (item) => item.bookCreationState === "not_created",
+      ).length,
+      active:
+        (counts.initial || 0) + (counts.queued || 0) + (counts.processing || 0),
+      created: counts.created || 0,
+      onHold:
+        (counts.paused || 0) +
+        (counts.failed || 0) +
+        (counts.duplicate || 0) +
+        (counts.deleted || 0),
+    },
+    create: {
+      requests: counts.initial || 0,
+      queue: counts.queued || 0,
+      processing: counts.processing || 0,
+      created: counts.created || 0,
+    },
+    onHold: {
+      paused: counts.paused || 0,
+      failed: counts.failed || 0,
+      duplicate: counts.duplicate || 0,
+      deleted: counts.deleted || 0,
+    },
+    incomplete: {
+      incomplete: state.records.filter(
+        (item) =>
+          (item.wasIncomplete || categoryIsIncomplete(item.category)) &&
+          !item.resolvedFromIncomplete,
+      ).length,
+      resolved: state.records.filter(
+        (item) => item.wasIncomplete && item.resolvedFromIncomplete,
+      ).length,
+    },
+    notifications: {
+      activeRequests:
+        (counts.initial || 0) + (counts.queued || 0) + (counts.processing || 0),
+      createdCount: counts.created || 0,
+      failedCount: counts.failed || 0,
+      duplicateCount: counts.duplicate || 0,
+      latestFailedMessage,
+    },
+  };
+}
+
+function filteredTablePayload(state, { card, query = "", category = "", status = "", offset = 0, limit = 60 }) {
+  const rows = tableRowsForCard(state, card);
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  const categoryOptions = Array.from(
+    new Set(rows.map((row) => row.category).filter(Boolean)),
+  ).sort();
+  const statusOptions = Array.from(
+    new Set(rows.map((row) => row.status).filter(Boolean)),
+  ).sort();
+  const filtered = rows.filter((row) => {
+    const searchText = [
+      row.title,
+      row.url,
+      row.displayUrl,
+      row.displayPath,
+      row.writer,
+      row.translator,
+      row.publisher,
+      row.category,
+      row.status,
+      requestDetails(row),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (normalizedQuery && !searchText.includes(normalizedQuery)) {
+      return false;
+    }
+    if (category && row.category !== category) {
+      return false;
+    }
+    if (status && row.status !== status) {
+      return false;
+    }
+    return true;
+  });
+  const nextRows = filtered.slice(offset, offset + limit);
+  const nextOffset = offset + nextRows.length;
+
+  return {
+    rows: nextRows,
+    pagination: {
+      offset,
+      limit,
+      totalCount: filtered.length,
+      returnedCount: nextRows.length,
+      hasMore: nextOffset < filtered.length,
+      nextOffset,
+    },
+    filters: {
+      categoryOptions,
+      statusOptions,
+    },
+  };
+}
+
 function finalizeSync(state) {
   state.sync.status = "idle";
   state.sync.progress = null;
@@ -377,24 +637,73 @@ async function mockProcessingApi(page, initialState) {
     },
   };
 
+  function includeListsForRoute(route) {
+    const url = new URL(route.request().url());
+    const raw = (url.searchParams.get("includeLists") || "").toLowerCase();
+    return !["0", "false", "no", "off"].includes(raw);
+  }
+
+  function statePayload(includeLists, extra = {}) {
+    return {
+      ...(includeLists ? state : {}),
+      ...(includeLists ? {} : { sync: state.sync, automation: state.automation, ui: state.ui }),
+      summary: processingSummary(state),
+      ...(includeLists ? {} : {}),
+      ...extra,
+    };
+  }
+
   async function fulfillState(route, extra = {}) {
     applyRequestTimeouts(state);
     state = syncRecordStates(state);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ ...state, ...extra }),
+      body: JSON.stringify(
+        statePayload(includeListsForRoute(route), extra),
+      ),
     });
   }
 
   async function delayForActions() {
-    await page.waitForTimeout(Math.max(20, state.ui?.actionDelayMs || 80));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.max(20, state.ui?.actionDelayMs || 80));
+    });
   }
 
-  await page.route("**/api/processing/state/", async (route) => {
+  async function delayForLoads() {
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.max(0, state.ui?.loadDelayMs || 0));
+    });
+  }
+
+  await page.route("**/api/processing/state/**", async (route) => {
+    await delayForLoads();
     await fulfillState(route);
   });
-  await page.route("**/api/processing/sync/start/", async (route) => {
+  await page.route("**/api/processing/table/**", async (route) => {
+    await delayForLoads();
+    applyRequestTimeouts(state);
+    state = syncRecordStates(state);
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset") || 0);
+    const limit = Number(url.searchParams.get("limit") || 60);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        filteredTablePayload(state, {
+          card: url.searchParams.get("card") || "",
+          query: url.searchParams.get("q") || "",
+          category: url.searchParams.get("category") || "",
+          status: url.searchParams.get("status") || "",
+          offset,
+          limit,
+        }),
+      ),
+    });
+  });
+  await page.route("**/api/processing/sync/start/**", async (route) => {
     const body = route.request().postDataJSON();
     lastSyncStartBody = body;
     state.sync = {
@@ -420,7 +729,7 @@ async function mockProcessingApi(page, initialState) {
     await delayForActions();
     await fulfillState(route);
   });
-  await page.route("**/api/processing/sync/pause/", async (route) => {
+  await page.route("**/api/processing/sync/pause/**", async (route) => {
     if (state.sync.status === "syncing") {
       state.sync.status = "pausing";
       state.sync.message = "Pausing after the current page finishes.";
@@ -428,12 +737,12 @@ async function mockProcessingApi(page, initialState) {
     await delayForActions();
     await fulfillState(route);
   });
-  await page.route("**/api/processing/sync/advance/", async (route) => {
+  await page.route("**/api/processing/sync/advance/**", async (route) => {
     await delayForActions();
     advanceSyncPage(state);
     await fulfillState(route);
   });
-  await page.route("**/api/processing/sync/resume/", async (route) => {
+  await page.route("**/api/processing/sync/resume/**", async (route) => {
     state.sync.status = "syncing";
     state.sync.progress = {
       runMode: state.sync.runMode || SYNC_RUN_MODE_MANUAL,
@@ -447,7 +756,7 @@ async function mockProcessingApi(page, initialState) {
     state.sync.message = "Reconciling saved records from the beginning.";
     await fulfillState(route);
   });
-  await page.route("**/api/processing/sync/stop/", async (route) => {
+  await page.route("**/api/processing/sync/stop/**", async (route) => {
     state.sync.status = "idle";
     state.sync.progress = null;
     if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
@@ -463,7 +772,7 @@ async function mockProcessingApi(page, initialState) {
     await delayForActions();
     await fulfillState(route);
   });
-  await page.route("**/api/processing/records/create-requests/", async (route) => {
+  await page.route("**/api/processing/records/create-requests/**", async (route) => {
     const body = route.request().postDataJSON();
     await delayForActions();
     for (const id of body.ids || []) {
@@ -474,7 +783,7 @@ async function mockProcessingApi(page, initialState) {
     }
     await fulfillState(route);
   });
-  await page.route("**/api/processing/automation/catalog/", async (route) => {
+  await page.route(/\/api\/processing\/automation\/catalog\/?(?:\?.*)?$/, async (route) => {
     state.automation.catalog = {
       ...state.automation.catalog,
       ...route.request().postDataJSON(),
@@ -484,7 +793,7 @@ async function mockProcessingApi(page, initialState) {
     await delayForActions();
     await fulfillState(route);
   });
-  await page.route("**/api/processing/automation/catalog/run/", async (route) => {
+  await page.route("**/api/processing/automation/catalog/run/**", async (route) => {
     await delayForActions();
     state.sync = {
       ...state.sync,
@@ -509,7 +818,7 @@ async function mockProcessingApi(page, initialState) {
     state.automation.catalog.statusMessage = "Automated catalog sync is running.";
     await fulfillState(route);
   });
-  await page.route("**/api/processing/pipeline/advance/", async (route) => {
+  await page.route("**/api/processing/pipeline/advance/**", async (route) => {
     applyRequestTimeouts(state);
     for (const item of state.requests) {
       if (item.state === "initial") {
@@ -524,6 +833,13 @@ async function mockProcessingApi(page, initialState) {
           item.state = "duplicate";
         } else {
           item.state = "created";
+          item.linkedBookId = item.linkedBookId || `linked-${item.bookRecordId}`;
+          item.linkedBookSlug = item.linkedBookSlug || `${item.bookRecordId}-book`;
+          const recordItem = state.records.find((record) => record.id === item.bookRecordId);
+          if (recordItem) {
+            recordItem.linkedBookId = item.linkedBookId;
+            recordItem.linkedBookSlug = item.linkedBookSlug;
+          }
         }
       }
       item.updatedAt = iso(200 + state.requests.indexOf(item));
@@ -531,7 +847,7 @@ async function mockProcessingApi(page, initialState) {
     applyRequestTimeouts(state);
     await fulfillState(route);
   });
-  await page.route("**/api/processing/requests/action/", async (route) => {
+  await page.route("**/api/processing/requests/action/**", async (route) => {
     const body = route.request().postDataJSON();
     await delayForActions();
     for (const id of body.ids || []) {
@@ -568,7 +884,7 @@ async function mockProcessingApi(page, initialState) {
     }
     await fulfillState(route);
   });
-  await page.route("**/api/processing/automation/incomplete/", async (route) => {
+  await page.route(/\/api\/processing\/automation\/incomplete\/?(?:\?.*)?$/, async (route) => {
     state.automation.incomplete = {
       ...state.automation.incomplete,
       ...route.request().postDataJSON(),
@@ -578,7 +894,7 @@ async function mockProcessingApi(page, initialState) {
     await delayForActions();
     await fulfillState(route);
   });
-  await page.route("**/api/processing/automation/incomplete/run/", async (route) => {
+  await page.route("**/api/processing/automation/incomplete/run/**", async (route) => {
     await delayForActions();
     state.sync = {
       ...state.sync,
@@ -644,6 +960,30 @@ async function automationControlHeights(page, pageId) {
       toggle: Math.round(toggle.getBoundingClientRect().height),
     };
   }, pageId);
+}
+
+async function controlDimensions(page, controls) {
+  return page.evaluate((items) => {
+    return Object.fromEntries(
+      items.map(({ key, testId, selector, closest }) => {
+        const element = selector
+          ? document.querySelector(selector)
+          : document.querySelector(`[data-testid="${testId}"]`);
+        const target = closest ? element?.closest(closest) : element;
+        if (!target) {
+          return [key, null];
+        }
+        const rect = target.getBoundingClientRect();
+        return [
+          key,
+          {
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          },
+        ];
+      }),
+    );
+  }, controls);
 }
 
 async function openCardFilters(page, pageId, cardId) {
@@ -909,6 +1249,217 @@ test.describe("processing pages replacement", () => {
     ).toBeVisible();
   });
 
+  test("processing cards show skeletons and fetch the next batch after scrolling", async ({
+    page,
+  }) => {
+    const records = Array.from({ length: 95 }, (_, index) =>
+      record({
+        id: `scroll-record-${index.toString().padStart(2, "0")}`,
+        name: `Scroll Record ${index.toString().padStart(2, "0")}`,
+        url: `https://example.test/books/scroll-record-${index.toString().padStart(2, "0")}`,
+        category: index % 2 === 0 ? "Poetry" : "Novel",
+      }),
+    );
+
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records,
+        ui: {
+          ...baseState().ui,
+          loadDelayMs: 250,
+          pipelineDelayMs: 5_000,
+        },
+      }),
+    );
+
+    await expect(
+      page
+        .getByTestId("catalog-overview-stat-records")
+        .locator(".processing-value-skeleton"),
+    ).toBeVisible();
+    await expect(page.getByTestId("catalog-records-table-skeleton")).toBeVisible();
+
+    await expect(page.getByTestId("catalog-records-row-scroll-record-00")).toBeVisible();
+    await expect(page.getByTestId("catalog-records-count")).toContainText("95");
+    await expect(
+      page.getByTestId("catalog-records-row-scroll-record-70"),
+    ).toHaveCount(0);
+
+    await page
+      .getByTestId("catalog-records-row-scroll-record-30")
+      .scrollIntoViewIfNeeded();
+
+    await expect(
+      page.getByTestId("catalog-records-load-more-skeleton"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("catalog-records-row-scroll-record-70"),
+    ).toHaveCount(1);
+  });
+
+  test("catalog loading cards and controls keep the same dimensions as the loaded UI", async ({
+    page,
+  }) => {
+    const initialState = baseState({
+      automation: {
+        catalog: {
+          ...baseState().automation.catalog,
+          statusMessage: "Saved.",
+        },
+        incomplete: {
+          ...baseState().automation.incomplete,
+        },
+      },
+      ui: {
+        ...baseState().ui,
+        loadDelayMs: 450,
+        pipelineDelayMs: 5_000,
+      },
+    });
+
+    await boot(
+      page,
+      "/catalog",
+      initialState,
+    );
+
+    await expect(page.getByTestId("catalog-automation-run-skeleton")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-control-skeleton")).toBeVisible();
+
+    const loadingDimensions = await controlDimensions(page, [
+      { key: "automationRun", testId: "catalog-automation-run-skeleton" },
+      {
+        key: "automationToggle",
+        testId: "catalog-automation-enabled-skeleton",
+      },
+      {
+        key: "automationInterval",
+        testId: "catalog-automation-interval-skeleton",
+      },
+      {
+        key: "automationTime",
+        testId: "catalog-automation-time-skeleton",
+      },
+      { key: "automationSave", testId: "catalog-automation-save-skeleton" },
+      { key: "manualSync", testId: "catalog-sync-control-skeleton" },
+      { key: "recordsCount", testId: "catalog-records-count" },
+      {
+        key: "overviewValue",
+        selector:
+          '[data-testid="catalog-overview-stat-records"] .processing-value-skeleton',
+      },
+      {
+        key: "manualStatus",
+        selector: '[data-testid="catalog-sync-card"] .processing-status-skeleton',
+      },
+    ]);
+
+    await expect(page.getByTestId("catalog-automation-run-btn")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeVisible();
+
+    const loadedDimensions = await controlDimensions(page, [
+      { key: "automationRun", testId: "catalog-automation-run-btn" },
+      {
+        key: "automationToggle",
+        testId: "catalog-automation-enabled",
+        closest: ".processing-switch",
+      },
+      {
+        key: "automationInterval",
+        testId: "catalog-automation-interval",
+        closest: ".processing-automation-field-control",
+      },
+      {
+        key: "automationTime",
+        testId: "catalog-automation-time",
+        closest: ".processing-automation-field-control",
+      },
+      { key: "automationSave", testId: "catalog-automation-save-btn" },
+      { key: "manualSync", testId: "catalog-sync-start-btn" },
+      { key: "recordsCount", testId: "catalog-records-count" },
+      {
+        key: "overviewValue",
+        selector: '[data-testid="catalog-overview-stat-records"] strong',
+      },
+      {
+        key: "manualStatus",
+        testId: "catalog-sync-progress",
+      },
+    ]);
+
+    expect({
+      automationRun: loadingDimensions.automationRun,
+      automationToggle: loadingDimensions.automationToggle,
+      automationInterval: loadingDimensions.automationInterval,
+      automationTime: loadingDimensions.automationTime,
+      automationSave: loadingDimensions.automationSave,
+      manualSync: loadingDimensions.manualSync,
+      recordsCount: loadingDimensions.recordsCount,
+    }).toEqual({
+      automationRun: loadedDimensions.automationRun,
+      automationToggle: loadedDimensions.automationToggle,
+      automationInterval: loadedDimensions.automationInterval,
+      automationTime: loadedDimensions.automationTime,
+      automationSave: loadedDimensions.automationSave,
+      manualSync: loadedDimensions.manualSync,
+      recordsCount: loadedDimensions.recordsCount,
+    });
+    expect(loadingDimensions.overviewValue?.height).toBe(
+      loadedDimensions.overviewValue?.height,
+    );
+    expect(loadingDimensions.manualStatus?.height).toBe(
+      loadedDimensions.manualStatus?.height,
+    );
+  });
+
+  test("catalog table skeleton rows keep the same dimensions as loaded rows", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [
+          record({
+            id: "catalog-row-size",
+            name: "Catalog Row Size",
+            category: "Poetry",
+            writer: "Row Writer",
+            publisher: "Row Publisher",
+          }),
+        ],
+        ui: {
+          ...baseState().ui,
+          loadDelayMs: 450,
+          pipelineDelayMs: 5_000,
+        },
+      }),
+    );
+
+    await expect(page.getByTestId("catalog-records-table-skeleton")).toBeVisible();
+
+    const loadingRowDimensions = await controlDimensions(page, [
+      { key: "row", testId: "catalog-records-table-skeleton" },
+    ]);
+
+    await expect(
+      page.getByTestId("catalog-records-row-catalog-row-size"),
+    ).toBeVisible();
+
+    const loadedRowDimensions = await controlDimensions(page, [
+      { key: "row", testId: "catalog-records-row-catalog-row-size" },
+    ]);
+
+    expect(
+      Math.abs(
+        (loadingRowDimensions.row?.height ?? 0) -
+          (loadedRowDimensions.row?.height ?? 0),
+      ),
+    ).toBeLessThanOrEqual(1);
+  });
+
   test("catalog records show bangla source urls as decoded text", async ({
     page,
   }) => {
@@ -1051,14 +1602,212 @@ test.describe("processing pages replacement", () => {
     );
 
     await page.goto("/create");
-    await expect(row(page, "create", "requests", "request-auto-new")).toBeVisible();
-    await expect(row(page, "create", "queue", "request-auto-new")).toBeVisible();
-    await expect(row(page, "create", "processing", "request-auto-new")).toBeVisible();
     await expect(row(page, "create", "created", "request-auto-new")).toBeVisible();
+    await expect(row(page, "create", "requests", "request-auto-new")).toHaveCount(0);
+    await expect(row(page, "create", "queue", "request-auto-new")).toHaveCount(0);
+    await expect(row(page, "create", "processing", "request-auto-new")).toHaveCount(0);
     await expect(row(page, "create", "created", "request-auto-failed")).toBeVisible();
     await expect(row(page, "create", "created", "request-auto-deleted")).toBeVisible();
     await expect(row(page, "create", "created", "created-old")).toBeVisible();
     await expect(row(page, "create", "paused", "paused-old")).toHaveCount(0);
+  });
+
+  test("create cards show only status-scoped rows and remove the details column", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/create",
+      baseState({
+        records: [
+          record({ id: "initial-only", name: "Initial Only", category: "Poetry" }),
+          record({ id: "queued-only", name: "Queued Only", category: "Science" }),
+          record({ id: "processing-only", name: "Processing Only", category: "Drama" }),
+          record({ id: "created-only", name: "Created Only", category: "History" }),
+        ],
+        requests: [
+          request({ id: "initial-only-request", bookRecordId: "initial-only", state: "initial" }),
+          request({ id: "queued-only-request", bookRecordId: "queued-only", state: "queued" }),
+          request({
+            id: "processing-only-request",
+            bookRecordId: "processing-only",
+            state: "processing",
+          }),
+          request({
+            id: "created-only-request",
+            bookRecordId: "created-only",
+            state: "created",
+            linkedBookId: "created-only-book-id",
+            linkedBookSlug: "created-only-book",
+          }),
+        ],
+        ui: {
+          ...baseState().ui,
+          pipelineDelayMs: 60_000,
+        },
+      }),
+    );
+
+    for (const cardId of ["requests", "queue", "processing"]) {
+      await expect(
+        page.getByTestId(`create-${cardId}-table`).getByRole("columnheader", {
+          name: "Details",
+        }),
+      ).toHaveCount(0);
+      await expect(page.getByTestId(`create-${cardId}-table`).locator("thead th")).toHaveCount(6);
+    }
+    await expect(
+      page.getByTestId("create-created-table").getByRole("columnheader", {
+        name: "Details",
+      }),
+    ).toHaveCount(0);
+    await expect(
+      page
+        .getByTestId("create-created-table")
+        .locator("thead th")
+        .filter({ hasText: "Open" }),
+    ).toHaveCount(1);
+    await expect(page.getByTestId("create-created-table").locator("thead th")).toHaveCount(7);
+
+    await expectVisibleCount(page, "create", "requests", 1);
+    await expectVisibleCount(page, "create", "queue", 1);
+    await expectVisibleCount(page, "create", "processing", 1);
+    await expectVisibleCount(page, "create", "created", 1);
+
+    await expect(row(page, "create", "requests", "initial-only-request")).toBeVisible();
+    await expect(row(page, "create", "requests", "initial-only-request")).toContainText("Initial");
+    await expect(
+      row(page, "create", "requests", "initial-only-request").locator(".processing-col-details"),
+    ).toHaveCount(0);
+    await expect(row(page, "create", "requests", "queued-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "requests", "processing-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "requests", "created-only-request")).toHaveCount(0);
+
+    await expect(row(page, "create", "queue", "queued-only-request")).toBeVisible();
+    await expect(row(page, "create", "queue", "queued-only-request")).toContainText("Queued");
+    await expect(
+      row(page, "create", "queue", "queued-only-request").locator(".processing-col-details"),
+    ).toHaveCount(0);
+    await expect(row(page, "create", "queue", "initial-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "queue", "processing-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "queue", "created-only-request")).toHaveCount(0);
+
+    await expect(row(page, "create", "processing", "processing-only-request")).toBeVisible();
+    await expect(row(page, "create", "processing", "processing-only-request")).toContainText(
+      "Processing",
+    );
+    await expect(
+      row(page, "create", "processing", "processing-only-request").locator(
+        ".processing-col-details",
+      ),
+    ).toHaveCount(0);
+    await expect(row(page, "create", "processing", "initial-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "processing", "queued-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "processing", "created-only-request")).toHaveCount(0);
+
+    await expect(row(page, "create", "created", "created-only-request")).toBeVisible();
+    await expect(row(page, "create", "created", "created-only-request")).toContainText("Created");
+    await expect(
+      row(page, "create", "created", "created-only-request").locator(".processing-col-details"),
+    ).toHaveCount(0);
+    await expect(
+      row(page, "create", "created", "created-only-request").getByRole("link", {
+        name: "Open",
+      }),
+    ).toHaveAttribute("href", "/books/created-only-book");
+    await expect(row(page, "create", "created", "initial-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "created", "queued-only-request")).toHaveCount(0);
+    await expect(row(page, "create", "created", "processing-only-request")).toHaveCount(0);
+  });
+
+  test("create card skeleton rows match the visible status-only table structure", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/create",
+      baseState({
+        records: [
+          record({ id: "queued-skeleton", name: "Queued Skeleton", category: "Science" }),
+        ],
+        requests: [
+          request({
+            id: "queued-skeleton-request",
+            bookRecordId: "queued-skeleton",
+            state: "queued",
+          }),
+        ],
+        ui: {
+          ...baseState().ui,
+          loadDelayMs: 450,
+          pipelineDelayMs: 60_000,
+        },
+      }),
+    );
+
+    const queueTable = page.getByTestId("create-queue-table");
+    const queueSkeletonRow = page.getByTestId("create-queue-table-skeleton");
+
+    await expect(queueSkeletonRow).toBeVisible();
+    await expect(
+      queueTable.getByRole("columnheader", {
+        name: "Details",
+      }),
+    ).toHaveCount(0);
+    await expect(queueTable.locator("thead th")).toHaveCount(6);
+    await expect(queueSkeletonRow.locator("td")).toHaveCount(6);
+    await expect(queueSkeletonRow.locator(".processing-col-status")).toHaveCount(1);
+    await expect(queueSkeletonRow.locator(".processing-col-details")).toHaveCount(0);
+    await expect(queueSkeletonRow.locator(".processing-col-updated")).toHaveCount(1);
+  });
+
+  test("empty create cards keep their empty state after the first load", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/create",
+      baseState({
+        records: [
+          record({ id: "initial-lone", name: "Initial Lone", category: "Reference" }),
+        ],
+        requests: [
+          request({
+            id: "initial-lone-request",
+            bookRecordId: "initial-lone",
+            state: "initial",
+          }),
+        ],
+        ui: {
+          ...baseState().ui,
+          loadDelayMs: 450,
+          pipelineDelayMs: 300,
+        },
+      }),
+    );
+
+    const emptyCreatedCell = page
+      .getByTestId("create-created-table")
+      .locator("tbody td")
+      .filter({ hasText: "No records." });
+
+    await expect(emptyCreatedCell).toBeVisible();
+    await expect(page.getByTestId("create-created-table-skeleton")).toHaveCount(0);
+    await expect(
+      page
+        .getByTestId("create-created-count")
+        .locator(".processing-card-count-skeleton"),
+    ).toHaveCount(0);
+
+    await page.waitForTimeout(200);
+
+    await expect(emptyCreatedCell).toBeVisible();
+    await expect(page.getByTestId("create-created-table-skeleton")).toHaveCount(0);
+    await expect(
+      page
+        .getByTestId("create-created-count")
+        .locator(".processing-card-count-skeleton"),
+    ).toHaveCount(0);
   });
 
   test("card search, filters, counts, and actions stay scoped to their own cards", async ({
@@ -1133,7 +1882,13 @@ test.describe("processing pages replacement", () => {
           request({ id: "initial-b-request", bookRecordId: "initial-b", state: "initial" }),
           request({ id: "queued-a-request", bookRecordId: "queued-a", state: "queued" }),
           request({ id: "processing-a-request", bookRecordId: "processing-a", state: "processing" }),
-          request({ id: "created-a-request", bookRecordId: "created-a", state: "created" }),
+          request({
+            id: "created-a-request",
+            bookRecordId: "created-a",
+            state: "created",
+            linkedBookId: "created-a-book-id",
+            linkedBookSlug: "created-a-book",
+          }),
         ],
         ui: { actionDelayMs: 400, pipelineDelayMs: 20_000 },
       }),
@@ -1146,6 +1901,11 @@ test.describe("processing pages replacement", () => {
     await expectVisibleCount(page, "create", "queue", 1);
     await expectVisibleCount(page, "create", "processing", 1);
     await expectVisibleCount(page, "create", "created", 1);
+    await expect(
+      row(page, "create", "created", "created-a-request").getByRole("link", {
+        name: "Open",
+      }),
+    ).toHaveAttribute("href", "/books/created-a-book");
 
     await page.getByTestId("create-requests-search").fill("initial a");
     await expectVisibleCount(page, "create", "requests", 1);
@@ -1225,7 +1985,7 @@ test.describe("processing pages replacement", () => {
           request({ id: "deleted-request", bookRecordId: "deleted-book", state: "deleted" }),
           request({ id: "original-request", bookRecordId: "original-book", state: "processing" }),
         ],
-        ui: { actionDelayMs: 120, pipelineDelayMs: 1_000 },
+        ui: { actionDelayMs: 120, pipelineDelayMs: 20_000 },
       }),
     );
 
@@ -1269,6 +2029,94 @@ test.describe("processing pages replacement", () => {
     await expect(row(page, "on-hold", "deleted", "deleted-request")).toHaveCount(0);
     await page.goto("/create");
     await expect(row(page, "create", "requests", "deleted-request")).toBeVisible();
+  });
+
+  test("on-hold cards show only their own status records", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/on-hold",
+      baseState({
+        records: [
+          record({ id: "paused-only-book", name: "Paused Only" }),
+          record({ id: "failed-only-book", name: "Failed Only" }),
+          record({ id: "duplicate-only-book", name: "Duplicate Only" }),
+          record({ id: "deleted-only-book", name: "Deleted Only" }),
+        ],
+        requests: [
+          request({
+            id: "paused-only-request",
+            bookRecordId: "paused-only-book",
+            state: "paused",
+            progress: {
+              savedAt: iso(21),
+              checkpoint: "saved-chapter",
+              savedData: { chapter: 7 },
+            },
+          }),
+          request({
+            id: "failed-only-request",
+            bookRecordId: "failed-only-book",
+            state: "failed",
+            errorMessage: "Pipeline failed after retries.",
+          }),
+          request({
+            id: "duplicate-only-request",
+            bookRecordId: "duplicate-only-book",
+            state: "duplicate",
+            duplicateOfRequestId: "original-request",
+            duplicateOfRecordId: "original-book",
+          }),
+          request({
+            id: "deleted-only-request",
+            bookRecordId: "deleted-only-book",
+            state: "deleted",
+          }),
+        ],
+        ui: {
+          ...baseState().ui,
+          pipelineDelayMs: 60_000,
+        },
+      }),
+    );
+
+    await expectVisibleCount(page, "on-hold", "paused", 1);
+    await expectVisibleCount(page, "on-hold", "failed", 1);
+    await expectVisibleCount(page, "on-hold", "duplicate", 1);
+    await expectVisibleCount(page, "on-hold", "deleted", 1);
+
+    await expect(row(page, "on-hold", "paused", "paused-only-request")).toBeVisible();
+    await expect(row(page, "on-hold", "paused", "paused-only-request")).toContainText("Paused");
+    await expect(row(page, "on-hold", "paused", "paused-only-request")).toContainText(
+      "saved-chapter",
+    );
+    await expect(row(page, "on-hold", "paused", "failed-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "paused", "duplicate-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "paused", "deleted-only-request")).toHaveCount(0);
+
+    await expect(row(page, "on-hold", "failed", "failed-only-request")).toBeVisible();
+    await expect(row(page, "on-hold", "failed", "failed-only-request")).toContainText("Failed");
+    await expect(row(page, "on-hold", "failed", "failed-only-request")).toContainText(
+      "Pipeline failed after retries.",
+    );
+    await expect(row(page, "on-hold", "failed", "paused-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "failed", "duplicate-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "failed", "deleted-only-request")).toHaveCount(0);
+
+    await expect(row(page, "on-hold", "duplicate", "duplicate-only-request")).toBeVisible();
+    await expect(row(page, "on-hold", "duplicate", "duplicate-only-request")).toContainText(
+      "Duplicate",
+    );
+    await expect(row(page, "on-hold", "duplicate", "paused-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "duplicate", "failed-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "duplicate", "deleted-only-request")).toHaveCount(0);
+
+    await expect(row(page, "on-hold", "deleted", "deleted-only-request")).toBeVisible();
+    await expect(row(page, "on-hold", "deleted", "deleted-only-request")).toContainText("Deleted");
+    await expect(row(page, "on-hold", "deleted", "paused-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "deleted", "failed-only-request")).toHaveCount(0);
+    await expect(row(page, "on-hold", "deleted", "duplicate-only-request")).toHaveCount(0);
   });
 
   test("duplicate confirmation locks catalog rows until original request is terminal", async ({

@@ -1,7 +1,11 @@
 import { Fragment } from "react";
 import { Link } from "react-router-dom";
 import BookRouteLink from "./BookRouteLink";
-import { formatBookDate, getWriterColumnGroups } from "../utils/bookPresentation";
+import {
+  formatBookDate,
+  getWriterColumnGroups,
+} from "../utils/bookPresentation";
+import { CATALOG_TABLE_PREFETCH_TRIGGER } from "../utils/catalogBooks";
 import { toQueryString } from "../utils/query";
 
 function renderLinkedValues(values, queryKey, linkFilters) {
@@ -33,13 +37,73 @@ function renderWriterCell(book, linkFilters) {
   );
 }
 
-export default function BookTable({ books, emptyLabel = "No books found.", linkFilters = {}, highlightedBookId = "" }) {
-  if (!books?.length) {
-    return <div className="page-state">{emptyLabel}</div>;
-  }
+function BookTableSkeletonRows({ count = 5, incremental = false }) {
+  return Array.from({ length: count }, (_, index) => (
+    <tr
+      key={`${incremental ? "more" : "initial"}-skeleton-${index}`}
+      data-testid={
+        index === 0
+          ? `book-table-${incremental ? "load-more" : "table"}-skeleton`
+          : undefined
+      }
+      aria-hidden="true"
+    >
+      <td className="table-code-cell">
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td className="table-title-cell">
+        <div className="book-table-skeleton-stack">
+          <span className="skeleton-line skeleton-line-xl" />
+          <span className="skeleton-line skeleton-line-sm" />
+        </div>
+      </td>
+      <td>
+        <div className="book-table-skeleton-stack">
+          <span className="skeleton-line skeleton-line-lg" />
+          <span className="skeleton-line skeleton-line-sm" />
+        </div>
+      </td>
+      <td>
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td>
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td>
+        <span className="skeleton-pill skeleton-pill-sm" />
+      </td>
+      <td>
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td className="table-action-cell">
+        <span className="ghost-button skeleton-button skeleton-button-sm" />
+      </td>
+    </tr>
+  ));
+}
+
+export default function BookTable({
+  books,
+  emptyLabel = "No books found.",
+  linkFilters = {},
+  highlightedBookId = "",
+  shellClassName = "",
+  shellRef = null,
+  hasMore = false,
+  observeLoadTrigger = undefined,
+  initialLoading = false,
+  loadingMore = false,
+  refreshing = false,
+}) {
+  const showInitialSkeleton = (initialLoading || refreshing) && !books?.length;
+  const showIncrementalSkeleton = (loadingMore || refreshing) && books?.length > 0;
 
   return (
-    <div className="catalog-table-shell">
+    <div
+      ref={shellRef}
+      className={`catalog-table-shell${shellClassName ? ` ${shellClassName}` : ""}`}
+      aria-busy={initialLoading || loadingMore || refreshing}
+    >
       <table className="catalog-table book-table">
         <colgroup>
           <col className="book-table-col-id" />
@@ -64,47 +128,89 @@ export default function BookTable({ books, emptyLabel = "No books found.", linkF
           </tr>
         </thead>
         <tbody>
-          {books.map((book) => {
-            const categories = book.categories || [];
-            const series = book.series || [];
+          {showInitialSkeleton ? (
+            <BookTableSkeletonRows />
+          ) : books?.length ? (
+            books.map((book, rowIndex) => {
+              const categories = book.categories || [];
+              const series = book.series || [];
 
-            return (
-              <tr key={book.id} className={highlightedBookId === book.id ? "is-highlighted" : ""}>
-                <td className="table-code-cell">
-                  <BookRouteLink slug={book.slug} className="table-code-link">
-                    {book.catalog_code || "Pending"}
-                  </BookRouteLink>
-                </td>
-                <td className="table-title-cell">
-                  <BookRouteLink slug={book.slug} className="table-title-link">
-                    {book.title}
-                  </BookRouteLink>
-                  <span className="table-secondary-line">
-                    {book.primary_source?.display_path || (book.record_type === "manual" ? "Manual entry" : "Library record")}
-                  </span>
-                </td>
-                <td>{renderWriterCell(book, linkFilters)}</td>
-                <td>
-                  {categories.length ? renderLinkedValues(categories, "category", linkFilters) : <span className="table-muted">Unsorted</span>}
-                </td>
-                <td>{series.length ? series.join(", ") : <span className="table-muted">Standalone</span>}</td>
-                <td>
-                  <span className={`table-type-pill table-type-pill-${book.record_type || "digital"}`}>
-                    {book.record_type === "manual" ? "Manual" : "Digital"}
-                  </span>
-                </td>
-                <td>{formatBookDate(book.created_at)}</td>
-                <td className="table-action-cell">
-                  <BookRouteLink
-                    slug={book.slug}
-                    className="ghost-button table-row-action"
-                  >
-                    Open
-                  </BookRouteLink>
-                </td>
-              </tr>
-            );
-          })}
+              return (
+                <tr
+                  key={book.id}
+                  className={highlightedBookId === book.id ? "is-highlighted" : ""}
+                  ref={
+                    hasMore &&
+                    typeof observeLoadTrigger === "function" &&
+                    rowIndex ===
+                      Math.max(
+                        0,
+                        books.length - CATALOG_TABLE_PREFETCH_TRIGGER,
+                      )
+                      ? observeLoadTrigger
+                      : undefined
+                  }
+                >
+                  <td className="table-code-cell">
+                    <BookRouteLink slug={book.slug} className="table-code-link">
+                      {book.catalog_code || "Pending"}
+                    </BookRouteLink>
+                  </td>
+                  <td className="table-title-cell">
+                    <BookRouteLink slug={book.slug} className="table-title-link">
+                      {book.title}
+                    </BookRouteLink>
+                    <span className="table-secondary-line">
+                      {book.primary_source?.display_path ||
+                        (book.record_type === "manual"
+                          ? "Manual entry"
+                          : "Library record")}
+                    </span>
+                  </td>
+                  <td>{renderWriterCell(book, linkFilters)}</td>
+                  <td>
+                    {categories.length ? (
+                      renderLinkedValues(categories, "category", linkFilters)
+                    ) : (
+                      <span className="table-muted">Unsorted</span>
+                    )}
+                  </td>
+                  <td>
+                    {series.length ? (
+                      series.join(", ")
+                    ) : (
+                      <span className="table-muted">Standalone</span>
+                    )}
+                  </td>
+                  <td>
+                    <span
+                      className={`table-type-pill table-type-pill-${book.record_type || "digital"}`}
+                    >
+                      {book.record_type === "manual" ? "Manual" : "Digital"}
+                    </span>
+                  </td>
+                  <td>{formatBookDate(book.created_at)}</td>
+                  <td className="table-action-cell">
+                    <BookRouteLink
+                      slug={book.slug}
+                      className="ghost-button table-row-action"
+                    >
+                      Open
+                    </BookRouteLink>
+                  </td>
+                </tr>
+              );
+            })
+          ) : (
+            <tr>
+              <td colSpan={8} className="table-empty-cell">
+                {emptyLabel}
+              </td>
+            </tr>
+          )}
+          {showIncrementalSkeleton ? (
+            <BookTableSkeletonRows count={3} incremental />
+          ) : null}
         </tbody>
       </table>
     </div>

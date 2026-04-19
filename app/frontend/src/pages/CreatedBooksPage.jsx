@@ -1,15 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { apiFetch } from "../api/client";
-import BookCard from "../components/BookCard";
-import BookCardSkeleton from "../components/BookCardSkeleton";
+import BookCardGrid from "../components/BookCardGrid";
 import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
-import PropertyTableControls from "../components/PropertyTableControls";
+import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import {
   cleanQueryParams,
   filtersFromSearchParams,
-  toQueryString,
 } from "../utils/query";
 
 const defaultFilters = {
@@ -21,8 +18,6 @@ const defaultFilters = {
   review_state: "",
   sort: "-requested_at",
   ownership: "mine",
-  page: "1",
-  limit: "10",
 };
 
 const createdBookFilterFields = [
@@ -70,74 +65,40 @@ const createdBookFilterFields = [
   },
 ];
 
-const defaultPagination = {
-  page: 1,
-  limit: 10,
-  total_count: 0,
-  page_count: 1,
-  has_previous: false,
-  has_next: false,
-};
-
-function normalizeBookPayload(payload) {
-  if (Array.isArray(payload)) {
-    return {
-      entries: payload,
-      pagination: {
-        ...defaultPagination,
-        total_count: payload.length,
-      },
-    };
-  }
-
-  return {
-    entries: payload?.entries || [],
-    pagination: {
-      ...defaultPagination,
-      ...(payload?.pagination || {}),
-    },
-  };
-}
+const createdBookToolbarFields = createdBookFilterFields.filter(
+  (field) => field.key !== "sort",
+);
+const createdBookSortOptions =
+  createdBookFilterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function CreatedBooksPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [books, setBooks] = useState([]);
-  const [filters, setFilters] = useState(() =>
-    filtersFromSearchParams(defaultFilters, searchParams),
+  const appliedFilters = useMemo(
+    () => filtersFromSearchParams(defaultFilters, searchParams),
+    [searchParams],
   );
-  const [pagination, setPagination] = useState(defaultPagination);
+  const [filters, setFilters] = useState(appliedFilters);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  async function loadBooks(nextFilters = filters) {
-    try {
-      setLoading(true);
-      const payload = await apiFetch(
-        `/catalog/books/${toQueryString(nextFilters)}`,
-      );
-      const normalized = normalizeBookPayload(payload);
-      setBooks(normalized.entries);
-      setPagination(normalized.pagination);
-      setError("");
-    } catch (nextError) {
-      setBooks([]);
-      setPagination(defaultPagination);
-      setError(nextError.message);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const {
+    books,
+    totalCount,
+    hasMore,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error,
+    observeLoadTrigger,
+  } = useInfiniteCatalogBooks({
+    filters: appliedFilters,
+  });
 
   useEffect(() => {
-    const nextFilters = filtersFromSearchParams(defaultFilters, searchParams);
-    setFilters(nextFilters);
-    loadBooks(nextFilters);
-  }, [searchParams.toString()]);
+    setFilters(appliedFilters);
+  }, [appliedFilters]);
 
   function applyFilters(event) {
     event.preventDefault();
-    setSearchParams(cleanQueryParams({ ...filters, page: "1" }));
+    setSearchParams(cleanQueryParams(filters));
   }
 
   function resetFilters() {
@@ -146,22 +107,22 @@ export default function CreatedBooksPage() {
   }
 
   function clearSearch(nextFilters) {
-    const nextSearchFilters = { ...nextFilters, page: "1" };
-    setFilters(nextSearchFilters);
-    setSearchParams(cleanQueryParams(nextSearchFilters));
+    setFilters(nextFilters);
+    setSearchParams(cleanQueryParams(nextFilters));
   }
 
-  const resultCount = error || loading ? "" : `${pagination.total_count}`;
+  const resultCount = error && !books.length ? "" : `${totalCount}`;
+  const showErrorState = Boolean(error && !books.length && !initialLoading);
 
   return (
     <div className="catalog-page page-stack">
       <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
-        <h1 className="created-books-page-title">My Books</h1>
+        <h1>My Books</h1>
 
         <CatalogToolbar
           filters={filters}
           setFilters={setFilters}
-          fields={createdBookFilterFields}
+          fields={createdBookToolbarFields}
           defaultFilters={defaultFilters}
           filtersExpanded={filtersExpanded}
           setFiltersExpanded={setFiltersExpanded}
@@ -169,55 +130,39 @@ export default function CreatedBooksPage() {
           onReset={resetFilters}
           searchPlaceholder="Search your books by title or book ID..."
           resultCount={resultCount}
+          resultCountLoading={initialLoading || refreshing}
           onSearchClear={clearSearch}
+          sortValue={filters.sort}
+          sortOptions={createdBookSortOptions}
+          onSortChange={(nextSort) => {
+            const nextFilters = {
+              ...filters,
+              sort: nextSort,
+            };
+            setFilters(nextFilters);
+            setSearchParams(cleanQueryParams(nextFilters));
+          }}
+          sortAriaLabel="Sort my books"
+          searchRowCompact
+          searchRowClassName="catalog-search-row--property-compact"
           inline
-          buttonsLoading={loading}
+          bare
+          buttonsLoading={initialLoading || refreshing}
+          buttonsDisabled={initialLoading || loadingMore || refreshing}
         />
-
-        <div className="catalog-page-controls-row">
-          <PropertyTableControls
-            rowsPerPage={Number(pagination.limit) || Number(filters.limit) || 10}
-            onRowsPerPageChange={(nextLimit) => {
-              const nextFilters = {
-                ...filters,
-                page: "1",
-                limit: String(nextLimit),
-              };
-              setFilters(nextFilters);
-              setSearchParams(cleanQueryParams(nextFilters));
-            }}
-            page={Number(pagination.page) || 1}
-            pageCount={Number(pagination.page_count) || 1}
-            hasPrevious={Boolean(pagination.has_previous)}
-            hasNext={Boolean(pagination.has_next)}
-            onPageChange={(nextPage) => {
-              const nextFilters = {
-                ...filters,
-                page: String(nextPage),
-                limit: String(pagination.limit || filters.limit || 10),
-              };
-              setFilters(nextFilters);
-              setSearchParams(cleanQueryParams(nextFilters));
-            }}
-            disabled={loading}
-          />
-        </div>
       </header>
 
-      {loading ? (
-        <section className="book-grid book-grid-loading">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <BookCardSkeleton key={index} />
-          ))}
-        </section>
-      ) : error ? (
+      {showErrorState ? (
         <div className="page-state page-state-error">{error}</div>
-      ) : books.length ? (
-        <section className="book-grid">
-          {books.map((book) => (
-            <BookCard key={book.id} book={book} />
-          ))}
-        </section>
+      ) : books.length || initialLoading || refreshing ? (
+        <BookCardGrid
+          books={books}
+          hasMore={hasMore}
+          observeLoadTrigger={observeLoadTrigger}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          refreshing={refreshing}
+        />
       ) : (
         <EmptyState
           title="No books found"

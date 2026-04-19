@@ -22,11 +22,11 @@ test.describe("library live app", () => {
     await loginAsSuperAdmin(page);
   });
 
-  test("library page uses server pagination against the live app", async ({
+  test("library page uses 60-row incremental fetches against the live app", async ({
     page,
   }) => {
     const firstResponsePromise = page.waitForResponse((response) =>
-      isCatalogBooksResponse(response, 1, 10),
+      isCatalogBooksResponse(response, 1, 60),
     );
 
     await page.goto("/library");
@@ -36,19 +36,16 @@ test.describe("library live app", () => {
 
     const firstResponse = await firstResponsePromise;
     expect(new URL(firstResponse.url()).searchParams.get("page")).toBe("1");
-    expect(new URL(firstResponse.url()).searchParams.get("limit")).toBe("10");
+    expect(new URL(firstResponse.url()).searchParams.get("limit")).toBe("60");
 
-    const rowsPerPageResponsePromise = page.waitForResponse((response) =>
-      isCatalogBooksResponse(response, 1, 5),
+    const sortedResponsePromise = page.waitForResponse((response) =>
+      isCatalogBooksResponse(response, 1, 60) &&
+      new URL(response.url()).searchParams.get("sort") === "title",
     );
-    await page.locator(".catalog-toolbar-field-rows select").selectOption("5");
-    await rowsPerPageResponsePromise;
-
-    const nextPageResponsePromise = page.waitForResponse((response) =>
-      isCatalogBooksResponse(response, 2, 5),
-    );
-    await page.getByRole("button", { name: "Next" }).click();
-    await nextPageResponsePromise;
+    await page
+      .locator(".catalog-search-sort .catalog-toolbar-select")
+      .selectOption("title");
+    await sortedResponsePromise;
 
     await expect(page.locator(".book-table tbody tr").first()).toBeVisible();
   });

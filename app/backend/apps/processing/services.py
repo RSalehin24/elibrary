@@ -10,7 +10,8 @@ from uuid import uuid4
 from bs4 import BeautifulSoup
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import CharField, F, OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.catalog.services import find_existing_book_by_source_url
@@ -78,6 +79,22 @@ MAX_PROCESSING_REQUEST_ATTEMPTS = 3
 DEFAULT_AUTOMATION_INTERVAL = "weekly"
 DEFAULT_AUTOMATION_TIME = time_type(3, 0)
 LEGACY_AUTOMATION_STATUS_MESSAGE = "Not configured."
+PROCESSING_TASK_QUEUE = "processing"
+PROCESSING_DISPATCH_REQUESTED_AT_KEY = "_dispatchRequestedAt"
+PROCESSING_DISPATCH_TASK_ID_KEY = "_dispatchTaskId"
+PROCESSING_TABLE_DEFAULT_LIMIT = 60
+PROCESSING_TABLE_MAX_LIMIT = 600
+
+PROCESSING_REQUEST_CARD_STATES = {
+    "create-requests": {BookCreationRequestState.INITIAL},
+    "create-queue": {BookCreationRequestState.QUEUED},
+    "create-processing": {BookCreationRequestState.PROCESSING},
+    "create-created": {BookCreationRequestState.CREATED},
+    "on-hold-paused": {BookCreationRequestState.PAUSED},
+    "on-hold-failed": {BookCreationRequestState.FAILED},
+    "on-hold-duplicate": {BookCreationRequestState.DUPLICATE},
+    "on-hold-deleted": {BookCreationRequestState.DELETED},
+}
 
 
 def normalize_category_key(value):
@@ -87,6 +104,13 @@ def normalize_category_key(value):
 def category_is_incomplete(value):
     normalized = normalize_category_key(value)
     return any(keyword in normalized for keyword in INCOMPLETE_CATEGORY_KEYWORDS)
+
+
+def incomplete_category_query(field_name="category"):
+    query = Q()
+    for keyword in INCOMPLETE_CATEGORY_KEYWORDS:
+        query |= Q(**{f"{field_name}__icontains": keyword})
+    return query
 
 
 def sync_run_mode(state):
@@ -105,6 +129,12 @@ def should_run_processing_jobs_inline():
 
 def should_enqueue_processing_work():
     return not should_run_processing_jobs_inline()
+
+
+def should_skip_processing_metadata_duplicate_check():
+    return bool(
+        getattr(settings, "PROCESSING_SKIP_METADATA_DUPLICATE_CHECK", True)
+    )
 
 
 def sync_uses_live_fetch(state):
@@ -220,8 +250,27 @@ def get_automation_settings(kind):
     return normalize_automation_settings(automation_settings)
 
 
+def processing_request_prefetch():
+    return Prefetch(
+        "creation_requests",
+        queryset=BookCreationRequest.objects.select_related("duplicate_of_request").order_by(
+            "-updated_at",
+            "-created_at",
+            "id",
+        ),
+    )
+
+
+def record_request_list(record):
+    cached = getattr(record, "_prefetched_objects_cache", {}).get("creation_requests")
+    if cached is not None:
+        return list(cached)
+    return list(record.creation_requests.order_by("-updated_at", "-created_at", "id"))
+
+
 def latest_request_for_record(record):
-    return record.creation_requests.order_by("-updated_at", "-created_at").first()
+    requests = record_request_list(record)
+    return requests[0] if requests else None
 
 
 def linked_book_for_remote_url(url):
@@ -482,7 +531,7 @@ def dispatch_sync_task(sync_state, *, force=False):
 
     assigned_task_id = str(uuid4())
     sync_state.task_id = assigned_task_id
-    sync_state.queue_name = "celery"
+    sync_state.queue_name = PROCESSING_TASK_QUEUE
     sync_state.last_error = ""
     sync_state.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
 
@@ -490,6 +539,7 @@ def dispatch_sync_task(sync_state, *, force=False):
         async_result = run_processing_sync_task.apply_async(
             args=[sync_state.singleton_key],
             task_id=assigned_task_id,
+            queue=PROCESSING_TASK_QUEUE,
         )
         dispatched_task_id = getattr(async_result, "id", assigned_task_id) or assigned_task_id
         if dispatched_task_id != assigned_task_id:
@@ -987,7 +1037,7 @@ def request_blocks_record_selection(request):
 
 
 def record_is_selectable(record):
-    requests = list(record.creation_requests.order_by("-updated_at", "-created_at"))
+    requests = record_request_list(record)
     duplicate_request = next(
         (
             request
@@ -1010,14 +1060,548 @@ def record_is_selectable(record):
 def enqueue_request_processing(processing_request):
     from .tasks import kickoff_book_creation_request_task
 
+    processing_request = _reload_processing_request(processing_request.id)
+    if _request_dispatch_pending(processing_request):
+        return False
+
     try:
-        kickoff_book_creation_request_task.apply_async(args=[str(processing_request.id)])
+        async_result = kickoff_book_creation_request_task.apply_async(
+            args=[str(processing_request.id)],
+            queue=PROCESSING_TASK_QUEUE,
+        )
     except Exception:
         logger.warning(
             "Processing request kickoff dispatch failed for %s.",
             processing_request.id,
             exc_info=True,
         )
+        return False
+
+    processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state in {
+        BookCreationRequestState.INITIAL,
+        BookCreationRequestState.QUEUED,
+    }:
+        next_progress = {
+            **_request_progress(processing_request),
+            PROCESSING_DISPATCH_REQUESTED_AT_KEY: timezone.now().isoformat(),
+        }
+        task_id = str(getattr(async_result, "id", "") or "").strip()
+        if task_id:
+            next_progress[PROCESSING_DISPATCH_TASK_ID_KEY] = task_id
+        processing_request.progress = next_progress
+        processing_request.save(update_fields=["progress"])
+    return True
+
+
+def processing_state_label(state):
+    try:
+        return BookCreationState(state).label
+    except ValueError:
+        return str(state or "")
+
+
+def processing_display_url(url):
+    return unquote(str(url or "").strip())
+
+
+def processing_display_path(url):
+    parsed = urlparse((url or "").strip())
+    return unquote(parsed.path).strip("/") or parsed.netloc
+
+
+def processing_request_details(request):
+    progress = request.progress if isinstance(request.progress, dict) else {}
+    checkpoint = str(progress.get("checkpoint") or "").strip()
+    saved_at = str(progress.get("savedAt") or "").strip()
+    if checkpoint and saved_at:
+        return f"{checkpoint} ({saved_at})"
+    if checkpoint:
+        return checkpoint
+    if request.error_message:
+        return request.error_message
+    if request.duplicate_confirmed:
+        return "Confirmed duplicate"
+    if request.is_confirmed_not_duplicate:
+        return "Confirmed new"
+    if request.is_resumed:
+        return "Resumed from saved progress"
+    return ""
+
+
+def processing_linked_book(record, request=None):
+    request_book = getattr(request, "linked_book", None) if request is not None else None
+    if (
+        request is not None
+        and getattr(request, "linked_book_id", None)
+        and request_book is not None
+        and request_book.deleted_at is None
+    ):
+        return request_book
+
+    record_book = getattr(record, "linked_book", None)
+    if (
+        getattr(record, "linked_book_id", None)
+        and record_book is not None
+        and record_book.deleted_at is None
+    ):
+        return record_book
+
+    return None
+
+
+def processing_row_payload(record, request=None, *, selectable=True):
+    progress = request.progress if isinstance(request and request.progress, dict) else {}
+    linked_book = processing_linked_book(record, request)
+    return {
+        "id": str(request.id if request else record.id),
+        "recordId": str(record.id),
+        "requestId": str(request.id) if request else None,
+        "title": record.name,
+        "url": record.url,
+        "displayUrl": processing_display_url(record.url),
+        "displayPath": processing_display_path(record.url),
+        "category": record.category,
+        "writer": record.writer,
+        "translator": record.translator,
+        "publisher": record.publisher,
+        "status": request.state if request else record.book_creation_state,
+        "updatedAt": (
+            request.updated_at.isoformat() if request else record.updated_at.isoformat()
+        ),
+        "selectable": bool(selectable),
+        "progressCheckpoint": str(progress.get("checkpoint") or ""),
+        "progressSavedAt": str(progress.get("savedAt") or ""),
+        "errorMessage": request.error_message if request else "",
+        "isResumed": bool(request.is_resumed) if request else False,
+        "isConfirmedNotDuplicate": bool(request.is_confirmed_not_duplicate)
+        if request
+        else False,
+        "linkedBookId": str(linked_book.id) if linked_book else None,
+        "linkedBookSlug": linked_book.slug if linked_book else None,
+        "duplicateOfRequestId": str(request.duplicate_of_request_id)
+        if request and request.duplicate_of_request_id
+        else None,
+        "duplicateOfRecordId": str(request.duplicate_of_record_id)
+        if request and request.duplicate_of_record_id
+        else None,
+        "duplicateConfirmed": bool(request.duplicate_confirmed) if request else False,
+    }
+
+
+def processing_row_search_text(row):
+    details = ""
+    if row.get("progressCheckpoint"):
+        details = row["progressCheckpoint"]
+    elif row.get("errorMessage"):
+        details = row["errorMessage"]
+    elif row.get("duplicateConfirmed"):
+        details = "Confirmed duplicate"
+    elif row.get("isConfirmedNotDuplicate"):
+        details = "Confirmed new"
+    elif row.get("isResumed"):
+        details = "Resumed from saved progress"
+
+    values = [
+        row.get("title"),
+        row.get("url"),
+        row.get("displayUrl"),
+        row.get("displayPath"),
+        row.get("writer"),
+        row.get("translator"),
+        row.get("publisher"),
+        row.get("category"),
+        processing_state_label(row.get("status")),
+        details,
+    ]
+    return " ".join(str(value or "") for value in values).casefold()
+
+
+def processing_row_record_query(query):
+    if not query:
+        return Q()
+
+    return (
+        Q(name__icontains=query)
+        | Q(url__icontains=query)
+        | Q(category__icontains=query)
+        | Q(writer__icontains=query)
+        | Q(translator__icontains=query)
+        | Q(publisher__icontains=query)
+        | Q(processing_status__icontains=query)
+    )
+
+
+def processing_row_request_query(query):
+    if not query:
+        return Q()
+
+    return (
+        Q(book_record__name__icontains=query)
+        | Q(book_record__url__icontains=query)
+        | Q(book_record__category__icontains=query)
+        | Q(book_record__writer__icontains=query)
+        | Q(book_record__translator__icontains=query)
+        | Q(book_record__publisher__icontains=query)
+        | Q(state__icontains=query)
+        | Q(error_message__icontains=query)
+    )
+
+
+def distinct_nonempty_values(queryset, field_name):
+    return sorted(
+        {
+            value
+            for value in queryset.order_by().values_list(field_name, flat=True).distinct()
+            if value
+        }
+    )
+
+
+def annotate_record_processing_status(queryset):
+    latest_request_state = Subquery(
+        BookCreationRequest.objects.filter(book_record_id=OuterRef("pk"))
+        .order_by("-updated_at", "-created_at", "id")
+        .values("state")[:1],
+        output_field=CharField(),
+    )
+    return queryset.annotate(
+        latest_request_state=latest_request_state,
+    ).annotate(
+        processing_status=Coalesce(F("latest_request_state"), F("book_creation_state")),
+    )
+
+
+def processing_pagination_payload(total_count, offset, limit, returned_count):
+    next_offset = offset + returned_count
+    return {
+        "offset": offset,
+        "limit": limit,
+        "totalCount": total_count,
+        "returnedCount": returned_count,
+        "hasMore": next_offset < total_count,
+        "nextOffset": next_offset,
+    }
+
+
+def build_processing_record_table_payload(
+    queryset,
+    *,
+    query="",
+    category="",
+    status="",
+    offset=0,
+    limit=PROCESSING_TABLE_DEFAULT_LIMIT,
+    selectable=True,
+):
+    category_options = distinct_nonempty_values(queryset, "category")
+    status_options = distinct_nonempty_values(queryset, "processing_status")
+
+    filtered_queryset = queryset
+    if query:
+        filtered_queryset = filtered_queryset.filter(processing_row_record_query(query))
+    if category:
+        filtered_queryset = filtered_queryset.filter(category=category)
+    if status:
+        filtered_queryset = filtered_queryset.filter(processing_status=status)
+
+    total_count = filtered_queryset.count()
+    page_records = list(filtered_queryset[offset : offset + limit])
+    rows = []
+    for record in page_records:
+        latest_request = latest_request_for_record(record)
+        rows.append(
+            processing_row_payload(
+                record,
+                latest_request,
+                selectable=record_is_selectable(record) if selectable else False,
+            )
+        )
+
+    return {
+        "rows": rows,
+        "pagination": processing_pagination_payload(
+            total_count,
+            offset,
+            limit,
+            len(rows),
+        ),
+        "filters": {
+            "categoryOptions": category_options,
+            "statusOptions": status_options,
+        },
+    }
+
+
+def build_processing_request_table_payload(
+    queryset,
+    *,
+    query="",
+    category="",
+    status="",
+    offset=0,
+    limit=PROCESSING_TABLE_DEFAULT_LIMIT,
+):
+    category_options = distinct_nonempty_values(queryset, "book_record__category")
+    status_options = distinct_nonempty_values(queryset, "state")
+
+    filtered_queryset = queryset
+    if query:
+        filtered_queryset = filtered_queryset.filter(processing_row_request_query(query))
+    if category:
+        filtered_queryset = filtered_queryset.filter(book_record__category=category)
+    if status:
+        filtered_queryset = filtered_queryset.filter(state=status)
+
+    total_count = filtered_queryset.count()
+    page_requests = list(filtered_queryset[offset : offset + limit])
+    rows = [
+        processing_row_payload(processing_request.book_record, processing_request)
+        for processing_request in page_requests
+    ]
+
+    return {
+        "rows": rows,
+        "pagination": processing_pagination_payload(
+            total_count,
+            offset,
+            limit,
+            len(rows),
+        ),
+        "filters": {
+            "categoryOptions": category_options,
+            "statusOptions": status_options,
+        },
+    }
+
+
+def catalog_processing_rows():
+    rows = []
+    queryset = (
+        BookRecord.objects.select_related("linked_book")
+        .prefetch_related(processing_request_prefetch())
+        .order_by("name", "id")
+    )
+    for record in queryset:
+        latest_request = latest_request_for_record(record)
+        rows.append(
+            processing_row_payload(
+                record,
+                latest_request,
+                selectable=record_is_selectable(record),
+            )
+        )
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            0 if row["status"] == BookCreationState.NOT_CREATED else 1,
+            normalize_category_key(row["title"]),
+            row["id"],
+        ),
+    )
+
+
+def request_processing_rows(states, *, predicate=None):
+    queryset = (
+        BookCreationRequest.objects.filter(state__in=states)
+        .select_related("book_record", "linked_book", "book_record__linked_book")
+        .order_by("-updated_at", "-created_at", "id")
+    )
+    rows = []
+    for processing_request in queryset:
+        record = processing_request.book_record
+        if predicate and not predicate(processing_request, record):
+            continue
+        rows.append(processing_row_payload(record, processing_request))
+    return rows
+
+
+def incomplete_record_rows():
+    queryset = (
+        BookRecord.objects.select_related("linked_book")
+        .prefetch_related(processing_request_prefetch())
+        .filter(resolved_from_incomplete=False)
+        .filter(Q(was_incomplete=True) | incomplete_category_query())
+        .order_by("name", "id")
+    )
+    rows = []
+    for record in queryset:
+        latest_request = latest_request_for_record(record)
+        rows.append(
+            processing_row_payload(
+                record,
+                latest_request,
+                selectable=False,
+            )
+        )
+    return rows
+
+
+def incomplete_completed_rows():
+    return request_processing_rows(
+        {BookCreationRequestState.CREATED},
+        predicate=lambda _request, record: bool(
+            record.was_incomplete and record.resolved_from_incomplete
+        ),
+    )
+
+
+PROCESSING_TABLE_BUILDERS = {
+    "catalog-records": catalog_processing_rows,
+    "incomplete-records": incomplete_record_rows,
+    "incomplete-completed": incomplete_completed_rows,
+    **{
+        card_id: (lambda states: lambda: request_processing_rows(states))(states)
+        for card_id, states in PROCESSING_REQUEST_CARD_STATES.items()
+    },
+}
+
+
+def processing_table_payload(card, *, query="", category="", status="", offset=0, limit=PROCESSING_TABLE_DEFAULT_LIMIT):
+    offset_value = max(0, int(offset or 0))
+    limit_value = max(
+        1,
+        min(int(limit or PROCESSING_TABLE_DEFAULT_LIMIT), PROCESSING_TABLE_MAX_LIMIT),
+    )
+    query_value = str(query or "").strip()
+
+    if card == "catalog-records":
+        return build_processing_record_table_payload(
+            annotate_record_processing_status(
+                BookRecord.objects.select_related("linked_book")
+                .prefetch_related(processing_request_prefetch())
+                .order_by("name", "id")
+            ),
+            query=query_value,
+            category=category,
+            status=status,
+            offset=offset_value,
+            limit=limit_value,
+        )
+
+    if card == "incomplete-records":
+        return build_processing_record_table_payload(
+            annotate_record_processing_status(
+                BookRecord.objects.select_related("linked_book")
+                .prefetch_related(processing_request_prefetch())
+                .filter(resolved_from_incomplete=False)
+                .filter(Q(was_incomplete=True) | incomplete_category_query())
+                .order_by("name", "id")
+            ),
+            query=query_value,
+            category=category,
+            status=status,
+            offset=offset_value,
+            limit=limit_value,
+            selectable=False,
+        )
+
+    if card == "incomplete-completed":
+        return build_processing_request_table_payload(
+            BookCreationRequest.objects.filter(state=BookCreationRequestState.CREATED)
+            .filter(
+                book_record__was_incomplete=True,
+                book_record__resolved_from_incomplete=True,
+            )
+            .select_related("book_record", "linked_book", "book_record__linked_book")
+            .order_by("-updated_at", "-created_at", "id"),
+            query=query_value,
+            category=category,
+            status=status,
+            offset=offset_value,
+            limit=limit_value,
+        )
+
+    if card in PROCESSING_REQUEST_CARD_STATES:
+        return build_processing_request_table_payload(
+            BookCreationRequest.objects.filter(state__in=PROCESSING_REQUEST_CARD_STATES[card])
+            .select_related("book_record", "linked_book", "book_record__linked_book")
+            .order_by("-updated_at", "-created_at", "id"),
+            query=query_value,
+            category=category,
+            status=status,
+            offset=offset_value,
+            limit=limit_value,
+        )
+
+    raise KeyError(card)
+
+
+def processing_summary_payload():
+    request_counts = {
+        state: BookCreationRequest.objects.filter(state=state).count()
+        for state in BookCreationRequestState.values
+    }
+    latest_failed_message = (
+        BookCreationRequest.objects.filter(state=BookCreationRequestState.FAILED)
+        .exclude(error_message="")
+        .order_by("-updated_at", "-created_at", "id")
+        .values_list("error_message", flat=True)
+        .first()
+        or ""
+    )
+    active_requests = sum(
+        request_counts[state]
+        for state in (
+            BookCreationRequestState.INITIAL,
+            BookCreationRequestState.QUEUED,
+            BookCreationRequestState.PROCESSING,
+        )
+    )
+    on_hold_requests = sum(
+        request_counts[state]
+        for state in (
+            BookCreationRequestState.PAUSED,
+            BookCreationRequestState.FAILED,
+            BookCreationRequestState.DUPLICATE,
+            BookCreationRequestState.DELETED,
+        )
+    )
+    incomplete_records = (
+        BookRecord.objects.filter(resolved_from_incomplete=False)
+        .filter(Q(was_incomplete=True) | incomplete_category_query())
+        .count()
+    )
+    resolved_incomplete_records = BookRecord.objects.filter(
+        was_incomplete=True,
+        resolved_from_incomplete=True,
+    ).count()
+
+    return {
+        "catalog": {
+            "records": BookRecord.objects.count(),
+            "notCreated": BookRecord.objects.filter(
+                book_creation_state=BookCreationState.NOT_CREATED
+            ).count(),
+            "active": active_requests,
+            "created": request_counts[BookCreationRequestState.CREATED],
+            "onHold": on_hold_requests,
+        },
+        "create": {
+            "requests": request_counts[BookCreationRequestState.INITIAL],
+            "queue": request_counts[BookCreationRequestState.QUEUED],
+            "processing": request_counts[BookCreationRequestState.PROCESSING],
+            "created": request_counts[BookCreationRequestState.CREATED],
+        },
+        "onHold": {
+            "paused": request_counts[BookCreationRequestState.PAUSED],
+            "failed": request_counts[BookCreationRequestState.FAILED],
+            "duplicate": request_counts[BookCreationRequestState.DUPLICATE],
+            "deleted": request_counts[BookCreationRequestState.DELETED],
+        },
+        "incomplete": {
+            "incomplete": incomplete_records,
+            "resolved": resolved_incomplete_records,
+        },
+        "notifications": {
+            "activeRequests": active_requests,
+            "createdCount": request_counts[BookCreationRequestState.CREATED],
+            "failedCount": request_counts[BookCreationRequestState.FAILED],
+            "duplicateCount": request_counts[BookCreationRequestState.DUPLICATE],
+            "latestFailedMessage": latest_failed_message,
+        },
+    }
 
 
 def create_request_for_record(record, state=BookCreationRequestState.INITIAL, origin=SubmissionOrigin.CURATION):
@@ -1077,9 +1661,26 @@ def run_incomplete_automation():
 @transaction.atomic
 def reset_processing_data():
     BookCreationRequest.objects.all().delete()
-    BookRecord.objects.all().delete()
-    ProcessingSyncState.objects.all().delete()
-    ProcessingAutomationSettings.objects.all().delete()
+    BookRecord.objects.update(
+        book_creation_state=BookCreationState.NOT_CREATED,
+        linked_book=None,
+        is_duplicate=False,
+        duplicate_of_record=None,
+    )
+    ProcessingSyncState.objects.all().update(
+        status=ProcessingSyncStatus.IDLE,
+        progress=None,
+        remote_pages=[],
+        page_index=0,
+        fetched_count=0,
+        skipped_count=0,
+        updated_count=0,
+        appended_count=0,
+        message="Ready to sync.",
+        task_id="",
+        queue_name="",
+        last_error="",
+    )
 
 
 PROCESSING_SOURCE_METADATA_CHECKPOINT = "source-metadata"
@@ -1094,6 +1695,27 @@ def _request_saved_data(processing_request):
     progress = _request_progress(processing_request)
     saved_data = progress.get("savedData")
     return saved_data if isinstance(saved_data, dict) else {}
+
+
+def _request_dispatch_pending(processing_request):
+    if processing_request.state not in {
+        BookCreationRequestState.INITIAL,
+        BookCreationRequestState.QUEUED,
+    }:
+        return False
+
+    progress = _request_progress(processing_request)
+    return bool(progress.get(PROCESSING_DISPATCH_REQUESTED_AT_KEY))
+
+
+def _request_progress_without_dispatch_marker(progress):
+    if not isinstance(progress, dict):
+        return progress
+
+    next_progress = dict(progress)
+    next_progress.pop(PROCESSING_DISPATCH_REQUESTED_AT_KEY, None)
+    next_progress.pop(PROCESSING_DISPATCH_TASK_ID_KEY, None)
+    return next_progress or None
 
 
 def _reload_processing_request(request_id):
@@ -1273,6 +1895,9 @@ def _processing_request_duplicate_check(processing_request, scraped_data):
     if exact_title_duplicate:
         return exact_title_duplicate
 
+    if should_skip_processing_metadata_duplicate_check():
+        return None
+
     metadata_duplicate = detect_metadata_duplicate(scraped_data)
     if metadata_duplicate:
         return metadata_duplicate
@@ -1401,9 +2026,16 @@ def _transition_request_state(request_id, from_state, to_state):
         if processing_request.state != from_state:
             return processing_request
         processing_request.state = to_state
+        update_fields = ["state", "error_message", "updated_at"]
         if to_state == BookCreationRequestState.PROCESSING:
             processing_request.error_message = ""
-        processing_request.save(update_fields=["state", "error_message", "updated_at"])
+            next_progress = _request_progress_without_dispatch_marker(
+                processing_request.progress
+            )
+            if next_progress != processing_request.progress:
+                processing_request.progress = next_progress
+                update_fields.append("progress")
+        processing_request.save(update_fields=update_fields)
         sync_record_state(processing_request.book_record)
         return processing_request
 
@@ -1619,19 +2251,6 @@ def advance_pipeline_once():
     advanced = 0
     advanced += len(mark_stale_processing_requests())
 
-    initial_request = (
-        BookCreationRequest.objects.filter(state=BookCreationRequestState.INITIAL)
-        .order_by("created_at", "id")
-        .first()
-    )
-    if initial_request:
-        _transition_request_state(
-            initial_request.id,
-            BookCreationRequestState.INITIAL,
-            BookCreationRequestState.QUEUED,
-        )
-        return advanced + 1
-
     queued_request = (
         BookCreationRequest.objects.filter(state=BookCreationRequestState.QUEUED)
         .order_by("created_at", "id")
@@ -1644,9 +2263,10 @@ def advance_pipeline_once():
                 BookCreationRequestState.QUEUED,
                 BookCreationRequestState.PROCESSING,
             )
-        else:
+            advanced += 1
+        elif not _request_dispatch_pending(queued_request):
             enqueue_request_processing(queued_request)
-        return advanced + 1
+            advanced += 1
 
     processing_request = (
         BookCreationRequest.objects.filter(state=BookCreationRequestState.PROCESSING)
@@ -1655,9 +2275,23 @@ def advance_pipeline_once():
     )
     if processing_request and should_run_processing_jobs_inline():
         _run_processing_request(processing_request)
-        return advanced + 1
+        advanced += 1
 
-    refresh_processing_state()
+    initial_request = (
+        BookCreationRequest.objects.filter(state=BookCreationRequestState.INITIAL)
+        .order_by("created_at", "id")
+        .first()
+    )
+    if initial_request:
+        _transition_request_state(
+            initial_request.id,
+            BookCreationRequestState.INITIAL,
+            BookCreationRequestState.QUEUED,
+        )
+        advanced += 1
+
+    if advanced == 0:
+        refresh_processing_state()
     return advanced
 
 

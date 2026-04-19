@@ -93,22 +93,12 @@
   gap: 8px;
 }
 
-.processing-control-skeleton {
-  display: block;
-  width: 100%;
-  min-height: 42px;
-  border-radius: 12px;
-}
-
-.processing-control-skeleton-button {
-  width: 148px;
+.processing-card-skeleton {
+  padding-bottom: 25px;
 }
 
 .processing-switch-skeleton {
-  display: inline-block;
-  width: 92px;
-  min-height: 38px;
-  border-radius: 999px;
+  display: inline-flex;
 }
 
 .processing-summary-card > .processing-inline-loader,
@@ -121,6 +111,19 @@
   > .processing-table-shell {
   min-height: 0;
   height: 100%;
+}
+
+.processing-skeleton-row--split {
+  height: 110px;
+}
+
+.processing-skeleton-row--split > td {
+  height: 110px;
+}
+
+.processing-skeleton-row--split .processing-contributors-list {
+  min-height: 82px;
+  align-content: start;
 }
 
 .processing-table {
@@ -142,6 +145,33 @@
 
 .processing-col-select {
   width: 56px;
+}
+
+.processing-create-card .processing-col-select {
+  width: 4%;
+  padding-left: 8px;
+  padding-right: 8px;
+  text-align: center;
+}
+
+.processing-create-card .processing-col-book-wide {
+  width: 24%;
+}
+
+.processing-create-card .processing-col-contributors-wide {
+  width: 24%;
+}
+
+.processing-create-card .processing-col-category {
+  width: 16%;
+}
+
+.processing-create-card .processing-col-status {
+  width: 15%;
+}
+
+.processing-create-card .processing-col-updated {
+  width: 17%;
 }
 
 .processing-catalog-table .processing-incomplete-col-select {
@@ -244,6 +274,24 @@
 
 .processing-table .processing-col-updated {
   width: 15%;
+}
+
+.processing-on-hold-failed-card .processing-col-book-wide {
+  width: 17%;
+}
+
+.processing-on-hold-failed-card .processing-col-contributors-wide {
+  width: 17%;
+}
+
+.processing-on-hold-failed-card .processing-col-category,
+.processing-on-hold-failed-card .processing-col-status,
+.processing-on-hold-failed-card .processing-col-updated {
+  width: 12%;
+}
+
+.processing-on-hold-failed-card .processing-col-details {
+  width: 30%;
 }
 
 .processing-catalog-table .processing-col-request {
@@ -407,12 +455,11 @@
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 16px;
-  background:
-    linear-gradient(
-      180deg,
-      rgba(252, 254, 253, 0.96),
-      rgba(241, 247, 243, 0.9)
-    );
+  background: linear-gradient(
+    180deg,
+    rgba(252, 254, 253, 0.96),
+    rgba(241, 247, 243, 0.9)
+  );
   padding: 14px;
   display: grid;
   align-content: start;
@@ -516,7 +563,6 @@
   font-size: 0.8rem;
   line-height: 1.5;
 }
-
 
 .processing-inline-danger {
   min-height: 34px;

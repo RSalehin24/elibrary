@@ -1,6 +1,10 @@
-export default function BookCardSkeleton() {
+export default function BookCardSkeleton({ testId = undefined }) {
   return (
-    <article className="book-card book-card-skeleton" aria-hidden="true">
+    <article
+      className="book-card book-card-skeleton"
+      aria-hidden="true"
+      data-testid={testId}
+    >
       <div className="book-card-art">
         <div className="book-cover-placeholder book-card-cover book-card-cover-skeleton">
           <span className="book-cover-kicker skeleton-pill skeleton-pill-sm" />

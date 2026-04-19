@@ -145,6 +145,14 @@
     justify-content: flex-start;
   }
 
+  .catalog-search-sort {
+    width: 100%;
+  }
+
+  .catalog-search-sort .catalog-toolbar-select {
+    width: 100%;
+  }
+
   .catalog-search-row--compact .catalog-search-actions {
     flex-wrap: wrap;
   }
@@ -157,6 +165,10 @@
   .catalog-toolbar-sync-panel,
   .catalog-toolbar-secondary {
     min-height: 0;
+  }
+
+  .catalog-table-shell--incremental {
+    max-height: min(68vh, 760px);
   }
 
   .processing-card-actions > .primary-button,

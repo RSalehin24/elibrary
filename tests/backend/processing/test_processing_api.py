@@ -1,6 +1,7 @@
 import time as time_module
 from datetime import time, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from django.utils import timezone
@@ -13,8 +14,10 @@ from apps.processing.models import (
     BookRecord,
     ProcessingAutomationKind,
     ProcessingAutomationSettings,
+    ProcessingSyncStatus,
 )
-from apps.processing.services import get_sync_state
+from apps.processing.services import dispatch_sync_task, get_sync_state
+from apps.processing.tasks import kickoff_book_creation_request_task
 
 
 def login_processing_admin(client, email="processing-admin@example.com"):
@@ -277,6 +280,177 @@ def test_processing_state_normalizes_legacy_automation_defaults(client):
 
 
 @pytest.mark.django_db
+def test_processing_state_supports_summary_only_payload(client):
+    login_processing_admin(client)
+    record = BookRecord.objects.create(
+        id="summary-only-record",
+        name="Summary Only",
+        url="https://example.test/books/summary-only",
+        category="Fiction",
+        writer="Writer",
+        publisher="Press",
+        book_creation_state="not_created",
+        was_incomplete=True,
+    )
+    BookCreationRequest.objects.create(
+        id="summary-only-request",
+        book_record=record,
+        state="failed",
+        error_message="Pipeline failed after retries.",
+    )
+
+    response = client.get("/api/processing/state/?includeLists=0")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "records" not in payload
+    assert "requests" not in payload
+    assert payload["summary"]["catalog"]["records"] == 1
+    assert payload["summary"]["catalog"]["onHold"] == 1
+    assert payload["summary"]["onHold"]["failed"] == 1
+    assert payload["summary"]["incomplete"]["incomplete"] == 1
+    assert (
+        payload["summary"]["notifications"]["latestFailedMessage"]
+        == "Pipeline failed after retries."
+    )
+
+
+@pytest.mark.django_db
+def test_processing_table_paginates_catalog_rows_and_applies_filters(client):
+    login_processing_admin(client)
+
+    created_ids = set()
+    for index in range(75):
+        record = BookRecord.objects.create(
+            id=f"table-record-{index:02d}",
+            name=f"Table Record {index:02d}",
+            url=f"https://example.test/books/table-record-{index:02d}",
+            category="Poetry" if index % 2 == 0 else "Novel",
+            writer="Writer",
+            publisher="Press",
+            book_creation_state="not_created",
+        )
+        if index < 6:
+            BookCreationRequest.objects.create(
+                id=f"table-request-{index:02d}",
+                book_record=record,
+                state="created",
+            )
+            created_ids.add(record.id)
+
+    response = client.get("/api/processing/table/?card=catalog-records&limit=60")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) == 60
+    assert payload["pagination"]["totalCount"] == 75
+    assert payload["pagination"]["hasMore"] is True
+    assert payload["pagination"]["nextOffset"] == 60
+    assert "Novel" in payload["filters"]["categoryOptions"]
+    assert "Poetry" in payload["filters"]["categoryOptions"]
+    assert "created" in payload["filters"]["statusOptions"]
+    assert "not_created" in payload["filters"]["statusOptions"]
+
+    response = client.get("/api/processing/table/?card=catalog-records&offset=60&limit=60")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) == 15
+    assert payload["pagination"]["hasMore"] is False
+
+    response = client.get(
+        "/api/processing/table/?card=catalog-records&category=Poetry&status=created"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"]["totalCount"] == 3
+    assert {row["recordId"] for row in payload["rows"]} == {
+        record_id for record_id in created_ids if record_id.endswith(("00", "02", "04"))
+    }
+    assert all(row["category"] == "Poetry" for row in payload["rows"])
+    assert all(row["status"] == "created" for row in payload["rows"])
+
+
+@pytest.mark.django_db
+def test_processing_table_keeps_create_cards_scoped_to_request_status(client):
+    login_processing_admin(client)
+
+    card_states = {
+        "create-requests": "initial",
+        "create-queue": "queued",
+        "create-processing": "processing",
+        "create-created": "created",
+    }
+    request_ids = {}
+
+    for card_id, status in card_states.items():
+        record = BookRecord.objects.create(
+            id=f"{card_id}-record",
+            name=f"{card_id} title",
+            url=f"https://example.test/books/{card_id}",
+            category="Reference",
+            writer="Writer One",
+            publisher="Example Press",
+            book_creation_state=status,
+        )
+        request = BookCreationRequest.objects.create(
+            id=f"{card_id}-request",
+            book_record=record,
+            state=status,
+        )
+        request_ids[card_id] = str(request.id)
+
+    for card_id, status in card_states.items():
+        response = client.get(f"/api/processing/table/?card={card_id}")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert [row["requestId"] for row in payload["rows"]] == [request_ids[card_id]]
+        assert {row["status"] for row in payload["rows"]} == {status}
+        assert payload["filters"]["statusOptions"] == [status]
+
+
+@pytest.mark.django_db
+def test_processing_table_keeps_on_hold_cards_scoped_to_request_status(client):
+    login_processing_admin(client)
+
+    card_states = {
+        "on-hold-paused": "paused",
+        "on-hold-failed": "failed",
+        "on-hold-duplicate": "duplicate",
+        "on-hold-deleted": "deleted",
+    }
+    request_ids = {}
+
+    for card_id, status in card_states.items():
+        record = BookRecord.objects.create(
+            id=f"{card_id}-record",
+            name=f"{card_id} title",
+            url=f"https://example.test/books/{card_id}",
+            category="Reference",
+            writer="Writer One",
+            publisher="Example Press",
+            book_creation_state=status,
+        )
+        request = BookCreationRequest.objects.create(
+            id=f"{card_id}-request",
+            book_record=record,
+            state=status,
+        )
+        request_ids[card_id] = str(request.id)
+
+    for card_id, status in card_states.items():
+        response = client.get(f"/api/processing/table/?card={card_id}")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert [row["requestId"] for row in payload["rows"]] == [request_ids[card_id]]
+        assert {row["status"] for row in payload["rows"]} == {status}
+        assert payload["filters"]["statusOptions"] == [status]
+
+
+@pytest.mark.django_db
 def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requests(client):
     login_processing_admin(client)
     BookRecord.objects.create(
@@ -511,6 +685,192 @@ def test_processing_create_requests_and_pipeline_are_backend_owned(client, monke
     assert record.linked_book_id == created_book.id
 
 
+def test_processing_task_requeues_if_worker_child_is_lost():
+    assert kickoff_book_creation_request_task.acks_late is True
+    assert kickoff_book_creation_request_task.reject_on_worker_lost is True
+
+
+def test_processing_task_handles_missing_request_gracefully(monkeypatch):
+    missing_request_id = "missing-processing-request"
+
+    def raise_missing(_request_id):
+        raise BookCreationRequest.DoesNotExist
+
+    monkeypatch.setattr(
+        "apps.processing.tasks.kickoff_request_processing",
+        raise_missing,
+    )
+
+    result = kickoff_book_creation_request_task.run(missing_request_id)
+
+    assert result == {
+        "request_id": missing_request_id,
+        "state": "deleted",
+        "submission_id": "",
+        "missing": True,
+    }
+
+
+@pytest.mark.django_db
+def test_processing_pipeline_does_not_reenqueue_queued_request_while_dispatch_is_pending(
+    client, monkeypatch
+):
+    login_processing_admin(client)
+    record = BookRecord.objects.create(
+        id="pending-dispatch-record",
+        name="Pending Dispatch Record",
+        url="https://example.test/books/pending-dispatch-record",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+    )
+    dispatch_calls = []
+
+    def fake_apply_async(*, args, **kwargs):
+        dispatch_calls.append({"args": tuple(args), "kwargs": dict(kwargs)})
+        return SimpleNamespace(id=f"task-{len(dispatch_calls)}")
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_run_processing_jobs_inline",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
+        fake_apply_async,
+    )
+
+    response = client.post(
+        "/api/processing/records/create-requests/",
+        {"ids": [record.id]},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert dispatch_calls == [
+        {
+            "args": ("request-pending-dispatch-record",),
+            "kwargs": {"queue": "processing"},
+        }
+    ]
+    processing_request = BookCreationRequest.objects.get(book_record=record)
+    assert processing_request.state == "initial"
+
+    response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    assert response.json()["advancedCount"] == 1
+    processing_request.refresh_from_db()
+    assert processing_request.state == "queued"
+
+    response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    assert response.json()["advancedCount"] == 0
+    processing_request.refresh_from_db()
+    assert processing_request.state == "queued"
+    assert dispatch_calls == [
+        {
+            "args": ("request-pending-dispatch-record",),
+            "kwargs": {"queue": "processing"},
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_processing_pipeline_dispatches_queued_request_even_with_initial_backlog(
+    client, monkeypatch
+):
+    login_processing_admin(client)
+    queued_record = BookRecord.objects.create(
+        id="queued-backlog-record",
+        name="Queued Backlog Record",
+        url="https://example.test/books/queued-backlog-record",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+        book_creation_state="queued",
+    )
+    initial_record = BookRecord.objects.create(
+        id="initial-backlog-record",
+        name="Initial Backlog Record",
+        url="https://example.test/books/initial-backlog-record",
+        category="Fiction",
+        writer="Writer Two",
+        publisher="Example Press",
+        book_creation_state="initial",
+    )
+    queued_request = BookCreationRequest.objects.create(
+        id="queued-backlog-request",
+        book_record=queued_record,
+        state="queued",
+    )
+    initial_request = BookCreationRequest.objects.create(
+        id="initial-backlog-request",
+        book_record=initial_record,
+        state="initial",
+    )
+    dispatch_calls = []
+
+    def fake_apply_async(*, args, **kwargs):
+        dispatch_calls.append({"args": tuple(args), "kwargs": dict(kwargs)})
+        return SimpleNamespace(id=f"task-{len(dispatch_calls)}")
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_run_processing_jobs_inline",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
+        fake_apply_async,
+    )
+
+    response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    assert response.json()["advancedCount"] == 2
+    queued_request.refresh_from_db()
+    initial_request.refresh_from_db()
+    assert queued_request.state == "queued"
+    assert initial_request.state == "queued"
+    assert dispatch_calls == [
+        {
+            "args": ("queued-backlog-request",),
+            "kwargs": {"queue": "processing"},
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_processing_sync_dispatches_to_processing_queue(monkeypatch):
+    sync_state = get_sync_state()
+    sync_state.status = ProcessingSyncStatus.SYNCING
+    sync_state.task_id = ""
+    sync_state.queue_name = ""
+    sync_state.last_error = "stale error"
+    sync_state.save(update_fields=["status", "task_id", "queue_name", "last_error", "updated_at"])
+
+    dispatch_calls = []
+
+    def fake_apply_async(*, args, **kwargs):
+        dispatch_calls.append({"args": tuple(args), "kwargs": dict(kwargs)})
+        return SimpleNamespace(id=kwargs.get("task_id"))
+
+    monkeypatch.setattr(
+        "apps.processing.tasks.run_processing_sync_task.apply_async",
+        fake_apply_async,
+    )
+
+    dispatch_sync_task(sync_state, force=True)
+
+    sync_state.refresh_from_db()
+    assert sync_state.queue_name == "processing"
+    assert sync_state.last_error == ""
+    assert len(dispatch_calls) == 1
+    assert dispatch_calls[0]["args"] == ("default",)
+    assert dispatch_calls[0]["kwargs"]["queue"] == "processing"
+    assert dispatch_calls[0]["kwargs"]["task_id"] == sync_state.task_id
+
+
 @pytest.mark.django_db
 def test_processing_state_recovers_stale_processing_requests(client):
     login_processing_admin(client)
@@ -544,6 +904,35 @@ def test_processing_state_recovers_stale_processing_requests(client):
     row = next(item for item in payload["requests"] if item["id"] == stale_request.id)
     assert row["state"] == "queued"
     assert row["errorMessage"] == ""
+
+
+@pytest.mark.django_db
+def test_processing_table_includes_linked_book_slug_for_created_requests(client):
+    login_processing_admin(client)
+    linked_book = Book.objects.create(title="Linked Created Book", state="ready")
+    record = BookRecord.objects.create(
+        id="created-linked-record",
+        name="Created Linked Record",
+        url="https://example.test/books/created-linked-record",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+        book_creation_state="created",
+        linked_book=linked_book,
+    )
+    BookCreationRequest.objects.create(
+        id="created-linked-request",
+        book_record=record,
+        state="created",
+        linked_book=linked_book,
+    )
+
+    response = client.get("/api/processing/table/?card=create-created")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rows"][0]["linkedBookId"] == str(linked_book.id)
+    assert payload["rows"][0]["linkedBookSlug"] == linked_book.slug
 
 
 @pytest.mark.django_db

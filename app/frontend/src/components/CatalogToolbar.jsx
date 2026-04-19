@@ -31,6 +31,11 @@ export default function CatalogToolbar({
   secondaryBelow = false,
   buttonsLoading = false,
   drawerFirst = false,
+  sortValue = "",
+  sortOptions = [],
+  onSortChange = null,
+  sortAriaLabel = "Sort results",
+  sortDisabled = false,
 }) {
   const wrapperClassName = `catalog-toolbar-wrap${filtersExpanded ? " is-expanded" : ""}${inline ? " is-inline" : ""}${
     bare ? " is-bare" : ""
@@ -59,6 +64,11 @@ export default function CatalogToolbar({
       showResultCount={showResultCount}
       buttonsDisabled={buttonsDisabled}
       actionsExtra={searchActionsExtra}
+      sortValue={sortValue}
+      sortOptions={sortOptions}
+      onSortChange={onSortChange}
+      sortAriaLabel={sortAriaLabel}
+      sortDisabled={sortDisabled}
     />
   ) : null;
   const secondaryShellClassName = `catalog-toolbar-secondary-shell${hasSecondaryOnlyTopline ? " is-standalone" : ""}${

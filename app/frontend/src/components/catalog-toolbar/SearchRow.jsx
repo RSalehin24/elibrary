@@ -23,6 +23,11 @@ export function CatalogSearchRow({
   showFilterToggle = true,
   resultCountTestId = undefined,
   searchTestId = undefined,
+  sortValue = "",
+  sortOptions = [],
+  onSortChange = null,
+  sortAriaLabel = "Sort results",
+  sortDisabled = false,
 }) {
   const activeFilterCount = countActiveFilters(filters, fields, defaultFilters);
   const rowClassName = `catalog-search-row${compact ? " catalog-search-row--compact" : ""}${className ? ` ${className}` : ""}`;
@@ -67,6 +72,23 @@ export function CatalogSearchRow({
         />
       </label>
       <div className="catalog-search-actions">
+        {sortOptions?.length ? (
+          <div className="catalog-search-sort">
+            <select
+              className="catalog-toolbar-select"
+              value={sortValue}
+              onChange={(event) => onSortChange?.(event.target.value)}
+              aria-label={sortAriaLabel}
+              disabled={buttonsDisabled || sortDisabled}
+            >
+              {sortOptions.map((option) => (
+                <option key={`sort-${option.value}`} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         {showFilterToggle ? (
           <button
             type="button"

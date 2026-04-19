@@ -427,7 +427,8 @@
 }
 
 .processing-card-count-skeleton {
-  min-width: 72px;
+  width: 1ch;
+  min-width: 0;
   min-height: 34px;
   padding: 0;
   border: 0;

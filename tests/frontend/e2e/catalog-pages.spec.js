@@ -76,7 +76,7 @@ test.describe("Catalog Navigation Pages", () => {
     await search.press("Enter");
 
     await expect(
-      page.getByRole("heading", { name: /E2E Detail Book/, level: 3 }),
+      page.getByRole("heading", { name: /E2E Detail Book/ }),
     ).toBeVisible();
   });
 });

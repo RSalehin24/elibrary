@@ -60,7 +60,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bangla_library}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bangla_library}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -134,7 +138,11 @@ services:
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/', timeout=5).read()\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:8000/api/health/'', timeout=5).read()"',
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -154,6 +162,7 @@ services:
     build:
       context: ../..
       dockerfile: local/docker/backend.Dockerfile
+    restart: unless-stopped
     environment:
       <<: *app_environment
       CELERY_WORKER_CONCURRENCY: 1
@@ -162,9 +171,55 @@ services:
     command: >
       sh -c "mkdir -p /logs/local/celery &&
       celery -A config worker --pool=solo --loglevel=info --concurrency=1
+      --queues=celery
       --prefetch-multiplier=1
       --max-tasks-per-child=1
       2>&1 | tee -a /logs/local/celery/worker.log"
+    volumes:
+      - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
+    develop:
+      watch:
+        - action: sync+restart
+          path: ../../app/backend/apps
+          target: /app/apps
+        - action: sync+restart
+          path: ../../app/backend/config
+          target: /app/config
+        - action: rebuild
+          path: ../../app/backend/requirements.txt
+        - action: rebuild
+          path: ../../app/backend/requirements-dev.txt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+    networks:
+      - public
+      - internal
+
+  processing-worker:
+    build:
+      context: ../..
+      dockerfile: local/docker/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *app_environment
+      CELERY_WORKER_CONCURRENCY: 1
+      CELERY_WORKER_PREFETCH_MULTIPLIER: 1
+      CELERY_WORKER_MAX_TASKS_PER_CHILD: 1
+    command: >
+      sh -c "mkdir -p /logs/local/celery &&
+      celery -A config worker --pool=solo --loglevel=info --concurrency=1
+      --queues=processing
+      --hostname=processing@%h
+      --prefetch-multiplier=1
+      --max-tasks-per-child=1
+      2>&1 | tee -a /logs/local/celery/processing-worker.log"
     volumes:
       - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
       - ../../logs:/logs

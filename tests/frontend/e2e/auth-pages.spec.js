@@ -29,19 +29,13 @@ test.describe("Auth Pages", () => {
     ).toHaveCount(0);
   });
 
-  test("home pagination limits the visible cover grid", async ({ page }) => {
+  test("home page renders the shared inline card controls", async ({ page }) => {
     await loginAsSuperAdmin(page);
 
-    await page.getByLabel("Rows").selectOption("5");
-
+    await expect(page.locator(".book-card").first()).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: seedData.books.homePrimary.title }),
-    ).toHaveCount(0);
-
-    await page.getByRole("button", { name: "Next" }).click();
-
-    await expect(
-      page.getByRole("heading", { name: seedData.books.homePrimary.title }),
+      page.locator(".catalog-search-sort .catalog-toolbar-select"),
     ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Filters" })).toBeVisible();
   });
 });

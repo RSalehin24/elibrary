@@ -7,6 +7,10 @@ export function ProcessingCountSkeleton() {
   );
 }
 
+export function ProcessingValueSkeleton() {
+  return <span className="processing-value-skeleton" aria-hidden="true" />;
+}
+
 export default function ProcessingCardSkeleton({ label = "Loading" }) {
   return (
     <div
@@ -21,7 +25,7 @@ export default function ProcessingCardSkeleton({ label = "Loading" }) {
           {Array.from({ length: 4 }, (_, index) => (
             <article key={`stat-${index}`} className="processing-skeleton-stat">
               <span className="skeleton-line skeleton-line-sm" />
-              <span className="skeleton-line skeleton-line-lg" />
+              <ProcessingValueSkeleton />
             </article>
           ))}
         </div>

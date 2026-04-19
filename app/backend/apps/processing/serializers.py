@@ -24,6 +24,7 @@ class BookRecordSerializer(serializers.ModelSerializer):
     isDuplicate = serializers.BooleanField(source="is_duplicate")
     duplicateOfRecordId = serializers.CharField(source="duplicate_of_record_id", allow_null=True)
     linkedBookId = serializers.CharField(source="linked_book_id", allow_null=True)
+    linkedBookSlug = serializers.SerializerMethodField()
     selectable = serializers.SerializerMethodField()
     latestRequestId = serializers.SerializerMethodField()
 
@@ -44,6 +45,7 @@ class BookRecordSerializer(serializers.ModelSerializer):
             "updatedAt",
             "bookCreationState",
             "linkedBookId",
+            "linkedBookSlug",
             "wasIncomplete",
             "resolvedFromIncomplete",
             "willResolveToCategory",
@@ -67,6 +69,11 @@ class BookRecordSerializer(serializers.ModelSerializer):
         parsed = urlparse((obj.url or "").strip())
         return unquote(parsed.path).strip("/") or parsed.netloc
 
+    def get_linkedBookSlug(self, obj):
+        if obj.linked_book_id and obj.linked_book and obj.linked_book.deleted_at is None:
+            return obj.linked_book.slug
+        return None
+
 
 class BookCreationRequestSerializer(serializers.ModelSerializer):
     bookRecordId = serializers.CharField(source="book_record_id")
@@ -80,6 +87,7 @@ class BookCreationRequestSerializer(serializers.ModelSerializer):
     duplicateOfRecordId = serializers.CharField(source="duplicate_of_record_id", allow_null=True)
     duplicateConfirmed = serializers.BooleanField(source="duplicate_confirmed")
     linkedBookId = serializers.CharField(source="linked_book_id", allow_null=True)
+    linkedBookSlug = serializers.SerializerMethodField()
 
     class Meta:
         model = BookCreationRequest
@@ -97,6 +105,7 @@ class BookCreationRequestSerializer(serializers.ModelSerializer):
             "duplicateOfRecordId",
             "duplicateConfirmed",
             "linkedBookId",
+            "linkedBookSlug",
             "pipeline_outcome",
         ]
 
@@ -104,6 +113,19 @@ class BookCreationRequestSerializer(serializers.ModelSerializer):
         if obj.state != BookCreationRequest.State.PAUSED:
             return None
         return obj.progress
+
+    def get_linkedBookSlug(self, obj):
+        if obj.linked_book_id and obj.linked_book and obj.linked_book.deleted_at is None:
+            return obj.linked_book.slug
+        if (
+            obj.book_record_id
+            and obj.book_record
+            and obj.book_record.linked_book_id
+            and obj.book_record.linked_book
+            and obj.book_record.linked_book.deleted_at is None
+        ):
+            return obj.book_record.linked_book.slug
+        return None
 
 
 class ProcessingSyncStateSerializer(serializers.ModelSerializer):

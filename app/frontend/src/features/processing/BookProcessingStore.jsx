@@ -12,6 +12,10 @@ import { apiFetch } from "../../api/client";
 import { useSession } from "../../hooks/useSession";
 import { isProcessingRoute } from "../layout/navigation";
 import { useToast } from "../../hooks/useToast";
+import {
+  createCreatedNotificationBuffer,
+  createdNotificationDescription,
+} from "../../utils/processingCreatedNotificationBuffer";
 import { ACTIVE_REQUEST_STATES } from "./types";
 
 const ProcessingPagesContext = createContext(null);
@@ -19,6 +23,12 @@ const AGGREGATED_NOTIFICATION_WINDOW_MS = 2 * 60 * 1000;
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
+const INCOMPLETE_CATEGORY_KEYWORDS = [
+  "incomplete",
+  "unfinished",
+  "অসম্পূর্ণ",
+  "অসম্পূর্ণ বই",
+];
 
 const DEFAULT_SYNC_STATE = {
   status: "idle",
@@ -52,7 +62,41 @@ const DEFAULT_AUTOMATION_STATE = {
   },
 };
 
+const DEFAULT_SUMMARY = {
+  catalog: {
+    records: 0,
+    notCreated: 0,
+    active: 0,
+    created: 0,
+    onHold: 0,
+  },
+  create: {
+    requests: 0,
+    queue: 0,
+    processing: 0,
+    created: 0,
+  },
+  onHold: {
+    paused: 0,
+    failed: 0,
+    duplicate: 0,
+    deleted: 0,
+  },
+  incomplete: {
+    incomplete: 0,
+    resolved: 0,
+  },
+  notifications: {
+    activeRequests: 0,
+    createdCount: 0,
+    failedCount: 0,
+    duplicateCount: 0,
+    latestFailedMessage: "",
+  },
+};
+
 const DEFAULT_STATE = {
+  summary: DEFAULT_SUMMARY,
   records: [],
   requests: [],
   sync: DEFAULT_SYNC_STATE,
@@ -61,15 +105,30 @@ const DEFAULT_STATE = {
     pipelineDelayMs: 500,
   },
 };
+const PROCESSING_SUMMARY_QUERY = "?includeLists=0";
+
+function processingSummaryPath(path) {
+  return `${path}${PROCESSING_SUMMARY_QUERY}`;
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function isIncompleteCategory(value) {
+  const normalized = normalizeText(value);
+  return INCOMPLETE_CATEGORY_KEYWORDS.some((keyword) =>
+    normalized.includes(keyword.toLowerCase()),
+  );
+}
 
 function isCatalogRemotePage(page) {
   return (
     Array.isArray(page) &&
     page.every(
-      (item) =>
-        item &&
-        typeof item === "object" &&
-        !Array.isArray(item),
+      (item) => item && typeof item === "object" && !Array.isArray(item),
     )
   );
 }
@@ -80,11 +139,107 @@ function catalogRemotePages(remotePages) {
     : [];
 }
 
+function deriveSummary(records, requests) {
+  const requestCounts = requests.reduce(
+    (counts, request) => ({
+      ...counts,
+      [request.state]: (counts[request.state] || 0) + 1,
+    }),
+    {},
+  );
+  const activeRequests = ACTIVE_REQUEST_STATES.reduce(
+    (total, state) => total + (requestCounts[state] || 0),
+    0,
+  );
+  const onHoldRequests = ["paused", "failed", "duplicate", "deleted"].reduce(
+    (total, state) => total + (requestCounts[state] || 0),
+    0,
+  );
+  const latestFailedMessage =
+    requests.find(
+      (request) => request.state === "failed" && request.errorMessage,
+    )?.errorMessage || "";
+
+  return {
+    catalog: {
+      records: records.length,
+      notCreated: records.filter(
+        (record) => record.bookCreationState === "not_created",
+      ).length,
+      active: activeRequests,
+      created: requestCounts.created || 0,
+      onHold: onHoldRequests,
+    },
+    create: {
+      requests: requestCounts.initial || 0,
+      queue: requestCounts.queued || 0,
+      processing: requestCounts.processing || 0,
+      created: requestCounts.created || 0,
+    },
+    onHold: {
+      paused: requestCounts.paused || 0,
+      failed: requestCounts.failed || 0,
+      duplicate: requestCounts.duplicate || 0,
+      deleted: requestCounts.deleted || 0,
+    },
+    incomplete: {
+      incomplete: records.filter(
+        (record) =>
+          (record.wasIncomplete || isIncompleteCategory(record.category)) &&
+          !record.resolvedFromIncomplete,
+      ).length,
+      resolved: records.filter(
+        (record) => record.wasIncomplete && record.resolvedFromIncomplete,
+      ).length,
+    },
+    notifications: {
+      activeRequests,
+      createdCount: requestCounts.created || 0,
+      failedCount: requestCounts.failed || 0,
+      duplicateCount: requestCounts.duplicate || 0,
+      latestFailedMessage,
+    },
+  };
+}
+
 function normalizeState(payload) {
   const state = payload && typeof payload === "object" ? payload : {};
+  const records = Array.isArray(state.records) ? state.records : [];
+  const requests = Array.isArray(state.requests) ? state.requests : [];
+  const fallbackSummary = deriveSummary(records, requests);
   return {
-    records: Array.isArray(state.records) ? state.records : [],
-    requests: Array.isArray(state.requests) ? state.requests : [],
+    summary: {
+      ...DEFAULT_SUMMARY,
+      ...fallbackSummary,
+      ...(state.summary || {}),
+      catalog: {
+        ...DEFAULT_SUMMARY.catalog,
+        ...fallbackSummary.catalog,
+        ...(state.summary?.catalog || {}),
+      },
+      create: {
+        ...DEFAULT_SUMMARY.create,
+        ...fallbackSummary.create,
+        ...(state.summary?.create || {}),
+      },
+      onHold: {
+        ...DEFAULT_SUMMARY.onHold,
+        ...fallbackSummary.onHold,
+        ...(state.summary?.onHold || {}),
+      },
+      incomplete: {
+        ...DEFAULT_SUMMARY.incomplete,
+        ...fallbackSummary.incomplete,
+        ...(state.summary?.incomplete || {}),
+      },
+      notifications: {
+        ...DEFAULT_SUMMARY.notifications,
+        ...fallbackSummary.notifications,
+        ...(state.summary?.notifications || {}),
+      },
+    },
+    records,
+    requests,
     sync: {
       ...DEFAULT_SYNC_STATE,
       ...(state.sync || {}),
@@ -104,10 +259,6 @@ function normalizeState(payload) {
       ...(state.ui || {}),
     },
   };
-}
-
-function buildRecordMap(records) {
-  return new Map(records.map((record) => [record.id, record]));
 }
 
 function syncCompletionCopy(previousState, nextState) {
@@ -149,7 +300,8 @@ function syncPausedCopy(nextState) {
     return {
       title: "Incomplete automation paused",
       description:
-        nextState.sync?.message || "Incomplete catalog sync progress was saved.",
+        nextState.sync?.message ||
+        "Incomplete catalog sync progress was saved.",
     };
   }
   return {
@@ -158,117 +310,75 @@ function syncPausedCopy(nextState) {
   };
 }
 
-function requestTimestamp(request) {
-  const parsed = Date.parse(request?.updatedAt || request?.createdAt || "");
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function latestRequestForRecord(requests, recordId) {
-  return requests
-    .filter((request) => request.bookRecordId === recordId)
-    .sort((left, right) => requestTimestamp(right) - requestTimestamp(left))[0];
-}
-
 function countLabel(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function recordNameMap(records) {
-  return new Map(records.map((record) => [record.id, record.name || "Untitled book"]));
-}
-
-function changedRequestsByState(previousState, nextState) {
-  const previousRequests = new Map(
-    previousState.requests.map((request) => [request.id, request]),
+function notifyStateTransitions(previousState, nextState, toast, options = {}) {
+  const handleCreatedCompletions =
+    typeof options.handleCreatedCompletions === "function"
+      ? options.handleCreatedCompletions
+      : () => {};
+  const previousNotifications =
+    previousState.summary?.notifications || DEFAULT_SUMMARY.notifications;
+  const nextNotifications =
+    nextState.summary?.notifications || DEFAULT_SUMMARY.notifications;
+  const createdDelta = Math.max(
+    0,
+    (nextNotifications.createdCount || 0) -
+      (previousNotifications.createdCount || 0),
   );
-  return nextState.requests.reduce(
-    (groups, request) => {
-      const previous = previousRequests.get(request.id);
-      if (!previous || previous.state === request.state) {
-        return groups;
-      }
-
-      if (request.state === "created") {
-        groups.created.push(request);
-      } else if (request.state === "failed") {
-        groups.failed.push(request);
-      } else if (request.state === "duplicate") {
-        groups.duplicate.push(request);
-      }
-
-      return groups;
-    },
-    { created: [], failed: [], duplicate: [] },
+  const failedDelta = Math.max(
+    0,
+    (nextNotifications.failedCount || 0) -
+      (previousNotifications.failedCount || 0),
   );
-}
+  const duplicateDelta = Math.max(
+    0,
+    (nextNotifications.duplicateCount || 0) -
+      (previousNotifications.duplicateCount || 0),
+  );
+  const previousHasActiveRequests =
+    (previousNotifications.activeRequests || 0) > 0;
+  const nextHasActiveRequests = (nextNotifications.activeRequests || 0) > 0;
 
-function describeRequestNames(requests, records) {
-  const names = requests
-    .map((request) => records.get(request.bookRecordId))
-    .filter(Boolean);
-
-  if (!names.length) {
-    return "";
-  }
-  if (names.length === 1) {
-    return names[0];
-  }
-  return `${names[0]} and ${names.length - 1} more`;
-}
-
-function notifyStateTransitions(previousState, nextState, toast) {
-  const changed = changedRequestsByState(previousState, nextState);
-  const records = recordNameMap(nextState.records);
-
-  if (changed.created.length) {
-    toast.success({
-      title:
-        changed.created.length === 1 ? "Book created" : "Books created",
-      description:
-        changed.created.length === 1
-          ? `${describeRequestNames(changed.created, records)} completed successfully.`
-          : `${countLabel(changed.created.length, "request")} completed successfully.`,
+  if (createdDelta > 0) {
+    handleCreatedCompletions(createdDelta, {
+      flushImmediately: !nextHasActiveRequests,
     });
+  } else if (!nextHasActiveRequests) {
+    handleCreatedCompletions(0, { flushImmediately: true });
   }
 
-  if (changed.failed.length) {
+  if (failedDelta) {
     const firstError =
-      changed.failed.find((request) => request.errorMessage)?.errorMessage ||
+      nextNotifications.latestFailedMessage ||
       "Review the Failed card for details.";
     toast.error({
-      title:
-        changed.failed.length === 1 ? "Request failed" : "Requests failed",
+      title: failedDelta === 1 ? "Request failed" : "Requests failed",
       description:
-        changed.failed.length === 1
+        failedDelta === 1
           ? firstError
-          : `${countLabel(changed.failed.length, "request")} failed. ${firstError}`,
+          : `${countLabel(failedDelta, "request")} failed. ${firstError}`,
       groupKey: "processing-failed",
       holdOpenMs: AGGREGATED_NOTIFICATION_WINDOW_MS,
     });
   }
 
-  if (changed.duplicate.length) {
+  if (duplicateDelta) {
     toast.info({
       title:
-        changed.duplicate.length === 1
-          ? "Duplicate detected"
-          : "Duplicates detected",
+        duplicateDelta === 1 ? "Duplicate detected" : "Duplicates detected",
       description:
-        changed.duplicate.length === 1
-          ? `${describeRequestNames(changed.duplicate, records)} needs duplicate review.`
-          : `${countLabel(changed.duplicate.length, "request")} need duplicate review.`,
+        duplicateDelta === 1
+          ? "A request needs duplicate review."
+          : `${countLabel(duplicateDelta, "request")} need duplicate review.`,
       groupKey: "processing-duplicate",
       holdOpenMs: AGGREGATED_NOTIFICATION_WINDOW_MS,
       soundType: "error",
     });
   }
 
-  const previousHasActiveRequests = previousState.requests?.some((request) =>
-    ACTIVE_REQUEST_STATES.includes(request.state),
-  );
-  const nextHasActiveRequests = nextState.requests?.some((request) =>
-    ACTIVE_REQUEST_STATES.includes(request.state),
-  );
   if (previousHasActiveRequests && !nextHasActiveRequests) {
     toast.success({
       title: "Pipeline complete",
@@ -287,7 +397,11 @@ function notifyStateTransitions(previousState, nextState, toast) {
     previousSyncStatus !== "idle" &&
     nextSyncStatus === "idle"
   ) {
-    if (String(nextState.sync?.message || "").toLowerCase().includes("stopped")) {
+    if (
+      String(nextState.sync?.message || "")
+        .toLowerCase()
+        .includes("stopped")
+    ) {
       return;
     }
     toast.success(syncCompletionCopy(previousState, nextState));
@@ -371,8 +485,11 @@ export function BookProcessingProvider({ children }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [busyCards, setBusyCards] = useState({});
+  const [stateVersion, setStateVersion] = useState(0);
   const stateRef = useRef(state);
   const hasAppliedInitialStateRef = useRef(false);
+  const syncAdvanceInFlightRef = useRef(false);
+  const pipelineAdvanceInFlightRef = useRef(false);
   const location = useLocation();
   const { authenticated, loading } = useSession();
   const toast = useToast();
@@ -384,24 +501,64 @@ export function BookProcessingProvider({ children }) {
     stateRef.current = state;
   }, [state]);
 
-  const applyServerState = useCallback((payload) => {
-    const nextState = normalizeState(payload);
-    const previousState = stateRef.current;
-    stateRef.current = nextState;
-    setState(nextState);
-    setLoaded(true);
-    setError("");
-    if (hasAppliedInitialStateRef.current) {
-      notifyStateTransitions(previousState, nextState, toast);
-    } else {
-      hasAppliedInitialStateRef.current = true;
-    }
-    return nextState;
-  }, [toast]);
+  const createdNotificationBuffer = useMemo(
+    () =>
+      createCreatedNotificationBuffer({
+        onFlush: (completedCount) => {
+          toast.success({
+            title: "Book created",
+            description: createdNotificationDescription(completedCount),
+          });
+        },
+      }),
+    [toast],
+  );
+
+  useEffect(
+    () => () => {
+      createdNotificationBuffer.destroy();
+    },
+    [createdNotificationBuffer],
+  );
+
+  const handleCreatedCompletions = useCallback(
+    (createdDelta, { flushImmediately = false } = {}) => {
+      if (createdDelta > 0) {
+        createdNotificationBuffer.addCompletedCount(createdDelta);
+      }
+      if (flushImmediately) {
+        createdNotificationBuffer.flushIfPending();
+      }
+    },
+    [createdNotificationBuffer],
+  );
+
+  const applyServerState = useCallback(
+    (payload) => {
+      const nextState = normalizeState(payload);
+      const previousState = stateRef.current;
+      stateRef.current = nextState;
+      setState(nextState);
+      setStateVersion((current) => current + 1);
+      setLoaded(true);
+      setError("");
+      if (hasAppliedInitialStateRef.current) {
+        notifyStateTransitions(previousState, nextState, toast, {
+          handleCreatedCompletions,
+        });
+      } else {
+        hasAppliedInitialStateRef.current = true;
+      }
+      return nextState;
+    },
+    [handleCreatedCompletions, toast],
+  );
 
   const loadState = useCallback(async () => {
     try {
-      const payload = await apiFetch("/processing/state/");
+      const payload = await apiFetch(
+        processingSummaryPath("/processing/state/"),
+      );
       return applyServerState(payload);
     } catch (loadError) {
       const message = loadError.message || "Unable to load processing state.";
@@ -460,33 +617,33 @@ export function BookProcessingProvider({ children }) {
     [applyServerState, toast],
   );
 
-  const startCatalogSync = useCallback(
-    () => {
-      const remotePages = catalogRemotePages(stateRef.current.sync.remotePages);
-      return runCardAction(
-        "catalog-sync",
-        () =>
-          apiFetch("/processing/sync/start/", {
-            method: "POST",
-            body: remotePages.length ? { remotePages } : {},
+  const startCatalogSync = useCallback(() => {
+    const remotePages = catalogRemotePages(stateRef.current.sync.remotePages);
+    return runCardAction(
+      "catalog-sync",
+      () =>
+        apiFetch(processingSummaryPath("/processing/sync/start/"), {
+          method: "POST",
+          body: remotePages.length ? { remotePages } : {},
+        }),
+      {
+        onSuccess: (_, __, nextToast) =>
+          nextToast.info({
+            title: "Sync started",
+            description: "Catalog sync is running.",
           }),
-        {
-          onSuccess: (_, __, nextToast) =>
-            nextToast.info({
-              title: "Sync started",
-              description: "Catalog sync is running.",
-            }),
-        },
-      );
-    },
-    [runCardAction],
-  );
+      },
+    );
+  }, [runCardAction]);
 
   const pauseCatalogSync = useCallback(
     () =>
       runCardAction(
         "catalog-sync",
-        () => apiFetch("/processing/sync/pause/", { method: "POST" }),
+        () =>
+          apiFetch(processingSummaryPath("/processing/sync/pause/"), {
+            method: "POST",
+          }),
         {
           onSuccess: (_, __, nextToast) =>
             nextToast.info({
@@ -502,12 +659,16 @@ export function BookProcessingProvider({ children }) {
     () =>
       runCardAction(
         "catalog-sync",
-        () => apiFetch("/processing/sync/resume/", { method: "POST" }),
+        () =>
+          apiFetch(processingSummaryPath("/processing/sync/resume/"), {
+            method: "POST",
+          }),
         {
           onSuccess: (_, __, nextToast) =>
             nextToast.info({
               title: "Sync resumed",
-              description: "Catalog reconciliation restarted from the beginning.",
+              description:
+                "Catalog reconciliation restarted from the beginning.",
             }),
         },
       ),
@@ -518,7 +679,10 @@ export function BookProcessingProvider({ children }) {
     (cardId = "catalog-sync") =>
       runCardAction(
         cardId,
-        () => apiFetch("/processing/sync/stop/", { method: "POST" }),
+        () =>
+          apiFetch(processingSummaryPath("/processing/sync/stop/"), {
+            method: "POST",
+          }),
         {
           onSuccess: (_, nextState, nextToast) =>
             nextToast.info({
@@ -536,10 +700,13 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-records",
         () =>
-          apiFetch("/processing/records/create-requests/", {
-            method: "POST",
-            body: { ids: recordIds },
-          }),
+          apiFetch(
+            processingSummaryPath("/processing/records/create-requests/"),
+            {
+              method: "POST",
+              body: { ids: recordIds },
+            },
+          ),
         {
           onSuccess: (payload, __, nextToast) => {
             if (payload?.createdCount) {
@@ -564,7 +731,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-save",
         () =>
-          apiFetch("/processing/automation/catalog/", {
+          apiFetch(processingSummaryPath("/processing/automation/catalog/"), {
             method: "POST",
             body: form,
           }),
@@ -583,7 +750,13 @@ export function BookProcessingProvider({ children }) {
     () =>
       runCardAction(
         "catalog-automation-run",
-        () => apiFetch("/processing/automation/catalog/run/", { method: "POST" }),
+        () =>
+          apiFetch(
+            processingSummaryPath("/processing/automation/catalog/run/"),
+            {
+              method: "POST",
+            },
+          ),
         {
           onSuccess: (_, __, nextToast) =>
             nextToast.info({
@@ -599,12 +772,16 @@ export function BookProcessingProvider({ children }) {
     () =>
       runCardAction(
         "catalog-automation-run",
-        () => apiFetch("/processing/sync/pause/", { method: "POST" }),
+        () =>
+          apiFetch(processingSummaryPath("/processing/sync/pause/"), {
+            method: "POST",
+          }),
         {
           onSuccess: (_, __, nextToast) =>
             nextToast.info({
               title: "Catalog automation pausing",
-              description: "Automated catalog sync will pause after the current page.",
+              description:
+                "Automated catalog sync will pause after the current page.",
             }),
         },
       ),
@@ -621,10 +798,13 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-save",
         () =>
-          apiFetch("/processing/automation/incomplete/", {
-            method: "POST",
-            body: form,
-          }),
+          apiFetch(
+            processingSummaryPath("/processing/automation/incomplete/"),
+            {
+              method: "POST",
+              body: form,
+            },
+          ),
         {
           onSuccess: (_, __, nextToast) =>
             nextToast.success({
@@ -640,7 +820,13 @@ export function BookProcessingProvider({ children }) {
     () =>
       runCardAction(
         "incomplete-automation-run",
-        () => apiFetch("/processing/automation/incomplete/run/", { method: "POST" }),
+        () =>
+          apiFetch(
+            processingSummaryPath("/processing/automation/incomplete/run/"),
+            {
+              method: "POST",
+            },
+          ),
         {
           onSuccess: (_, __, nextToast) => {
             nextToast.info({
@@ -657,7 +843,10 @@ export function BookProcessingProvider({ children }) {
     () =>
       runCardAction(
         "incomplete-automation-run",
-        () => apiFetch("/processing/sync/pause/", { method: "POST" }),
+        () =>
+          apiFetch(processingSummaryPath("/processing/sync/pause/"), {
+            method: "POST",
+          }),
         {
           onSuccess: (_, __, nextToast) =>
             nextToast.info({
@@ -680,7 +869,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         cardId,
         () =>
-          apiFetch("/processing/requests/action/", {
+          apiFetch(processingSummaryPath("/processing/requests/action/"), {
             method: "POST",
             body: {
               ids: requestIds,
@@ -690,7 +879,12 @@ export function BookProcessingProvider({ children }) {
           }),
         {
           onSuccess: (payload, __, nextToast) =>
-            notifyRequestAction(nextToast, action, payload?.changedCount || 0, extra),
+            notifyRequestAction(
+              nextToast,
+              action,
+              payload?.changedCount || 0,
+              extra,
+            ),
         },
       ),
     [runCardAction],
@@ -705,26 +899,22 @@ export function BookProcessingProvider({ children }) {
   );
 
   const pauseRequests = useCallback(
-    (cardId, requestIds) =>
-      applyRequestAction(cardId, requestIds, "pause"),
+    (cardId, requestIds) => applyRequestAction(cardId, requestIds, "pause"),
     [applyRequestAction],
   );
 
   const resumePausedRequests = useCallback(
-    (cardId, requestIds) =>
-      applyRequestAction(cardId, requestIds, "resume"),
+    (cardId, requestIds) => applyRequestAction(cardId, requestIds, "resume"),
     [applyRequestAction],
   );
 
   const retryFailedRequests = useCallback(
-    (cardId, requestIds) =>
-      applyRequestAction(cardId, requestIds, "retry"),
+    (cardId, requestIds) => applyRequestAction(cardId, requestIds, "retry"),
     [applyRequestAction],
   );
 
   const markDuplicateRequestsAsNew = useCallback(
-    (cardId, requestIds) =>
-      applyRequestAction(cardId, requestIds, "new"),
+    (cardId, requestIds) => applyRequestAction(cardId, requestIds, "new"),
     [applyRequestAction],
   );
 
@@ -741,8 +931,7 @@ export function BookProcessingProvider({ children }) {
   );
 
   const recreateCompletedRequests = useCallback(
-    (cardId, requestIds) =>
-      applyRequestAction(cardId, requestIds, "recreate"),
+    (cardId, requestIds) => applyRequestAction(cardId, requestIds, "recreate"),
     [applyRequestAction],
   );
 
@@ -757,17 +946,29 @@ export function BookProcessingProvider({ children }) {
       return undefined;
     }
 
-    const timerId = window.setInterval(async () => {
-      try {
-        const payload = await apiFetch("/processing/sync/advance/", {
-          method: "POST",
-        });
-        applyServerState(payload);
-      } catch (syncError) {
-        toast.error(syncError.message || "Catalog sync stalled.");
-        window.clearInterval(timerId);
-      }
-    }, Math.max(150, Number(state.ui?.syncDelayMs) || 250));
+    const timerId = window.setInterval(
+      async () => {
+        if (syncAdvanceInFlightRef.current) {
+          return;
+        }
+        syncAdvanceInFlightRef.current = true;
+        try {
+          const payload = await apiFetch(
+            processingSummaryPath("/processing/sync/advance/"),
+            {
+              method: "POST",
+            },
+          );
+          applyServerState(payload);
+        } catch (syncError) {
+          toast.error(syncError.message || "Catalog sync stalled.");
+          window.clearInterval(timerId);
+        } finally {
+          syncAdvanceInFlightRef.current = false;
+        }
+      },
+      Math.max(150, Number(state.ui?.syncDelayMs) || 250),
+    );
 
     return () => {
       window.clearInterval(timerId);
@@ -785,24 +986,35 @@ export function BookProcessingProvider({ children }) {
       return undefined;
     }
 
-    const hasActiveRequests = state.requests.some((request) =>
-      ACTIVE_REQUEST_STATES.includes(request.state),
-    );
+    const hasActiveRequests =
+      (state.summary?.notifications?.activeRequests || 0) > 0;
     if (!hasActiveRequests) {
       return undefined;
     }
 
-    const timerId = window.setInterval(async () => {
-      try {
-        const payload = await apiFetch("/processing/pipeline/advance/", {
-          method: "POST",
-        });
-        applyServerState(payload);
-      } catch (pipelineError) {
-        toast.error(pipelineError.message || "Processing pipeline stalled.");
-        window.clearInterval(timerId);
-      }
-    }, Math.max(100, Number(state.ui?.pipelineDelayMs) || 500));
+    const timerId = window.setInterval(
+      async () => {
+        if (pipelineAdvanceInFlightRef.current) {
+          return;
+        }
+        pipelineAdvanceInFlightRef.current = true;
+        try {
+          const payload = await apiFetch(
+            processingSummaryPath("/processing/pipeline/advance/"),
+            {
+              method: "POST",
+            },
+          );
+          applyServerState(payload);
+        } catch (pipelineError) {
+          toast.error(pipelineError.message || "Processing pipeline stalled.");
+          window.clearInterval(timerId);
+        } finally {
+          pipelineAdvanceInFlightRef.current = false;
+        }
+      },
+      Math.max(100, Number(state.ui?.pipelineDelayMs) || 500),
+    );
 
     return () => {
       window.clearInterval(timerId);
@@ -810,24 +1022,20 @@ export function BookProcessingProvider({ children }) {
   }, [
     applyServerState,
     canLoadProcessingState,
-    state.requests,
+    state.summary?.notifications?.activeRequests,
     state.ui?.pipelineDelayMs,
     toast,
   ]);
 
-  const recordMap = useMemo(() => buildRecordMap(state.records), [state.records]);
-
   const value = useMemo(
     () => ({
       state,
-      records: state.records,
-      requests: state.requests,
-      recordMap,
       busyCards,
       loaded,
       error,
+      stateVersion,
+      canLoadProcessingState,
       reload: loadState,
-      isRecordSelectable: (record) => Boolean(record?.selectable),
       startCatalogSync,
       pauseCatalogSync,
       resumeCatalogSync,
@@ -852,6 +1060,7 @@ export function BookProcessingProvider({ children }) {
     }),
     [
       busyCards,
+      canLoadProcessingState,
       confirmDuplicateRequests,
       createAgainRequests,
       createRequestsForRecords,
@@ -864,7 +1073,6 @@ export function BookProcessingProvider({ children }) {
       pauseCatalogAutomation,
       pauseIncompleteAutomation,
       pauseRequests,
-      recordMap,
       recreateCompletedRequests,
       resumeCatalogSync,
       resumePausedRequests,
@@ -878,6 +1086,7 @@ export function BookProcessingProvider({ children }) {
       stopSync,
       startCatalogSync,
       state,
+      stateVersion,
     ],
   );
 
@@ -897,5 +1106,3 @@ export function useBookProcessing() {
   }
   return context;
 }
-
-export { latestRequestForRecord };

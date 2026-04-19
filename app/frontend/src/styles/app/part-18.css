@@ -9,6 +9,10 @@
   backdrop-filter: blur(14px);
 }
 
+.catalog-table-shell--incremental {
+  max-height: min(72vh, 960px);
+}
+
 .catalog-table {
   width: 100%;
   min-width: 980px;
@@ -65,6 +69,11 @@
 
 .catalog-table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.book-table-skeleton-stack {
+  display: grid;
+  gap: 8px;
 }
 
 .table-code-cell {
@@ -153,6 +162,10 @@
 
 .table-row-action {
   min-width: 88px;
+}
+
+.table-empty-cell {
+  color: var(--muted);
 }
 
 .property-table {

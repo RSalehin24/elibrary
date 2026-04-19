@@ -3,7 +3,6 @@ import os
 import re
 import shutil
 import time
-from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -29,6 +28,42 @@ from .scraper_support.text import (
 )
 
 INLINE_TOC_PATTERNS = ("সূচীপত্র", "সুচিপত্র", "table of contents", "contents")
+
+DEFAULT_SCRAPE_LIMITS = {
+    "max_nodes": 320,
+    "max_depth": 6,
+    "max_lesson_pages": 20,
+    "max_content_chars": 120000,
+}
+
+
+def normalize_scrape_limits(content_limits=None):
+    limits = dict(DEFAULT_SCRAPE_LIMITS)
+    if not isinstance(content_limits, dict):
+        return limits
+
+    for key, default in DEFAULT_SCRAPE_LIMITS.items():
+        raw_value = content_limits.get(key, default)
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            parsed = default
+        limits[key] = max(1, parsed)
+
+    return limits
+
+
+def truncate_scraped_content(content, max_content_chars):
+    if not content:
+        return content
+
+    if not isinstance(max_content_chars, int) or max_content_chars <= 0:
+        return content
+
+    if len(content) <= max_content_chars:
+        return content
+
+    return content[:max_content_chars]
 
 def remove_redundant_headers(html_content, title, debug=False):
     """
@@ -778,32 +813,47 @@ def scrape_recursive_content_node(
     active_urls=None,
     prefetched_soup=None,
     prefetched_main_content=None,
+    crawl_state=None,
+    crawl_limits=None,
+    depth=0,
 ):
     cache = cache if cache is not None else {}
     active_urls = active_urls if active_urls is not None else set()
+    crawl_state = crawl_state if isinstance(crawl_state, dict) else {"visited_nodes": 0}
+    crawl_limits = (
+        crawl_limits if isinstance(crawl_limits, dict) else normalize_scrape_limits()
+    )
     normalized_url = normalize_crawl_url(url)
 
     if not normalized_url:
         return build_content_node(title_hint, node_type=node_type)
 
+    if depth > crawl_limits["max_depth"]:
+        return build_content_node(title_hint or normalized_url, node_type=node_type)
+
+    if crawl_state.get("visited_nodes", 0) >= crawl_limits["max_nodes"]:
+        return build_content_node(title_hint or normalized_url, node_type=node_type)
+
     if prefetched_soup is None and prefetched_main_content is None and normalized_url in cache:
-        cached_node = deepcopy(cache[normalized_url])
-        if clean_display_text(title_hint):
-            cached_node["title"] = clean_display_text(title_hint)
-        if node_type:
-            cached_node["type"] = node_type
-        return cached_node
+        cached_node = cache[normalized_url]
+        return {
+            "title": clean_display_text(title_hint) or cached_node.get("title", ""),
+            "type": node_type or cached_node.get("type", "lesson"),
+            "content": cached_node.get("content", ""),
+            "children": cached_node.get("children", []),
+        }
 
     if normalized_url in active_urls:
         return build_content_node(title_hint or normalized_url, node_type=node_type)
 
+    crawl_state["visited_nodes"] = crawl_state.get("visited_nodes", 0) + 1
     active_urls.add(normalized_url)
 
     try:
         soup = prefetched_soup or get_soup(normalized_url)
         if not soup:
             node = build_content_node(title_hint or normalized_url, node_type=node_type)
-            cache[normalized_url] = deepcopy(node)
+            cache[normalized_url] = node
             return node
 
         page_title, _ = extract_title_and_author(soup)
@@ -818,10 +868,16 @@ def scrape_recursive_content_node(
             _, _, main_content = extract_main_content_segments(main_content)
 
         children = []
-        cleaned_page_content = clean_content_html(main_content, resolved_title)
+        cleaned_page_content = truncate_scraped_content(
+            clean_content_html(main_content, resolved_title),
+            crawl_limits.get("max_content_chars"),
+        )
 
         if urlparse(normalized_url).path.startswith("/books/"):
-            lessons = scrape_all_lessons(normalized_url)
+            lessons = scrape_all_lessons(
+                normalized_url,
+                max_pages=crawl_limits.get("max_lesson_pages"),
+            )
             if lessons:
                 for lesson_data in lessons:
                     if lesson_data["has_topics"]:
@@ -834,6 +890,9 @@ def scrape_recursive_content_node(
                                     node_type="topic",
                                     cache=cache,
                                     active_urls=active_urls,
+                                    crawl_state=crawl_state,
+                                    crawl_limits=crawl_limits,
+                                    depth=depth + 1,
                                 )
                             )
                         children.append(
@@ -851,6 +910,9 @@ def scrape_recursive_content_node(
                                 node_type="lesson",
                                 cache=cache,
                                 active_urls=active_urls,
+                                crawl_state=crawl_state,
+                                crawl_limits=crawl_limits,
+                                depth=depth + 1,
                             )
                         )
 
@@ -869,12 +931,18 @@ def scrape_recursive_content_node(
                             normalized_url,
                             cache,
                             active_urls,
+                            crawl_state,
+                            crawl_limits,
+                            depth + 1,
                         )
                         for entry in inline_toc
                     )
                     if child
                 ]
-                cleaned_page_content = clean_content_html(cleaned_main_content, resolved_title)
+                cleaned_page_content = truncate_scraped_content(
+                    clean_content_html(cleaned_main_content, resolved_title),
+                    crawl_limits.get("max_content_chars"),
+                )
 
         node = build_content_node(
             resolved_title,
@@ -882,26 +950,47 @@ def scrape_recursive_content_node(
             content=cleaned_page_content,
             children=children,
         )
-        cache[normalized_url] = deepcopy(node)
+        cache[normalized_url] = node
         return node
     finally:
         active_urls.discard(normalized_url)
 
 
-def crawl_inline_toc_entry(entry, remaining_items, base_url, cache, active_urls):
+def crawl_inline_toc_entry(
+    entry,
+    remaining_items,
+    base_url,
+    cache,
+    active_urls,
+    crawl_state,
+    crawl_limits,
+    depth,
+):
     title = clean_display_text(entry.get("title", ""))
     node_type = entry.get("type") or "lesson"
     raw_url = (entry.get("url") or "").strip()
     local_content_item = consume_inline_content_item(title, remaining_items)
-    local_content = clean_content_html(
-        local_content_item.get("content", "") if local_content_item else "",
-        title,
+    local_content = truncate_scraped_content(
+        clean_content_html(
+            local_content_item.get("content", "") if local_content_item else "",
+            title,
+        ),
+        crawl_limits.get("max_content_chars"),
     )
 
     nested_children = [
         child
         for child in (
-            crawl_inline_toc_entry(child_entry, remaining_items, base_url, cache, active_urls)
+            crawl_inline_toc_entry(
+                child_entry,
+                remaining_items,
+                base_url,
+                cache,
+                active_urls,
+                crawl_state,
+                crawl_limits,
+                depth + 1,
+            )
             for child_entry in entry.get("children", []) or []
         )
         if child
@@ -916,6 +1005,9 @@ def crawl_inline_toc_entry(entry, remaining_items, base_url, cache, active_urls)
                 node_type=node_type,
                 cache=cache,
                 active_urls=active_urls,
+                crawl_state=crawl_state,
+                crawl_limits=crawl_limits,
+                depth=depth,
             )
             if local_content and not linked_node.get("content"):
                 linked_node["content"] = local_content
@@ -955,7 +1047,7 @@ def content_node_to_toc_entry(node, parent_path=()):
     return entry
 
 
-def flatten_content_nodes(nodes, parent_path=()):
+def flatten_content_nodes(nodes, parent_path=(), max_items=None):
     items = []
 
     for node in nodes:
@@ -971,7 +1063,25 @@ def flatten_content_nodes(nodes, parent_path=()):
                     "path": path,
                 }
             )
-        items.extend(flatten_content_nodes(node.get("children", []), tuple(path)))
+            if isinstance(max_items, int) and max_items > 0 and len(items) >= max_items:
+                return items
+
+        child_limit = None
+        if isinstance(max_items, int) and max_items > 0:
+            child_limit = max_items - len(items)
+            if child_limit <= 0:
+                return items
+
+        items.extend(
+            flatten_content_nodes(
+                node.get("children", []),
+                tuple(path),
+                max_items=child_limit,
+            )
+        )
+
+        if isinstance(max_items, int) and max_items > 0 and len(items) >= max_items:
+            return items
 
     return items
 
@@ -1076,7 +1186,7 @@ def scrape_lesson_list(soup):
 
     return lessons
 
-def scrape_all_lessons(book_url):
+def scrape_all_lessons(book_url, max_pages=None):
     """
     Scrape all lessons across all pages.
     Returns a list of lesson dictionaries.
@@ -1085,6 +1195,9 @@ def scrape_all_lessons(book_url):
     page = 1
 
     while True:
+        if max_pages is not None and page > max_pages:
+            break
+
         soup = get_soup(f"{book_url}?ld-courseinfo-lesson-page={page}")
         if not soup:
             break
@@ -1140,7 +1253,7 @@ def build_toc_structure(lessons_data):
     
     return toc
 
-def scrape_book_data(book_url):
+def scrape_book_data(book_url, *, content_limits=None):
     book_url = normalize_source_url(book_url)
     soup = get_soup(book_url)
     if not soup:
@@ -1154,25 +1267,55 @@ def scrape_book_data(book_url):
 
     cover = download_cover_image(soup, output_folder)
     main_content = scrape_main_content(soup)
-    
+
     # Extract book info and dedication from main content
     book_info, dedication, main_content = extract_dedication(main_content)
-    print("Fetching recursive content structure...")
-    root_node = scrape_recursive_content_node(
-        book_url,
-        title_hint=book_title,
-        node_type="book",
-        cache={},
-        active_urls=set(),
-        prefetched_soup=soup,
-        prefetched_main_content=main_content,
-    )
-    toc = [
-        content_node_to_toc_entry(child)
-        for child in root_node.get("children", [])
-    ]
-    content_items = flatten_content_nodes(root_node.get("children", []))
-    main_content = root_node.get("content", main_content)
+
+    crawl_limits = normalize_scrape_limits(content_limits)
+    disable_recursive = False
+    if isinstance(content_limits, dict):
+        raw_disable_recursive = content_limits.get("disable_recursive", False)
+        if isinstance(raw_disable_recursive, str):
+            disable_recursive = raw_disable_recursive.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        else:
+            disable_recursive = bool(raw_disable_recursive)
+
+    if disable_recursive:
+        print("Skipping recursive content structure fetch.")
+        toc = []
+        content_items = []
+        main_content = truncate_scraped_content(
+            main_content,
+            crawl_limits.get("max_content_chars"),
+        )
+    else:
+        print("Fetching recursive content structure...")
+        root_node = scrape_recursive_content_node(
+            book_url,
+            title_hint=book_title,
+            node_type="book",
+            cache={},
+            active_urls=set(),
+            prefetched_soup=soup,
+            prefetched_main_content=main_content,
+            crawl_state={"visited_nodes": 0},
+            crawl_limits=crawl_limits,
+            depth=0,
+        )
+        toc = [
+            content_node_to_toc_entry(child)
+            for child in root_node.get("children", [])
+        ]
+        content_items = flatten_content_nodes(
+            root_node.get("children", []),
+            max_items=crawl_limits.get("max_nodes"),
+        )
+        main_content = root_node.get("content", main_content)
 
     return {
         "book_title": book_title,

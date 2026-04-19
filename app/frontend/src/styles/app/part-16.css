@@ -217,10 +217,23 @@
 .catalog-page-header--property-layout .catalog-toolbar-wrap {
   grid-area: toolbar;
   justify-self: stretch;
+  align-self: start;
 }
 
 .catalog-page-header--property-layout > h1 {
   grid-area: title;
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  align-self: start;
+}
+
+.catalog-page-header--property-layout .catalog-search-row--property-compact {
+  min-height: 40px;
+  align-items: center;
+}
+
+.catalog-page-header--property-layout .catalog-search-actions {
   align-self: center;
 }
 

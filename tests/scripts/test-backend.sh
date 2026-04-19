@@ -37,7 +37,7 @@ fi
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
 COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
 COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
-STACK_SERVICES=(postgres redis backend worker beat frontend)
+STACK_SERVICES=(postgres redis backend worker processing-worker beat frontend)
 
 ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${APP_ENV_FILE}"
 load_env_if_present "${APP_ENV_FILE}"

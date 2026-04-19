@@ -4,6 +4,7 @@ from apps.catalog.services import (
     find_existing_book_by_source_url,
     replace_book_relations,
 )
+from django.conf import settings
 from apps.ingestion.pipeline import epub_book, html_book, scraper
 from apps.ingestion.pipeline.scraper_support.network import normalize_source_url
 from apps.ingestion.pipeline.scraper_support.text import normalize_text, texts_are_similar
@@ -45,8 +46,33 @@ def capture_source_page_metadata(source_url):
     return metadata
 
 
+def processing_scrape_limits():
+    return {
+        "max_nodes": getattr(settings, "PROCESSING_SCRAPER_MAX_NODES", 48),
+        "max_depth": getattr(settings, "PROCESSING_SCRAPER_MAX_DEPTH", 3),
+        "max_lesson_pages": getattr(
+            settings,
+            "PROCESSING_SCRAPER_MAX_LESSON_PAGES",
+            2,
+        ),
+        "max_content_chars": getattr(
+            settings,
+            "PROCESSING_SCRAPER_MAX_CONTENT_CHARS",
+            12000,
+        ),
+        "disable_recursive": getattr(
+            settings,
+            "PROCESSING_SCRAPER_DISABLE_RECURSIVE",
+            False,
+        ),
+    }
+
+
 def scrape_book(source_url):
-    return scraper.scrape_book_data(normalize_source_url(source_url))
+    return scraper.scrape_book_data(
+        normalize_source_url(source_url),
+        content_limits=processing_scrape_limits(),
+    )
 
 
 def generate_exports(book_data):

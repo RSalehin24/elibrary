@@ -25,9 +25,13 @@ def test_processing_source_helpers_bypass_legacy_adapter(monkeypatch):
     html_calls = []
     epub_calls = []
 
+    def fake_scrape_book_data(url, **kwargs):
+        scrape_calls.append((url, kwargs))
+        return {"resolved_url": url}
+
     monkeypatch.setattr(
         "apps.processing.source.scraper.scrape_book_data",
-        lambda url: scrape_calls.append(url) or {"resolved_url": url},
+        fake_scrape_book_data,
     )
     monkeypatch.setattr(
         "apps.processing.source.html_book.create_html_book",
@@ -45,12 +49,39 @@ def test_processing_source_helpers_bypass_legacy_adapter(monkeypatch):
 
     scraped = source.scrape_book("https://ebanglalibrary.com/books/example-book")
     assert scraped == {"resolved_url": normalized_url}
-    assert scrape_calls == [normalized_url]
+    assert len(scrape_calls) == 1
+    called_url, called_kwargs = scrape_calls[0]
+    assert called_url == normalized_url
+    assert called_kwargs == {
+        "content_limits": {
+            "max_nodes": 48,
+            "max_depth": 3,
+            "max_lesson_pages": 2,
+            "max_content_chars": 12000,
+            "disable_recursive": False,
+        }
+    }
 
     payload = {"book_title": "Example Book", "output_folder": "/tmp/example"}
     source.generate_exports(payload)
     assert html_calls == [payload]
     assert epub_calls == [payload]
+
+
+def test_processing_source_scrape_limits_can_be_configured(settings):
+    settings.PROCESSING_SCRAPER_MAX_NODES = 144
+    settings.PROCESSING_SCRAPER_MAX_DEPTH = 4
+    settings.PROCESSING_SCRAPER_MAX_LESSON_PAGES = 12
+    settings.PROCESSING_SCRAPER_MAX_CONTENT_CHARS = 18000
+    settings.PROCESSING_SCRAPER_DISABLE_RECURSIVE = False
+
+    assert source.processing_scrape_limits() == {
+        "max_nodes": 144,
+        "max_depth": 4,
+        "max_lesson_pages": 12,
+        "max_content_chars": 18000,
+        "disable_recursive": False,
+    }
 
 
 def test_get_soup_uses_host_fallback_and_decodes_bangla_html(monkeypatch):

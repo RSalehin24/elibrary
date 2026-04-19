@@ -67,7 +67,7 @@ async function writeSuperAdminStorageState({ frontend, repoRoot }) {
 
 function startDetachedStack({ env, repoRoot }) {
   const composeFile = path.join(repoRoot, "local/compose/docker-compose.yml");
-  const services = "postgres redis backend worker beat frontend";
+  const services = "postgres redis backend worker processing-worker beat frontend";
   const command = [
     "set -euo pipefail",
     `if docker compose version >/dev/null 2>&1; then docker compose -f "${composeFile}" up -d --build ${services}; else docker-compose -f "${composeFile}" up -d --build ${services}; fi`,

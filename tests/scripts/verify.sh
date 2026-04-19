@@ -97,7 +97,7 @@ run_browser_suite() {
 for run_index in $(seq 1 "${repeat_count}"); do
   print_info "Verification run ${run_index}/${repeat_count}: starting live stack"
   compose "${COMPOSE_ARGS[@]}" up -d --build "${STACK_SERVICES[@]}"
-  compose "${COMPOSE_ARGS[@]}" stop worker beat >/dev/null 2>&1 || true
+  compose "${COMPOSE_ARGS[@]}" stop worker processing-worker beat >/dev/null 2>&1 || true
 
   print_info "Verification run ${run_index}/${repeat_count}: waiting for services"
   wait_for_url "${FRONTEND_URL}" 120 || die "Frontend did not become ready at ${FRONTEND_URL}"

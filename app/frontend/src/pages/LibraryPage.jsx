@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import BookTable from "../components/BookTable";
 import CatalogToolbar from "../components/CatalogToolbar";
 import ExportActions from "../components/ExportActions";
 import LoadingSpinner from "../components/LoadingSpinner";
-import PageLoader from "../components/PageLoader";
-import PropertyTableControls from "../components/PropertyTableControls";
+import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
+import {
+  normalizeBookPayload,
+} from "../utils/catalogBooks";
 import { getExportBlockState } from "../utils/export";
 import {
   clearPendingExport,
@@ -44,8 +46,6 @@ const defaultFilters = {
   created_after: "",
   created_before: "",
   sort: "-created_at",
-  page: "1",
-  limit: "10",
 };
 
 const libraryFilterFields = [
@@ -168,34 +168,11 @@ function waitForMinimumLoader(startedAt, minimumMs = 240) {
   return new Promise((resolve) => window.setTimeout(resolve, remaining));
 }
 
-const defaultPagination = {
-  page: 1,
-  limit: 10,
-  total_count: 0,
-  page_count: 1,
-  has_previous: false,
-  has_next: false,
-};
-
-function normalizeBookPayload(payload) {
-  if (Array.isArray(payload)) {
-    return {
-      entries: payload,
-      pagination: {
-        ...defaultPagination,
-        total_count: payload.length,
-      },
-    };
-  }
-
-  return {
-    entries: payload?.entries || [],
-    pagination: {
-      ...defaultPagination,
-      ...(payload?.pagination || {}),
-    },
-  };
-}
+const libraryToolbarFields = libraryFilterFields.filter(
+  (field) => field.key !== "sort",
+);
+const librarySortOptions =
+  libraryFilterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function LibraryPage() {
   const { authenticated } = useSession();
@@ -203,40 +180,32 @@ export default function LibraryPage() {
   const pendingExportRef = useRef(readPendingExport(EXPORT_STORAGE_KEY));
   const resumedPendingExportRef = useRef(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const [books, setBooks] = useState([]);
-  const [filters, setFilters] = useState(() =>
-    filtersFromSearchParams(defaultFilters, searchParams),
+  const appliedFilters = useMemo(
+    () => filtersFromSearchParams(defaultFilters, searchParams),
+    [searchParams],
   );
+  const [filters, setFilters] = useState(appliedFilters);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [savedFilters, setSavedFilters] = useState([]);
-  const [pagination, setPagination] = useState(defaultPagination);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [savedFilterAction, setSavedFilterAction] = useState("");
   const [downloadState, setDownloadState] = useState(
     () => pendingExportRef.current?.mode || "",
   );
+  const {
+    books,
+    totalCount,
+    hasMore,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error,
+    tableShellRef,
+    observeLoadTrigger,
+  } = useInfiniteCatalogBooks({
+    filters: appliedFilters,
+  });
 
-  async function loadBooks(nextFilters = filters) {
-    try {
-      setLoading(true);
-      const payload = await apiFetch(
-        `/catalog/books/${toQueryString(nextFilters)}`,
-      );
-      const normalized = normalizeBookPayload(payload);
-      setBooks(normalized.entries);
-      setPagination(normalized.pagination);
-      setError("");
-    } catch (nextError) {
-      setBooks([]);
-      setPagination(defaultPagination);
-      setError(nextError.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadAllBooksForExport(nextFilters = filters) {
+  async function loadAllBooksForExport(nextFilters = appliedFilters) {
     const pageSize = 100;
     const normalizedFilters = {
       ...nextFilters,
@@ -279,10 +248,8 @@ export default function LibraryPage() {
   }
 
   useEffect(() => {
-    const nextFilters = filtersFromSearchParams(defaultFilters, searchParams);
-    setFilters(nextFilters);
-    loadBooks(nextFilters);
-  }, [searchParams.toString()]);
+    setFilters(appliedFilters);
+  }, [appliedFilters]);
 
   useEffect(() => {
     loadSavedFilters();
@@ -331,7 +298,7 @@ export default function LibraryPage() {
 
   function applyFilters(event) {
     event.preventDefault();
-    setSearchParams(cleanQueryParams({ ...filters, page: "1" }));
+    setSearchParams(cleanQueryParams(filters));
   }
 
   function resetFilters() {
@@ -340,9 +307,8 @@ export default function LibraryPage() {
   }
 
   function clearSearch(nextFilters) {
-    const nextSearchFilters = { ...nextFilters, page: "1" };
-    setFilters(nextSearchFilters);
-    setSearchParams(cleanQueryParams(nextSearchFilters));
+    setFilters(nextFilters);
+    setSearchParams(cleanQueryParams(nextFilters));
   }
 
   function applySavedFilter(savedFilter) {
@@ -375,10 +341,10 @@ export default function LibraryPage() {
 
   async function runDownload(mode) {
     try {
-      const exportItems = await loadAllBooksForExport(filters);
+      const exportItems = await loadAllBooksForExport(appliedFilters);
       const blocked = getExportBlockState({
         items: exportItems,
-        loading,
+        loading: initialLoading || refreshing,
         error,
         nounSingular: "book",
         nounPlural: "books",
@@ -417,9 +383,7 @@ export default function LibraryPage() {
     }
   }
 
-  const resultCount = error || loading ? "" : `${pagination.total_count}`;
-  const sortOptions =
-    libraryFilterFields.find((field) => field.key === "sort")?.options || [];
+  const resultCount = error && !books.length ? "" : `${totalCount}`;
   const exportActions = (
     <ExportActions
       loading={downloadState}
@@ -428,45 +392,7 @@ export default function LibraryPage() {
       bare
     />
   );
-  const tableControls = (
-    <PropertyTableControls
-      sortValue={filters.sort}
-      sortOptions={sortOptions}
-      onSortChange={(nextSort) => {
-        const nextFilters = {
-          ...filters,
-          sort: nextSort,
-          page: "1",
-        };
-        setFilters(nextFilters);
-        setSearchParams(cleanQueryParams(nextFilters));
-      }}
-      rowsPerPage={Number(pagination.limit) || Number(filters.limit) || 10}
-      onRowsPerPageChange={(nextLimit) => {
-        const nextFilters = {
-          ...filters,
-          page: "1",
-          limit: String(nextLimit),
-        };
-        setFilters(nextFilters);
-        setSearchParams(cleanQueryParams(nextFilters));
-      }}
-      page={Number(pagination.page) || 1}
-      pageCount={Number(pagination.page_count) || 1}
-      hasPrevious={Boolean(pagination.has_previous)}
-      hasNext={Boolean(pagination.has_next)}
-      onPageChange={(nextPage) => {
-        const nextFilters = {
-          ...filters,
-          page: String(nextPage),
-          limit: String(pagination.limit || filters.limit || 10),
-        };
-        setFilters(nextFilters);
-        setSearchParams(cleanQueryParams(nextFilters));
-      }}
-      disabled={loading}
-    />
-  );
+  const showErrorState = Boolean(error && !books.length && !initialLoading);
 
   return (
     <div className="catalog-page page-stack">
@@ -476,7 +402,7 @@ export default function LibraryPage() {
         <CatalogToolbar
           filters={filters}
           setFilters={setFilters}
-          fields={libraryFilterFields}
+          fields={libraryToolbarFields}
           defaultFilters={defaultFilters}
           filtersExpanded={filtersExpanded}
           setFiltersExpanded={setFiltersExpanded}
@@ -484,16 +410,27 @@ export default function LibraryPage() {
           onReset={resetFilters}
           searchPlaceholder="Search books, book IDs, writers, categories..."
           resultCount={resultCount}
+          resultCountLoading={initialLoading || refreshing}
           searchActionsExtra={exportActions}
+          sortValue={filters.sort}
+          sortOptions={librarySortOptions}
+          onSortChange={(nextSort) => {
+            const nextFilters = {
+              ...filters,
+              sort: nextSort,
+            };
+            setFilters(nextFilters);
+            setSearchParams(cleanQueryParams(nextFilters));
+          }}
+          sortAriaLabel="Sort books"
           searchRowCompact
           searchRowClassName="catalog-search-row--property-compact"
           onSearchClear={clearSearch}
           inline
           bare
-          buttonsLoading={loading}
+          buttonsLoading={initialLoading || refreshing}
+          buttonsDisabled={initialLoading || loadingMore || refreshing}
         />
-
-        <div className="catalog-page-controls-row">{tableControls}</div>
       </header>
 
       {savedFilters.length ? (
@@ -528,16 +465,20 @@ export default function LibraryPage() {
         </section>
       ) : null}
 
-      {loading ? (
-        <PageLoader
-          label="Loading books"
-          detail="Fetching the current catalog view and book statuses."
-          variant="table"
-        />
-      ) : error ? (
+      {showErrorState ? (
         <div className="page-state page-state-error">{error}</div>
       ) : (
-        <BookTable books={books} emptyLabel="No books found." />
+        <BookTable
+          books={books}
+          emptyLabel="No books found."
+          shellClassName="catalog-table-shell--incremental"
+          shellRef={tableShellRef}
+          hasMore={hasMore}
+          observeLoadTrigger={observeLoadTrigger}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          refreshing={refreshing}
+        />
       )}
     </div>
   );

@@ -66,7 +66,7 @@ wait_for_url() {
 
 print_info "Starting local stack for browser tests"
 compose "${COMPOSE_ARGS[@]}" up -d --build "${STACK_SERVICES[@]}"
-compose "${COMPOSE_ARGS[@]}" stop worker beat >/dev/null 2>&1 || true
+compose "${COMPOSE_ARGS[@]}" stop worker processing-worker beat >/dev/null 2>&1 || true
 
 print_info "Waiting for frontend and backend"
 wait_for_url "${FRONTEND_URL}" 120 || die "Frontend did not become ready at ${FRONTEND_URL}"

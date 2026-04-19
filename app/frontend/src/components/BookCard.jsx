@@ -23,14 +23,14 @@ function renderFilterLinks(values, queryKey, emptyLabel) {
   ));
 }
 
-export default function BookCard({ book }) {
+export default function BookCard({ book, cardRef = undefined }) {
   const contributorGroups = getWriterColumnGroups(book);
   const series = book.series || [];
   const categories = book.categories || [];
   const bookIdLabel = book.catalog_code || "Pending";
 
   return (
-    <article className="book-card">
+    <article className="book-card" ref={cardRef}>
       <div className="book-card-art">
         <BookCoverArt book={book} className="book-card-cover" ariaHidden />
       </div>

@@ -1,5 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { apiFetch } from "../../api/client";
+import BookRouteLink from "../../components/BookRouteLink";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import {
+  ProcessingCountSkeleton,
+  ProcessingValueSkeleton,
+} from "../../components/ProcessingCardSkeleton";
 import {
   countActiveFilters,
   renderField,
@@ -8,23 +21,16 @@ import {
   FilterIcon,
   SearchIcon,
 } from "../../components/catalog-toolbar/icons.jsx";
-import {
-  latestRequestForRecord,
-  useBookProcessing,
-} from "./BookProcessingStore";
+import { useBookProcessing } from "./BookProcessingStore";
 import { REQUEST_STATE_LABELS } from "./types";
 
 const SEARCH_PLACEHOLDER =
   "Search name, URL, category, writer, translator, or publisher";
+const PROCESSING_TABLE_BATCH_SIZE = 60;
+const PROCESSING_TABLE_PREFETCH_TRIGGER = 30;
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
-const INCOMPLETE_CATEGORY_KEYWORDS = [
-  "incomplete",
-  "unfinished",
-  "অসম্পূর্ণ",
-  "অসম্পূর্ণ বই",
-];
 
 function formatDate(value) {
   if (!value) {
@@ -44,33 +50,6 @@ function formatDate(value) {
   });
 }
 
-function normalizeText(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function decodeUrlForDisplay(value) {
-  const url = String(value || "").trim();
-  if (!url) {
-    return "";
-  }
-  try {
-    return decodeURIComponent(url);
-  } catch {
-    return url;
-  }
-}
-
-function recordDisplayUrl(record) {
-  return record?.displayUrl || decodeUrlForDisplay(record?.url);
-}
-
-function isIncompleteCategory(value) {
-  const normalized = normalizeText(value);
-  return INCOMPLETE_CATEGORY_KEYWORDS.some((keyword) =>
-    normalized.includes(keyword.toLowerCase()),
-  );
-}
-
 function splitSyncMessage(message) {
   const trimmed = String(message || "").trim();
   if (!trimmed) {
@@ -85,18 +64,15 @@ function splitSyncMessage(message) {
   return [parts[1], parts[2]];
 }
 
-function uniqueOptions(values) {
-  return Array.from(new Set(values.filter(Boolean))).sort((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
 function requestDetails(request) {
   if (!request) {
     return "";
   }
-  if (request.progress?.checkpoint) {
-    return `${request.progress.checkpoint} (${formatDate(request.progress.savedAt)})`;
+  const checkpoint =
+    request.progress?.checkpoint || request.progressCheckpoint || "";
+  const savedAt = request.progress?.savedAt || request.progressSavedAt || "";
+  if (checkpoint) {
+    return savedAt ? `${checkpoint} (${formatDate(savedAt)})` : checkpoint;
   }
   if (request.errorMessage) {
     return request.errorMessage;
@@ -113,41 +89,32 @@ function requestDetails(request) {
   return "";
 }
 
-function recordSearchText(record, request) {
-  const displayUrl = recordDisplayUrl(record);
-  return [
-    record?.name,
-    record?.url,
-    displayUrl,
-    record?.displayPath,
-    record?.writer,
-    record?.translator,
-    record?.publisher,
-    record?.category,
-    REQUEST_STATE_LABELS[request?.state || record?.bookCreationState],
-    requestDetails(request),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-function OverviewStat({ testId, label, value }) {
+function OverviewStat({ testId, label, value, loading = false }) {
   return (
     <div className="processing-summary-stat" data-testid={testId}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{loading ? <ProcessingValueSkeleton /> : value}</strong>
     </div>
+  );
+}
+
+function ProcessingStatusSkeleton({ lines = 1, variant = "automation" }) {
+  return (
+    <span
+      className={`processing-status-skeleton processing-status-skeleton--${variant}`}
+      aria-hidden="true"
+    >
+      <span className="processing-status-line-skeleton processing-status-line-skeleton--wide" />
+      {lines > 1 ? (
+        <span className="processing-status-line-skeleton processing-status-line-skeleton--short" />
+      ) : null}
+    </span>
   );
 }
 
 function PlayIcon() {
   return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="currentColor"
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
       <path d="M6.5 4.5v11l8.75-5.5-8.75-5.5Z" />
     </svg>
   );
@@ -155,11 +122,7 @@ function PlayIcon() {
 
 function PauseIcon() {
   return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="currentColor"
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
       <path d="M6.25 4.75h2.75v10.5H6.25zM11 4.75h2.75v10.5H11z" />
     </svg>
   );
@@ -167,11 +130,7 @@ function PauseIcon() {
 
 function StopIcon() {
   return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="currentColor"
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
       <path d="M5.75 5.75h8.5v8.5h-8.5z" />
     </svg>
   );
@@ -210,6 +169,70 @@ function IconOnlyActionButton({
   );
 }
 
+function IconOnlyActionSkeleton({ testId, label, className = "" }) {
+  return (
+    <button
+      type="button"
+      className={`toolbar-icon-button toolbar-icon-button-accent is-icon-only processing-icon-button processing-skeleton-control${
+        className ? ` ${className}` : ""
+      }`}
+      aria-hidden="true"
+      tabIndex={-1}
+      data-testid={testId}
+    >
+      <span className="toolbar-icon-button-art" />
+      <span className="toolbar-icon-button-text">{label}</span>
+    </button>
+  );
+}
+
+function ButtonSkeleton({ testId, label, className = "" }) {
+  return (
+    <button
+      type="button"
+      className={`primary-button processing-skeleton-control processing-skeleton-button${
+        className ? ` ${className}` : ""
+      }`}
+      aria-hidden="true"
+      tabIndex={-1}
+      data-testid={testId}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SwitchSkeleton({ testId, label = "Off" }) {
+  return (
+    <label
+      className="processing-switch processing-switch-skeleton"
+      aria-hidden="true"
+      data-testid={testId}
+    >
+      <input type="checkbox" checked={false} readOnly tabIndex={-1} />
+      <span className="processing-switch-track processing-skeleton-control">
+        <span className="processing-switch-state">{label}</span>
+        <span className="processing-switch-thumb processing-skeleton-control" />
+      </span>
+    </label>
+  );
+}
+
+function AutomationFieldSkeleton({ testId, label, controlClassName = "" }) {
+  return (
+    <label className="processing-automation-field processing-form-field-skeleton">
+      <span className="processing-automation-field-label">{label}</span>
+      <span
+        className={`processing-automation-field-control processing-automation-field-control--skeleton processing-skeleton-control${
+          controlClassName ? ` ${controlClassName}` : ""
+        }`}
+        aria-hidden="true"
+        data-testid={testId}
+      />
+    </label>
+  );
+}
+
 function PageFrame({ pageId, title, children }) {
   return (
     <div className="processing-page page-stack" data-testid={`${pageId}-page`}>
@@ -225,7 +248,7 @@ function PageFrame({ pageId, title, children }) {
   );
 }
 
-function OverviewPanel({ pageId, stats }) {
+function OverviewPanel({ pageId, stats, loading = false }) {
   return (
     <section className="detail-card processing-summary-card">
       <div className="processing-summary-bar">
@@ -235,27 +258,12 @@ function OverviewPanel({ pageId, stats }) {
             testId={`${pageId}-overview-stat-${stat.id}`}
             label={stat.label}
             value={stat.value}
+            loading={loading}
           />
         ))}
       </div>
     </section>
   );
-}
-
-function filterRows(rows, query, categoryFilter, statusFilter) {
-  const normalizedQuery = normalizeText(query);
-  return rows.filter((row) => {
-    if (normalizedQuery && !row.searchText.includes(normalizedQuery)) {
-      return false;
-    }
-    if (categoryFilter && row.category !== categoryFilter) {
-      return false;
-    }
-    if (statusFilter && row.status !== statusFilter) {
-      return false;
-    }
-    return true;
-  });
 }
 
 function ActiveFilters({ pageId, cardId, categoryFilter, statusFilter }) {
@@ -308,20 +316,380 @@ function ContributorsCell({ row }) {
   );
 }
 
+function processingTablePath({
+  cardKey,
+  query,
+  category,
+  status,
+  offset,
+  limit,
+}) {
+  const params = new URLSearchParams({
+    card: cardKey,
+    offset: String(offset),
+    limit: String(limit),
+  });
+  if (query) {
+    params.set("q", query);
+  }
+  if (category) {
+    params.set("category", category);
+  }
+  if (status) {
+    params.set("status", status);
+  }
+  return `/processing/table/?${params.toString()}`;
+}
+
+function TableSkeletonRows({
+  pageId,
+  cardId,
+  showSelectionColumn,
+  splitBookColumn,
+  showDetailsColumn = true,
+  showActionColumn = false,
+  count = 5,
+  incremental = false,
+}) {
+  return Array.from({ length: count }, (_, index) => (
+    <tr
+      key={`${incremental ? "more" : "initial"}-skeleton-${index}`}
+      className={`processing-skeleton-row${
+        splitBookColumn ? " processing-skeleton-row--split" : ""
+      }`}
+      data-testid={
+        index === 0
+          ? `${pageId}-${cardId}-${incremental ? "load-more" : "table"}-skeleton`
+          : undefined
+      }
+      aria-hidden="true"
+    >
+      {showSelectionColumn ? (
+        <td className="processing-col-select">
+          <span className="processing-checkbox-skeleton processing-skeleton-control" />
+        </td>
+      ) : null}
+      {splitBookColumn ? (
+        <>
+          <td className="processing-col-name">
+            <div className="processing-table-primary">
+              <strong>
+                <span className="skeleton-line skeleton-line-xl" />
+              </strong>
+            </div>
+          </td>
+          <td className="processing-col-url">
+            <span className="processing-table-link">
+              <span className="processing-table-skeleton-stack">
+                <span className="skeleton-line skeleton-line-lg" />
+                <span className="skeleton-line skeleton-line-sm" />
+              </span>
+            </span>
+          </td>
+        </>
+      ) : (
+        <td className="processing-col-book-wide">
+          <div className="processing-table-skeleton-stack">
+            <span className="skeleton-line skeleton-line-xl" />
+            <span className="skeleton-line skeleton-line-sm" />
+          </div>
+        </td>
+      )}
+      <td className="processing-col-contributors-wide">
+        <div
+          className="processing-contributors-list"
+          style={splitBookColumn ? { minHeight: "81px" } : undefined}
+        >
+          <div className="processing-contributor-entry">
+            <span className="processing-contributor-label">
+              <span className="skeleton-line skeleton-line-sm" />
+            </span>
+            <span className="processing-table-muted">
+              <span className="skeleton-line skeleton-line-sm" />
+            </span>
+          </div>
+          <div className="processing-contributor-entry">
+            <span className="processing-contributor-label">
+              <span className="skeleton-line skeleton-line-sm" />
+            </span>
+            <span className="processing-table-muted">
+              <span className="skeleton-line skeleton-line-sm" />
+            </span>
+          </div>
+        </div>
+      </td>
+      <td className="processing-col-category">
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td className="processing-col-status">
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      {showDetailsColumn ? (
+        <td className="processing-col-details">
+          <span className="skeleton-line skeleton-line-lg" />
+        </td>
+      ) : null}
+      <td className="processing-col-updated">
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      {showActionColumn ? (
+        <td className="processing-col-action">
+          <span className="ghost-button skeleton-button skeleton-button-sm" />
+        </td>
+      ) : null}
+    </tr>
+  ));
+}
+
+function useProcessingTableData({ cardKey, filters, enabled, stateVersion }) {
+  const [tableState, setTableState] = useState({
+    rows: [],
+    totalCount: 0,
+    categoryOptions: [],
+    statusOptions: [],
+    hasMore: false,
+    loadedOnce: false,
+    initialLoading: false,
+    loadingMore: false,
+    refreshing: false,
+    error: "",
+  });
+  const tableShellRef = useRef(null);
+  const observerRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const deferredQuery = useDeferredValue(filters.q);
+
+  const loadRows = useCallback(
+    async ({
+      offset = 0,
+      limit = PROCESSING_TABLE_BATCH_SIZE,
+      append = false,
+      preserveRows = false,
+    } = {}) => {
+      const requestSeq = requestSeqRef.current + 1;
+      requestSeqRef.current = requestSeq;
+
+      setTableState((current) => ({
+        ...current,
+        initialLoading: !append && !preserveRows && !current.loadedOnce,
+        loadingMore: append,
+        refreshing: !append && (preserveRows || current.loadedOnce),
+        error: "",
+        rows: append || preserveRows || current.loadedOnce ? current.rows : [],
+        totalCount:
+          append || preserveRows || current.loadedOnce ? current.totalCount : 0,
+      }));
+
+      try {
+        const payload = await apiFetch(
+          processingTablePath({
+            cardKey,
+            query: deferredQuery,
+            category: filters.category,
+            status: filters.status,
+            offset,
+            limit,
+          }),
+        );
+        if (requestSeqRef.current !== requestSeq) {
+          return null;
+        }
+
+        const nextRows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const nextPagination = payload?.pagination || {};
+        const nextFilters = payload?.filters || {};
+
+        setTableState((current) => ({
+          rows: append ? [...current.rows, ...nextRows] : nextRows,
+          totalCount: Number(nextPagination.totalCount) || 0,
+          categoryOptions: Array.isArray(nextFilters.categoryOptions)
+            ? nextFilters.categoryOptions
+            : [],
+          statusOptions: Array.isArray(nextFilters.statusOptions)
+            ? nextFilters.statusOptions
+            : [],
+          hasMore: Boolean(nextPagination.hasMore),
+          loadedOnce: true,
+          initialLoading: false,
+          loadingMore: false,
+          refreshing: false,
+          error: "",
+        }));
+        return payload;
+      } catch (nextError) {
+        if (requestSeqRef.current !== requestSeq) {
+          return null;
+        }
+        setTableState((current) => ({
+          ...current,
+          rows:
+            append || preserveRows || current.loadedOnce ? current.rows : [],
+          totalCount:
+            append || preserveRows || current.loadedOnce
+              ? current.totalCount
+              : 0,
+          loadedOnce: true,
+          initialLoading: false,
+          loadingMore: false,
+          refreshing: false,
+          error: nextError.message || "Unable to load records.",
+        }));
+        return null;
+      }
+    },
+    [cardKey, deferredQuery, filters.category, filters.status],
+  );
+
+  const refreshRows = useCallback(
+    async ({ preserveLoadedRows = true } = {}) => {
+      const nextLimit = preserveLoadedRows
+        ? Math.max(PROCESSING_TABLE_BATCH_SIZE, tableState.rows.length || 0)
+        : PROCESSING_TABLE_BATCH_SIZE;
+      return loadRows({
+        offset: 0,
+        limit: nextLimit,
+        append: false,
+        preserveRows: preserveLoadedRows && tableState.rows.length > 0,
+      });
+    },
+    [loadRows, tableState.rows.length],
+  );
+
+  const loadMore = useCallback(async () => {
+    if (
+      !enabled ||
+      tableState.initialLoading ||
+      tableState.loadingMore ||
+      !tableState.hasMore
+    ) {
+      return null;
+    }
+
+    return loadRows({
+      offset: tableState.rows.length,
+      limit: PROCESSING_TABLE_BATCH_SIZE,
+      append: true,
+    });
+  }, [
+    enabled,
+    loadRows,
+    tableState.hasMore,
+    tableState.initialLoading,
+    tableState.loadingMore,
+    tableState.rows.length,
+  ]);
+
+  const observeLoadTrigger = useCallback(
+    (node) => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+        observerRef.current = null;
+      }
+
+      if (
+        !node ||
+        !enabled ||
+        tableState.initialLoading ||
+        tableState.loadingMore ||
+        !tableState.hasMore
+      ) {
+        return;
+      }
+
+      observerRef.current = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            loadMore();
+          }
+        },
+        {
+          root: tableShellRef.current,
+          rootMargin: "0px 0px 240px 0px",
+        },
+      );
+      observerRef.current.observe(node);
+    },
+    [
+      enabled,
+      loadMore,
+      tableState.hasMore,
+      tableState.initialLoading,
+      tableState.loadingMore,
+    ],
+  );
+
+  useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+    loadRows({
+      offset: 0,
+      limit: PROCESSING_TABLE_BATCH_SIZE,
+      append: false,
+      preserveRows: false,
+    });
+    return undefined;
+  }, [
+    enabled,
+    cardKey,
+    deferredQuery,
+    filters.category,
+    filters.status,
+    loadRows,
+  ]);
+
+  useEffect(() => {
+    if (!enabled || !tableState.loadedOnce) {
+      return undefined;
+    }
+    loadRows({
+      offset: 0,
+      limit: Math.max(PROCESSING_TABLE_BATCH_SIZE, tableState.rows.length),
+      append: false,
+      preserveRows: tableState.rows.length > 0,
+    });
+    return undefined;
+  }, [
+    enabled,
+    loadRows,
+    stateVersion,
+    tableState.loadedOnce,
+    tableState.rows.length,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+    };
+  }, []);
+
+  return {
+    ...tableState,
+    refreshRows,
+    loadMore,
+    tableShellRef,
+    observeLoadTrigger,
+  };
+}
+
 function ProcessingDataCard({
   pageId,
   cardId,
+  cardKey,
   title,
-  description,
-  rows,
   actions = [],
   busy = false,
   readOnly = false,
   detailsLabel = "Details",
+  showDetailsColumn = true,
   emptyLabel = "No records.",
   className = "",
   fullSpan = false,
   bookColumnMode = "combined",
+  actionLabel = "Action",
+  renderRowAction = null,
 }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [filters, setFilters] = useState({
@@ -330,8 +698,10 @@ function ProcessingDataCard({
     status: "",
   });
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const { canLoadProcessingState, stateVersion } = useBookProcessing();
   const showSelectionColumn = actions.length > 0 && !readOnly;
   const splitBookColumn = bookColumnMode === "split";
+  const showActionColumn = typeof renderRowAction === "function";
   const defaultFilters = useMemo(
     () => ({
       q: "",
@@ -340,15 +710,27 @@ function ProcessingDataCard({
     }),
     [],
   );
+  const {
+    rows,
+    totalCount,
+    categoryOptions,
+    statusOptions,
+    hasMore,
+    loadedOnce,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error: tableError,
+    refreshRows,
+    tableShellRef,
+    observeLoadTrigger,
+  } = useProcessingTableData({
+    cardKey,
+    filters,
+    enabled: canLoadProcessingState,
+    stateVersion,
+  });
 
-  const categoryOptions = useMemo(
-    () => uniqueOptions(rows.map((row) => row.category)),
-    [rows],
-  );
-  const statusOptions = useMemo(
-    () => uniqueOptions(rows.map((row) => row.status)),
-    [rows],
-  );
   const filterFields = useMemo(
     () => [
       {
@@ -384,19 +766,24 @@ function ProcessingDataCard({
     () => countActiveFilters(filters, filterFields, defaultFilters),
     [defaultFilters, filterFields, filters],
   );
-  const visibleRows = useMemo(
-    () => filterRows(rows, filters.q, filters.category, filters.status),
-    [filters.category, filters.q, filters.status, rows],
-  );
-  const visibleColumnCount = (showSelectionColumn ? 1 : 0) +
-    (splitBookColumn ? 7 : 6);
+  const visibleRows = rows;
+  const visibleColumnCount =
+    (showSelectionColumn ? 1 : 0) +
+    (splitBookColumn ? 6 : 5) +
+    (showDetailsColumn ? 1 : 0) +
+    (showActionColumn ? 1 : 0);
+  const showInitialTableSkeleton = initialLoading && !loadedOnce;
+  const showRefreshSkeletonRows =
+    (loadingMore || refreshing) && visibleRows.length > 0;
 
   useEffect(() => {
     const visibleIds = new Set(visibleRows.map((row) => row.id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
   }, [visibleRows]);
 
-  const selectedRows = visibleRows.filter((row) => selectedIds.includes(row.id));
+  const selectedRows = visibleRows.filter((row) =>
+    selectedIds.includes(row.id),
+  );
   const selectableRows = visibleRows.filter((row) => row.selectable);
   const allSelectableSelected =
     selectableRows.length > 0 &&
@@ -424,6 +811,7 @@ function ProcessingDataCard({
     const result = await action.onAction(ids, selectedRows);
     if (result) {
       setSelectedIds([]);
+      await refreshRows();
     }
   }
 
@@ -459,6 +847,7 @@ function ProcessingDataCard({
                 placeholder={SEARCH_PLACEHOLDER}
                 autoComplete="off"
                 data-testid={`${pageId}-${cardId}-search`}
+                disabled={busy}
               />
             </label>
           </div>
@@ -471,7 +860,7 @@ function ProcessingDataCard({
               onClick={() => setFiltersExpanded((current) => !current)}
               aria-expanded={filtersExpanded}
               aria-controls={`${pageId}-${cardId}-filters`}
-              disabled={busy}
+              disabled={busy || showInitialTableSkeleton}
             >
               <FilterIcon />
               <span>Filters</span>
@@ -483,10 +872,14 @@ function ProcessingDataCard({
             </button>
             <span
               className="catalog-result-count"
-              aria-label={`${visibleRows.length} results`}
+              aria-label={`${totalCount} results`}
               data-testid={`${pageId}-${cardId}-count`}
             >
-              {visibleRows.length}
+              {showInitialTableSkeleton ? (
+                <ProcessingCountSkeleton />
+              ) : (
+                totalCount
+              )}
             </span>
           </div>
         </div>
@@ -534,9 +927,11 @@ function ProcessingDataCard({
                   key={action.id}
                   type="button"
                   className={
-                    action.danger ? "ghost-button danger-button" : "primary-button"
+                    action.danger
+                      ? "ghost-button danger-button"
+                      : "primary-button"
                   }
-                  disabled={busy || selectedRows.length === 0}
+                  disabled={busy || initialLoading || selectedRows.length === 0}
                   onClick={() => runAction(action)}
                   data-testid={`${pageId}-${cardId}-${action.id}-btn`}
                 >
@@ -549,11 +944,38 @@ function ProcessingDataCard({
         </div>
       ) : null}
 
-      <div className="processing-table-shell">
+      <div
+        ref={tableShellRef}
+        className="processing-table-shell"
+        aria-busy={initialLoading || loadingMore || refreshing}
+      >
         <table
           className="simple-table processing-table"
           data-testid={`${pageId}-${cardId}-table`}
         >
+          <colgroup>
+            {showSelectionColumn ? (
+              <col className="processing-col-select" />
+            ) : null}
+            {splitBookColumn ? (
+              <>
+                <col className="processing-col-name" />
+                <col className="processing-col-url" />
+              </>
+            ) : (
+              <col className="processing-col-book-wide" />
+            )}
+            <col className="processing-col-contributors-wide" />
+            <col className="processing-col-category" />
+            <col className="processing-col-status" />
+            {showDetailsColumn ? (
+              <col className="processing-col-details" />
+            ) : null}
+            <col className="processing-col-updated" />
+            {showActionColumn ? (
+              <col className="processing-col-action" />
+            ) : null}
+          </colgroup>
           <thead>
             <tr>
               {showSelectionColumn ? (
@@ -563,7 +985,11 @@ function ProcessingDataCard({
                     className="processing-checkbox"
                     aria-label={`Select all ${title}`}
                     checked={allSelectableSelected}
-                    disabled={busy || selectableRows.length === 0}
+                    disabled={
+                      busy ||
+                      showInitialTableSkeleton ||
+                      selectableRows.length === 0
+                    }
                     onChange={(event) => toggleAll(event.target.checked)}
                     data-testid={`${pageId}-${cardId}-select-all`}
                   />
@@ -580,16 +1006,40 @@ function ProcessingDataCard({
               <th className="processing-col-contributors-wide">Credits</th>
               <th className="processing-col-category">Category</th>
               <th className="processing-col-status">Status</th>
-              <th className="processing-col-details">{detailsLabel}</th>
+              {showDetailsColumn ? (
+                <th className="processing-col-details">{detailsLabel}</th>
+              ) : null}
               <th className="processing-col-updated">Updated</th>
+              {showActionColumn ? (
+                <th className="processing-col-action">{actionLabel}</th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
-            {visibleRows.length ? (
-              visibleRows.map((row) => (
+            {showInitialTableSkeleton ? (
+              <TableSkeletonRows
+                pageId={pageId}
+                cardId={cardId}
+                showSelectionColumn={showSelectionColumn}
+                splitBookColumn={splitBookColumn}
+                showDetailsColumn={showDetailsColumn}
+                showActionColumn={showActionColumn}
+              />
+            ) : visibleRows.length ? (
+              visibleRows.map((row, rowIndex) => (
                 <tr
                   key={row.id}
                   data-testid={`${pageId}-${cardId}-row-${row.id}`}
+                  ref={
+                    hasMore &&
+                    rowIndex ===
+                      Math.max(
+                        0,
+                        visibleRows.length - PROCESSING_TABLE_PREFETCH_TRIGGER,
+                      )
+                      ? observeLoadTrigger
+                      : undefined
+                  }
                 >
                   {showSelectionColumn ? (
                     <td className="processing-col-select">
@@ -644,73 +1094,44 @@ function ProcessingDataCard({
                   <td className="processing-col-status">
                     {REQUEST_STATE_LABELS[row.status] || row.status}
                   </td>
-                  <td className="processing-col-details">
-                    {row.details || "Ready"}
-                  </td>
+                  {showDetailsColumn ? (
+                    <td className="processing-col-details">
+                      {requestDetails(row) || "Ready"}
+                    </td>
+                  ) : null}
                   <td className="processing-col-updated">
                     {formatDate(row.updatedAt)}
                   </td>
+                  {showActionColumn ? (
+                    <td className="processing-col-action">
+                      {renderRowAction(row) || (
+                        <span className="processing-table-muted">-</span>
+                      )}
+                    </td>
+                  ) : null}
                 </tr>
               ))
             ) : (
               <tr>
-                <td colSpan={visibleColumnCount}>{emptyLabel}</td>
+                <td colSpan={visibleColumnCount}>{tableError || emptyLabel}</td>
               </tr>
             )}
+            {showRefreshSkeletonRows ? (
+              <TableSkeletonRows
+                pageId={pageId}
+                cardId={cardId}
+                showSelectionColumn={showSelectionColumn}
+                splitBookColumn={splitBookColumn}
+                showDetailsColumn={showDetailsColumn}
+                showActionColumn={showActionColumn}
+                count={3}
+                incremental
+              />
+            ) : null}
           </tbody>
         </table>
       </div>
     </section>
-  );
-}
-
-function recordRow(record, request, selectable = true) {
-  const status = request?.state || record.bookCreationState || "not_created";
-  return {
-    id: record.id,
-    record,
-    request,
-    title: record.name,
-    url: record.url,
-    displayUrl: recordDisplayUrl(record),
-    displayPath: record?.displayPath || "",
-    category: record.category,
-    writer: record.writer,
-    translator: record.translator,
-    publisher: record.publisher,
-    status,
-    updatedAt: request?.updatedAt || record.updatedAt,
-    details: requestDetails(request),
-    selectable,
-    searchText: recordSearchText(record, request),
-  };
-}
-
-function requestRow(request, record, selectable = true) {
-  return {
-    ...recordRow(record, request, selectable),
-    id: request.id,
-    request,
-    status: request.state,
-    updatedAt: request.updatedAt,
-    details: requestDetails(request),
-    searchText: recordSearchText(record, request),
-  };
-}
-
-function useRequestRows(states) {
-  const { requests, recordMap } = useBookProcessing();
-  const allowedStates = new Set(states);
-  return useMemo(
-    () =>
-      requests
-        .filter((request) => allowedStates.has(request.state))
-        .map((request) => {
-          const record = recordMap.get(request.bookRecordId);
-          return record ? requestRow(request, record) : null;
-        })
-        .filter(Boolean),
-    [allowedStates, recordMap, requests],
   );
 }
 
@@ -719,6 +1140,7 @@ function AutomationPanel({
   title,
   automation,
   sync,
+  loading = false,
   saving = false,
   running = false,
   onSave,
@@ -732,6 +1154,24 @@ function AutomationPanel({
     interval: automation.interval,
     time: automation.time,
   });
+  const runMode =
+    pageId === "catalog"
+      ? SYNC_RUN_MODE_CATALOG_AUTOMATION
+      : SYNC_RUN_MODE_INCOMPLETE_AUTOMATION;
+  const runLabel =
+    pageId === "catalog" ? "automated catalog sync" : "incomplete catalog sync";
+  const ownsSync = sync.status !== "idle" && sync.runMode === runMode;
+  const blockedByOtherSync = sync.status !== "idle" && sync.runMode !== runMode;
+  const isRunning =
+    ownsSync && (sync.status === "syncing" || sync.status === "pausing");
+  const isPausing = ownsSync && sync.status === "pausing";
+  const isPaused = ownsSync && sync.status === "paused";
+  const busy = saving || running;
+  const controlsDisabled = busy || ownsSync || blockedByOtherSync;
+  const statusMessage = ownsSync
+    ? sync.message || ""
+    : automation.statusMessage || "";
+  const showFooter = busy || Boolean(statusMessage);
 
   useEffect(() => {
     setForm({
@@ -741,22 +1181,55 @@ function AutomationPanel({
     });
   }, [automation.enabled, automation.interval, automation.time]);
 
-  const runMode =
-    pageId === "catalog"
-      ? SYNC_RUN_MODE_CATALOG_AUTOMATION
-      : SYNC_RUN_MODE_INCOMPLETE_AUTOMATION;
-  const runLabel =
-    pageId === "catalog"
-      ? "automated catalog sync"
-      : "incomplete catalog sync";
-  const ownsSync = sync.status !== "idle" && sync.runMode === runMode;
-  const blockedByOtherSync = sync.status !== "idle" && sync.runMode !== runMode;
-  const isRunning = ownsSync && (sync.status === "syncing" || sync.status === "pausing");
-  const isPausing = ownsSync && sync.status === "pausing";
-  const isPaused = ownsSync && sync.status === "paused";
-  const busy = saving || running;
-  const controlsDisabled = busy || ownsSync || blockedByOtherSync;
-  const statusMessage = ownsSync ? sync.message || "" : automation.statusMessage || "";
+  if (loading) {
+    return (
+      <section
+        className={`detail-card processing-card processing-card-skeleton processing-replacement-card processing-settings-card${
+          className ? ` ${className}` : ""
+        }`}
+        data-testid={`${pageId}-automation-card`}
+      >
+        <div className="processing-card-head processing-card-head--settings">
+          <div className="processing-card-head-meta">
+            <h2>{title}</h2>
+          </div>
+          <div className="processing-card-head-controls">
+            <IconOnlyActionSkeleton
+              testId={`${pageId}-automation-run-skeleton`}
+              label="Run automation"
+              className="processing-icon-button--automation"
+            />
+            <SwitchSkeleton testId={`${pageId}-automation-enabled-skeleton`} />
+          </div>
+        </div>
+        <div className="processing-automation-row">
+          <AutomationFieldSkeleton
+            testId={`${pageId}-automation-interval-skeleton`}
+            label="Interval"
+            controlClassName="processing-automation-field-control--select"
+          />
+          <AutomationFieldSkeleton
+            testId={`${pageId}-automation-time-skeleton`}
+            label="Time"
+            controlClassName="processing-automation-field-control--time"
+          />
+          <div className="processing-automation-save-slot">
+            <ButtonSkeleton
+              testId={`${pageId}-automation-save-skeleton`}
+              label="Save"
+            />
+          </div>
+        </div>
+        {showFooter ? (
+          <div className="processing-card-footer">
+            <div className="processing-card-status">
+              <ProcessingStatusSkeleton variant="automation" />
+            </div>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
 
   const runControl = isPaused
     ? {
@@ -884,7 +1357,13 @@ function AutomationPanel({
                 data-testid={`${pageId}-automation-loader`}
               >
                 <LoadingSpinner size={14} />{" "}
-                {saving ? "Saving" : isPausing ? "Pausing" : isRunning ? "Running" : ""}
+                {saving
+                  ? "Saving"
+                  : isPausing
+                    ? "Pausing"
+                    : isRunning
+                      ? "Running"
+                      : ""}
               </span>
             ) : null}
             {statusMessage ? (
@@ -902,7 +1381,7 @@ function AutomationPanel({
   );
 }
 
-function CatalogSyncPanel({ className = "" }) {
+function CatalogSyncPanel({ className = "", loading = false }) {
   const [pauseRequested, setPauseRequested] = useState(false);
   const {
     state,
@@ -918,9 +1397,9 @@ function CatalogSyncPanel({ className = "" }) {
   const automationOwnsSync =
     sync.runMode !== SYNC_RUN_MODE_MANUAL && sync.status !== "idle";
   const isSyncing =
-    manualOwnsSync &&
-    (sync.status === "syncing" || sync.status === "pausing");
-  const isPausing = manualOwnsSync && (pauseRequested || sync.status === "pausing");
+    manualOwnsSync && (sync.status === "syncing" || sync.status === "pausing");
+  const isPausing =
+    manualOwnsSync && (pauseRequested || sync.status === "pausing");
   const syncMessageLines = splitSyncMessage(sync.message);
 
   useEffect(() => {
@@ -928,6 +1407,38 @@ function CatalogSyncPanel({ className = "" }) {
       setPauseRequested(false);
     }
   }, [isSyncing]);
+
+  if (loading) {
+    return (
+      <section
+        className={`detail-card processing-card processing-card-skeleton processing-replacement-card processing-settings-card${
+          className ? ` ${className}` : ""
+        }`}
+        data-testid="catalog-sync-card"
+      >
+        <div className="processing-card-head">
+          <div className="processing-card-head-meta">
+            <h2>Manual</h2>
+          </div>
+        </div>
+        <div className="processing-sync-body">
+          <IconOnlyActionSkeleton
+            testId="catalog-sync-control-skeleton"
+            label="Start sync"
+            className="processing-icon-button--manual"
+          />
+        </div>
+        <div className="processing-card-footer processing-card-footer--sync">
+          <div className="processing-card-status processing-card-status--stack">
+            <ProcessingStatusSkeleton
+              lines={syncMessageLines.length > 1 ? 2 : 1}
+              variant="sync"
+            />
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   async function handlePauseSync() {
     setPauseRequested(true);
@@ -1026,10 +1537,8 @@ function CatalogSyncPanel({ className = "" }) {
 export function CatalogProcessingPage() {
   const {
     state,
-    records,
-    requests,
     busyCards,
-    isRecordSelectable,
+    loaded,
     createRequestsForRecords,
     saveCatalogAutomation,
     runCatalogAutomation,
@@ -1038,61 +1547,44 @@ export function CatalogProcessingPage() {
   } = useBookProcessing();
   const catalogAutomationSaving = Boolean(busyCards["catalog-automation-save"]);
   const catalogAutomationRunning = Boolean(busyCards["catalog-automation-run"]);
-
-  const rows = useMemo(
-    () =>
-      records
-        .map((record) =>
-          recordRow(
-            record,
-            latestRequestForRecord(requests, record.id),
-            isRecordSelectable(record),
-          ),
-        )
-        .sort((left, right) => {
-          const leftPriority = left.status === "not_created" ? 0 : 1;
-          const rightPriority = right.status === "not_created" ? 0 : 1;
-          return leftPriority - rightPriority;
-        }),
-    [isRecordSelectable, records, requests],
-  );
-  const activeCount = requests.filter((request) =>
-    ["initial", "queued", "processing"].includes(request.state),
-  ).length;
-  const holdCount = requests.filter((request) =>
-    ["paused", "failed", "duplicate", "deleted"].includes(request.state),
-  ).length;
+  const summary = state.summary?.catalog || {};
 
   return (
     <PageFrame pageId="catalog" title="Catalog">
       <OverviewPanel
         pageId="catalog"
+        loading={!loaded}
         stats={[
-          { id: "records", label: "Book Records", value: records.length },
+          { id: "records", label: "Book Records", value: summary.records || 0 },
           {
             id: "not-created",
             label: "Not Created",
-            value: records.filter(
-              (record) => record.bookCreationState === "not_created",
-            ).length,
+            value: summary.notCreated || 0,
           },
-          { id: "active", label: "Active Requests", value: activeCount },
+          {
+            id: "active",
+            label: "Active Requests",
+            value: summary.active || 0,
+          },
           {
             id: "created",
             label: "Created",
-            value: requests.filter((request) => request.state === "created")
-              .length,
+            value: summary.created || 0,
           },
-          { id: "on-hold", label: "On Hold", value: holdCount },
+          { id: "on-hold", label: "On Hold", value: summary.onHold || 0 },
         ]}
       />
       <div className="processing-card-grid processing-card-grid--catalog">
-        <CatalogSyncPanel className="processing-catalog-sync-card" />
+        <CatalogSyncPanel
+          className="processing-catalog-sync-card"
+          loading={!loaded}
+        />
         <AutomationPanel
           pageId="catalog"
           title="Automation"
           automation={state.automation.catalog}
           sync={state.sync}
+          loading={!loaded}
           saving={catalogAutomationSaving}
           running={catalogAutomationRunning}
           onSave={saveCatalogAutomation}
@@ -1105,9 +1597,9 @@ export function CatalogProcessingPage() {
       <ProcessingDataCard
         pageId="catalog"
         cardId="records"
+        cardKey="catalog-records"
         title="Book Records"
         description="Synced catalog records ready for book creation."
-        rows={rows}
         busy={Boolean(busyCards["catalog-records"])}
         className="processing-catalog-card processing-catalog-records-card"
         bookColumnMode="split"
@@ -1123,62 +1615,71 @@ export function CatalogProcessingPage() {
   );
 }
 
-function CreateCard({ cardId, title, description, states, actions }) {
+function CreateCard({
+  cardId,
+  cardKey,
+  title,
+  description,
+  actions,
+  actionLabel,
+  renderRowAction,
+}) {
   const { busyCards } = useBookProcessing();
-  const rows = useRequestRows(states);
   return (
     <ProcessingDataCard
       pageId="create"
       cardId={cardId}
+      cardKey={cardKey}
       title={title}
       description={description}
-      rows={rows}
       busy={Boolean(busyCards[`create-${cardId}`])}
+      className="processing-create-card"
+      showDetailsColumn={false}
       actions={actions}
+      actionLabel={actionLabel}
+      renderRowAction={renderRowAction}
     />
   );
 }
 
 export function CreateProcessingPage() {
-  const { requests, deleteRequests, pauseRequests } = useBookProcessing();
+  const { state, loaded, deleteRequests, pauseRequests } = useBookProcessing();
+  const summary = state.summary?.create || {};
 
   return (
     <PageFrame pageId="create" title="Create">
       <OverviewPanel
         pageId="create"
+        loading={!loaded}
         stats={[
           {
             id: "requests",
             label: "Requests",
-            value: requests.filter((request) => request.state === "initial")
-              .length,
+            value: summary.requests || 0,
           },
           {
             id: "queue",
             label: "Queue",
-            value: requests.filter((request) => request.state === "queued")
-              .length,
+            value: summary.queue || 0,
           },
           {
             id: "processing",
             label: "Processing",
-            value: requests.filter((request) => request.state === "processing")
-              .length,
+            value: summary.processing || 0,
           },
           {
             id: "created",
             label: "Created",
-            value: requests.filter((request) => request.state === "created")
-              .length,
+            value: summary.created || 0,
           },
         ]}
       />
       <div className="processing-card-grid">
         <CreateCard
           cardId="requests"
+          cardKey="create-requests"
           title="Requests"
           description="New book creation requests."
-          states={["initial"]}
           actions={[
             {
               id: "delete",
@@ -1190,9 +1691,9 @@ export function CreateProcessingPage() {
         />
         <CreateCard
           cardId="queue"
+          cardKey="create-queue"
           title="Queue"
           description="Requests waiting for the processor."
-          states={["queued"]}
           actions={[
             {
               id: "delete",
@@ -1204,9 +1705,9 @@ export function CreateProcessingPage() {
         />
         <CreateCard
           cardId="processing"
+          cardKey="create-processing"
           title="Processing"
           description="Requests currently being built."
-          states={["processing"]}
           actions={[
             {
               id: "pause",
@@ -1223,9 +1724,21 @@ export function CreateProcessingPage() {
         />
         <CreateCard
           cardId="created"
+          cardKey="create-created"
           title="Created"
           description="Completed books."
-          states={["created"]}
+          actionLabel="Open"
+          renderRowAction={(row) =>
+            row.linkedBookSlug ? (
+              <BookRouteLink
+                slug={row.linkedBookSlug}
+                className="ghost-button table-row-action"
+                data-testid={`create-created-open-${row.id}`}
+              >
+                Open
+              </BookRouteLink>
+            ) : null
+          }
           actions={[
             {
               id: "delete",
@@ -1243,31 +1756,33 @@ export function CreateProcessingPage() {
 
 function OnHoldCard({
   cardId,
+  cardKey,
   title,
   description,
-  states,
   actions,
   detailsLabel,
+  className = "",
 }) {
   const { busyCards } = useBookProcessing();
-  const rows = useRequestRows(states);
   return (
     <ProcessingDataCard
       pageId="on-hold"
       cardId={cardId}
+      cardKey={cardKey}
       title={title}
       description={description}
-      rows={rows}
       busy={Boolean(busyCards[`on-hold-${cardId}`])}
       actions={actions}
       detailsLabel={detailsLabel}
+      className={className}
     />
   );
 }
 
 export function OnHoldProcessingPage() {
   const {
-    requests,
+    state,
+    loaded,
     resumePausedRequests,
     retryFailedRequests,
     markDuplicateRequestsAsNew,
@@ -1275,44 +1790,42 @@ export function OnHoldProcessingPage() {
     createAgainRequests,
     deleteRequests,
   } = useBookProcessing();
+  const summary = state.summary?.onHold || {};
 
   return (
     <PageFrame pageId="on-hold" title="On Hold">
       <OverviewPanel
         pageId="on-hold"
+        loading={!loaded}
         stats={[
           {
             id: "paused",
             label: "Paused",
-            value: requests.filter((request) => request.state === "paused")
-              .length,
+            value: summary.paused || 0,
           },
           {
             id: "failed",
             label: "Failed",
-            value: requests.filter((request) => request.state === "failed")
-              .length,
+            value: summary.failed || 0,
           },
           {
             id: "duplicate",
             label: "Duplicate",
-            value: requests.filter((request) => request.state === "duplicate")
-              .length,
+            value: summary.duplicate || 0,
           },
           {
             id: "deleted",
             label: "Deleted",
-            value: requests.filter((request) => request.state === "deleted")
-              .length,
+            value: summary.deleted || 0,
           },
         ]}
       />
       <div className="processing-card-grid">
         <OnHoldCard
           cardId="paused"
+          cardKey="on-hold-paused"
           title="Paused"
           description="Requests with saved progress."
-          states={["paused"]}
           actions={[
             {
               id: "resume",
@@ -1329,10 +1842,11 @@ export function OnHoldProcessingPage() {
         />
         <OnHoldCard
           cardId="failed"
+          cardKey="on-hold-failed"
           title="Failed"
           description="Requests that need retry or deletion."
-          states={["failed"]}
           detailsLabel="Error Reason"
+          className="processing-on-hold-failed-card"
           actions={[
             {
               id: "retry",
@@ -1349,9 +1863,9 @@ export function OnHoldProcessingPage() {
         />
         <OnHoldCard
           cardId="duplicate"
+          cardKey="on-hold-duplicate"
           title="Duplicate"
           description="Requests waiting on duplicate resolution."
-          states={["duplicate"]}
           actions={[
             {
               id: "new",
@@ -1375,9 +1889,9 @@ export function OnHoldProcessingPage() {
         />
         <OnHoldCard
           cardId="deleted"
+          cardKey="on-hold-deleted"
           title="Deleted"
           description="Deleted requests available for recreation."
-          states={["deleted"]}
           actions={[
             {
               id: "create-again",
@@ -1394,10 +1908,8 @@ export function OnHoldProcessingPage() {
 export function IncompleteProcessingPage() {
   const {
     state,
-    records,
-    requests,
-    recordMap,
     busyCards,
+    loaded,
     saveIncompleteAutomation,
     runIncompleteAutomation,
     pauseIncompleteAutomation,
@@ -1411,49 +1923,23 @@ export function IncompleteProcessingPage() {
   const incompleteAutomationRunning = Boolean(
     busyCards["incomplete-automation-run"],
   );
-
-  const incompleteRows = useMemo(
-    () =>
-      records
-        .filter(
-          (record) =>
-            (record.wasIncomplete || isIncompleteCategory(record.category)) &&
-            !record.resolvedFromIncomplete,
-        )
-        .map((record) => recordRow(record, latestRequestForRecord(requests, record.id), false)),
-    [records, requests],
-  );
-  const completedRows = useMemo(
-    () =>
-      requests
-        .filter((request) => request.state === "created")
-        .map((request) => {
-          const record = recordMap.get(request.bookRecordId);
-          if (!record?.wasIncomplete || !record.resolvedFromIncomplete) {
-            return null;
-          }
-          return requestRow(request, record);
-        })
-        .filter(Boolean),
-    [recordMap, requests],
-  );
+  const summary = state.summary?.incomplete || {};
 
   return (
     <PageFrame pageId="incomplete" title="Incomplete">
       <OverviewPanel
         pageId="incomplete"
+        loading={!loaded}
         stats={[
           {
             id: "incomplete",
             label: "Incomplete",
-            value: incompleteRows.length,
+            value: summary.incomplete || 0,
           },
           {
             id: "resolved",
             label: "Updated",
-            value: records.filter(
-              (record) => record.wasIncomplete && record.resolvedFromIncomplete,
-            ).length,
+            value: summary.resolved || 0,
           },
         ]}
       />
@@ -1463,6 +1949,7 @@ export function IncompleteProcessingPage() {
           title="Automation"
           automation={state.automation.incomplete}
           sync={state.sync}
+          loading={!loaded}
           saving={incompleteAutomationSaving}
           running={incompleteAutomationRunning}
           onSave={saveIncompleteAutomation}
@@ -1474,18 +1961,18 @@ export function IncompleteProcessingPage() {
         <ProcessingDataCard
           pageId="incomplete"
           cardId="records"
+          cardKey="incomplete-records"
           title="Incomplete"
           description="Records currently classified as incomplete."
-          rows={incompleteRows}
           bookColumnMode="split"
           readOnly
         />
         <ProcessingDataCard
           pageId="incomplete"
           cardId="completed"
+          cardKey="incomplete-completed"
           title="Updated"
           description="Records resolved by incomplete automation."
-          rows={completedRows}
           busy={Boolean(busyCards["incomplete-completed"])}
           actions={[
             {

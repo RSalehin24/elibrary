@@ -24,6 +24,9 @@
 .skeleton-pill,
 .skeleton-button,
 .skeleton-panel,
+.processing-value-skeleton,
+.processing-status-line-skeleton,
+.processing-skeleton-control,
 .processing-card-count-skeleton {
   position: relative;
   overflow: hidden;
@@ -35,6 +38,9 @@
 .skeleton-pill::after,
 .skeleton-button::after,
 .skeleton-panel::after,
+.processing-value-skeleton::after,
+.processing-status-line-skeleton::after,
+.processing-skeleton-control::after,
 .processing-card-count-skeleton::after {
   content: "";
   position: absolute;
@@ -49,6 +55,88 @@
   );
   transform: translateX(-130%);
   animation: skeleton-shimmer 1.45s linear infinite;
+}
+
+.processing-value-skeleton {
+  display: inline-block;
+  width: 2.4ch;
+  min-width: 0;
+  height: 1em;
+  border-radius: 0.38em;
+  vertical-align: baseline;
+}
+
+.processing-status-skeleton {
+  display: inline-grid;
+  gap: 2px;
+  width: 100%;
+  justify-items: center;
+}
+
+.processing-status-skeleton--automation {
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+.processing-status-skeleton--sync {
+  font-size: 0.8rem;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.processing-status-line-skeleton {
+  display: block;
+  height: 1lh;
+  max-width: 100%;
+  border-radius: 999px;
+}
+
+.processing-status-line-skeleton--wide {
+  width: min(16ch, 100%);
+}
+
+.processing-status-line-skeleton--short {
+  width: min(10ch, 100%);
+}
+
+.processing-skeleton-control {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  opacity: 1;
+  color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+.processing-skeleton-button {
+  text-shadow: none;
+}
+
+.processing-switch-skeleton {
+  cursor: default;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.processing-switch-skeleton:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.processing-switch-skeleton .processing-switch-track {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.processing-switch-skeleton .processing-switch-state {
+  color: transparent;
+}
+
+.processing-automation-field-control--skeleton.processing-automation-field-control--select::after {
+  opacity: 0;
 }
 
 .skeleton-block,

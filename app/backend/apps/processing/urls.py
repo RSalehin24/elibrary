@@ -8,6 +8,7 @@ from .views import (
     ProcessingPipelineAdvanceView,
     ProcessingRecordCreateRequestsView,
     ProcessingRequestActionView,
+    ProcessingTableView,
     ProcessingSyncAdvanceView,
     ProcessingStateView,
     ProcessingSyncPauseView,
@@ -19,6 +20,7 @@ from .views import (
 
 urlpatterns = [
     path("state/", ProcessingStateView.as_view(), name="processing-state"),
+    path("table/", ProcessingTableView.as_view(), name="processing-table"),
     path("pipeline/advance/", ProcessingPipelineAdvanceView.as_view(), name="processing-pipeline-advance"),
     path("sync/start/", ProcessingSyncStartView.as_view(), name="processing-sync-start"),
     path("sync/pause/", ProcessingSyncPauseView.as_view(), name="processing-sync-pause"),

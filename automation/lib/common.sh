@@ -174,7 +174,7 @@ service_group_for_logs() {
       printf 'frontend'
       ;;
     backend)
-      printf 'backend worker beat'
+      printf 'backend worker processing-worker beat'
       ;;
     *)
       return 1
