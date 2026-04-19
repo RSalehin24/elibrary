@@ -669,9 +669,9 @@ export default function ProfilePage() {
                 {kindleSectionOpen ? (
                   <div className="profile-password-panel">
                     <p className="form-helper-text">
-                      <p className="profile-kindle-info-margin"> > Allow{" "}
-                      <strong>{kindleSenderEmail}</strong> in <i>Manage Your Content and Devices > Preferences > Personal Document Settings</i> in your Amazon settings.</p> 
-                      <p> > For adding multiple emails please ensure <strong>Personal Document Archiving</strong> is disabled.</p> 
+                      <p className="profile-kindle-info-margin"> &gt; Allow{" "}
+                      <strong>{kindleSenderEmail}</strong> in <i>Manage Your Content and Devices &gt; Preferences &gt; Personal Document Settings</i> in your Amazon settings.</p> 
+                      <p> &gt; For adding multiple emails please ensure <strong>Personal Document Archiving</strong> is disabled.</p> 
                     </p>
                     <div className="profile-kindle-email-list">
                       {kindleEmails.map((email, index) => {
