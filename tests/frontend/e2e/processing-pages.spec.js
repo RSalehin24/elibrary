@@ -643,12 +643,94 @@ function advanceSyncPage(state) {
   state.sync.message = catalogRecordCountMessage(state);
 }
 
+function advancePipelineState(state) {
+  applyRequestTimeouts(state);
+  for (const item of state.requests) {
+    if (item.state === "initial") {
+      item.state = "queued";
+    } else if (item.state === "queued") {
+      item.state = "processing";
+    } else if (item.state === "processing") {
+      if (item.pipelineOutcome === "failed") {
+        item.state = "failed";
+        item.errorMessage = item.errorMessage || "Pipeline failed after retries.";
+      } else if (item.pipelineOutcome === "duplicate") {
+        item.state = "duplicate";
+      } else {
+        item.state = "created";
+        item.linkedBookId = item.linkedBookId || `linked-${item.bookRecordId}`;
+        item.linkedBookSlug = item.linkedBookSlug || `${item.bookRecordId}-book`;
+        const recordItem = state.records.find((record) => record.id === item.bookRecordId);
+        if (recordItem) {
+          recordItem.linkedBookId = item.linkedBookId;
+          recordItem.linkedBookSlug = item.linkedBookSlug;
+        }
+      }
+    }
+    item.updatedAt = iso(200 + state.requests.indexOf(item));
+  }
+  applyRequestTimeouts(state);
+}
+
 async function mockProcessingApi(page, initialState) {
+  await page.addInitScript(() => {
+    const sources = new Set();
+    window.__processingStreamSourceCount = 0;
+
+    class MockEventSource {
+      constructor() {
+        this.listeners = new Map();
+        this.onerror = null;
+        sources.add(this);
+        window.__processingStreamSourceCount = sources.size;
+        setTimeout(() => {
+          this._emit("connected", {});
+        }, 0);
+      }
+
+      addEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        listeners.push(listener);
+        this.listeners.set(type, listeners);
+      }
+
+      removeEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        this.listeners.set(
+          type,
+          listeners.filter((candidate) => candidate !== listener),
+        );
+      }
+
+      close() {
+        sources.delete(this);
+        window.__processingStreamSourceCount = sources.size;
+      }
+
+      _emit(type, payload) {
+        const listeners = this.listeners.get(type) || [];
+        const event = { data: JSON.stringify(payload) };
+        listeners.forEach((listener) => listener(event));
+      }
+    }
+
+    window.EventSource = MockEventSource;
+    window.__processingEmitStreamEvent = (type, payload) => {
+      sources.forEach((source) => {
+        source._emit(type, payload);
+      });
+    };
+  });
+
   let state = syncRecordStates(clone(initialState));
   let lastSyncStartBody = null;
+  let streamTimer = null;
   const controller = {
     getLastSyncStartBody() {
       return clone(lastSyncStartBody);
+    },
+    startStream() {
+      scheduleStreamAdvance();
     },
     setNowIso(nowIso) {
       state.ui = {
@@ -661,8 +743,63 @@ async function mockProcessingApi(page, initialState) {
         item.id === id ? { ...item, ...updates, updatedAt: iso(900) } : item,
       );
       state = syncRecordStates(state);
+      void emitStreamSnapshot();
+      scheduleStreamAdvance();
     },
   };
+
+  function hasActiveStreamWork() {
+    return (
+      ["syncing", "pausing"].includes(state.sync.status) ||
+      state.requests.some((item) =>
+        ["initial", "queued", "processing"].includes(item.state),
+      )
+    );
+  }
+
+  function nextStreamDelayMs() {
+    return Math.max(
+      50,
+      ["syncing", "pausing"].includes(state.sync.status)
+        ? state.ui?.syncDelayMs || state.ui?.pipelineDelayMs || 500
+        : state.ui?.pipelineDelayMs || 500,
+    );
+  }
+
+  async function emitStreamSnapshot() {
+    await page.evaluate((payload) => {
+      window.__processingEmitStreamEvent?.("snapshot", payload);
+    }, statePayload(true));
+  }
+
+  function cancelStreamAdvance() {
+    if (streamTimer) {
+      clearTimeout(streamTimer);
+      streamTimer = null;
+    }
+  }
+
+  function scheduleStreamAdvance() {
+    cancelStreamAdvance();
+    if (!hasActiveStreamWork()) {
+      return;
+    }
+
+    streamTimer = setTimeout(async () => {
+      applyRequestTimeouts(state);
+      state = syncRecordStates(state);
+
+      if (["syncing", "pausing"].includes(state.sync.status)) {
+        advanceSyncPage(state);
+      } else if (hasActiveStreamWork()) {
+        advancePipelineState(state);
+      }
+
+      state = syncRecordStates(state);
+      await emitStreamSnapshot();
+      scheduleStreamAdvance();
+    }, nextStreamDelayMs());
+  }
 
   function includeListsForRoute(route) {
     const url = new URL(route.request().url());
@@ -759,21 +896,24 @@ async function mockProcessingApi(page, initialState) {
     };
     await delayForActions();
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
-  await page.route("**/api/processing/sync/pause/**", async (route) => {
+  await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/pause\/?(?:\?.*)?$/, async (route) => {
     if (state.sync.status === "syncing") {
       state.sync.status = "pausing";
       state.sync.message = "Pausing after the current page finishes.";
     }
     await delayForActions();
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
-  await page.route("**/api/processing/sync/advance/**", async (route) => {
+  await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/advance\/?(?:\?.*)?$/, async (route) => {
     await delayForActions();
     advanceSyncPage(state);
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
-  await page.route("**/api/processing/sync/resume/**", async (route) => {
+  await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/resume\/?(?:\?.*)?$/, async (route) => {
     const runMode = state.sync.runMode || SYNC_RUN_MODE_MANUAL;
     state.sync.status = "syncing";
     state.sync.progress = {
@@ -796,8 +936,9 @@ async function mockProcessingApi(page, initialState) {
     }
     await delayForActions();
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
-  await page.route("**/api/processing/sync/stop/**", async (route) => {
+  await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/stop\/?(?:\?.*)?$/, async (route) => {
     state.sync.status = "idle";
     state.sync.progress = null;
     if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
@@ -812,6 +953,7 @@ async function mockProcessingApi(page, initialState) {
     state.sync.runMode = SYNC_RUN_MODE_MANUAL;
     await delayForActions();
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
   await page.route("**/api/processing/records/create-requests/**", async (route) => {
     const body = route.request().postDataJSON();
@@ -823,6 +965,7 @@ async function mockProcessingApi(page, initialState) {
       }
     }
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/automation\/catalog\/?(?:\?.*)?$/, async (route) => {
     state.automation.catalog = {
@@ -858,35 +1001,12 @@ async function mockProcessingApi(page, initialState) {
     };
     state.automation.catalog.statusMessage = "Automated catalog sync is running.";
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
   await page.route("**/api/processing/pipeline/advance/**", async (route) => {
-    applyRequestTimeouts(state);
-    for (const item of state.requests) {
-      if (item.state === "initial") {
-        item.state = "queued";
-      } else if (item.state === "queued") {
-        item.state = "processing";
-      } else if (item.state === "processing") {
-        if (item.pipelineOutcome === "failed") {
-          item.state = "failed";
-          item.errorMessage = item.errorMessage || "Pipeline failed after retries.";
-        } else if (item.pipelineOutcome === "duplicate") {
-          item.state = "duplicate";
-        } else {
-          item.state = "created";
-          item.linkedBookId = item.linkedBookId || `linked-${item.bookRecordId}`;
-          item.linkedBookSlug = item.linkedBookSlug || `${item.bookRecordId}-book`;
-          const recordItem = state.records.find((record) => record.id === item.bookRecordId);
-          if (recordItem) {
-            recordItem.linkedBookId = item.linkedBookId;
-            recordItem.linkedBookSlug = item.linkedBookSlug;
-          }
-        }
-      }
-      item.updatedAt = iso(200 + state.requests.indexOf(item));
-    }
-    applyRequestTimeouts(state);
+    advancePipelineState(state);
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
   await page.route("**/api/processing/requests/action/**", async (route) => {
     const body = route.request().postDataJSON();
@@ -924,6 +1044,7 @@ async function mockProcessingApi(page, initialState) {
       item.updatedAt = iso(300 + state.requests.indexOf(item));
     }
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/automation\/incomplete\/?(?:\?.*)?$/, async (route) => {
     state.automation.incomplete = {
@@ -959,6 +1080,7 @@ async function mockProcessingApi(page, initialState) {
     };
     state.automation.incomplete.statusMessage = "Incomplete catalog sync is running.";
     await fulfillState(route);
+    scheduleStreamAdvance();
   });
 
   return controller;
@@ -968,6 +1090,8 @@ async function boot(page, path, state) {
   await mockAuthenticatedSession(page);
   const processingApi = await mockProcessingApi(page, state);
   await page.goto(path);
+  await page.waitForFunction(() => window.__processingStreamSourceCount > 0);
+  processingApi.startStream();
   return processingApi;
 }
 

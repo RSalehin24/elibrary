@@ -96,27 +96,51 @@ def requested_resume_run_mode(request, *, default):
     return run_mode
 
 
-def state_payload(*, include_lists=True):
-    mark_stale_processing_requests()
-    refresh_processing_state()
-    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
-    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+def primary_sync_state(catalog_sync, incomplete_sync):
     if active_sync_scope() == PROCESSING_SYNC_KEY_INCOMPLETE:
-        primary_sync = incomplete_sync
-    elif active_sync_scope() == PROCESSING_SYNC_KEY_CATALOG and catalog_sync.status in {
+        return incomplete_sync
+    if active_sync_scope() == PROCESSING_SYNC_KEY_CATALOG and catalog_sync.status in {
         "syncing",
         "pausing",
         "paused",
     }:
-        primary_sync = catalog_sync
-    else:
-        primary_sync = (
-            incomplete_sync
-            if incomplete_sync.updated_at >= catalog_sync.updated_at
-            else catalog_sync
-        )
+        return catalog_sync
+    return (
+        incomplete_sync
+        if incomplete_sync.updated_at >= catalog_sync.updated_at
+        else catalog_sync
+    )
 
-    payload = {
+
+def serialized_processing_records():
+    return BookRecordSerializer(
+        BookRecord.objects.select_related("linked_book")
+        .prefetch_related("creation_requests")
+        .order_by("name", "id"),
+        many=True,
+    ).data
+
+
+def serialized_processing_requests():
+    return BookCreationRequestSerializer(
+        BookCreationRequest.objects.select_related(
+            "book_record",
+            "linked_book",
+            "book_record__linked_book",
+        ).order_by(
+            "-updated_at",
+            "-created_at",
+        ),
+        many=True,
+    ).data
+
+
+def base_state_payload():
+    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    primary_sync = primary_sync_state(catalog_sync, incomplete_sync)
+
+    return {
         "summary": processing_summary_payload(),
         "sync": serialize_sync_state(primary_sync),
         "syncStates": {
@@ -135,24 +159,32 @@ def state_payload(*, include_lists=True):
             ),
         },
     }
+
+
+def state_payload(*, include_lists=True):
+    mark_stale_processing_requests()
+    refresh_processing_state()
+
+    payload = base_state_payload()
     if include_lists:
-        payload["records"] = BookRecordSerializer(
-            BookRecord.objects.select_related("linked_book")
-            .prefetch_related("creation_requests")
-            .order_by("name", "id"),
-            many=True,
-        ).data
-        payload["requests"] = BookCreationRequestSerializer(
-            BookCreationRequest.objects.select_related(
-                "book_record",
-                "linked_book",
-                "book_record__linked_book",
-            ).order_by(
-                "-updated_at",
-                "-created_at",
-            ),
-            many=True,
-        ).data
+        payload["records"] = serialized_processing_records()
+        payload["requests"] = serialized_processing_requests()
+    return payload
+
+
+def stream_state_payload(previous_snapshot=None, next_snapshot=None):
+    payload = base_state_payload()
+
+    if previous_snapshot is None or next_snapshot is None:
+        payload["records"] = serialized_processing_records()
+        payload["requests"] = serialized_processing_requests()
+        return payload
+
+    if previous_snapshot.get("records") != next_snapshot.get("records"):
+        payload["records"] = serialized_processing_records()
+    if previous_snapshot.get("requests") != next_snapshot.get("requests"):
+        payload["requests"] = serialized_processing_requests()
+
     return payload
 
 
@@ -208,6 +240,7 @@ class ProcessingStreamView(APIView):
 
         def stream():
             yield "event: connected\ndata: {}\n\n"
+            yield f"event: snapshot\ndata: {json.dumps(state_payload())}\n\n"
             last_snapshot = processing_invalidation_snapshot()
             idle_seconds = 0
             snapshot_interval_seconds = (
@@ -225,8 +258,13 @@ class ProcessingStreamView(APIView):
                         next_snapshot,
                     )
                     if targets:
-                        payload = json.dumps({"targets": targets})
-                        yield f"event: invalidation\ndata: {payload}\n\n"
+                        payload = json.dumps(
+                            stream_state_payload(
+                                previous_snapshot=last_snapshot,
+                                next_snapshot=next_snapshot,
+                            )
+                        )
+                        yield f"event: state\ndata: {payload}\n\n"
                         last_snapshot = next_snapshot
                         idle_seconds = 0
                     else:

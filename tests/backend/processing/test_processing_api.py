@@ -349,10 +349,15 @@ def test_processing_stream_advances_sync_and_emits_invalidation(client, monkeypa
     stream = iter(response.streaming_content)
     assert next(stream).decode() == "event: connected\ndata: {}\n\n"
 
-    invalidation = next(stream).decode()
-    assert "event: invalidation" in invalidation
-    assert '"catalog-sync"' in invalidation
-    assert '"catalog-records"' in invalidation
+    snapshot = next(stream).decode()
+    assert "event: snapshot" in snapshot
+    assert '"syncStates"' in snapshot
+    assert '"records"' in snapshot
+
+    state_update = next(stream).decode()
+    assert "event: state" in state_update
+    assert '"syncStates"' in state_update
+    assert '"records"' in state_update
 
     sync_state = get_sync_state()
     assert sync_state.status == "idle"

@@ -85,4 +85,8 @@ class ProfileSerializer(UserSerializer):
         ]
 
     def get_kindle_sender_email(self, _obj):
-        return getattr(settings, "KINDLE_DELIVERY_FROM_EMAIL", "") or ""
+        return (
+            getattr(settings, "ACCOUNT_INVITE_FROM_EMAIL", "")
+            or getattr(settings, "DEFAULT_FROM_EMAIL", "")
+            or ""
+        )

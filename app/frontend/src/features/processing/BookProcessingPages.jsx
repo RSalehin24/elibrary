@@ -1,12 +1,10 @@
 import {
   useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { apiFetch } from "../../api/client";
 import BookRouteLink from "../../components/BookRouteLink";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import {
@@ -31,7 +29,12 @@ const PROCESSING_TABLE_PREFETCH_TRIGGER = 30;
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
-const PROCESSING_STATE_PATH = "/processing/state/?includeLists=0";
+const INCOMPLETE_CATEGORY_KEYWORDS = [
+  "incomplete",
+  "unfinished",
+  "অসম্পূর্ণ",
+  "অসম্পূর্ণ বই",
+];
 const DEFAULT_SYNC_CARD = {
   status: "idle",
   runMode: SYNC_RUN_MODE_MANUAL,
@@ -101,6 +104,19 @@ function requestDetails(request) {
     return "Resumed from saved progress";
   }
   return "";
+}
+
+function decodeUrlForDisplay(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return "";
+  }
+
+  try {
+    return decodeURIComponent(rawValue);
+  } catch {
+    return rawValue;
+  }
 }
 
 function OverviewStat({ testId, label, value, loading = false }) {
@@ -332,36 +348,6 @@ function ContributorsCell({ row }) {
   );
 }
 
-function processingTablePath({
-  cardKey,
-  query,
-  category,
-  status,
-  offset,
-  limit,
-}) {
-  const params = new URLSearchParams({
-    card: cardKey,
-    offset: String(offset),
-    limit: String(limit),
-  });
-  if (query) {
-    params.set("q", query);
-  }
-  if (category) {
-    params.set("category", category);
-  }
-  if (status) {
-    params.set("status", status);
-  }
-  return `/processing/table/?${params.toString()}`;
-}
-
-function processingCardPath(cardKey) {
-  const params = new URLSearchParams({ card: cardKey });
-  return `/processing/card/?${params.toString()}`;
-}
-
 function processingCardFromState(cardKey, statePayload) {
   const summary = statePayload?.summary || {};
   const syncStates = statePayload?.syncStates || {};
@@ -405,92 +391,277 @@ function processingCardFromState(cardKey, statePayload) {
   return cards[cardKey] || null;
 }
 
-function useProcessingCardData({ cardKey, enabled, refreshToken }) {
-  const [cardState, setCardState] = useState({
-    data: null,
-    loadedOnce: false,
-    initialLoading: false,
-    refreshing: false,
-    error: "",
+function normalizeSortValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function categoryIsIncomplete(value) {
+  const normalizedValue = normalizeSortValue(value);
+  return INCOMPLETE_CATEGORY_KEYWORDS.some((keyword) =>
+    normalizedValue.includes(normalizeSortValue(keyword)),
+  );
+}
+
+function sortedUniqueValues(values) {
+  return Array.from(new Set(values.filter(Boolean))).sort((left, right) =>
+    normalizeSortValue(left).localeCompare(normalizeSortValue(right)),
+  );
+}
+
+function compareRequestDates(left, right) {
+  const rightUpdated = Date.parse(right?.updatedAt || "") || 0;
+  const leftUpdated = Date.parse(left?.updatedAt || "") || 0;
+  if (rightUpdated !== leftUpdated) {
+    return rightUpdated - leftUpdated;
+  }
+
+  const rightCreated = Date.parse(right?.createdAt || "") || 0;
+  const leftCreated = Date.parse(left?.createdAt || "") || 0;
+  if (rightCreated !== leftCreated) {
+    return rightCreated - leftCreated;
+  }
+
+  return String(left?.id || "").localeCompare(String(right?.id || ""));
+}
+
+function latestRequestByRecordId(requests) {
+  const nextMap = new Map();
+  const sortedRequests = [...requests].sort(compareRequestDates);
+
+  sortedRequests.forEach((request) => {
+    if (!nextMap.has(request.bookRecordId)) {
+      nextMap.set(request.bookRecordId, request);
+    }
   });
-  const requestSeqRef = useRef(0);
-  const lastRefreshTokenRef = useRef(refreshToken);
 
-  const loadCard = useCallback(async () => {
-    const requestSeq = requestSeqRef.current + 1;
-    requestSeqRef.current = requestSeq;
+  return nextMap;
+}
 
-    setCardState((current) => ({
-      ...current,
-      initialLoading: !current.loadedOnce,
-      refreshing: current.loadedOnce,
-      error: "",
-    }));
+function requestBlocksSelection(request) {
+  return request && !["failed", "deleted"].includes(request.state);
+}
 
-    try {
-      let payload;
-      try {
-        payload = await apiFetch(processingCardPath(cardKey));
-      } catch (nextError) {
-        if (nextError?.status !== 404) {
-          throw nextError;
+function recordSelectable(record, requests, latestRequests) {
+  const recordRequests = requests.filter(
+    (request) => request.bookRecordId === record.id,
+  );
+  const confirmedDuplicate = recordRequests.find(
+    (request) => request.state === "duplicate" && request.duplicateConfirmed,
+  );
+  if (confirmedDuplicate) {
+    const original = requests.find(
+      (request) => request.id === confirmedDuplicate.duplicateOfRequestId,
+    );
+    return !original || ["failed", "deleted"].includes(original.state);
+  }
+
+  if (recordRequests.some(requestBlocksSelection)) {
+    return false;
+  }
+
+  if (typeof record.selectable === "boolean") {
+    return record.selectable;
+  }
+
+  const latestRequest = latestRequests.get(record.id);
+  return !requestBlocksSelection(latestRequest);
+}
+
+function rowFromRecord(record, latestRequest, requests, latestRequests) {
+  return {
+    id: record.id,
+    recordId: record.id,
+    requestId: latestRequest?.id || record.latestRequestId || null,
+    title: record.name,
+    url: record.url,
+    displayUrl: record.displayUrl || decodeUrlForDisplay(record.url),
+    displayPath: record.displayPath || "",
+    category: record.category,
+    writer: record.writer,
+    translator: record.translator,
+    publisher: record.publisher,
+    status: latestRequest?.state || record.bookCreationState || "not_created",
+    updatedAt: latestRequest?.updatedAt || record.updatedAt,
+    selectable: recordSelectable(record, requests, latestRequests),
+    progressCheckpoint: latestRequest?.progress?.checkpoint || "",
+    progressSavedAt: latestRequest?.progress?.savedAt || "",
+    errorMessage: latestRequest?.errorMessage || "",
+    isResumed: Boolean(latestRequest?.isResumed),
+    isConfirmedNotDuplicate: Boolean(latestRequest?.isConfirmedNotDuplicate),
+    linkedBookId: latestRequest?.linkedBookId || record.linkedBookId || null,
+    linkedBookSlug: latestRequest?.linkedBookSlug || record.linkedBookSlug || null,
+    duplicateOfRequestId: latestRequest?.duplicateOfRequestId || null,
+    duplicateOfRecordId:
+      latestRequest?.duplicateOfRecordId || record.duplicateOfRecordId || null,
+    duplicateConfirmed: Boolean(latestRequest?.duplicateConfirmed),
+  };
+}
+
+function rowFromRequest(request, record, requests, latestRequests) {
+  if (!record) {
+    return null;
+  }
+
+  const baseRow = rowFromRecord(record, request, requests, latestRequests);
+  return {
+    ...baseRow,
+    id: request.id,
+    requestId: request.id,
+    status: request.state,
+    updatedAt: request.updatedAt,
+    selectable: true,
+    progressCheckpoint: request.progress?.checkpoint || "",
+    progressSavedAt: request.progress?.savedAt || "",
+    errorMessage: request.errorMessage || "",
+    isResumed: Boolean(request.isResumed),
+    isConfirmedNotDuplicate: Boolean(request.isConfirmedNotDuplicate),
+    linkedBookId: request.linkedBookId || record.linkedBookId || null,
+    linkedBookSlug: request.linkedBookSlug || record.linkedBookSlug || null,
+    duplicateOfRequestId: request.duplicateOfRequestId || null,
+    duplicateOfRecordId: request.duplicateOfRecordId || record.duplicateOfRecordId || null,
+    duplicateConfirmed: Boolean(request.duplicateConfirmed),
+  };
+}
+
+function tableRowsForCard(cardKey, records, requests) {
+  const latestRequests = latestRequestByRecordId(requests);
+  const recordsById = new Map(records.map((record) => [record.id, record]));
+
+  if (cardKey === "catalog-records") {
+    return [...records]
+      .map((record) =>
+        rowFromRecord(record, latestRequests.get(record.id), requests, latestRequests),
+      )
+      .sort((left, right) => {
+        const leftPriority = left.status === "not_created" ? 0 : 1;
+        const rightPriority = right.status === "not_created" ? 0 : 1;
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
         }
 
-        const statePayload = await apiFetch(PROCESSING_STATE_PATH);
-        payload = processingCardFromState(cardKey, statePayload);
-        if (!payload) {
-          throw nextError;
+        const titleComparison = normalizeSortValue(left.title).localeCompare(
+          normalizeSortValue(right.title),
+        );
+        if (titleComparison !== 0) {
+          return titleComparison;
         }
-      }
-      if (requestSeqRef.current !== requestSeq) {
-        return null;
-      }
-      setCardState({
-        data: payload,
-        loadedOnce: true,
-        initialLoading: false,
-        refreshing: false,
-        error: "",
+
+        return String(left.id || "").localeCompare(String(right.id || ""));
       });
-      return payload;
-    } catch (nextError) {
-      if (requestSeqRef.current !== requestSeq) {
-        return null;
-      }
-      setCardState((current) => ({
-        ...current,
-        loadedOnce: true,
-        initialLoading: false,
-        refreshing: false,
-        error: nextError.message || "Unable to load card.",
+  }
+
+  const requestStateMap = {
+    "create-requests": ["initial"],
+    "create-queue": ["queued"],
+    "create-processing": ["processing"],
+    "create-created": ["created"],
+    "on-hold-paused": ["paused"],
+    "on-hold-failed": ["failed"],
+    "on-hold-duplicate": ["duplicate"],
+    "on-hold-deleted": ["deleted"],
+  };
+
+  if (requestStateMap[cardKey]) {
+    return [...requests]
+      .filter((request) => requestStateMap[cardKey].includes(request.state))
+      .sort(compareRequestDates)
+      .map((request) =>
+        rowFromRequest(
+          request,
+          recordsById.get(request.bookRecordId),
+          requests,
+          latestRequests,
+        ),
+      )
+      .filter(Boolean);
+  }
+
+  if (cardKey === "incomplete-records") {
+    return [...records]
+      .filter(
+        (record) =>
+          (record.wasIncomplete || categoryIsIncomplete(record.category)) &&
+          !record.resolvedFromIncomplete,
+      )
+      .map((record) => ({
+        ...rowFromRecord(
+          record,
+          latestRequests.get(record.id),
+          requests,
+          latestRequests,
+        ),
+        selectable: false,
       }));
-      return null;
-    }
-  }, [cardKey]);
+  }
 
-  useEffect(() => {
-    if (!enabled) {
-      return undefined;
-    }
-    loadCard();
-    return undefined;
-  }, [cardKey, enabled, loadCard]);
+  if (cardKey === "incomplete-completed") {
+    return [...requests]
+      .filter((request) => request.state === "created")
+      .sort(compareRequestDates)
+      .map((request) =>
+        rowFromRequest(
+          request,
+          recordsById.get(request.bookRecordId),
+          requests,
+          latestRequests,
+        ),
+      )
+      .filter((row) => {
+        const record = recordsById.get(row.recordId);
+        return Boolean(record?.wasIncomplete && record?.resolvedFromIncomplete);
+      });
+  }
 
-  useEffect(() => {
-    if (!enabled || !cardState.loadedOnce) {
-      return undefined;
+  return [];
+}
+
+function filterTableRows(rows, filters) {
+  const normalizedQuery = normalizeSortValue(filters.q);
+
+  return rows.filter((row) => {
+    const searchText = normalizeSortValue(
+      [
+        row.title,
+        row.url,
+        row.displayUrl,
+        row.displayPath,
+        row.writer,
+        row.translator,
+        row.publisher,
+        row.category,
+        row.status,
+        requestDetails(row),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+
+    if (normalizedQuery && !searchText.includes(normalizedQuery)) {
+      return false;
     }
-    if (lastRefreshTokenRef.current === refreshToken) {
-      return undefined;
+    if (filters.category && row.category !== filters.category) {
+      return false;
     }
-    lastRefreshTokenRef.current = refreshToken;
-    loadCard();
-    return undefined;
-  }, [enabled, refreshToken, cardState.loadedOnce, loadCard]);
+    if (filters.status && row.status !== filters.status) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function useProcessingCardData({ cardKey, enabled }) {
+  const { processingState } = useBookProcessing();
+  const data = useMemo(
+    () => processingCardFromState(cardKey, processingState),
+    [cardKey, processingState],
+  );
 
   return {
-    ...cardState,
-    reload: loadCard,
+    data,
+    loadedOnce: enabled ? processingState.loadedOnce : false,
+    initialLoading: Boolean(enabled && processingState.initialLoading),
+    refreshing: false,
+    error: enabled ? processingState.error : "",
   };
 }
 
@@ -594,144 +765,75 @@ function TableSkeletonRows({
   ));
 }
 
-function useProcessingTableData({ cardKey, filters, enabled, refreshToken }) {
-  const [tableState, setTableState] = useState({
-    rows: [],
-    totalCount: 0,
-    categoryOptions: [],
-    statusOptions: [],
-    hasMore: false,
-    loadedOnce: false,
-    initialLoading: false,
-    loadingMore: false,
-    refreshing: false,
-    error: "",
-  });
+function useProcessingTableData({ cardKey, filters, enabled }) {
+  const { processingState } = useBookProcessing();
   const tableShellRef = useRef(null);
   const observerRef = useRef(null);
-  const requestSeqRef = useRef(0);
-  const lastRefreshTokenRef = useRef(refreshToken);
-  const deferredQuery = useDeferredValue(filters.q);
+  const loadMoreTimerRef = useRef(null);
+  const [visibleCount, setVisibleCount] = useState(PROCESSING_TABLE_BATCH_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const loadRows = useCallback(
-    async ({
-      offset = 0,
-      limit = PROCESSING_TABLE_BATCH_SIZE,
-      append = false,
-      preserveRows = false,
-    } = {}) => {
-      const requestSeq = requestSeqRef.current + 1;
-      requestSeqRef.current = requestSeq;
-
-      setTableState((current) => ({
-        ...current,
-        initialLoading: !append && !preserveRows && !current.loadedOnce,
-        loadingMore: append,
-        refreshing: !append && (preserveRows || current.loadedOnce),
-        error: "",
-        rows: append || preserveRows || current.loadedOnce ? current.rows : [],
-        totalCount:
-          append || preserveRows || current.loadedOnce ? current.totalCount : 0,
-      }));
-
-      try {
-        const payload = await apiFetch(
-          processingTablePath({
+  const allRows = useMemo(
+    () =>
+      enabled
+        ? tableRowsForCard(
             cardKey,
-            query: deferredQuery,
-            category: filters.category,
-            status: filters.status,
-            offset,
-            limit,
-          }),
-        );
-        if (requestSeqRef.current !== requestSeq) {
-          return null;
-        }
-
-        const nextRows = Array.isArray(payload?.rows) ? payload.rows : [];
-        const nextPagination = payload?.pagination || {};
-        const nextFilters = payload?.filters || {};
-
-        setTableState((current) => ({
-          rows: append ? [...current.rows, ...nextRows] : nextRows,
-          totalCount: Number(nextPagination.totalCount) || 0,
-          categoryOptions: Array.isArray(nextFilters.categoryOptions)
-            ? nextFilters.categoryOptions
-            : [],
-          statusOptions: Array.isArray(nextFilters.statusOptions)
-            ? nextFilters.statusOptions
-            : [],
-          hasMore: Boolean(nextPagination.hasMore),
-          loadedOnce: true,
-          initialLoading: false,
-          loadingMore: false,
-          refreshing: false,
-          error: "",
-        }));
-        return payload;
-      } catch (nextError) {
-        if (requestSeqRef.current !== requestSeq) {
-          return null;
-        }
-        setTableState((current) => ({
-          ...current,
-          rows:
-            append || preserveRows || current.loadedOnce ? current.rows : [],
-          totalCount:
-            append || preserveRows || current.loadedOnce
-              ? current.totalCount
-              : 0,
-          loadedOnce: true,
-          initialLoading: false,
-          loadingMore: false,
-          refreshing: false,
-          error: nextError.message || "Unable to load records.",
-        }));
-        return null;
-      }
-    },
-    [cardKey, deferredQuery, filters.category, filters.status],
+            processingState.records || [],
+            processingState.requests || [],
+          )
+        : [],
+    [
+      cardKey,
+      enabled,
+      processingState.records,
+      processingState.requests,
+    ],
   );
 
-  const refreshRows = useCallback(
-    async ({ preserveLoadedRows = true } = {}) => {
-      const nextLimit = preserveLoadedRows
-        ? Math.max(PROCESSING_TABLE_BATCH_SIZE, tableState.rows.length || 0)
-        : PROCESSING_TABLE_BATCH_SIZE;
-      return loadRows({
-        offset: 0,
-        limit: nextLimit,
-        append: false,
-        preserveRows: preserveLoadedRows && tableState.rows.length > 0,
-      });
-    },
-    [loadRows, tableState.rows.length],
+  const categoryOptions = useMemo(
+    () => sortedUniqueValues(allRows.map((row) => row.category)),
+    [allRows],
   );
 
-  const loadMore = useCallback(async () => {
-    if (
-      !enabled ||
-      tableState.initialLoading ||
-      tableState.loadingMore ||
-      !tableState.hasMore
-    ) {
-      return null;
+  const statusOptions = useMemo(
+    () => sortedUniqueValues(allRows.map((row) => row.status)),
+    [allRows],
+  );
+
+  const filteredRows = useMemo(
+    () =>
+      filterTableRows(allRows, {
+        ...filters,
+        q: filters.q,
+      }),
+    [allRows, filters],
+  );
+
+  const hasMore = visibleCount < filteredRows.length;
+
+  const loadMore = useCallback(() => {
+    if (!enabled || !hasMore || loadingMore) {
+      return;
     }
-
-    return loadRows({
-      offset: tableState.rows.length,
-      limit: PROCESSING_TABLE_BATCH_SIZE,
-      append: true,
-    });
-  }, [
-    enabled,
-    loadRows,
-    tableState.hasMore,
-    tableState.initialLoading,
-    tableState.loadingMore,
-    tableState.rows.length,
-  ]);
+    setLoadingMore(true);
+    if (typeof window === "undefined") {
+      setVisibleCount((current) =>
+        Math.min(filteredRows.length, current + PROCESSING_TABLE_BATCH_SIZE),
+      );
+      setLoadingMore(false);
+      return;
+    }
+    if (loadMoreTimerRef.current) {
+      window.clearTimeout(loadMoreTimerRef.current);
+    }
+    loadMoreTimerRef.current = window.setTimeout(() => {
+      setVisibleCount((current) =>
+        Math.min(filteredRows.length, current + PROCESSING_TABLE_BATCH_SIZE),
+      );
+      setLoadingMore(false);
+      loadMoreTimerRef.current = null;
+    }, 120);
+  }, [enabled, filteredRows.length, hasMore, loadingMore]);
 
   const observeLoadTrigger = useCallback(
     (node) => {
@@ -743,9 +845,9 @@ function useProcessingTableData({ cardKey, filters, enabled, refreshToken }) {
       if (
         !node ||
         !enabled ||
-        tableState.initialLoading ||
-        tableState.loadingMore ||
-        !tableState.hasMore
+        !processingState.loadedOnce ||
+        loadingMore ||
+        !hasMore
       ) {
         return;
       }
@@ -765,58 +867,34 @@ function useProcessingTableData({ cardKey, filters, enabled, refreshToken }) {
     },
     [
       enabled,
+      hasMore,
+      loadingMore,
       loadMore,
-      tableState.hasMore,
-      tableState.initialLoading,
-      tableState.loadingMore,
+      processingState.loadedOnce,
     ],
   );
 
   useEffect(() => {
-    if (!enabled) {
-      return undefined;
+    setVisibleCount(PROCESSING_TABLE_BATCH_SIZE);
+    setLoadingMore(false);
+    if (typeof window !== "undefined" && loadMoreTimerRef.current) {
+      window.clearTimeout(loadMoreTimerRef.current);
+      loadMoreTimerRef.current = null;
     }
-    loadRows({
-      offset: 0,
-      limit: PROCESSING_TABLE_BATCH_SIZE,
-      append: false,
-      preserveRows: false,
-    });
     return undefined;
   }, [
-    enabled,
     cardKey,
-    deferredQuery,
+    filters.q,
     filters.category,
     filters.status,
-    loadRows,
-  ]);
-
-  useEffect(() => {
-    if (!enabled || !tableState.loadedOnce) {
-      return undefined;
-    }
-    if (lastRefreshTokenRef.current === refreshToken) {
-      return undefined;
-    }
-    lastRefreshTokenRef.current = refreshToken;
-    loadRows({
-      offset: 0,
-      limit: Math.max(PROCESSING_TABLE_BATCH_SIZE, tableState.rows.length),
-      append: false,
-      preserveRows: tableState.rows.length > 0,
-    });
-    return undefined;
-  }, [
-    enabled,
-    loadRows,
-    refreshToken,
-    tableState.loadedOnce,
-    tableState.rows.length,
+    allRows.length,
   ]);
 
   useEffect(() => {
     return () => {
+      if (typeof window !== "undefined" && loadMoreTimerRef.current) {
+        window.clearTimeout(loadMoreTimerRef.current);
+      }
       if (observerRef.current) {
         observerRef.current.disconnect();
       }
@@ -824,8 +902,21 @@ function useProcessingTableData({ cardKey, filters, enabled, refreshToken }) {
   }, []);
 
   return {
-    ...tableState,
-    refreshRows,
+    rows: filteredRows.slice(0, visibleCount),
+    totalCount: filteredRows.length,
+    categoryOptions,
+    statusOptions,
+    hasMore,
+    loadedOnce: enabled ? processingState.loadedOnce : false,
+    initialLoading:
+      Boolean(
+        enabled &&
+          processingState.initialLoading &&
+          !processingState.loadedOnce,
+      ),
+    loadingMore,
+    refreshing: false,
+    error: enabled ? processingState.error : "",
     loadMore,
     tableShellRef,
     observeLoadTrigger,
@@ -856,7 +947,7 @@ function ProcessingDataCard({
     status: "",
   });
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const { canLoadProcessingState, refreshVersions } = useBookProcessing();
+  const { canLoadProcessingState } = useBookProcessing();
   const showSelectionColumn = actions.length > 0 && !readOnly;
   const splitBookColumn = bookColumnMode === "split";
   const showActionColumn = typeof renderRowAction === "function";
@@ -885,7 +976,6 @@ function ProcessingDataCard({
     cardKey,
     filters,
     enabled: canLoadProcessingState,
-    refreshToken: refreshVersions[cardKey] || 0,
   });
 
   const filterFields = useMemo(
@@ -1766,7 +1856,6 @@ export function CatalogProcessingPage() {
   const {
     busyCards,
     canLoadProcessingState,
-    refreshVersions,
     createRequestsForRecords,
     saveCatalogAutomation,
     runCatalogAutomation,
@@ -1779,7 +1868,6 @@ export function CatalogProcessingPage() {
   } = useProcessingCardData({
     cardKey: "catalog-overview",
     enabled: canLoadProcessingState,
-    refreshToken: refreshVersions["catalog-overview"] || 0,
   });
   const {
     data: catalogSyncCard,
@@ -1787,7 +1875,6 @@ export function CatalogProcessingPage() {
   } = useProcessingCardData({
     cardKey: "catalog-sync",
     enabled: canLoadProcessingState,
-    refreshToken: refreshVersions["catalog-sync"] || 0,
   });
   const {
     data: catalogAutomationCard,
@@ -1795,7 +1882,6 @@ export function CatalogProcessingPage() {
   } = useProcessingCardData({
     cardKey: "catalog-automation",
     enabled: canLoadProcessingState,
-    refreshToken: refreshVersions["catalog-automation"] || 0,
   });
   const catalogAutomationSaving = Boolean(busyCards["catalog-automation-save"]);
   const catalogAutomationRunning = Boolean(busyCards["catalog-automation-run"]);
@@ -1903,7 +1989,6 @@ function CreateCard({
 export function CreateProcessingPage() {
   const {
     canLoadProcessingState,
-    refreshVersions,
     deleteRequests,
     pauseRequests,
   } = useBookProcessing();
@@ -1911,7 +1996,6 @@ export function CreateProcessingPage() {
     useProcessingCardData({
       cardKey: "create-overview",
       enabled: canLoadProcessingState,
-      refreshToken: refreshVersions["create-overview"] || 0,
     });
   const summary = createOverviewCard?.summary || {};
 
@@ -2051,7 +2135,6 @@ function OnHoldCard({
 export function OnHoldProcessingPage() {
   const {
     canLoadProcessingState,
-    refreshVersions,
     resumePausedRequests,
     retryFailedRequests,
     markDuplicateRequestsAsNew,
@@ -2063,7 +2146,6 @@ export function OnHoldProcessingPage() {
     useProcessingCardData({
       cardKey: "on-hold-overview",
       enabled: canLoadProcessingState,
-      refreshToken: refreshVersions["on-hold-overview"] || 0,
     });
   const summary = onHoldOverviewCard?.summary || {};
 
@@ -2184,7 +2266,6 @@ export function IncompleteProcessingPage() {
   const {
     busyCards,
     canLoadProcessingState,
-    refreshVersions,
     saveIncompleteAutomation,
     runIncompleteAutomation,
     pauseIncompleteAutomation,
@@ -2204,7 +2285,6 @@ export function IncompleteProcessingPage() {
   } = useProcessingCardData({
     cardKey: "incomplete-overview",
     enabled: canLoadProcessingState,
-    refreshToken: refreshVersions["incomplete-overview"] || 0,
   });
   const {
     data: incompleteAutomationCard,
@@ -2212,7 +2292,6 @@ export function IncompleteProcessingPage() {
   } = useProcessingCardData({
     cardKey: "incomplete-automation",
     enabled: canLoadProcessingState,
-    refreshToken: refreshVersions["incomplete-automation"] || 0,
   });
   const summary = incompleteOverviewCard?.summary || {};
   const incompleteAutomation =

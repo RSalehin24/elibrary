@@ -3,7 +3,7 @@ import {
   BACKEND_STATUS_EVENT,
   SERVICE_ERROR_WINDOW_MS,
   SESSION_EXPIRED_EVENT,
-} from "./constants";
+} from "./constants.js";
 
 let sessionExpiredNotified = false;
 let serviceFailureWindowStart = 0;

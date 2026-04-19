@@ -1,4 +1,5 @@
 import logging
+from smtplib import SMTPAuthenticationError
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -27,6 +28,11 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
+BREVO_EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
+SMTP_EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+DEFAULT_CONSOLE_EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+BREVO_SMTP_PORT = 587
+
 
 def valid_kindle_delivery_addresses(values):
     normalized = []
@@ -38,6 +44,73 @@ def valid_kindle_delivery_addresses(values):
         except DjangoValidationError:
             continue
     return normalized
+
+
+def resolve_kindle_delivery_email_backend():
+    primary_backend = str(getattr(settings, "EMAIL_BACKEND", "") or "").strip()
+    if primary_backend == BREVO_EMAIL_BACKEND:
+        # Brevo API rejects EPUB attachments, so Kindle deliveries use SMTP.
+        return SMTP_EMAIL_BACKEND
+    return primary_backend or DEFAULT_CONSOLE_EMAIL_BACKEND
+
+
+def _as_bool(value, *, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def _as_int(value, *, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def build_kindle_delivery_connection_kwargs():
+    backend = resolve_kindle_delivery_email_backend()
+    kwargs = {"backend": backend}
+    if backend != SMTP_EMAIL_BACKEND:
+        return kwargs
+
+    smtp_host = str(getattr(settings, "EMAIL_HOST", "") or "").strip()
+    smtp_username = str(getattr(settings, "EMAIL_HOST_USER", "") or "").strip()
+    smtp_password = str(getattr(settings, "EMAIL_HOST_PASSWORD", "") or "").strip()
+
+    kwargs.update(
+        {
+            "host": smtp_host,
+            "port": _as_int(getattr(settings, "EMAIL_PORT", BREVO_SMTP_PORT), default=BREVO_SMTP_PORT),
+            "username": smtp_username,
+            "password": smtp_password,
+            "use_tls": _as_bool(getattr(settings, "EMAIL_USE_TLS", True), default=True),
+            "use_ssl": _as_bool(getattr(settings, "EMAIL_USE_SSL", False), default=False),
+            "timeout": _as_int(getattr(settings, "EMAIL_TIMEOUT", 20), default=20),
+        }
+    )
+    return kwargs
+
+
+def build_kindle_delivery_connection_attempts():
+    return [build_kindle_delivery_connection_kwargs()]
+
+
+def close_kindle_delivery_connection(connection, book_slug):
+    if connection is None:
+        return
+
+    try:
+        connection.close()
+    except Exception:
+        logger.exception(
+            "Kindle delivery connection close failed for %s.",
+            book_slug,
+        )
 
 
 class BookAssetDownloadView(APIView):
@@ -90,23 +163,45 @@ class BookSendToKindleView(APIView):
 
         attachment_bytes, _source_name, _path = read_asset_bytes(asset)
         filename = asset_download_filename(book, asset)
-        sender = getattr(settings, "KINDLE_DELIVERY_FROM_EMAIL", "") or getattr(
+        sender = getattr(settings, "ACCOUNT_INVITE_FROM_EMAIL", "") or getattr(
             settings,
             "DEFAULT_FROM_EMAIL",
             "",
         )
+        connection_attempts = build_kindle_delivery_connection_attempts()
+        connection_kwargs = connection_attempts[0]
+        delivery_backend = connection_kwargs["backend"]
         delivered = []
         failed = []
+        smtp_auth_failed = False
 
-        with get_connection() as connection:
-            for kindle_email in kindle_emails:
+        smtp_host = str(connection_kwargs.get("host") or "").strip()
+        smtp_username = str(connection_kwargs.get("username") or "").strip()
+        smtp_password = str(connection_kwargs.get("password") or "").strip()
+        if delivery_backend == SMTP_EMAIL_BACKEND and not (smtp_host and smtp_username and smtp_password):
+            return Response(
+                {
+                    "detail": (
+                        "Kindle delivery requires SMTP because the Brevo API backend "
+                        "does not support EPUB attachments. Configure EMAIL_HOST, "
+                        "EMAIL_HOST_USER, and EMAIL_HOST_PASSWORD with the Brevo "
+                        "SMTP login email and SMTP key from the SMTP page."
+                    ),
+                    "failedEmails": kindle_emails,
+                    "senderEmail": sender,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        attempt_index = 0
+        connection = get_connection(**connection_attempts[attempt_index])
+        try:
+            index = 0
+            while index < len(kindle_emails):
+                kindle_email = kindle_emails[index]
                 message = EmailMessage(
                     subject=book.title,
-                    body=(
-                        "Bangla Library attached this EPUB for Kindle delivery.\n\n"
-                        "If Amazon rejects the file, add the sender email to your "
-                        "Approved Personal Document E-mail List."
-                    ),
+                    body="",
                     from_email=sender,
                     to=[kindle_email],
                     connection=connection,
@@ -114,6 +209,15 @@ class BookSendToKindleView(APIView):
                 message.attach(filename, attachment_bytes, "application/epub+zip")
                 try:
                     message.send(fail_silently=False)
+                except SMTPAuthenticationError:
+                    smtp_auth_failed = True
+                    logger.exception(
+                        "Kindle delivery authentication failed for %s to %s.",
+                        book.slug,
+                        kindle_email,
+                    )
+                    failed.extend(kindle_emails[index:])
+                    break
                 except Exception:
                     logger.exception(
                         "Kindle delivery failed for %s to %s.",
@@ -123,14 +227,25 @@ class BookSendToKindleView(APIView):
                     failed.append(kindle_email)
                 else:
                     delivered.append(kindle_email)
+                index += 1
+        finally:
+            close_kindle_delivery_connection(connection, book.slug)
 
         if not delivered:
+            detail = (
+                "Kindle delivery could not authenticate with Brevo SMTP. "
+                "Set EMAIL_HOST_USER to the Brevo SMTP login email and "
+                "EMAIL_HOST_PASSWORD to an active SMTP key from Brevo's SMTP page. "
+                "A Brevo API key will not work for SMTP."
+                if smtp_auth_failed
+                else (
+                    "Kindle delivery failed for every configured address. "
+                    "Check the outgoing mail settings and Amazon approved sender list."
+                )
+            )
             return Response(
                 {
-                    "detail": (
-                        "Kindle delivery failed for every configured address. "
-                        "Check the outgoing mail settings and Amazon approved sender list."
-                    ),
+                    "detail": detail,
                     "failedEmails": failed,
                     "senderEmail": sender,
                 },

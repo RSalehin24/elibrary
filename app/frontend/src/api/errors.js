@@ -1,9 +1,9 @@
-import { payloadMessage } from "./text";
+import { payloadMessage } from "./text.js";
 import {
   evaluateBackendAvailability,
   serviceUnavailableMessage,
   shouldTreatAsBackendUnavailable,
-} from "./runtime";
+} from "./runtime.js";
 
 export function createApiError({ status, payload, path }) {
   const message = payloadMessage(payload);
@@ -11,7 +11,7 @@ export function createApiError({ status, payload, path }) {
 
   if (shouldTreatAsBackendUnavailable(status)) {
     void evaluateBackendAvailability(status, path);
-    resolvedMessage = serviceUnavailableMessage(status, path);
+    resolvedMessage = message || serviceUnavailableMessage(status, path);
   } else if ([500, 501].includes(status)) {
     resolvedMessage = message || "Request failed.";
   }

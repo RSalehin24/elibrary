@@ -7,78 +7,41 @@ import {
   useRef,
   useState,
 } from "react";
+import { useLocation } from "react-router-dom";
 import { apiFetch, resolveAppUrl } from "../../api/client";
 import { useSession } from "../../hooks/useSession";
 import { useToast } from "../../hooks/useToast";
 import { hasCapability } from "../../utils/capabilities";
 
 const ProcessingPagesContext = createContext(null);
-const PROCESSING_STREAM_RECONNECT_MS = 4000;
-const PROCESSING_MONITOR_IDLE_MS = 4000;
-const PROCESSING_MONITOR_ACTIVE_MS = 1000;
+const PROCESSING_ROUTE_PATHS = new Set([
+  "/catalog",
+  "/create",
+  "/on-hold",
+  "/incomplete",
+]);
+const PROCESSING_STATE_PATH = "/processing/state/";
 const PROCESSING_SYNC_SCOPE_CATALOG = "catalog";
 const PROCESSING_SYNC_SCOPE_INCOMPLETE = "incomplete";
-const PROCESSING_STATE_PATH = "/processing/state/?includeLists=0";
-const PROCESSING_DATA_TARGETS = [
-  "catalog-overview",
-  "create-overview",
-  "on-hold-overview",
-  "incomplete-overview",
-  "catalog-records",
-  "create-requests",
-  "create-queue",
-  "create-processing",
-  "create-created",
-  "on-hold-paused",
-  "on-hold-failed",
-  "on-hold-duplicate",
-  "on-hold-deleted",
-  "incomplete-records",
-  "incomplete-completed",
-];
-const CATALOG_SYNC_TARGETS = [
-  "catalog-sync",
-  "catalog-automation",
-  "catalog-overview",
-  "catalog-records",
-];
-const INCOMPLETE_SYNC_TARGETS = [
-  "incomplete-automation",
-  "incomplete-overview",
-  "incomplete-records",
-  "incomplete-completed",
-];
-const ALL_PROCESSING_TARGETS = Array.from(
-  new Set([
-    ...PROCESSING_DATA_TARGETS,
-    ...CATALOG_SYNC_TARGETS,
-    ...INCOMPLETE_SYNC_TARGETS,
-  ]),
-);
+const DEFAULT_PROCESSING_STATE = {
+  summary: {},
+  sync: null,
+  syncStates: {},
+  automation: {},
+  orchestration: {},
+  records: [],
+  requests: [],
+  loadedOnce: false,
+  initialLoading: false,
+  error: "",
+};
 
 function countLabel(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function normalizeTargets(targets) {
-  if (!Array.isArray(targets)) {
-    return [];
-  }
-  return Array.from(
-    new Set(
-      targets
-        .map((target) => String(target || "").trim())
-        .filter(Boolean),
-    ),
-  );
-}
-
 function scopedSyncPath(scope, action) {
   return `/processing/sync/${scope}/${action}/`;
-}
-
-function summaryOnlyPath(path) {
-  return `${path}${path.includes("?") ? "&" : "?"}includeLists=0`;
 }
 
 function isCatalogRemotePage(page) {
@@ -170,33 +133,106 @@ function notifyRequestAction(toast, action, changedCount, options = {}) {
   });
 }
 
+function mergeProcessingPayload(current, payload) {
+  if (!payload || typeof payload !== "object") {
+    return current;
+  }
+
+  return {
+    summary:
+      payload.summary && typeof payload.summary === "object"
+        ? payload.summary
+        : current.summary,
+    sync: payload.sync && typeof payload.sync === "object" ? payload.sync : current.sync,
+    syncStates:
+      payload.syncStates && typeof payload.syncStates === "object"
+        ? payload.syncStates
+        : current.syncStates,
+    automation:
+      payload.automation && typeof payload.automation === "object"
+        ? payload.automation
+        : current.automation,
+    orchestration:
+      payload.orchestration && typeof payload.orchestration === "object"
+        ? payload.orchestration
+        : current.orchestration,
+    records: Array.isArray(payload.records) ? payload.records : current.records,
+    requests: Array.isArray(payload.requests) ? payload.requests : current.requests,
+    loadedOnce: true,
+    initialLoading: false,
+    error: "",
+  };
+}
+
 export function BookProcessingProvider({ children }) {
   const [busyCards, setBusyCards] = useState({});
-  const [refreshVersions, setRefreshVersions] = useState({});
+  const [processingState, setProcessingState] = useState(DEFAULT_PROCESSING_STATE);
   const [streamMode, setStreamMode] = useState("idle");
-  const reconnectTimerRef = useRef(null);
   const eventSourceRef = useRef(null);
-  const monitorTimerRef = useRef(null);
-  const monitorRequestRef = useRef(false);
-  const hasStreamConnectedRef = useRef(false);
+  const location = useLocation();
   const { authenticated, loading, user } = useSession();
   const toast = useToast();
   const canLoadProcessingState =
     authenticated && !loading && hasCapability(user, "processing:manage");
+  const onProcessingPage = PROCESSING_ROUTE_PATHS.has(location.pathname);
 
-  const refreshTargets = useCallback((targets) => {
-    const normalizedTargets = normalizeTargets(targets);
-    if (!normalizedTargets.length) {
-      return;
-    }
-    setRefreshVersions((current) => {
-      const next = { ...current };
-      normalizedTargets.forEach((target) => {
-        next[target] = (next[target] || 0) + 1;
-      });
-      return next;
-    });
+  const applyProcessingPayload = useCallback((payload) => {
+    setProcessingState((current) => mergeProcessingPayload(current, payload));
   }, []);
+
+  useEffect(() => {
+    if (canLoadProcessingState) {
+      return undefined;
+    }
+    setProcessingState(DEFAULT_PROCESSING_STATE);
+    setStreamMode("idle");
+    return undefined;
+  }, [canLoadProcessingState]);
+
+  useEffect(() => {
+    if (!onProcessingPage || !canLoadProcessingState) {
+      return undefined;
+    }
+    if (processingState.loadedOnce && !processingState.error) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    setProcessingState((current) => ({
+      ...current,
+      initialLoading: true,
+      error: "",
+    }));
+
+    apiFetch(PROCESSING_STATE_PATH)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        applyProcessingPayload(payload);
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        setProcessingState((current) => ({
+          ...current,
+          loadedOnce: true,
+          initialLoading: false,
+          error: loadError.message || "Unable to load processing state.",
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    applyProcessingPayload,
+    canLoadProcessingState,
+    onProcessingPage,
+    processingState.error,
+    processingState.loadedOnce,
+  ]);
 
   const runCardAction = useCallback(
     async (cardId, request, options = {}) => {
@@ -206,7 +242,7 @@ export function BookProcessingProvider({ children }) {
       }));
       try {
         const payload = await request();
-        refreshTargets(options.targets);
+        applyProcessingPayload(payload);
         if (typeof options.onSuccess === "function") {
           options.onSuccess(payload, toast);
         }
@@ -233,237 +269,83 @@ export function BookProcessingProvider({ children }) {
         });
       }
     },
-    [refreshTargets, toast],
+    [applyProcessingPayload, toast],
   );
 
   useEffect(() => {
-    if (!canLoadProcessingState || typeof window === "undefined") {
-      setStreamMode("idle");
-      if (reconnectTimerRef.current) {
-        window.clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
+    if (
+      !onProcessingPage ||
+      !canLoadProcessingState ||
+      typeof window === "undefined"
+    ) {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
       }
-      hasStreamConnectedRef.current = false;
+      setStreamMode("idle");
       return undefined;
     }
 
     if (typeof EventSource === "undefined") {
-      refreshTargets(ALL_PROCESSING_TARGETS);
-      setStreamMode("fallback");
+      setStreamMode("unsupported");
       return undefined;
     }
 
     let disposed = false;
+    const nextSource = new EventSource(resolveAppUrl("/processing/stream/"), {
+      withCredentials: true,
+    });
+    eventSourceRef.current = nextSource;
+    setStreamMode("connecting");
 
-    const connect = () => {
-      if (disposed) {
+    const handlePayload = (event) => {
+      if (disposed || eventSourceRef.current !== nextSource) {
         return;
       }
-
-      setStreamMode("connecting");
-
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
+      try {
+        applyProcessingPayload(JSON.parse(event.data || "{}"));
+      } catch {
+        // Ignore malformed stream payloads and keep the current state.
       }
-
-      const nextSource = new EventSource(
-        resolveAppUrl("/processing/stream/"),
-        { withCredentials: true },
-      );
-      eventSourceRef.current = nextSource;
-
-      nextSource.addEventListener("connected", () => {
-        if (disposed || eventSourceRef.current !== nextSource) {
-          return;
-        }
-        if (hasStreamConnectedRef.current) {
-          refreshTargets(ALL_PROCESSING_TARGETS);
-        }
-        hasStreamConnectedRef.current = true;
-        setStreamMode("connected");
-      });
-
-      nextSource.addEventListener("invalidation", (event) => {
-        try {
-          const payload = JSON.parse(event.data || "{}");
-          refreshTargets(payload.targets);
-        } catch {
-          refreshTargets(ALL_PROCESSING_TARGETS);
-        }
-      });
-
-      nextSource.onerror = () => {
-        if (eventSourceRef.current === nextSource) {
-          nextSource.close();
-          eventSourceRef.current = null;
-        }
-        refreshTargets(ALL_PROCESSING_TARGETS);
-        setStreamMode("fallback");
-        if (disposed || reconnectTimerRef.current) {
-          return;
-        }
-        reconnectTimerRef.current = window.setTimeout(() => {
-          reconnectTimerRef.current = null;
-          connect();
-        }, PROCESSING_STREAM_RECONNECT_MS);
-      };
     };
 
-    connect();
+    nextSource.addEventListener("connected", () => {
+      if (disposed || eventSourceRef.current !== nextSource) {
+        return;
+      }
+      setStreamMode("connected");
+    });
+    nextSource.addEventListener("snapshot", handlePayload);
+    nextSource.addEventListener("state", handlePayload);
+    nextSource.onerror = () => {
+      if (disposed || eventSourceRef.current !== nextSource) {
+        return;
+      }
+      setStreamMode("reconnecting");
+    };
 
     return () => {
       disposed = true;
-      if (reconnectTimerRef.current) {
-        window.clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
+      if (eventSourceRef.current === nextSource) {
+        nextSource.close();
         eventSourceRef.current = null;
       }
       setStreamMode("idle");
-      hasStreamConnectedRef.current = false;
     };
-  }, [
-    canLoadProcessingState,
-    refreshTargets,
-  ]);
-
-  useEffect(() => {
-    if (
-      !canLoadProcessingState ||
-      streamMode !== "fallback" ||
-      typeof window === "undefined"
-    ) {
-      if (monitorTimerRef.current !== null) {
-        window.clearTimeout(monitorTimerRef.current);
-        monitorTimerRef.current = null;
-      }
-      monitorRequestRef.current = false;
-      return undefined;
-    }
-
-    let disposed = false;
-
-    const schedule = (delayMs) => {
-      if (disposed) {
-        return;
-      }
-      if (monitorTimerRef.current !== null) {
-        window.clearTimeout(monitorTimerRef.current);
-      }
-      monitorTimerRef.current = window.setTimeout(runMonitorTick, delayMs);
-    };
-
-    const runMonitorTick = async () => {
-      if (disposed || monitorRequestRef.current) {
-        schedule(PROCESSING_MONITOR_IDLE_MS);
-        return;
-      }
-
-      monitorRequestRef.current = true;
-      try {
-        const payload = await apiFetch(PROCESSING_STATE_PATH);
-        const syncStates = payload?.syncStates || {};
-        const catalogSync = syncStates.catalog || payload?.sync || null;
-        const incompleteSync = syncStates.incomplete || payload?.sync || null;
-        const manualPipelineAdvance = Boolean(
-          payload?.orchestration?.manualPipelineAdvance,
-        );
-        const activeSyncScopes = [
-          ["catalog", catalogSync, CATALOG_SYNC_TARGETS],
-          ["incomplete", incompleteSync, INCOMPLETE_SYNC_TARGETS],
-        ].filter(([, syncState]) =>
-          ["syncing", "pausing"].includes(syncState?.status) &&
-          !syncState?.workerManaged,
-        );
-        const hasActiveRequests =
-          Number(payload?.summary?.notifications?.activeRequests || 0) > 0;
-
-        let nextDelay = PROCESSING_MONITOR_IDLE_MS;
-        const refreshedTargets = [];
-        const shouldRefreshLocally = !hasStreamConnectedRef.current;
-
-        for (const [scope, _syncState, targets] of activeSyncScopes) {
-          await apiFetch(
-            `${scopedSyncPath(scope, "advance")}?includeLists=0`,
-            {
-              method: "POST",
-            },
-          );
-          if (shouldRefreshLocally) {
-            refreshedTargets.push(...targets);
-          }
-          nextDelay = PROCESSING_MONITOR_ACTIVE_MS;
-        }
-
-        if (
-          manualPipelineAdvance &&
-          hasActiveRequests &&
-          !activeSyncScopes.length
-        ) {
-          const advancePayload = await apiFetch(
-            "/processing/pipeline/advance/?includeLists=0",
-            {
-              method: "POST",
-            },
-          );
-          if (
-            shouldRefreshLocally &&
-            Number(advancePayload?.advancedCount || 0) > 0
-          ) {
-            refreshedTargets.push(...PROCESSING_DATA_TARGETS);
-          }
-          nextDelay = PROCESSING_MONITOR_ACTIVE_MS;
-        }
-
-        if (refreshedTargets.length) {
-          refreshTargets(refreshedTargets);
-        }
-
-        schedule(nextDelay);
-      } catch (monitorError) {
-        if (
-          ![401, 403].includes(monitorError?.status) &&
-          !hasStreamConnectedRef.current
-        ) {
-          refreshTargets(ALL_PROCESSING_TARGETS);
-        }
-        schedule(PROCESSING_MONITOR_IDLE_MS);
-      } finally {
-        monitorRequestRef.current = false;
-      }
-    };
-
-    schedule(PROCESSING_MONITOR_ACTIVE_MS);
-
-    return () => {
-      disposed = true;
-      if (monitorTimerRef.current !== null) {
-        window.clearTimeout(monitorTimerRef.current);
-        monitorTimerRef.current = null;
-      }
-      monitorRequestRef.current = false;
-    };
-  }, [canLoadProcessingState, refreshTargets, streamMode]);
+  }, [applyProcessingPayload, canLoadProcessingState, onProcessingPage]);
 
   const startCatalogSync = useCallback(
     (remotePages) =>
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch(summaryOnlyPath("/processing/sync/start/"), {
+          apiFetch("/processing/sync/start/", {
             method: "POST",
             ...(catalogRemotePages(remotePages).length
               ? { body: { remotePages: catalogRemotePages(remotePages) } }
               : {}),
           }),
         {
-          targets: CATALOG_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Sync started",
@@ -479,16 +361,10 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause"), {
             method: "POST",
-            },
-          ),
+          }),
         {
-          targets: CATALOG_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Pause requested",
@@ -504,17 +380,11 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume"), {
             method: "POST",
             body: { runMode: "manual" },
-            },
-          ),
+          }),
         {
-          targets: CATALOG_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Sync resumed",
@@ -530,17 +400,9 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop"), {
             method: "POST",
-            },
-          ),
-        {
-          targets: CATALOG_SYNC_TARGETS,
-        },
+          }),
       ),
     [runCardAction],
   );
@@ -550,12 +412,11 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-records",
         () =>
-          apiFetch(summaryOnlyPath("/processing/records/create-requests/"), {
+          apiFetch("/processing/records/create-requests/", {
             method: "POST",
             body: { ids: recordIds },
           }),
         {
-          targets: PROCESSING_DATA_TARGETS,
           onSuccess: (payload, nextToast) => {
             if (payload?.createdCount) {
               nextToast.success({
@@ -579,12 +440,11 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-save",
         () =>
-          apiFetch(summaryOnlyPath("/processing/automation/catalog/"), {
+          apiFetch("/processing/automation/catalog/", {
             method: "POST",
             body: form,
           }),
         {
-          targets: ["catalog-automation"],
           onSuccess: (_, nextToast) =>
             nextToast.success({
               title: "Catalog automation saved",
@@ -600,11 +460,10 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch(summaryOnlyPath("/processing/automation/catalog/run/"), {
+          apiFetch("/processing/automation/catalog/run/", {
             method: "POST",
           }),
         {
-          targets: CATALOG_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Catalog automation started",
@@ -620,16 +479,10 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause"), {
             method: "POST",
-            },
-          ),
+          }),
         {
-          targets: CATALOG_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Catalog automation pausing",
@@ -646,17 +499,11 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume"), {
             method: "POST",
             body: { runMode: "catalog_automation" },
-            },
-          ),
+          }),
         {
-          targets: CATALOG_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Catalog automation resumed",
@@ -673,17 +520,9 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop"), {
             method: "POST",
-            },
-          ),
-        {
-          targets: CATALOG_SYNC_TARGETS,
-        },
+          }),
       ),
     [runCardAction],
   );
@@ -693,12 +532,11 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-save",
         () =>
-          apiFetch(summaryOnlyPath("/processing/automation/incomplete/"), {
+          apiFetch("/processing/automation/incomplete/", {
             method: "POST",
             body: form,
           }),
         {
-          targets: ["incomplete-automation"],
           onSuccess: (_, nextToast) =>
             nextToast.success({
               title: "Incomplete automation saved",
@@ -714,11 +552,10 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch(summaryOnlyPath("/processing/automation/incomplete/run/"), {
+          apiFetch("/processing/automation/incomplete/run/", {
             method: "POST",
           }),
         {
-          targets: INCOMPLETE_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Incomplete automation started",
@@ -734,16 +571,10 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "pause"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "pause"), {
             method: "POST",
-            },
-          ),
+          }),
         {
-          targets: INCOMPLETE_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Incomplete automation pausing",
@@ -760,17 +591,11 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "resume"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "resume"), {
             method: "POST",
             body: { runMode: "incomplete_automation" },
-            },
-          ),
+          }),
         {
-          targets: INCOMPLETE_SYNC_TARGETS,
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Incomplete automation resumed",
@@ -787,17 +612,9 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch(
-            summaryOnlyPath(
-              scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "stop"),
-            ),
-            {
+          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "stop"), {
             method: "POST",
-            },
-          ),
-        {
-          targets: INCOMPLETE_SYNC_TARGETS,
-        },
+          }),
       ),
     [runCardAction],
   );
@@ -807,7 +624,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         cardId,
         () =>
-          apiFetch(summaryOnlyPath("/processing/requests/action/"), {
+          apiFetch("/processing/requests/action/", {
             method: "POST",
             body: {
               ids: requestIds,
@@ -816,7 +633,6 @@ export function BookProcessingProvider({ children }) {
             },
           }),
         {
-          targets: PROCESSING_DATA_TARGETS,
           onSuccess: (payload, nextToast) =>
             notifyRequestAction(
               nextToast,
@@ -878,8 +694,8 @@ export function BookProcessingProvider({ children }) {
     () => ({
       busyCards,
       canLoadProcessingState,
-      refreshTargets,
-      refreshVersions,
+      processingState,
+      streamMode,
       startCatalogSync,
       pauseCatalogSync,
       resumeCatalogSync,
@@ -916,9 +732,8 @@ export function BookProcessingProvider({ children }) {
       pauseCatalogSync,
       pauseIncompleteAutomation,
       pauseRequests,
+      processingState,
       recreateCompletedRequests,
-      refreshTargets,
-      refreshVersions,
       resumeCatalogAutomation,
       resumeCatalogSync,
       resumeIncompleteAutomation,
@@ -932,6 +747,7 @@ export function BookProcessingProvider({ children }) {
       stopCatalogAutomation,
       stopCatalogSync,
       stopIncompleteAutomation,
+      streamMode,
     ],
   );
 

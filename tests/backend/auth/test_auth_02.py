@@ -88,7 +88,7 @@ def test_authenticated_user_can_update_profile_name(client):
 
 @pytest.mark.django_db
 def test_profile_exposes_and_updates_kindle_emails(settings, client):
-    settings.KINDLE_DELIVERY_FROM_EMAIL = "library-sender@example.com"
+    settings.ACCOUNT_INVITE_FROM_EMAIL = "library-sender@example.com"
     user = User.objects.create_user(
         email="kindle-profile@example.com",
         password="strong-password-123",
