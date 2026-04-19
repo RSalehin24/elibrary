@@ -1,11 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { apiFetch } from "../api/client";
 import CatalogToolbar from "../components/CatalogToolbar";
-import PageLoader from "../components/PageLoader";
-import PropertyTableControls, {
-  useClientPagination,
-} from "../components/PropertyTableControls";
+import PropertyTable from "../components/PropertyTable";
+import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { formatBookDate } from "../utils/bookPresentation";
 import {
   cleanQueryParams,
@@ -49,53 +46,50 @@ const filterFields = [
   },
 ];
 
+const seriesToolbarFields = filterFields.filter(
+  (field) => field.key !== "sort",
+);
+const seriesSortOptions =
+  filterFields.find((field) => field.key === "sort")?.options || [];
+
 export default function SeriesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filters, setFilters] = useState(() =>
-    filtersFromSearchParams(defaultFilters, searchParams),
+  const appliedFilters = useMemo(
+    () => filtersFromSearchParams(defaultFilters, searchParams),
+    [searchParams],
   );
+  const [filters, setFilters] = useState(appliedFilters);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [seriesList, setSeriesList] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const pagination = useClientPagination(seriesList);
+  const {
+    entries: seriesList,
+    totalCount,
+    hasMore,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error,
+    tableShellRef,
+    observeLoadTrigger,
+  } = useInfiniteCatalogBooks({
+    endpoint: "/catalog/series/",
+    filters: appliedFilters,
+  });
 
   useEffect(() => {
-    const nextFilters = filtersFromSearchParams(defaultFilters, searchParams);
-    setFilters(nextFilters);
-
-    async function loadSeries() {
-      try {
-        setLoading(true);
-        const payload = await apiFetch(
-          `/catalog/series/${toQueryString(nextFilters)}`,
-        );
-        setSeriesList(payload);
-        setError("");
-      } catch (nextError) {
-        setError(nextError.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadSeries();
-  }, [searchParams.toString()]);
+    setFilters(appliedFilters);
+  }, [appliedFilters]);
 
   function applyFilters(event) {
     event.preventDefault();
-    pagination.resetPage();
     setSearchParams(cleanQueryParams(filters));
   }
 
   function resetFilters() {
-    pagination.resetPage();
     setFilters(defaultFilters);
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
   function clearSearch(nextFilters) {
-    pagination.resetPage();
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
   }
@@ -108,29 +102,9 @@ export default function SeriesPage() {
     return `/library${toQueryString(params)}`;
   }
 
-  const resultCount = error || loading ? "" : `${seriesList.length}`;
-  const sortOptions =
-    filterFields.find((field) => field.key === "sort")?.options || [];
-  const tableControls = (
-    <PropertyTableControls
-      sortValue={filters.sort}
-      sortOptions={sortOptions}
-      onSortChange={(nextSort) => {
-        const nextFilters = { ...filters, sort: nextSort };
-        pagination.resetPage();
-        setFilters(nextFilters);
-        setSearchParams(cleanQueryParams(nextFilters));
-      }}
-      rowsPerPage={pagination.rowsPerPage}
-      onRowsPerPageChange={pagination.setRowsPerPage}
-      page={pagination.page}
-      pageCount={pagination.pageCount}
-      hasPrevious={pagination.hasPrevious}
-      hasNext={pagination.hasNext}
-      onPageChange={pagination.setPage}
-      disabled={loading}
-    />
-  );
+  const resultCount =
+    error && !seriesList.length ? "" : `${totalCount}`;
+  const showErrorState = Boolean(error && !seriesList.length && !initialLoading);
 
   return (
     <div className="catalog-page page-stack">
@@ -140,7 +114,7 @@ export default function SeriesPage() {
         <CatalogToolbar
           filters={filters}
           setFilters={setFilters}
-          fields={filterFields}
+          fields={seriesToolbarFields}
           defaultFilters={defaultFilters}
           filtersExpanded={filtersExpanded}
           setFiltersExpanded={setFiltersExpanded}
@@ -148,66 +122,72 @@ export default function SeriesPage() {
           onReset={resetFilters}
           searchPlaceholder="Search series..."
           resultCount={resultCount}
+          resultCountLoading={initialLoading || refreshing}
+          sortValue={filters.sort}
+          sortOptions={seriesSortOptions}
+          onSortChange={(nextSort) => {
+            const nextFilters = { ...filters, sort: nextSort };
+            setFilters(nextFilters);
+            setSearchParams(cleanQueryParams(nextFilters));
+          }}
+          sortAriaLabel="Sort series"
           searchRowCompact
           searchRowClassName="catalog-search-row--property-compact"
           onSearchClear={clearSearch}
           inline
+          bare
+          buttonsLoading={initialLoading || refreshing}
+          buttonsDisabled={initialLoading || loadingMore || refreshing}
         />
-
-        <div className="catalog-page-controls-row">{tableControls}</div>
       </header>
 
-      {loading ? (
-        <PageLoader
-          label="Loading series"
-          detail="Fetching series names and related book totals."
-          variant="table"
-        />
-      ) : error ? (
+      {showErrorState ? (
         <div className="page-state page-state-error">{error}</div>
-      ) : seriesList.length ? (
-        <div className="catalog-table-shell">
-          <table className="catalog-table property-table">
-            <thead>
-              <tr>
-                <th>Series</th>
-                <th>Books</th>
-                <th>Digital</th>
-                <th>Manual</th>
-                <th>Created</th>
-                <th>Open</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagination.items.map((series) => (
-                <tr key={series.id}>
-                  <td>
-                    <Link
-                      to={buildBooksLink(series.name)}
-                      className="table-title-link"
-                    >
-                      {series.name}
-                    </Link>
-                  </td>
-                  <td>{series.book_count}</td>
-                  <td>{series.digital_book_count}</td>
-                  <td>{series.manual_book_count}</td>
-                  <td>{formatBookDate(series.created_at)}</td>
-                  <td className="table-action-cell">
-                    <Link
-                      to={buildBooksLink(series.name)}
-                      className="ghost-button table-row-action"
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       ) : (
-        <div className="page-state">No series found.</div>
+        <PropertyTable
+          headers={[
+            "Series",
+            "Books",
+            "Digital",
+            "Manual",
+            "Created",
+            "Open",
+          ]}
+          columnKinds={["title", "stat", "stat", "stat", "date", "action"]}
+          items={seriesList}
+          shellRef={tableShellRef}
+          hasMore={hasMore}
+          observeLoadTrigger={observeLoadTrigger}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          refreshing={refreshing}
+          shellClassName="catalog-table-shell--incremental"
+          renderRow={(series) => (
+            <tr key={series.id}>
+              <td>
+                <Link
+                  to={buildBooksLink(series.name)}
+                  className="table-title-link"
+                >
+                  {series.name}
+                </Link>
+              </td>
+              <td>{series.book_count}</td>
+              <td>{series.digital_book_count}</td>
+              <td>{series.manual_book_count}</td>
+              <td>{formatBookDate(series.created_at)}</td>
+              <td className="table-action-cell">
+                <Link
+                  to={buildBooksLink(series.name)}
+                  className="ghost-button table-row-action"
+                >
+                  Open
+                </Link>
+              </td>
+            </tr>
+          )}
+          emptyLabel="No series found."
+        />
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    ProcessingCardView,
     ProcessingCatalogAutomationRunView,
     ProcessingCatalogAutomationView,
     ProcessingIncompleteAutomationRunView,
@@ -15,18 +16,25 @@ from .views import (
     ProcessingSyncResumeView,
     ProcessingSyncStopView,
     ProcessingSyncStartView,
+    ProcessingStreamView,
 )
 
 
 urlpatterns = [
     path("state/", ProcessingStateView.as_view(), name="processing-state"),
+    path("card/", ProcessingCardView.as_view(), name="processing-card"),
     path("table/", ProcessingTableView.as_view(), name="processing-table"),
+    path("stream/", ProcessingStreamView.as_view(), name="processing-stream"),
     path("pipeline/advance/", ProcessingPipelineAdvanceView.as_view(), name="processing-pipeline-advance"),
     path("sync/start/", ProcessingSyncStartView.as_view(), name="processing-sync-start"),
     path("sync/pause/", ProcessingSyncPauseView.as_view(), name="processing-sync-pause"),
     path("sync/advance/", ProcessingSyncAdvanceView.as_view(), name="processing-sync-advance"),
     path("sync/resume/", ProcessingSyncResumeView.as_view(), name="processing-sync-resume"),
     path("sync/stop/", ProcessingSyncStopView.as_view(), name="processing-sync-stop"),
+    path("sync/<slug:scope>/pause/", ProcessingSyncPauseView.as_view(), name="processing-sync-scope-pause"),
+    path("sync/<slug:scope>/advance/", ProcessingSyncAdvanceView.as_view(), name="processing-sync-scope-advance"),
+    path("sync/<slug:scope>/resume/", ProcessingSyncResumeView.as_view(), name="processing-sync-scope-resume"),
+    path("sync/<slug:scope>/stop/", ProcessingSyncStopView.as_view(), name="processing-sync-scope-stop"),
     path("records/create-requests/", ProcessingRecordCreateRequestsView.as_view(), name="processing-record-create-requests"),
     path("requests/action/", ProcessingRequestActionView.as_view(), name="processing-request-action"),
     path("automation/catalog/", ProcessingCatalogAutomationView.as_view(), name="processing-catalog-automation"),

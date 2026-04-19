@@ -2,15 +2,21 @@ from celery import shared_task
 
 from .models import BookCreationRequest, BookCreationRequestState
 from .services import (
+    PROCESSING_SYNC_KEY_CATALOG,
     kickoff_request_processing,
-    run_processing_sync,
+    run_processing_sync_until_blocked,
     sync_state_task_payload,
 )
 
+run_processing_sync = run_processing_sync_until_blocked
+
 
 @shared_task(bind=True)
-def run_processing_sync_task(self, singleton_key="default"):
-    state = run_processing_sync(singleton_key=singleton_key, task_id=self.request.id)
+def run_processing_sync_task(self, singleton_key=PROCESSING_SYNC_KEY_CATALOG):
+    state = run_processing_sync(
+        singleton_key=singleton_key,
+        task_id=self.request.id,
+    )
     return sync_state_task_payload(state)
 
 

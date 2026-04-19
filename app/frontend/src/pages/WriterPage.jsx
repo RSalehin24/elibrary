@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useLocation, useSearchParams } from "react-router-dom";
-import { apiFetch } from "../api/client";
 import CatalogToolbar from "../components/CatalogToolbar";
-import PageLoader from "../components/PageLoader";
-import PropertyTableControls, {
-  useClientPagination,
-} from "../components/PropertyTableControls";
+import PropertyTable from "../components/PropertyTable";
+import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { formatBookDate } from "../utils/bookPresentation";
 import {
   cleanQueryParams,
@@ -92,6 +89,12 @@ function activeTabForPath(pathname) {
   );
 }
 
+const contributorToolbarFields = filterFields.filter(
+  (field) => field.key !== "sort",
+);
+const contributorSortOptions =
+  filterFields.find((field) => field.key === "sort")?.options || [];
+
 export default function WriterPage() {
   const location = useLocation();
   const activeTab = useMemo(
@@ -99,51 +102,42 @@ export default function WriterPage() {
     [location.pathname],
   );
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filters, setFilters] = useState(() =>
-    filtersFromSearchParams(defaultFilters, searchParams),
+  const appliedFilters = useMemo(
+    () => filtersFromSearchParams(defaultFilters, searchParams),
+    [searchParams],
   );
+  const [filters, setFilters] = useState(appliedFilters);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [contributors, setContributors] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const pagination = useClientPagination(contributors);
+  const {
+    entries: contributors,
+    totalCount,
+    hasMore,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error,
+    tableShellRef,
+    observeLoadTrigger,
+  } = useInfiniteCatalogBooks({
+    endpoint: activeTab.endpoint,
+    filters: appliedFilters,
+  });
 
   useEffect(() => {
-    const nextFilters = filtersFromSearchParams(defaultFilters, searchParams);
-    setFilters(nextFilters);
-
-    async function loadContributors() {
-      try {
-        setLoading(true);
-        const payload = await apiFetch(
-          `${activeTab.endpoint}${toQueryString(nextFilters)}`,
-        );
-        setContributors(payload);
-        setError("");
-      } catch (nextError) {
-        setError(nextError.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadContributors();
-  }, [activeTab.endpoint, searchParams.toString()]);
+    setFilters(appliedFilters);
+  }, [appliedFilters]);
 
   function applyFilters(event) {
     event.preventDefault();
-    pagination.resetPage();
     setSearchParams(cleanQueryParams(filters));
   }
 
   function resetFilters() {
-    pagination.resetPage();
     setFilters(defaultFilters);
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
   function clearSearch(nextFilters) {
-    pagination.resetPage();
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
   }
@@ -159,30 +153,10 @@ export default function WriterPage() {
     return `/library${toQueryString(params)}`;
   }
 
-  const resultCount = error || loading ? "" : `${contributors.length}`;
+  const resultCount =
+    error && !contributors.length ? "" : `${totalCount}`;
   const contributorLabel = activeTab.label.toLowerCase();
-  const sortOptions =
-    filterFields.find((field) => field.key === "sort")?.options || [];
-  const tableControls = (
-    <PropertyTableControls
-      sortValue={filters.sort}
-      sortOptions={sortOptions}
-      onSortChange={(nextSort) => {
-        const nextFilters = { ...filters, sort: nextSort };
-        pagination.resetPage();
-        setFilters(nextFilters);
-        setSearchParams(cleanQueryParams(nextFilters));
-      }}
-      rowsPerPage={pagination.rowsPerPage}
-      onRowsPerPageChange={pagination.setRowsPerPage}
-      page={pagination.page}
-      pageCount={pagination.pageCount}
-      hasPrevious={pagination.hasPrevious}
-      hasNext={pagination.hasNext}
-      onPageChange={pagination.setPage}
-      disabled={loading}
-    />
-  );
+  const showErrorState = Boolean(error && !contributors.length && !initialLoading);
 
   return (
     <div className="catalog-page page-stack">
@@ -207,7 +181,7 @@ export default function WriterPage() {
           <CatalogToolbar
             filters={filters}
             setFilters={setFilters}
-            fields={filterFields}
+            fields={contributorToolbarFields}
             defaultFilters={defaultFilters}
             filtersExpanded={filtersExpanded}
             setFiltersExpanded={setFiltersExpanded}
@@ -215,72 +189,83 @@ export default function WriterPage() {
             onReset={resetFilters}
             searchPlaceholder={`Search ${contributorLabel} or codes...`}
             resultCount={resultCount}
+            resultCountLoading={initialLoading || refreshing}
+            sortValue={filters.sort}
+            sortOptions={contributorSortOptions}
+            onSortChange={(nextSort) => {
+              const nextFilters = { ...filters, sort: nextSort };
+              setFilters(nextFilters);
+              setSearchParams(cleanQueryParams(nextFilters));
+            }}
+            sortAriaLabel={`Sort ${contributorLabel}`}
             searchRowCompact
             searchRowClassName="catalog-search-row--property-compact"
             onSearchClear={clearSearch}
             inline
             bare
+            buttonsLoading={initialLoading || refreshing}
+            buttonsDisabled={initialLoading || loadingMore || refreshing}
           />
-
-          <div className="catalog-page-controls-row">{tableControls}</div>
         </div>
       </header>
 
-      {loading ? (
-        <PageLoader
-          label={`Loading ${activeTab.label}`}
-          detail={`Fetching ${contributorLabel} and their related book counts.`}
-          variant="table"
-        />
-      ) : error ? (
+      {showErrorState ? (
         <div className="page-state page-state-error">{error}</div>
-      ) : contributors.length ? (
-        <div className="catalog-table-shell">
-          <table className="catalog-table property-table">
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Name</th>
-                <th>Books</th>
-                <th>Digital</th>
-                <th>Manual</th>
-                <th>Created</th>
-                <th>Open</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagination.items.map((contributor) => (
-                <tr key={contributor.id}>
-                  <td className="table-code-cell">
-                    {contributor.catalog_code}
-                  </td>
-                  <td>
-                    <Link
-                      to={buildBooksLink(contributor.catalog_code)}
-                      className="table-title-link"
-                    >
-                      {contributor.name}
-                    </Link>
-                  </td>
-                  <td>{contributor.book_count}</td>
-                  <td>{contributor.digital_book_count}</td>
-                  <td>{contributor.manual_book_count}</td>
-                  <td>{formatBookDate(contributor.created_at)}</td>
-                  <td className="table-action-cell">
-                    <Link
-                      to={buildBooksLink(contributor.catalog_code)}
-                      className="ghost-button table-row-action"
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       ) : (
-        <div className="page-state">{activeTab.emptyLabel}</div>
+        <PropertyTable
+          headers={[
+            "Code",
+            "Name",
+            "Books",
+            "Digital",
+            "Manual",
+            "Created",
+            "Open",
+          ]}
+          columnKinds={[
+            "code",
+            "title",
+            "stat",
+            "stat",
+            "stat",
+            "date",
+            "action",
+          ]}
+          items={contributors}
+          shellRef={tableShellRef}
+          hasMore={hasMore}
+          observeLoadTrigger={observeLoadTrigger}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          refreshing={refreshing}
+          shellClassName="catalog-table-shell--incremental"
+          renderRow={(contributor) => (
+            <tr key={contributor.id}>
+              <td className="table-code-cell">{contributor.catalog_code}</td>
+              <td>
+                <Link
+                  to={buildBooksLink(contributor.catalog_code)}
+                  className="table-title-link"
+                >
+                  {contributor.name}
+                </Link>
+              </td>
+              <td>{contributor.book_count}</td>
+              <td>{contributor.digital_book_count}</td>
+              <td>{contributor.manual_book_count}</td>
+              <td>{formatBookDate(contributor.created_at)}</td>
+              <td className="table-action-cell">
+                <Link
+                  to={buildBooksLink(contributor.catalog_code)}
+                  className="ghost-button table-row-action"
+                >
+                  Open
+                </Link>
+              </td>
+            </tr>
+          )}
+          emptyLabel={activeTab.emptyLabel}
+        />
       )}
     </div>
   );

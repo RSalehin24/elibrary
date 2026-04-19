@@ -95,6 +95,9 @@ function baseState(overrides = {}) {
         lastRunAt: "",
       },
     },
+    orchestration: {
+      manualPipelineAdvance: true,
+    },
     ui: {
       actionDelayMs: 80,
       pipelineDelayMs: 500,
@@ -671,6 +674,10 @@ async function mockProcessingApi(page, initialState) {
     return {
       ...(includeLists ? state : {}),
       ...(includeLists ? {} : { sync: state.sync, automation: state.automation, ui: state.ui }),
+      orchestration: {
+        manualPipelineAdvance:
+          state.orchestration?.manualPipelineAdvance ?? true,
+      },
       summary: processingSummary(state),
       ...(includeLists ? {} : {}),
       ...extra,
@@ -1697,10 +1704,9 @@ test.describe("processing pages replacement", () => {
     );
 
     await page.getByTestId("catalog-automation-run-btn").click();
-    await expect(page.getByTestId("catalog-automation-loader")).toBeVisible();
     await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
       "data-state",
-      /syncing|idle/,
+      "syncing",
     );
     await expect(page.getByTestId("catalog-automation-status")).toContainText(
       "Created 3 request",
@@ -1748,6 +1754,12 @@ test.describe("processing pages replacement", () => {
       "aria-label",
       "Resume automated catalog sync",
     );
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toHaveAttribute(
+      "aria-label",
+      "Start sync",
+    );
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
 
     await page.getByTestId("catalog-automation-run-btn").click();
 
@@ -2391,10 +2403,9 @@ test.describe("processing pages replacement", () => {
       "Saved",
     );
     await page.getByTestId("incomplete-automation-run-btn").click();
-    await expect(page.getByTestId("incomplete-automation-loader")).toBeVisible();
     await expect(
       page.getByTestId("incomplete-automation-run-btn"),
-    ).toHaveAttribute("data-state", /syncing|idle/);
+    ).toHaveAttribute("data-state", "syncing");
     await expect(row(page, "incomplete", "completed", "request-incomplete-book")).toBeVisible();
     await expect(page.getByTestId("incomplete-overview-stat-incomplete")).toContainText(
       "0",

@@ -3,14 +3,17 @@ import os
 import sys
 import uuid
 from datetime import timedelta, time as time_type
+from time import monotonic
 from types import SimpleNamespace
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 from uuid import uuid4
 
 from bs4 import BeautifulSoup
+from config.celery import app as celery_app
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
-from django.db.models import CharField, F, OuterRef, Prefetch, Q, Subquery
+from django.db.models import CharField, F, Max, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
@@ -22,6 +25,8 @@ from apps.ingestion.services.normalization import promote_leading_front_matter
 from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_with_host_fallback
 from apps.ingestion.services.resolution_support import (
     fetch_source_page_metadata,
+    metadata_entry_defaults,
+    split_display_title,
     upsert_source_catalog_entry,
 )
 from apps.ingestion.services.submissions_support.persistence import export_payload_from_book
@@ -53,11 +58,18 @@ logger = logging.getLogger(__name__)
 SYNC_RUN_MODE_MANUAL = "manual"
 SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation"
 SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation"
+PROCESSING_SYNC_KEY_CATALOG = "catalog"
+PROCESSING_SYNC_KEY_INCOMPLETE = "incomplete"
 INCOMPLETE_CATEGORY_KEYWORDS = (
     "incomplete",
     "unfinished",
     "অসম্পূর্ণ",
     "অসম্পূর্ণ বই",
+)
+INCOMPLETE_CATALOG_URL = (
+    "https://www.ebanglalibrary.com/genres/"
+    "%E0%A6%85%E0%A6%B8%E0%A6%AE%E0%A7%8D%E0%A6%AA%E0%A7%82%E0%A6%B0%E0%A7%8D%E0%A6%A3-"
+    "%E0%A6%AC%E0%A6%87/"
 )
 TERMINAL_STATES = {
     BookCreationRequestState.CREATED,
@@ -82,10 +94,20 @@ DEFAULT_AUTOMATION_INTERVAL = "weekly"
 DEFAULT_AUTOMATION_TIME = time_type(3, 0)
 LEGACY_AUTOMATION_STATUS_MESSAGE = "Not configured."
 PROCESSING_TASK_QUEUE = "processing"
+PROCESSING_WORKER_CACHE_SECONDS = 2
+PROCESSING_PUSH_TICK_LOCK_KEY = "processing:push-tick"
+PROCESSING_PUSH_TICK_LOCK_SECONDS = 1
 PROCESSING_DISPATCH_REQUESTED_AT_KEY = "_dispatchRequestedAt"
 PROCESSING_DISPATCH_TASK_ID_KEY = "_dispatchTaskId"
 PROCESSING_TABLE_DEFAULT_LIMIT = 60
 PROCESSING_TABLE_MAX_LIMIT = 600
+PROCESSING_CARD_CATALOG_OVERVIEW = "catalog-overview"
+PROCESSING_CARD_CATALOG_SYNC = "catalog-sync"
+PROCESSING_CARD_CATALOG_AUTOMATION = "catalog-automation"
+PROCESSING_CARD_CREATE_OVERVIEW = "create-overview"
+PROCESSING_CARD_ON_HOLD_OVERVIEW = "on-hold-overview"
+PROCESSING_CARD_INCOMPLETE_OVERVIEW = "incomplete-overview"
+PROCESSING_CARD_INCOMPLETE_AUTOMATION = "incomplete-automation"
 
 PROCESSING_REQUEST_CARD_STATES = {
     "create-requests": {BookCreationRequestState.INITIAL},
@@ -96,6 +118,35 @@ PROCESSING_REQUEST_CARD_STATES = {
     "on-hold-failed": {BookCreationRequestState.FAILED},
     "on-hold-duplicate": {BookCreationRequestState.DUPLICATE},
     "on-hold-deleted": {BookCreationRequestState.DELETED},
+}
+
+PROCESSING_REQUEST_DATA_TARGETS = [
+    PROCESSING_CARD_CATALOG_OVERVIEW,
+    PROCESSING_CARD_CREATE_OVERVIEW,
+    PROCESSING_CARD_ON_HOLD_OVERVIEW,
+    "catalog-records",
+    "create-requests",
+    "create-queue",
+    "create-processing",
+    "create-created",
+    "on-hold-paused",
+    "on-hold-failed",
+    "on-hold-duplicate",
+    "on-hold-deleted",
+]
+PROCESSING_RECORD_DATA_TARGETS = [
+    PROCESSING_CARD_CATALOG_OVERVIEW,
+    "catalog-records",
+]
+PROCESSING_INCOMPLETE_DATA_TARGETS = [
+    PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+    "incomplete-records",
+    "incomplete-completed",
+]
+
+PROCESSING_WORKER_AVAILABILITY = {
+    "checked_at": 0.0,
+    "available": None,
 }
 
 
@@ -121,6 +172,12 @@ def sync_run_mode(state):
     return progress.get("runMode") or saved_data.get("runMode") or SYNC_RUN_MODE_MANUAL
 
 
+def sync_key_for_run_mode(run_mode):
+    if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
+        return PROCESSING_SYNC_KEY_INCOMPLETE
+    return PROCESSING_SYNC_KEY_CATALOG
+
+
 def sync_state_task_payload(state):
     return {
         "singleton_key": state.singleton_key,
@@ -141,18 +198,64 @@ def should_run_processing_jobs_inline():
     return bool(
         settings.CELERY_TASK_ALWAYS_EAGER
         or getattr(settings, "PROCESSING_INLINE_PIPELINE_ADVANCE", False)
-        or os.environ.get("PYTEST_CURRENT_TEST")
     )
 
 
+def processing_workers_available(queue_name=PROCESSING_TASK_QUEUE):
+    if should_run_processing_jobs_inline():
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+
+    checked_at = PROCESSING_WORKER_AVAILABILITY["checked_at"]
+    available = PROCESSING_WORKER_AVAILABILITY["available"]
+    now = monotonic()
+    if available is not None and (now - checked_at) < PROCESSING_WORKER_CACHE_SECONDS:
+        return available
+
+    detected = False
+    try:
+        inspector = celery_app.control.inspect(timeout=0.5)
+        active_queues = inspector.active_queues() or {}
+        detected = any(
+            any((queue or {}).get("name") == queue_name for queue in (queues or []))
+            for queues in active_queues.values()
+        )
+    except Exception:
+        logger.debug(
+            "Processing worker availability check failed; assuming manual progression.",
+            exc_info=True,
+        )
+
+    PROCESSING_WORKER_AVAILABILITY["checked_at"] = now
+    PROCESSING_WORKER_AVAILABILITY["available"] = detected
+    return detected
+
+
 def should_enqueue_processing_work():
-    return not should_run_processing_jobs_inline()
+    return not should_run_processing_jobs_inline() and processing_workers_available()
+
+
+def should_manually_advance_processing_work():
+    return not should_run_processing_jobs_inline() and not processing_workers_available()
 
 
 def should_skip_processing_metadata_duplicate_check():
     return bool(
         getattr(settings, "PROCESSING_SKIP_METADATA_DUPLICATE_CHECK", True)
     )
+
+
+def allow_processing_remote_page_payloads():
+    return bool(
+        getattr(settings, "PROCESSING_ALLOW_REMOTE_PAGE_PAYLOADS", False)
+        or "pytest" in sys.modules
+        or os.environ.get("PYTEST_CURRENT_TEST")
+    )
+
+
+def can_process_record_url(url):
+    return allow_processing_remote_page_payloads() or uses_supported_source_url(url)
 
 
 def sync_uses_live_fetch(state):
@@ -232,12 +335,64 @@ def update_automation_run_status(run_mode, message, *, last_run_at=None):
     return automation_settings
 
 
-def get_sync_state():
+def get_sync_state(sync_key=PROCESSING_SYNC_KEY_CATALOG):
     state, _ = ProcessingSyncState.objects.get_or_create(
-        singleton_key="default",
+        singleton_key=sync_key,
         defaults={"message": "Ready to sync."},
     )
     return state
+
+
+def active_sync_scope(default=PROCESSING_SYNC_KEY_CATALOG):
+    incomplete_state = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    if incomplete_state.status in {
+        ProcessingSyncStatus.SYNCING,
+        ProcessingSyncStatus.PAUSING,
+        ProcessingSyncStatus.PAUSED,
+    }:
+        return PROCESSING_SYNC_KEY_INCOMPLETE
+
+    catalog_state = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    if catalog_state.status in {
+        ProcessingSyncStatus.SYNCING,
+        ProcessingSyncStatus.PAUSING,
+        ProcessingSyncStatus.PAUSED,
+    }:
+        return PROCESSING_SYNC_KEY_CATALOG
+
+    return default
+
+
+def serialize_sync_state(state):
+    return {
+        "status": state.status,
+        "progress": state.progress,
+        "fetchedCount": state.fetched_count,
+        "skippedCount": state.skipped_count,
+        "updatedCount": state.updated_count,
+        "appendedCount": state.appended_count,
+        "message": state.message,
+        "remotePages": state.remote_pages,
+        "pageIndex": state.page_index,
+        "runMode": sync_run_mode(state),
+        "workerManaged": bool(state.task_id),
+    }
+
+
+def serialize_automation_settings(automation_settings):
+    return {
+        "kind": automation_settings.kind,
+        "enabled": automation_settings.enabled,
+        "interval": automation_settings.interval,
+        "time": automation_settings.time.strftime("%H:%M"),
+        "saved": automation_settings.saved,
+        "lastRunAt": (
+            automation_settings.last_run_at.isoformat()
+            if automation_settings.last_run_at
+            else None
+        ),
+        "statusMessage": automation_settings.status_message,
+    }
 
 
 def persisted_sync_status(state):
@@ -542,7 +697,7 @@ def reconcile_remote_pages(remote_pages):
     }
 
 
-def should_dispatch_live_sync(remote_pages, run_mode):
+def should_use_live_catalog_fetch(remote_pages, run_mode):
     return (
         bool(getattr(settings, "PROCESSING_USE_LIVE_SYNC", False))
         and not settings.CELERY_TASK_ALWAYS_EAGER
@@ -584,7 +739,10 @@ def dispatch_sync_task(sync_state, *, force=False):
         sync_state.queue_name = "inline-fallback"
         sync_state.last_error = str(exc)
         sync_state.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
-        run_processing_sync(singleton_key=sync_state.singleton_key, task_id="")
+        run_processing_sync_until_blocked(
+            singleton_key=sync_state.singleton_key,
+            task_id="",
+        )
     return sync_state
 
 
@@ -621,19 +779,213 @@ def fetch_live_catalog_page(resolver, page_number):
     return normalized_entries
 
 
-def start_sync(remote_pages=None, *, run_mode=SYNC_RUN_MODE_MANUAL):
+def incomplete_catalog_page_url(page_number):
+    if page_number <= 1:
+        return INCOMPLETE_CATALOG_URL
+    return urljoin(INCOMPLETE_CATALOG_URL, f"page/{page_number}/")
+
+
+def parse_incomplete_catalog_page(soup):
+    entries = []
+    seen_urls = set()
+    anchors = soup.select(".entry-title a[href], article h2 a[href], article h3 a[href]")
+
+    for anchor in anchors:
+        href = urljoin(INCOMPLETE_CATALOG_URL, anchor.get("href", ""))
+        try:
+            normalized_url = normalize_source_url(href)
+        except ValueError:
+            continue
+        if normalized_url in seen_urls:
+            continue
+
+        display_title = anchor.get_text(" ", strip=True)
+        if not display_title:
+            continue
+
+        seen_urls.add(normalized_url)
+        title, author_line = split_display_title(display_title)
+        entries.append(
+            metadata_entry_defaults(
+                source_url=normalized_url,
+                title=title or display_title,
+                author_line=author_line,
+                raw_data={
+                    "title": title or display_title,
+                    "display_title": display_title,
+                    "author_line": author_line,
+                    "incompleteCategoryUrl": INCOMPLETE_CATALOG_URL,
+                    "metadata_source": "incomplete_archive_page",
+                },
+            )
+        )
+
+    return entries
+
+
+def incomplete_resolution_category(raw_data, fallback=""):
+    raw_data = raw_data if isinstance(raw_data, dict) else {}
+    for key in (
+        "willResolveToCategory",
+        "will_resolve_to_category",
+        "resolvedCategory",
+        "resolved_category",
+        "metadataSourceCategory",
+        "category",
+        "book_type",
+    ):
+        value = str(raw_data.get(key) or "").strip()
+        if value and not category_is_incomplete(value):
+            return value
+    return str(fallback or "").strip()
+
+
+def incomplete_remote_payload(stored_entry):
+    raw_data = stored_entry.raw_data if isinstance(stored_entry.raw_data, dict) else {}
+    return {
+        "id": str(stored_entry.id),
+        "name": stored_entry.title,
+        "url": stored_entry.source_url,
+        "category": "অসম্পূর্ণ বই",
+        "writer": stored_entry.author_line,
+        "translator": raw_data.get("translator") or "",
+        "composer": raw_data.get("composer") or "",
+        "publisher": raw_data.get("publisher") or "",
+        "updatedAt": stored_entry.updated_at.isoformat(),
+        "wasIncomplete": True,
+        "resolvedFromIncomplete": False,
+        "willResolveToCategory": incomplete_resolution_category(raw_data),
+    }
+
+
+def fetch_live_incomplete_page(resolver, page_number):
+    response = get_with_host_fallback(
+        resolver.session,
+        incomplete_catalog_page_url(page_number),
+        timeout=30,
+    )
+    try:
+        response.raise_for_status()
+    except Exception as exc:
+        if (
+            page_number > 1
+            and getattr(getattr(exc, "response", None), "status_code", None) == 404
+        ):
+            logger.info(
+                "Incomplete catalog page %s returned 404; treating it as the end of the archive.",
+                incomplete_catalog_page_url(page_number),
+            )
+            return []
+        raise
+    entries = parse_incomplete_catalog_page(BeautifulSoup(response.text, "html.parser"))
+
+    normalized_entries = []
+    seen_urls = set()
+    for entry in entries:
+        source_url = entry.get("source_url")
+        if not source_url:
+            continue
+
+        enriched_entry = dict(entry)
+        try:
+            metadata = fetch_source_page_metadata(source_url, session=resolver.session)
+            resolution_category = incomplete_resolution_category(metadata.get("raw_data"))
+            enriched_entry = {
+                **metadata,
+                "raw_data": {
+                    **(metadata.get("raw_data") or {}),
+                    "category": "অসম্পূর্ণ বই",
+                    "willResolveToCategory": resolution_category,
+                    "metadataSourceCategory": resolution_category,
+                    "incompleteCategoryUrl": INCOMPLETE_CATALOG_URL,
+                    "metadata_source": "incomplete_archive_page",
+                },
+            }
+        except Exception:
+            logger.warning(
+                "Incomplete metadata enrichment failed for %s; using archive listing metadata.",
+                source_url,
+                exc_info=True,
+            )
+            enriched_entry = {
+                **entry,
+                "raw_data": {
+                    **(entry.get("raw_data") or {}),
+                    "category": "অসম্পূর্ণ বই",
+                    "willResolveToCategory": "",
+                    "incompleteCategoryUrl": INCOMPLETE_CATALOG_URL,
+                    "metadata_source": "incomplete_archive_page",
+                },
+            }
+
+        stored_entry = upsert_source_catalog_entry(enriched_entry)
+        payload = incomplete_remote_payload(stored_entry)
+        if payload["url"] in seen_urls:
+            continue
+        seen_urls.add(payload["url"])
+        normalized_entries.append(payload)
+
+    return normalized_entries
+
+
+def fetch_live_incomplete_remote_pages(page_size=100, max_pages=250):
+    resolver = TitleResolver(session=create_session_with_retries())
+    pages = []
+    current_page = []
+    seen_urls = set()
+    page_signatures = set()
+
+    for page_number in range(1, max_pages + 1):
+        page_items = fetch_live_incomplete_page(resolver, page_number)
+        if not page_items:
+            break
+
+        signature = tuple(item["url"] for item in page_items[:5])
+        if signature in page_signatures:
+            break
+        page_signatures.add(signature)
+
+        deduped_page_items = []
+        for item in page_items:
+            source_url = item.get("url")
+            if not source_url or source_url in seen_urls:
+                continue
+            seen_urls.add(source_url)
+            deduped_page_items.append(item)
+
+        for item in deduped_page_items:
+            current_page.append(item)
+            if len(current_page) >= page_size:
+                pages.append(current_page)
+                current_page = []
+
+    if current_page:
+        pages.append(current_page)
+    pages.append([])
+    return pages
+
+
+def start_sync(
+    remote_pages=None,
+    *,
+    run_mode=SYNC_RUN_MODE_MANUAL,
+    sync_key=None,
+):
+    sync_key = sync_key or sync_key_for_run_mode(run_mode)
+    live_fetch = False
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
+        live_fetch = remote_pages is None and should_use_live_incomplete_fetch()
         if remote_pages is None:
-            remote_pages = incomplete_automation_pages()
+            remote_pages = [] if live_fetch else incomplete_sync_remote_pages()
         elif not isinstance(remote_pages, list):
-            remote_pages = incomplete_automation_pages()
+            remote_pages = [] if live_fetch else incomplete_sync_remote_pages()
     else:
         remote_pages = catalog_remote_pages(remote_pages)
-        if not remote_pages and SourceCatalogEntry.objects.exists():
+        live_fetch = should_use_live_catalog_fetch(remote_pages, run_mode)
+        if not live_fetch and not remote_pages and SourceCatalogEntry.objects.exists():
             remote_pages = source_catalog_remote_pages()
 
-    live_fetch = should_dispatch_live_sync(remote_pages, run_mode)
-    state = get_sync_state()
+    state = get_sync_state(sync_key)
     state.remote_pages = remote_pages
     state.status = ProcessingSyncStatus.SYNCING
     state.progress = build_sync_progress(run_mode, live_fetch=live_fetch)
@@ -648,13 +1000,16 @@ def start_sync(remote_pages=None, *, run_mode=SYNC_RUN_MODE_MANUAL):
     state.last_error = ""
     state.save()
     update_automation_run_status(run_mode, state.message)
-    if live_fetch:
+    if should_enqueue_processing_work():
         dispatch_sync_task(state, force=True)
+    elif should_run_processing_jobs_inline():
+        run_processing_sync_until_blocked(singleton_key=state.singleton_key, task_id="")
     return state
 
 
-def pause_sync():
-    state = get_sync_state()
+def pause_sync(sync_key=None):
+    sync_key = sync_key or active_sync_scope()
+    state = get_sync_state(sync_key)
     if state.status == ProcessingSyncStatus.SYNCING:
         run_mode = sync_run_mode(state)
         state.status = ProcessingSyncStatus.PAUSING
@@ -670,28 +1025,32 @@ def pause_sync():
     return state
 
 
-def resume_sync():
-    state = get_sync_state()
-    run_mode = sync_run_mode(state)
+def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
+    state = get_sync_state(sync_key)
+    run_mode = run_mode or sync_run_mode(state)
     live_fetch = sync_uses_live_fetch(state)
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
-        state.remote_pages = incomplete_automation_pages()
+        state.remote_pages = [] if live_fetch else incomplete_sync_remote_pages()
+        next_page_index = 0
+        resume_message = "Restarting incomplete catalog sync from the beginning."
+    else:
+        next_page_index = 0
+        resume_message = (
+            "Restarting automated catalog sync from the beginning."
+            if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION
+            else "Reconciling saved records from the beginning."
+        )
     state.status = ProcessingSyncStatus.SYNCING
     state.progress = build_sync_progress(
         run_mode,
-        next_page_index=0,
+        next_page_index=next_page_index,
         fetched_count=state.fetched_count,
         live_fetch=live_fetch,
     )
-    state.page_index = 0
+    state.page_index = next_page_index
     state.task_id = ""
     state.queue_name = ""
-    if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
-        state.message = "Restarting automated catalog sync from the beginning."
-    elif run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
-        state.message = "Restarting incomplete catalog sync from the beginning."
-    else:
-        state.message = "Reconciling saved records from the beginning."
+    state.message = resume_message
     state.save(
         update_fields=[
             "remote_pages",
@@ -705,13 +1064,16 @@ def resume_sync():
         ]
     )
     update_automation_run_status(run_mode, state.message)
-    if live_fetch and not settings.CELERY_TASK_ALWAYS_EAGER:
+    if should_enqueue_processing_work():
         dispatch_sync_task(state, force=True)
+    elif should_run_processing_jobs_inline():
+        run_processing_sync_until_blocked(singleton_key=state.singleton_key, task_id="")
     return state
 
 
-def stop_sync():
-    state = get_sync_state()
+def stop_sync(sync_key=None):
+    sync_key = sync_key or active_sync_scope()
+    state = get_sync_state(sync_key)
     if state.status not in {
         ProcessingSyncStatus.SYNCING,
         ProcessingSyncStatus.PAUSING,
@@ -791,7 +1153,16 @@ def fail_sync(state, error):
 
 def complete_catalog_automation(state):
     created = []
+    unsupported_count = 0
     for record in BookRecord.objects.order_by("name"):
+        if not can_process_record_url(record.url):
+            unsupported_count += 1
+            logger.warning(
+                "Skipping automation request creation for record %s because its URL is unsupported: %s",
+                record.id,
+                record.url,
+            )
+            continue
         latest_request = latest_request_for_record(record)
         latest_state = latest_request.state if latest_request else record.book_creation_state
         eligible = (
@@ -801,12 +1172,23 @@ def complete_catalog_automation(state):
             BookCreationRequestState.DELETED,
         }
         if eligible:
-            created.append(create_request_for_record(record, origin=SubmissionOrigin.AUTOMATION))
+            processing_request = create_request_for_record(
+                record,
+                origin=SubmissionOrigin.AUTOMATION,
+            )
+            if processing_request is not None:
+                created.append(processing_request)
 
     finished_at = timezone.now()
+    status_message = f"Created {len(created)} {'request' if len(created) == 1 else 'requests'}."
+    if unsupported_count:
+        status_message = (
+            f"{status_message} Skipped {unsupported_count} unsupported "
+            f"{'record' if unsupported_count == 1 else 'records'}."
+        )
     update_automation_run_status(
         SYNC_RUN_MODE_CATALOG_AUTOMATION,
-        f"Created {len(created)} {'request' if len(created) == 1 else 'requests'}.",
+        status_message,
         last_run_at=finished_at,
     )
     return finalize_sync(
@@ -821,7 +1203,7 @@ def complete_catalog_automation(state):
 def incomplete_automation_pages(page_size=100):
     record_ids = [
         str(record.id)
-        for record in BookRecord.objects.filter(resolved_from_incomplete=False)
+        for record in unresolved_incomplete_records_queryset()
         .exclude(will_resolve_to_category="")
         .order_by("name", "id")
         .only("id", "category", "was_incomplete")
@@ -835,12 +1217,68 @@ def incomplete_automation_pages(page_size=100):
     return pages
 
 
+def unresolved_incomplete_records_queryset():
+    return BookRecord.objects.filter(resolved_from_incomplete=False).filter(
+        Q(was_incomplete=True) | incomplete_category_query()
+    )
+
+
+def uses_supported_source_url(url):
+    try:
+        normalize_source_url(url)
+    except ValueError:
+        return False
+    return True
+
+
+def should_use_live_incomplete_fetch():
+    if not getattr(settings, "PROCESSING_USE_LIVE_SYNC", False):
+        return False
+    if settings.CELERY_TASK_ALWAYS_EAGER or "pytest" in sys.modules:
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+
+    unresolved_urls = list(
+        unresolved_incomplete_records_queryset().values_list("url", flat=True)
+    )
+    return not unresolved_urls or all(
+        uses_supported_source_url(url) for url in unresolved_urls
+    )
+
+
+def incomplete_sync_remote_pages():
+    if should_use_live_incomplete_fetch():
+        try:
+            return fetch_live_incomplete_remote_pages()
+        except Exception:
+            logger.warning(
+                "Live incomplete catalog fetch failed; falling back to local incomplete snapshot.",
+                exc_info=True,
+            )
+    return incomplete_automation_pages()
+
+
+def preferred_incomplete_resolution_category(record):
+    for candidate in (
+        record.will_resolve_to_category,
+        incomplete_resolution_category(
+            getattr(record.source_catalog_entry, "raw_data", None),
+        ),
+        "" if category_is_incomplete(record.category) else record.category,
+    ):
+        value = str(candidate or "").strip()
+        if value and not category_is_incomplete(value):
+            return value
+    return "Uncategorized"
+
+
 def resolve_incomplete_records(record_ids):
     resolved = []
-    for record in BookRecord.objects.filter(pk__in=record_ids).exclude(will_resolve_to_category=""):
+    for record in BookRecord.objects.filter(pk__in=record_ids):
         if not (record.was_incomplete or category_is_incomplete(record.category)):
             continue
-        record.category = record.will_resolve_to_category
+        record.category = preferred_incomplete_resolution_category(record)
         record.was_incomplete = True
         record.resolved_from_incomplete = True
         record.book_creation_state = BookCreationRequestState.CREATED
@@ -862,20 +1300,117 @@ def resolve_incomplete_records(record_ids):
     return resolved
 
 
-def complete_incomplete_automation(state):
+def complete_incomplete_automation(state, *, resolved_count=0):
     finished_at = timezone.now()
     update_automation_run_status(
         SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
-        f"Resolved {state.updated_count} {'book' if state.updated_count == 1 else 'books'}.",
+        f"Resolved {resolved_count} {'book' if resolved_count == 1 else 'books'}.",
         last_run_at=finished_at,
     )
     return finalize_sync(
         state,
         message=(
-            f"Incomplete catalog sync complete. Resolved {state.updated_count} "
-            f"{'book' if state.updated_count == 1 else 'books'}."
+            f"Incomplete catalog sync complete. Resolved {resolved_count} "
+            f"{'book' if resolved_count == 1 else 'books'}."
         ),
     )
+
+
+def incomplete_remote_urls(remote_pages):
+    urls = set()
+    for page in catalog_remote_pages(remote_pages):
+        for item in page:
+            url = str(item.get("url") or "").strip()
+            if not url:
+                continue
+            try:
+                urls.add(normalize_source_url(url))
+            except ValueError:
+                urls.add(url)
+    return urls
+
+
+def stale_incomplete_record_ids(remote_pages):
+    current_urls = incomplete_remote_urls(remote_pages)
+    stale_ids = []
+    for record_id, url in unresolved_incomplete_records_queryset().values_list("id", "url"):
+        normalized_url = str(url or "").strip()
+        try:
+            normalized_url = normalize_source_url(normalized_url)
+        except ValueError:
+            pass
+        if normalized_url not in current_urls:
+            stale_ids.append(record_id)
+    return stale_ids
+
+
+def complete_live_incomplete_sync(state):
+    resolved = resolve_incomplete_records(stale_incomplete_record_ids(state.remote_pages))
+    state.updated_count = len(resolved)
+    state.save(update_fields=["updated_count", "updated_at"])
+    return complete_incomplete_automation(state, resolved_count=len(resolved))
+
+
+def advance_live_incomplete_sync_once(state):
+    resolver = TitleResolver(session=create_session_with_retries())
+    seen_urls = incomplete_remote_urls(state.remote_pages)
+    page_signatures = {
+        tuple(item.get("url") for item in page[:5] if item.get("url"))
+        for page in catalog_remote_pages(state.remote_pages)
+        if page
+    }
+
+    page_number = state.page_index + 1
+    page = fetch_live_incomplete_page(resolver, page_number)
+    unique_page = []
+    for item in page:
+        source_url = item.get("url")
+        if not source_url or source_url in seen_urls:
+            continue
+        seen_urls.add(source_url)
+        unique_page.append(item)
+
+    signature = tuple(item["url"] for item in unique_page[:5])
+    if not unique_page or (signature and signature in page_signatures):
+        return complete_live_incomplete_sync(state)
+
+    state.remote_pages = [*catalog_remote_pages(state.remote_pages), unique_page]
+    result = upsert_remote_records(unique_page)
+    state.fetched_count += len(unique_page)
+    state.skipped_count += result["skipped_count"]
+    state.appended_count += result["appended_count"]
+    state.page_index += 1
+
+    latest_status = persisted_sync_status(state)
+    if latest_status == ProcessingSyncStatus.PAUSING:
+        state.status = ProcessingSyncStatus.PAUSED
+        state.progress = build_sync_progress(
+            SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+            next_page_index=state.page_index,
+            fetched_count=state.fetched_count,
+            saved_at=timezone.now().isoformat(),
+            live_fetch=True,
+        )
+        state.message = (
+            f"Saved progress for {state.fetched_count} "
+            f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
+        )
+        update_automation_run_status(SYNC_RUN_MODE_INCOMPLETE_AUTOMATION, state.message)
+    elif latest_status != ProcessingSyncStatus.SYNCING:
+        return ProcessingSyncState.objects.get(pk=state.pk)
+    else:
+        state.progress = build_sync_progress(
+            SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+            next_page_index=state.page_index,
+            fetched_count=state.fetched_count,
+            live_fetch=True,
+        )
+        state.message = sync_progress_message(
+            SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+            state.fetched_count,
+        )
+    state.save()
+    return state
 
 
 def advance_catalog_sync_once(state, run_mode):
@@ -923,13 +1458,63 @@ def advance_catalog_sync_once(state, run_mode):
 
 
 def advance_incomplete_sync_once(state):
+    if sync_uses_live_fetch(state):
+        try:
+            return advance_live_incomplete_sync_once(state)
+        except Exception as exc:
+            logger.exception("Live incomplete sync failed.")
+            return fail_sync(state, exc)
+
     page = state.remote_pages[state.page_index] if state.page_index < len(state.remote_pages) else []
     if not page:
-        return complete_incomplete_automation(state)
+        resolved = resolve_incomplete_records(stale_incomplete_record_ids(state.remote_pages))
+        state.updated_count = len(resolved)
+        state.save(update_fields=["updated_count", "updated_at"])
+        return complete_incomplete_automation(state, resolved_count=len(resolved))
 
-    resolved = resolve_incomplete_records(page)
+    if isinstance(page, list) and all(not isinstance(item, dict) for item in page):
+        resolved = resolve_incomplete_records(page)
+        state.fetched_count += len(page)
+        state.updated_count += len(resolved)
+        state.page_index += 1
+        next_page = state.remote_pages[state.page_index] if state.page_index < len(state.remote_pages) else []
+        latest_status = persisted_sync_status(state)
+        if latest_status == ProcessingSyncStatus.PAUSING:
+            state.status = ProcessingSyncStatus.PAUSED
+            state.progress = build_sync_progress(
+                SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+                next_page_index=state.page_index,
+                fetched_count=state.fetched_count,
+                saved_at=timezone.now().isoformat(),
+                live_fetch=sync_uses_live_fetch(state),
+            )
+            state.message = (
+                f"Saved progress for {state.fetched_count} "
+                f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
+            )
+            update_automation_run_status(SYNC_RUN_MODE_INCOMPLETE_AUTOMATION, state.message)
+        elif latest_status != ProcessingSyncStatus.SYNCING:
+            return ProcessingSyncState.objects.get(pk=state.pk)
+        elif not next_page:
+            return complete_incomplete_automation(state, resolved_count=state.updated_count)
+        else:
+            state.progress = build_sync_progress(
+                SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+                next_page_index=state.page_index,
+                fetched_count=state.fetched_count,
+                live_fetch=sync_uses_live_fetch(state),
+            )
+            state.message = sync_progress_message(
+                SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+                state.fetched_count,
+            )
+        state.save()
+        return state
+
+    result = upsert_remote_records(page)
     state.fetched_count += len(page)
-    state.updated_count += len(resolved)
+    state.skipped_count += result["skipped_count"]
+    state.appended_count += result["appended_count"]
     state.page_index += 1
     next_page = state.remote_pages[state.page_index] if state.page_index < len(state.remote_pages) else []
     latest_status = persisted_sync_status(state)
@@ -940,6 +1525,7 @@ def advance_incomplete_sync_once(state):
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
             saved_at=timezone.now().isoformat(),
+            live_fetch=sync_uses_live_fetch(state),
         )
         state.message = (
             f"Saved progress for {state.fetched_count} "
@@ -949,12 +1535,16 @@ def advance_incomplete_sync_once(state):
     elif latest_status != ProcessingSyncStatus.SYNCING:
         return ProcessingSyncState.objects.get(pk=state.pk)
     elif not next_page:
-        return complete_incomplete_automation(state)
+        resolved = resolve_incomplete_records(stale_incomplete_record_ids(state.remote_pages))
+        state.updated_count = len(resolved)
+        state.save(update_fields=["updated_count", "updated_at"])
+        return complete_incomplete_automation(state, resolved_count=len(resolved))
     else:
         state.progress = build_sync_progress(
             SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
+            live_fetch=sync_uses_live_fetch(state),
         )
         state.message = sync_progress_message(
             SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
@@ -964,7 +1554,7 @@ def advance_incomplete_sync_once(state):
     return state
 
 
-def run_processing_sync(singleton_key="default", task_id=""):
+def run_processing_sync(singleton_key=PROCESSING_SYNC_KEY_CATALOG, task_id=""):
     state = ProcessingSyncState.objects.get(singleton_key=singleton_key)
     if task_id and state.task_id and state.task_id != task_id:
         return state
@@ -976,6 +1566,41 @@ def run_processing_sync(singleton_key="default", task_id=""):
         return advance_incomplete_sync_once(state)
     if not sync_uses_live_fetch(state):
         return advance_catalog_sync_once(state, run_mode)
+
+    return run_processing_sync_until_blocked(singleton_key=singleton_key, task_id=task_id)
+
+
+def run_processing_sync_until_blocked(
+    singleton_key=PROCESSING_SYNC_KEY_CATALOG,
+    task_id="",
+):
+    state = ProcessingSyncState.objects.get(singleton_key=singleton_key)
+    if task_id and state.task_id and state.task_id != task_id:
+        return state
+    if state.status not in SYNC_ACTIVE_STATUSES:
+        return state
+
+    run_mode = sync_run_mode(state)
+    if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
+        while True:
+            state.refresh_from_db()
+            if task_id and state.task_id and state.task_id != task_id:
+                return state
+            if state.status not in SYNC_ACTIVE_STATUSES:
+                return state
+            state = advance_incomplete_sync_once(state)
+            if state.status not in SYNC_ACTIVE_STATUSES:
+                return state
+    if not sync_uses_live_fetch(state):
+        while True:
+            state.refresh_from_db()
+            if task_id and state.task_id and state.task_id != task_id:
+                return state
+            if state.status not in SYNC_ACTIVE_STATUSES:
+                return state
+            state = advance_catalog_sync_once(state, run_mode)
+            if state.status not in SYNC_ACTIVE_STATUSES:
+                return state
 
     resolver = TitleResolver(session=create_session_with_retries())
     seen_urls = set()
@@ -1043,8 +1668,9 @@ def run_processing_sync(singleton_key="default", task_id=""):
         return fail_sync(state, exc)
 
 
-def advance_sync_once():
-    state = get_sync_state()
+def advance_sync_once(sync_key=None):
+    sync_key = sync_key or active_sync_scope()
+    state = get_sync_state(sync_key)
     if state.status not in SYNC_ACTIVE_STATUSES:
         return state
     if state.task_id and not settings.CELERY_TASK_ALWAYS_EAGER:
@@ -1073,6 +1699,8 @@ def request_blocks_record_selection(request):
 
 
 def record_is_selectable(record):
+    if not can_process_record_url(record.url):
+        return False
     requests = record_request_list(record)
     duplicate_request = next(
         (
@@ -1097,6 +1725,14 @@ def enqueue_request_processing(processing_request):
     from .tasks import kickoff_book_creation_request_task
 
     processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state == BookCreationRequestState.INITIAL:
+        processing_request = _transition_request_state(
+            processing_request.id,
+            BookCreationRequestState.INITIAL,
+            BookCreationRequestState.QUEUED,
+        )
+    if processing_request.state != BookCreationRequestState.QUEUED:
+        return False
     if _request_dispatch_pending(processing_request):
         return False
 
@@ -1114,10 +1750,7 @@ def enqueue_request_processing(processing_request):
         return False
 
     processing_request = _reload_processing_request(processing_request.id)
-    if processing_request.state in {
-        BookCreationRequestState.INITIAL,
-        BookCreationRequestState.QUEUED,
-    }:
+    if processing_request.state == BookCreationRequestState.QUEUED:
         next_progress = {
             **_request_progress(processing_request),
             PROCESSING_DISPATCH_REQUESTED_AT_KEY: timezone.now().isoformat(),
@@ -1128,6 +1761,20 @@ def enqueue_request_processing(processing_request):
         processing_request.progress = next_progress
         processing_request.save(update_fields=["progress"])
     return True
+
+
+def queue_processing_request(processing_request):
+    if not can_process_record_url(processing_request.book_record.url):
+        return _fail_processing_request(
+            processing_request,
+            ValueError("Only ebanglalibrary.com book URLs are allowed"),
+        )
+    if should_enqueue_processing_work():
+        enqueue_request_processing(processing_request)
+        return _reload_processing_request(processing_request.id)
+    if should_run_processing_jobs_inline():
+        return kickoff_request_processing(processing_request.id)
+    return _reload_processing_request(processing_request.id)
 
 
 def processing_state_label(state):
@@ -1564,11 +2211,31 @@ def processing_table_payload(card, *, query="", category="", status="", offset=0
     raise KeyError(card)
 
 
-def processing_summary_payload():
-    request_counts = {
+def processing_request_counts():
+    return {
         state: BookCreationRequest.objects.filter(state=state).count()
         for state in BookCreationRequestState.values
     }
+
+
+def processing_incomplete_counts():
+    incomplete_records = (
+        BookRecord.objects.filter(resolved_from_incomplete=False)
+        .filter(Q(was_incomplete=True) | incomplete_category_query())
+        .count()
+    )
+    resolved_records = BookRecord.objects.filter(
+        was_incomplete=True,
+        resolved_from_incomplete=True,
+    ).count()
+    return {
+        "incomplete": incomplete_records,
+        "resolved": resolved_records,
+    }
+
+
+def processing_summary_payload():
+    request_counts = processing_request_counts()
     latest_failed_message = (
         BookCreationRequest.objects.filter(state=BookCreationRequestState.FAILED)
         .exclude(error_message="")
@@ -1594,15 +2261,7 @@ def processing_summary_payload():
             BookCreationRequestState.DELETED,
         )
     )
-    incomplete_records = (
-        BookRecord.objects.filter(resolved_from_incomplete=False)
-        .filter(Q(was_incomplete=True) | incomplete_category_query())
-        .count()
-    )
-    resolved_incomplete_records = BookRecord.objects.filter(
-        was_incomplete=True,
-        resolved_from_incomplete=True,
-    ).count()
+    incomplete_counts = processing_incomplete_counts()
 
     return {
         "catalog": {
@@ -1626,10 +2285,7 @@ def processing_summary_payload():
             "duplicate": request_counts[BookCreationRequestState.DUPLICATE],
             "deleted": request_counts[BookCreationRequestState.DELETED],
         },
-        "incomplete": {
-            "incomplete": incomplete_records,
-            "resolved": resolved_incomplete_records,
-        },
+        "incomplete": incomplete_counts,
         "notifications": {
             "activeRequests": active_requests,
             "createdCount": request_counts[BookCreationRequestState.CREATED],
@@ -1640,7 +2296,251 @@ def processing_summary_payload():
     }
 
 
+def processing_card_payload(card):
+    summary = processing_summary_payload()
+    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    catalog_automation = get_automation_settings(ProcessingAutomationKind.CATALOG)
+    incomplete_automation = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
+
+    cards = {
+        PROCESSING_CARD_CATALOG_OVERVIEW: {
+            "card": PROCESSING_CARD_CATALOG_OVERVIEW,
+            "summary": summary["catalog"],
+        },
+        PROCESSING_CARD_CATALOG_SYNC: {
+            "card": PROCESSING_CARD_CATALOG_SYNC,
+            "sync": serialize_sync_state(catalog_sync),
+        },
+        PROCESSING_CARD_CATALOG_AUTOMATION: {
+            "card": PROCESSING_CARD_CATALOG_AUTOMATION,
+            "sync": serialize_sync_state(catalog_sync),
+            "automation": serialize_automation_settings(catalog_automation),
+        },
+        PROCESSING_CARD_CREATE_OVERVIEW: {
+            "card": PROCESSING_CARD_CREATE_OVERVIEW,
+            "summary": summary["create"],
+        },
+        PROCESSING_CARD_ON_HOLD_OVERVIEW: {
+            "card": PROCESSING_CARD_ON_HOLD_OVERVIEW,
+            "summary": summary["onHold"],
+        },
+        PROCESSING_CARD_INCOMPLETE_OVERVIEW: {
+            "card": PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+            "summary": summary["incomplete"],
+        },
+        PROCESSING_CARD_INCOMPLETE_AUTOMATION: {
+            "card": PROCESSING_CARD_INCOMPLETE_AUTOMATION,
+            "sync": serialize_sync_state(incomplete_sync),
+            "automation": serialize_automation_settings(incomplete_automation),
+        },
+    }
+    if card not in cards:
+        raise KeyError(card)
+    return cards[card]
+
+
+def processing_incomplete_invalidation_snapshot():
+    incomplete_counts = processing_incomplete_counts()
+    incomplete_record_filter = Q(was_incomplete=True) | incomplete_category_query()
+    latest_incomplete_record_updated_at = (
+        BookRecord.objects.filter(incomplete_record_filter).aggregate(
+            latest=Max("updated_at")
+        )["latest"]
+    )
+    completed_incomplete_requests = BookCreationRequest.objects.filter(
+        state=BookCreationRequestState.CREATED,
+        book_record__was_incomplete=True,
+        book_record__resolved_from_incomplete=True,
+    )
+    latest_incomplete_completed_request = completed_incomplete_requests.aggregate(
+        latest=Max("updated_at")
+    )["latest"]
+
+    return {
+        "counts": incomplete_counts,
+        "completedRequestCount": completed_incomplete_requests.count(),
+        "latestRecordUpdatedAt": (
+            latest_incomplete_record_updated_at.isoformat()
+            if latest_incomplete_record_updated_at
+            else None
+        ),
+        "latestCompletedRequestUpdatedAt": (
+            latest_incomplete_completed_request.isoformat()
+            if latest_incomplete_completed_request
+            else None
+        ),
+    }
+
+
+def processing_invalidation_snapshot():
+    request_counts = processing_request_counts()
+    latest_record_updated_at = BookRecord.objects.aggregate(
+        latest=Max("updated_at")
+    )["latest"]
+    latest_request_updated_at = BookCreationRequest.objects.aggregate(
+        latest=Max("updated_at")
+    )["latest"]
+    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    catalog_automation = get_automation_settings(ProcessingAutomationKind.CATALOG)
+    incomplete_automation = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
+
+    return {
+        "requests": {
+            "counts": request_counts,
+            "latestUpdatedAt": (
+                latest_request_updated_at.isoformat()
+                if latest_request_updated_at
+                else None
+            ),
+        },
+        "records": {
+            "total": BookRecord.objects.count(),
+            "notCreated": BookRecord.objects.filter(
+                book_creation_state=BookCreationState.NOT_CREATED
+            ).count(),
+            "latestUpdatedAt": (
+                latest_record_updated_at.isoformat() if latest_record_updated_at else None
+            ),
+        },
+        "incompleteData": processing_incomplete_invalidation_snapshot(),
+        "catalogSync": {
+            "status": catalog_sync.status,
+            "runMode": sync_run_mode(catalog_sync),
+            "message": catalog_sync.message,
+            "pageIndex": catalog_sync.page_index,
+            "fetchedCount": catalog_sync.fetched_count,
+            "updatedCount": catalog_sync.updated_count,
+            "updatedAt": catalog_sync.updated_at.isoformat(),
+        },
+        "incompleteSync": {
+            "status": incomplete_sync.status,
+            "runMode": sync_run_mode(incomplete_sync),
+            "message": incomplete_sync.message,
+            "pageIndex": incomplete_sync.page_index,
+            "fetchedCount": incomplete_sync.fetched_count,
+            "updatedCount": incomplete_sync.updated_count,
+            "updatedAt": incomplete_sync.updated_at.isoformat(),
+        },
+        "catalogAutomation": {
+            "enabled": catalog_automation.enabled,
+            "interval": catalog_automation.interval,
+            "time": catalog_automation.time.strftime("%H:%M"),
+            "saved": catalog_automation.saved,
+            "lastRunAt": (
+                catalog_automation.last_run_at.isoformat()
+                if catalog_automation.last_run_at
+                else None
+            ),
+            "statusMessage": catalog_automation.status_message,
+            "updatedAt": catalog_automation.updated_at.isoformat(),
+        },
+        "incompleteAutomation": {
+            "enabled": incomplete_automation.enabled,
+            "interval": incomplete_automation.interval,
+            "time": incomplete_automation.time.strftime("%H:%M"),
+            "saved": incomplete_automation.saved,
+            "lastRunAt": (
+                incomplete_automation.last_run_at.isoformat()
+                if incomplete_automation.last_run_at
+                else None
+            ),
+            "statusMessage": incomplete_automation.status_message,
+            "updatedAt": incomplete_automation.updated_at.isoformat(),
+        },
+    }
+
+
+def processing_invalidation_targets(previous_snapshot, next_snapshot):
+    targets = []
+    if previous_snapshot.get("requests") != next_snapshot.get("requests"):
+        targets.extend(PROCESSING_REQUEST_DATA_TARGETS)
+    if previous_snapshot.get("records") != next_snapshot.get("records"):
+        targets.extend(PROCESSING_RECORD_DATA_TARGETS)
+    if previous_snapshot.get("incompleteData") != next_snapshot.get("incompleteData"):
+        targets.extend(PROCESSING_INCOMPLETE_DATA_TARGETS)
+    if previous_snapshot.get("catalogSync") != next_snapshot.get("catalogSync"):
+        targets.extend(
+            [
+                PROCESSING_CARD_CATALOG_SYNC,
+                PROCESSING_CARD_CATALOG_AUTOMATION,
+            ]
+        )
+    if previous_snapshot.get("catalogAutomation") != next_snapshot.get(
+        "catalogAutomation"
+    ):
+        targets.append(PROCESSING_CARD_CATALOG_AUTOMATION)
+    if previous_snapshot.get("incompleteSync") != next_snapshot.get(
+        "incompleteSync"
+    ):
+        targets.append(PROCESSING_CARD_INCOMPLETE_AUTOMATION)
+    if previous_snapshot.get("incompleteAutomation") != next_snapshot.get(
+        "incompleteAutomation"
+    ):
+        targets.append(PROCESSING_CARD_INCOMPLETE_AUTOMATION)
+    return list(dict.fromkeys(targets))
+
+
+def processing_has_active_work():
+    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    has_active_sync = any(
+        sync_state.status in SYNC_ACTIVE_STATUSES
+        for sync_state in (catalog_sync, incomplete_sync)
+    )
+    has_active_requests = BookCreationRequest.objects.filter(
+        state__in=ACTIVE_STATES
+    ).exists()
+    return has_active_sync or has_active_requests
+
+
+def advance_processing_push_tick():
+    if not cache.add(
+        PROCESSING_PUSH_TICK_LOCK_KEY,
+        timezone.now().isoformat(),
+        timeout=PROCESSING_PUSH_TICK_LOCK_SECONDS,
+    ):
+        return processing_has_active_work()
+
+    mark_stale_processing_requests()
+    refresh_processing_state()
+
+    active_sync_scopes = [
+        scope
+        for scope, sync_state in (
+            (PROCESSING_SYNC_KEY_CATALOG, get_sync_state(PROCESSING_SYNC_KEY_CATALOG)),
+            (
+                PROCESSING_SYNC_KEY_INCOMPLETE,
+                get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE),
+            ),
+        )
+        if sync_state.status in SYNC_ACTIVE_STATUSES
+    ]
+    has_active_requests = BookCreationRequest.objects.filter(
+        state__in=ACTIVE_STATES
+    ).exists()
+
+    if active_sync_scopes:
+        for scope in active_sync_scopes:
+            advance_sync_once(scope)
+    elif has_active_requests:
+        advance_pipeline_once()
+
+    return bool(active_sync_scopes or has_active_requests)
+
+
 def create_request_for_record(record, state=BookCreationRequestState.INITIAL, origin=SubmissionOrigin.CURATION):
+    if (
+        state == BookCreationRequestState.INITIAL
+        and not can_process_record_url(record.url)
+    ):
+        logger.warning(
+            "Skipping request creation for record %s because its URL is unsupported: %s",
+            record.id,
+            record.url,
+        )
+        return None
     processing_request = BookCreationRequest.objects.create(
         id=next_request_id(request_id_for_record(record)),
         book_record=record,
@@ -1648,8 +2548,8 @@ def create_request_for_record(record, state=BookCreationRequestState.INITIAL, or
         origin=origin,
     )
     sync_record_state(record)
-    if state == BookCreationRequestState.INITIAL and should_enqueue_processing_work():
-        enqueue_request_processing(processing_request)
+    if state == BookCreationRequestState.INITIAL:
+        processing_request = queue_processing_request(processing_request)
     return processing_request
 
 
@@ -1658,7 +2558,9 @@ def create_requests_for_record_ids(record_ids, *, actor=None, origin=SubmissionO
     for record in BookRecord.objects.filter(pk__in=record_ids).order_by("name", "id"):
         if not record_is_selectable(record):
             continue
-        created.append(create_request_for_record(record, origin=origin))
+        processing_request = create_request_for_record(record, origin=origin)
+        if processing_request is not None:
+            created.append(processing_request)
     return created
 
 
@@ -1679,18 +2581,50 @@ def update_automation_settings(kind, payload):
     return automation_settings
 
 
+def run_manual_catalog_sync(remote_pages=None):
+    sync_state = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    if sync_state.status == ProcessingSyncStatus.PAUSED:
+        return resume_sync(
+            PROCESSING_SYNC_KEY_CATALOG,
+            run_mode=SYNC_RUN_MODE_MANUAL,
+        )
+    return start_sync(
+        remote_pages or None,
+        run_mode=SYNC_RUN_MODE_MANUAL,
+        sync_key=PROCESSING_SYNC_KEY_CATALOG,
+    )
+
+
 def run_catalog_automation():
-    sync_state = get_sync_state()
-    remote_pages = catalog_remote_pages(sync_state.remote_pages)
+    sync_state = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    if sync_state.status == ProcessingSyncStatus.PAUSED:
+        return resume_sync(
+            PROCESSING_SYNC_KEY_CATALOG,
+            run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
+        )
+    remote_pages = []
+    if allow_processing_remote_page_payloads():
+        remote_pages = catalog_remote_pages(sync_state.remote_pages)
     if settings.CELERY_TASK_ALWAYS_EAGER and not remote_pages:
         remote_pages = source_catalog_remote_pages()
-    return start_sync(remote_pages, run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION)
+    return start_sync(
+        remote_pages or None,
+        run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
+        sync_key=PROCESSING_SYNC_KEY_CATALOG,
+    )
 
 
 def run_incomplete_automation():
+    sync_state = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    if sync_state.status == ProcessingSyncStatus.PAUSED:
+        return resume_sync(
+            PROCESSING_SYNC_KEY_INCOMPLETE,
+            run_mode=SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+        )
     return start_sync(
-        incomplete_automation_pages(),
+        None,
         run_mode=SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+        sync_key=PROCESSING_SYNC_KEY_INCOMPLETE,
     )
 
 
@@ -2055,6 +2989,11 @@ def _run_processing_request(processing_request):
                 "Processing request %s failed.",
                 processing_request.id,
             )
+            if (
+                isinstance(exc, ValueError)
+                and "ebanglalibrary.com" in str(exc)
+            ):
+                break
             reloaded = _reload_processing_request(processing_request.id)
             if reloaded.state in {
                 BookCreationRequestState.DELETED,
@@ -2126,8 +3065,7 @@ def mark_stale_processing_requests():
         processing_request.save(update_fields=["state", "error_message", "updated_at"])
         sync_record_state(processing_request.book_record)
         recovered.append(processing_request)
-        if should_enqueue_processing_work():
-            enqueue_request_processing(processing_request)
+        queue_processing_request(processing_request)
     return recovered
 
 
@@ -2165,8 +3103,7 @@ def apply_resume_action(processing_request, *, actor=None):
     processing_request.error_message = ""
     processing_request.save(update_fields=["state", "is_resumed", "error_message", "updated_at"])
     sync_record_state(processing_request.book_record)
-    if should_enqueue_processing_work():
-        enqueue_request_processing(processing_request)
+    queue_processing_request(processing_request)
     return processing_request
 
 
@@ -2191,8 +3128,7 @@ def apply_retry_action(processing_request, *, actor=None):
         record.duplicate_of_record = None
         record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
     sync_record_state(record)
-    if should_enqueue_processing_work():
-        enqueue_request_processing(processing_request)
+    queue_processing_request(processing_request)
     return processing_request
 
 
@@ -2227,8 +3163,7 @@ def apply_new_action(processing_request, *, actor=None):
         update_fields=["linked_book", "is_duplicate", "duplicate_of_record", "updated_at"]
     )
     sync_record_state(record)
-    if should_enqueue_processing_work():
-        enqueue_request_processing(processing_request)
+    queue_processing_request(processing_request)
     return processing_request
 
 
@@ -2288,8 +3223,7 @@ def apply_recreate_action(processing_request, *, actor=None):
         record.duplicate_of_record = None
         record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
     sync_record_state(record)
-    if should_enqueue_processing_work():
-        enqueue_request_processing(processing_request)
+    queue_processing_request(processing_request)
     return processing_request
 
 
@@ -2310,8 +3244,16 @@ def advance_pipeline_once():
                 BookCreationRequestState.PROCESSING,
             )
             advanced += 1
-        elif not _request_dispatch_pending(queued_request):
-            enqueue_request_processing(queued_request)
+        elif should_enqueue_processing_work():
+            if not _request_dispatch_pending(queued_request):
+                enqueue_request_processing(queued_request)
+                advanced += 1
+        else:
+            _transition_request_state(
+                queued_request.id,
+                BookCreationRequestState.QUEUED,
+                BookCreationRequestState.PROCESSING,
+            )
             advanced += 1
 
     processing_request = (
@@ -2319,7 +3261,10 @@ def advance_pipeline_once():
         .order_by("created_at", "id")
         .first()
     )
-    if processing_request and should_run_processing_jobs_inline():
+    if processing_request and (
+        should_run_processing_jobs_inline()
+        or should_manually_advance_processing_work()
+    ):
         _run_processing_request(processing_request)
         advanced += 1
 

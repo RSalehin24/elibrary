@@ -1,11 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { apiFetch } from "../api/client";
 import CatalogToolbar from "../components/CatalogToolbar";
-import PageLoader from "../components/PageLoader";
-import PropertyTableControls, {
-  useClientPagination,
-} from "../components/PropertyTableControls";
+import PropertyTable from "../components/PropertyTable";
+import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { formatBookDate } from "../utils/bookPresentation";
 import {
   cleanQueryParams,
@@ -51,53 +48,50 @@ const filterFields = [
   },
 ];
 
+const categoryToolbarFields = filterFields.filter(
+  (field) => field.key !== "sort",
+);
+const categorySortOptions =
+  filterFields.find((field) => field.key === "sort")?.options || [];
+
 export default function CategoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filters, setFilters] = useState(() =>
-    filtersFromSearchParams(defaultFilters, searchParams),
+  const appliedFilters = useMemo(
+    () => filtersFromSearchParams(defaultFilters, searchParams),
+    [searchParams],
   );
+  const [filters, setFilters] = useState(appliedFilters);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const pagination = useClientPagination(categories);
+  const {
+    entries: categories,
+    totalCount,
+    hasMore,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error,
+    tableShellRef,
+    observeLoadTrigger,
+  } = useInfiniteCatalogBooks({
+    endpoint: "/catalog/categories/",
+    filters: appliedFilters,
+  });
 
   useEffect(() => {
-    const nextFilters = filtersFromSearchParams(defaultFilters, searchParams);
-    setFilters(nextFilters);
-
-    async function loadCategories() {
-      try {
-        setLoading(true);
-        const payload = await apiFetch(
-          `/catalog/categories/${toQueryString(nextFilters)}`,
-        );
-        setCategories(payload);
-        setError("");
-      } catch (nextError) {
-        setError(nextError.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadCategories();
-  }, [searchParams.toString()]);
+    setFilters(appliedFilters);
+  }, [appliedFilters]);
 
   function applyFilters(event) {
     event.preventDefault();
-    pagination.resetPage();
     setSearchParams(cleanQueryParams(filters));
   }
 
   function resetFilters() {
-    pagination.resetPage();
     setFilters(defaultFilters);
     setSearchParams(cleanQueryParams(defaultFilters));
   }
 
   function clearSearch(nextFilters) {
-    pagination.resetPage();
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
   }
@@ -110,29 +104,9 @@ export default function CategoryPage() {
     return `/library${toQueryString(params)}`;
   }
 
-  const resultCount = error || loading ? "" : `${categories.length}`;
-  const sortOptions =
-    filterFields.find((field) => field.key === "sort")?.options || [];
-  const tableControls = (
-    <PropertyTableControls
-      sortValue={filters.sort}
-      sortOptions={sortOptions}
-      onSortChange={(nextSort) => {
-        const nextFilters = { ...filters, sort: nextSort };
-        pagination.resetPage();
-        setFilters(nextFilters);
-        setSearchParams(cleanQueryParams(nextFilters));
-      }}
-      rowsPerPage={pagination.rowsPerPage}
-      onRowsPerPageChange={pagination.setRowsPerPage}
-      page={pagination.page}
-      pageCount={pagination.pageCount}
-      hasPrevious={pagination.hasPrevious}
-      hasNext={pagination.hasNext}
-      onPageChange={pagination.setPage}
-      disabled={loading}
-    />
-  );
+  const resultCount =
+    error && !categories.length ? "" : `${totalCount}`;
+  const showErrorState = Boolean(error && !categories.length && !initialLoading);
 
   return (
     <div className="catalog-page page-stack">
@@ -142,7 +116,7 @@ export default function CategoryPage() {
         <CatalogToolbar
           filters={filters}
           setFilters={setFilters}
-          fields={filterFields}
+          fields={categoryToolbarFields}
           defaultFilters={defaultFilters}
           filtersExpanded={filtersExpanded}
           setFiltersExpanded={setFiltersExpanded}
@@ -150,68 +124,82 @@ export default function CategoryPage() {
           onReset={resetFilters}
           searchPlaceholder="Search categories or codes..."
           resultCount={resultCount}
+          resultCountLoading={initialLoading || refreshing}
+          sortValue={filters.sort}
+          sortOptions={categorySortOptions}
+          onSortChange={(nextSort) => {
+            const nextFilters = { ...filters, sort: nextSort };
+            setFilters(nextFilters);
+            setSearchParams(cleanQueryParams(nextFilters));
+          }}
+          sortAriaLabel="Sort categories"
           searchRowCompact
           searchRowClassName="catalog-search-row--property-compact"
           onSearchClear={clearSearch}
           inline
+          bare
+          buttonsLoading={initialLoading || refreshing}
+          buttonsDisabled={initialLoading || loadingMore || refreshing}
         />
-
-        <div className="catalog-page-controls-row">{tableControls}</div>
       </header>
 
-      {loading ? (
-        <PageLoader
-          label="Loading categories"
-          detail="Fetching category counts and related book totals."
-          variant="table"
-        />
-      ) : error ? (
+      {showErrorState ? (
         <div className="page-state page-state-error">{error}</div>
-      ) : categories.length ? (
-        <div className="catalog-table-shell">
-          <table className="catalog-table property-table">
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Name</th>
-                <th>Books</th>
-                <th>Digital</th>
-                <th>Manual</th>
-                <th>Created</th>
-                <th>Open</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagination.items.map((category) => (
-                <tr key={category.id}>
-                  <td className="table-code-cell">{category.catalog_code}</td>
-                  <td>
-                    <Link
-                      to={buildBooksLink(category.catalog_code)}
-                      className="table-title-link"
-                    >
-                      {category.name}
-                    </Link>
-                  </td>
-                  <td>{category.book_count}</td>
-                  <td>{category.digital_book_count}</td>
-                  <td>{category.manual_book_count}</td>
-                  <td>{formatBookDate(category.created_at)}</td>
-                  <td className="table-action-cell">
-                    <Link
-                      to={buildBooksLink(category.catalog_code)}
-                      className="ghost-button table-row-action"
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       ) : (
-        <div className="page-state">No categories found.</div>
+        <PropertyTable
+          headers={[
+            "Code",
+            "Name",
+            "Books",
+            "Digital",
+            "Manual",
+            "Created",
+            "Open",
+          ]}
+          columnKinds={[
+            "code",
+            "title",
+            "stat",
+            "stat",
+            "stat",
+            "date",
+            "action",
+          ]}
+          items={categories}
+          shellRef={tableShellRef}
+          hasMore={hasMore}
+          observeLoadTrigger={observeLoadTrigger}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          refreshing={refreshing}
+          shellClassName="catalog-table-shell--incremental"
+          renderRow={(category) => (
+            <tr key={category.id}>
+              <td className="table-code-cell">{category.catalog_code}</td>
+              <td>
+                <Link
+                  to={buildBooksLink(category.catalog_code)}
+                  className="table-title-link"
+                >
+                  {category.name}
+                </Link>
+              </td>
+              <td>{category.book_count}</td>
+              <td>{category.digital_book_count}</td>
+              <td>{category.manual_book_count}</td>
+              <td>{formatBookDate(category.created_at)}</td>
+              <td className="table-action-cell">
+                <Link
+                  to={buildBooksLink(category.catalog_code)}
+                  className="ghost-button table-row-action"
+                >
+                  Open
+                </Link>
+              </td>
+            </tr>
+          )}
+          emptyLabel="No categories found."
+        />
       )}
     </div>
   );

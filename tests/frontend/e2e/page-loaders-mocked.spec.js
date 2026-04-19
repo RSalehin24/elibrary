@@ -37,37 +37,44 @@ function unauthenticatedSessionPayload() {
 test.describe("Page Loader Skeletons", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test("catalog pages show a table skeleton while list data is loading", async ({
-    page,
-  }) => {
-    const categoriesRequest = createDeferred();
+  test(
+    "catalog property pages keep the header visible and show an in-table skeleton while loading",
+    async ({ page }) => {
+      const categoriesRequest = createDeferred();
 
-    await page.route("**/api/auth/session/", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(authenticatedSessionPayload()),
+      await page.route("**/api/auth/session/", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(authenticatedSessionPayload()),
+        });
       });
-    });
-    await page.route("**/api/csrf/", async (route) => {
-      await route.fulfill({ status: 204, body: "" });
-    });
-    await page.route("**/api/catalog/categories/**", async (route) => {
-      await categoriesRequest.promise;
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify([]),
+      await page.route("**/api/csrf/", async (route) => {
+        await route.fulfill({ status: 204, body: "" });
       });
-    });
+      await page.route("**/api/catalog/categories/**", async (route) => {
+        await categoriesRequest.promise;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([]),
+        });
+      });
 
-    await page.goto("/categories");
-    await expect(page.locator(".page-loader-variant-table")).toBeVisible();
+      await page.goto("/categories");
+      await expect(
+        page.getByRole("heading", { name: "Categories" }),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("property-table-table-skeleton"),
+      ).toBeVisible();
 
-    categoriesRequest.release();
-    await expect(page.getByRole("heading", { name: "Categories" })).toBeVisible();
-    await expect(page.locator(".page-loader-variant-table")).toHaveCount(0);
-  });
+      categoriesRequest.release();
+      await expect(
+        page.getByTestId("property-table-table-skeleton"),
+      ).toHaveCount(0);
+    },
+  );
 
   test("admin pages show a management skeleton while admin data is loading", async ({
     page,

@@ -8,6 +8,7 @@ from apps.common.text import normalize_catalog_text
 
 from .shared import (
     CONTRIBUTOR_ROLE_BY_PAGE,
+    OptionalPaginationListMixin,
     apply_created_at_filters,
     normalized_text_search_clause,
     requested_record_type,
@@ -36,9 +37,11 @@ def annotate_reference_counts(queryset, relation, *, record_type, contributor_ro
     return queryset.annotate(book_count=Count(relation, filter=count_filter(BookRecordType.DIGITAL), distinct=True))
 
 
-class CategoryListView(generics.ListAPIView):
+class CategoryListView(OptionalPaginationListMixin, generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = CategoryListSerializer
+    pagination_default_limit = 60
+    pagination_max_limit = 100
 
     def get_queryset(self):
         queryset = annotate_reference_counts(Category.objects.all(), "books", record_type=requested_record_type(self.request, BookRecordType.DIGITAL))
@@ -58,9 +61,11 @@ class CategoryListView(generics.ListAPIView):
         return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "name")
 
 
-class SeriesListView(generics.ListAPIView):
+class SeriesListView(OptionalPaginationListMixin, generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = SeriesListSerializer
+    pagination_default_limit = 60
+    pagination_max_limit = 100
 
     def get_queryset(self):
         queryset = annotate_reference_counts(Series.objects.all(), "books", record_type=requested_record_type(self.request, BookRecordType.DIGITAL))
@@ -79,10 +84,12 @@ class SeriesListView(generics.ListAPIView):
         return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "name")
 
 
-class ContributorListView(generics.ListAPIView):
+class ContributorListView(OptionalPaginationListMixin, generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ContributorListSerializer
     role_slug = "writers"
+    pagination_default_limit = 60
+    pagination_max_limit = 100
 
     def get_contributor_role(self):
         role_slug = self.kwargs.get("role") or getattr(self, "role_slug", "writers")

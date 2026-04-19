@@ -68,9 +68,14 @@ export default function PropertyTableControls({
   disabled = false,
   leadingContent = null,
 }) {
+  const hasSort = Boolean(sortOptions?.length);
   const controls = (
-    <div className="catalog-toolbar-secondary property-table-controls">
-      {sortOptions?.length ? (
+    <div
+      className={`catalog-toolbar-secondary property-table-controls${
+        hasSort ? "" : " property-table-controls--without-sort"
+      }`}
+    >
+      {hasSort ? (
         <label className="catalog-toolbar-field catalog-toolbar-field-sort">
           <span className="fact-label catalog-toolbar-inline-label">Sort</span>
           <select

@@ -8,7 +8,7 @@ import {
 import { apiFetch } from "../api/client";
 import {
   CATALOG_TABLE_BATCH_SIZE,
-  normalizeBookPayload,
+  normalizeCatalogListPayload,
 } from "../utils/catalogBooks";
 import { toQueryString } from "../utils/query";
 
@@ -22,7 +22,7 @@ export function useInfiniteCatalogBooks({
     return rest;
   }, [filters]);
   const [tableState, setTableState] = useState({
-    books: [],
+    entries: [],
     totalCount: 0,
     currentPage: 0,
     hasMore: false,
@@ -57,7 +57,8 @@ export function useInfiniteCatalogBooks({
         loadingMore: append,
         refreshing: !append && (preserveRows || current.loadedOnce),
         error: "",
-        books: append || preserveRows || current.loadedOnce ? current.books : [],
+        entries:
+          append || preserveRows || current.loadedOnce ? current.entries : [],
         totalCount:
           append || preserveRows || current.loadedOnce ? current.totalCount : 0,
       }));
@@ -74,12 +75,12 @@ export function useInfiniteCatalogBooks({
           return null;
         }
 
-        const normalized = normalizeBookPayload(payload);
+        const normalized = normalizeCatalogListPayload(payload);
         const nextPage = Number(normalized.pagination.page) || page;
 
         setTableState((current) => ({
-          books: append
-            ? [...current.books, ...normalized.entries]
+          entries: append
+            ? [...current.entries, ...normalized.entries]
             : normalized.entries,
           totalCount: Number(normalized.pagination.total_count) || 0,
           currentPage: nextPage,
@@ -99,14 +100,15 @@ export function useInfiniteCatalogBooks({
 
         setTableState((current) => ({
           ...current,
-          books: append || preserveRows || current.loadedOnce ? current.books : [],
+          entries:
+            append || preserveRows || current.loadedOnce ? current.entries : [],
           totalCount:
             append || preserveRows || current.loadedOnce ? current.totalCount : 0,
           loadedOnce: true,
           initialLoading: false,
           loadingMore: false,
           refreshing: false,
-          error: nextError.message || "Unable to load books.",
+          error: nextError.message || "Unable to load records.",
         }));
 
         return null;
@@ -133,6 +135,36 @@ export function useInfiniteCatalogBooks({
       append: true,
     });
   }, [enabled, loadPage]);
+
+  const reload = useCallback(
+    async ({
+      preserveRows = tableStateRef.current.entries.length > 0,
+      limit = CATALOG_TABLE_BATCH_SIZE,
+    } = {}) =>
+      loadPage({
+        page: 1,
+        limit,
+        append: false,
+        preserveRows,
+      }),
+    [loadPage],
+  );
+
+  const prependEntry = useCallback((entry) => {
+    setTableState((current) => {
+      const alreadyPresent = current.entries.some(
+        (currentEntry) => currentEntry.id === entry.id,
+      );
+      return {
+        ...current,
+        entries: [
+          entry,
+          ...current.entries.filter((currentEntry) => currentEntry.id !== entry.id),
+        ],
+        totalCount: alreadyPresent ? current.totalCount : current.totalCount + 1,
+      };
+    });
+  }, []);
 
   const observeLoadTrigger = useCallback(
     (node) => {
@@ -175,7 +207,7 @@ export function useInfiniteCatalogBooks({
       return undefined;
     }
 
-    const hasLoadedRows = tableStateRef.current.books.length > 0;
+    const hasLoadedRows = tableStateRef.current.entries.length > 0;
     loadPage({
       page: 1,
       limit: CATALOG_TABLE_BATCH_SIZE,
@@ -196,7 +228,11 @@ export function useInfiniteCatalogBooks({
 
   return {
     ...tableState,
+    entries: tableState.entries,
+    books: tableState.entries,
     loadMore,
+    reload,
+    prependEntry,
     tableShellRef,
     observeLoadTrigger,
   };

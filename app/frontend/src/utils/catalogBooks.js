@@ -10,7 +10,7 @@ const defaultPagination = {
   has_next: false,
 };
 
-export function normalizeBookPayload(payload) {
+export function normalizeCatalogListPayload(payload) {
   if (Array.isArray(payload)) {
     return {
       entries: payload,
@@ -29,3 +29,5 @@ export function normalizeBookPayload(payload) {
     },
   };
 }
+
+export const normalizeBookPayload = normalizeCatalogListPayload;

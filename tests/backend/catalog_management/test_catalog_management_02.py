@@ -132,6 +132,38 @@ def test_reference_listing_search_supports_normalized_bangla_queries(client):
 
 
 @pytest.mark.django_db
+def test_reference_listing_supports_optional_pagination_payload(client):
+    user = User.objects.create_user(
+        email="reference-pagination-reader@example.com",
+        password="strong-password-123",
+    )
+    client.force_login(user)
+
+    for index in range(3):
+        category = get_or_create_category(f"Pagination Category {index}")
+        book = Book.objects.create(
+            title=f"Pagination Category Book {index}",
+            state="ready",
+            review_state="approved",
+        )
+        replace_book_relations(book, category_names=[category.name])
+
+    response = client.get("/api/catalog/categories/", {"page": 2, "limit": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["entries"]) == 1
+    assert payload["pagination"] == {
+        "page": 2,
+        "limit": 2,
+        "total_count": 3,
+        "page_count": 2,
+        "has_previous": True,
+        "has_next": False,
+    }
+
+
+@pytest.mark.django_db
 def test_manual_book_creation_uses_manual_listing_and_stays_hidden_from_default_book_page(client):
     user = User.objects.create_user(email="manual-reader@example.com", password="strong-password-123")
     client.force_login(user)
@@ -191,6 +223,43 @@ def test_manual_book_creation_uses_manual_listing_and_stays_hidden_from_default_
     assert payload["id"] in {entry["id"] for entry in manual_response.json()}
     assert payload["id"] not in {entry["id"] for entry in default_book_page.json()}
     assert payload["id"] in {entry["id"] for entry in all_books_response.json()}
+
+
+@pytest.mark.django_db
+def test_manual_book_listing_supports_optional_pagination_payload(client):
+    user = User.objects.create_user(
+        email="manual-pagination-reader@example.com",
+        password="strong-password-123",
+    )
+    client.force_login(user)
+
+    for index in range(3):
+        book = Book.objects.create(
+            title=f"Manual Pagination Book {index}",
+            state="ready",
+            review_state="approved",
+            record_type="manual",
+        )
+        replace_book_relations(
+            book,
+            contributors=[{"name": f"Manual Pagination Writer {index}", "role": "author"}],
+            category_names=[f"Manual Pagination Category {index}"],
+        )
+
+    response = client.get("/api/catalog/manual-books/", {"page": 2, "limit": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["entries"]) == 1
+    assert all(entry["record_type"] == "manual" for entry in payload["entries"])
+    assert payload["pagination"] == {
+        "page": 2,
+        "limit": 2,
+        "total_count": 3,
+        "page_count": 2,
+        "has_previous": True,
+        "has_next": False,
+    }
 
 
 @pytest.mark.django_db

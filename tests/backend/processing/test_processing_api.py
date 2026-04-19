@@ -18,7 +18,11 @@ from apps.processing.models import (
     ProcessingAutomationSettings,
     ProcessingSyncStatus,
 )
-from apps.processing.services import dispatch_sync_task, get_sync_state
+from apps.processing.services import (
+    PROCESSING_SYNC_KEY_INCOMPLETE,
+    dispatch_sync_task,
+    get_sync_state,
+)
 from apps.processing.tasks import (
     kickoff_book_creation_request_task,
     run_processing_sync_task,
@@ -48,6 +52,133 @@ def record_payload(record_id, **overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def test_parse_incomplete_catalog_page_reads_entry_title_links():
+    soup = processing_services.BeautifulSoup(
+        """
+        <html>
+          <body>
+            <article>
+              <h2 class="entry-title">
+                <a href="/books/sample-incomplete-book/">Sample Incomplete Book - Sample Author</a>
+              </h2>
+            </article>
+            <article>
+              <h2 class="entry-title">
+                <a href="/books/second-incomplete-book/">Second Incomplete Book</a>
+              </h2>
+            </article>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    entries = processing_services.parse_incomplete_catalog_page(soup)
+
+    assert [entry["source_url"] for entry in entries] == [
+        "https://www.ebanglalibrary.com/books/sample-incomplete-book/",
+        "https://www.ebanglalibrary.com/books/second-incomplete-book/",
+    ]
+    assert entries[0]["title"] == "Sample Incomplete Book"
+    assert entries[0]["author_line"] == "Sample Author"
+    assert entries[0]["raw_data"]["metadata_source"] == "incomplete_archive_page"
+
+
+def test_fetch_live_incomplete_page_treats_paginated_404_as_end_of_archive(monkeypatch):
+    class FakeHttpError(Exception):
+        def __init__(self, response):
+            super().__init__("404 not found")
+            self.response = response
+
+    class FakeResponse:
+        status_code = 404
+        text = ""
+
+        def raise_for_status(self):
+            raise FakeHttpError(self)
+
+    monkeypatch.setattr(
+        "apps.processing.services.get_with_host_fallback",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+
+    page = processing_services.fetch_live_incomplete_page(
+        SimpleNamespace(session=object()),
+        5,
+    )
+
+    assert page == []
+
+
+@pytest.mark.django_db
+def test_processing_invalidation_targets_ignore_incomplete_cards_for_unrelated_request_updates():
+    record = BookRecord.objects.create(
+        id="plain-record",
+        name="Plain Record",
+        url="https://example.test/books/plain-record",
+        category="Novel",
+        writer="Writer One",
+        publisher="Example Press",
+    )
+    request = BookCreationRequest.objects.create(
+        id="plain-request",
+        book_record=record,
+        state="initial",
+    )
+    previous_snapshot = processing_services.processing_invalidation_snapshot()
+
+    request.state = "queued"
+    request.save(update_fields=["state", "updated_at"])
+    processing_services.sync_record_state(record)
+    next_snapshot = processing_services.processing_invalidation_snapshot()
+
+    targets = processing_services.processing_invalidation_targets(
+        previous_snapshot,
+        next_snapshot,
+    )
+
+    assert "create-queue" in targets
+    assert processing_services.PROCESSING_CARD_INCOMPLETE_OVERVIEW not in targets
+    assert "incomplete-records" not in targets
+    assert "incomplete-completed" not in targets
+
+
+@pytest.mark.django_db
+def test_processing_invalidation_targets_include_incomplete_cards_for_incomplete_updates():
+    record = BookRecord.objects.create(
+        id="incomplete-target-record",
+        name="Incomplete Target Record",
+        url="https://example.test/books/incomplete-target-record",
+        category="অসম্পূর্ণ বই",
+        writer="Writer One",
+        publisher="Example Press",
+        was_incomplete=True,
+        resolved_from_incomplete=False,
+        will_resolve_to_category="Novel",
+    )
+    previous_snapshot = processing_services.processing_invalidation_snapshot()
+
+    record.category = "Novel"
+    record.resolved_from_incomplete = True
+    record.save(update_fields=["category", "resolved_from_incomplete", "updated_at"])
+    BookCreationRequest.objects.create(
+        id="incomplete-target-request",
+        book_record=record,
+        state="created",
+    )
+    processing_services.sync_record_state(record)
+    next_snapshot = processing_services.processing_invalidation_snapshot()
+
+    targets = processing_services.processing_invalidation_targets(
+        previous_snapshot,
+        next_snapshot,
+    )
+
+    assert processing_services.PROCESSING_CARD_INCOMPLETE_OVERVIEW in targets
+    assert "incomplete-records" in targets
+    assert "incomplete-completed" in targets
 
 
 @pytest.mark.django_db
@@ -193,6 +324,92 @@ def test_processing_sync_uses_persisted_source_catalog_when_no_remote_pages(clie
 
 
 @pytest.mark.django_db
+def test_processing_stream_advances_sync_and_emits_invalidation(client, monkeypatch):
+    login_processing_admin(client)
+    processing_services.cache.delete(processing_services.PROCESSING_PUSH_TICK_LOCK_KEY)
+
+    start_response = client.post(
+        "/api/processing/sync/start/",
+        {
+            "remotePages": [
+                [record_payload("stream-sync-record")],
+                [],
+            ]
+        },
+        content_type="application/json",
+    )
+
+    assert start_response.status_code == 200
+
+    monkeypatch.setattr("apps.processing.views.time.sleep", lambda _seconds: None)
+
+    response = client.get("/api/processing/stream/")
+
+    assert response.status_code == 200
+    stream = iter(response.streaming_content)
+    assert next(stream).decode() == "event: connected\ndata: {}\n\n"
+
+    invalidation = next(stream).decode()
+    assert "event: invalidation" in invalidation
+    assert '"catalog-sync"' in invalidation
+    assert '"catalog-records"' in invalidation
+
+    sync_state = get_sync_state()
+    assert sync_state.status == "idle"
+    assert BookRecord.objects.filter(pk="stream-sync-record").exists()
+
+
+@pytest.mark.django_db
+def test_processing_push_tick_advances_processing_pipeline_without_client_polling(
+    monkeypatch,
+):
+    record = BookRecord.objects.create(
+        id="push-pipeline-record",
+        name="Push Pipeline Record",
+        url="https://example.test/books/push-pipeline-record",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+        book_creation_state="processing",
+    )
+    processing_request = BookCreationRequest.objects.create(
+        id="push-pipeline-request",
+        book_record=record,
+        state="processing",
+    )
+
+    def fake_run_processing_request(request):
+        request.state = "created"
+        request.error_message = ""
+        request.save(update_fields=["state", "error_message", "updated_at"])
+        processing_services.sync_record_state(request.book_record)
+        return request
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_run_processing_jobs_inline",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.processing_workers_available",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services._run_processing_request",
+        fake_run_processing_request,
+    )
+
+    processing_services.cache.delete(processing_services.PROCESSING_PUSH_TICK_LOCK_KEY)
+
+    has_active_work = processing_services.advance_processing_push_tick()
+
+    assert has_active_work is True
+    processing_request.refresh_from_db()
+    record.refresh_from_db()
+    assert processing_request.state == "created"
+    assert record.book_creation_state == "created"
+
+
+@pytest.mark.django_db
 def test_processing_state_returns_weekly_automation_defaults_without_placeholder(client):
     login_processing_admin(client)
 
@@ -201,10 +418,10 @@ def test_processing_state_returns_weekly_automation_defaults_without_placeholder
     assert response.status_code == 200
     payload = response.json()
     assert payload["automation"]["catalog"]["interval"] == "weekly"
-    assert payload["automation"]["catalog"]["time"] == "03:00:00"
+    assert payload["automation"]["catalog"]["time"] == "03:00"
     assert payload["automation"]["catalog"]["statusMessage"] == ""
     assert payload["automation"]["incomplete"]["interval"] == "weekly"
-    assert payload["automation"]["incomplete"]["time"] == "03:00:00"
+    assert payload["automation"]["incomplete"]["time"] == "03:00"
     assert payload["automation"]["incomplete"]["statusMessage"] == ""
 
 
@@ -264,10 +481,10 @@ def test_processing_state_normalizes_legacy_automation_defaults(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["automation"]["catalog"]["interval"] == "weekly"
-    assert payload["automation"]["catalog"]["time"] == "03:00:00"
+    assert payload["automation"]["catalog"]["time"] == "03:00"
     assert payload["automation"]["catalog"]["statusMessage"] == ""
     assert payload["automation"]["incomplete"]["interval"] == "weekly"
-    assert payload["automation"]["incomplete"]["time"] == "03:00:00"
+    assert payload["automation"]["incomplete"]["time"] == "03:00"
     assert payload["automation"]["incomplete"]["statusMessage"] == ""
 
     catalog = ProcessingAutomationSettings.objects.get(
@@ -519,6 +736,73 @@ def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requ
 
 
 @pytest.mark.django_db
+def test_processing_sync_start_ignores_remote_pages_when_overrides_are_disabled(client, monkeypatch):
+    login_processing_admin(client)
+    monkeypatch.setattr(
+        "apps.processing.views.allow_processing_remote_page_payloads",
+        lambda: False,
+    )
+
+    response = client.post(
+        "/api/processing/sync/start/",
+        {"remotePages": [[record_payload("ignored-record")], []]},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "syncing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
+    assert not BookRecord.objects.filter(pk="ignored-record").exists()
+
+
+@pytest.mark.django_db
+def test_catalog_automation_ignores_stale_remote_pages_when_overrides_are_disabled(client, monkeypatch):
+    login_processing_admin(client)
+    monkeypatch.setattr(
+        "apps.processing.services.allow_processing_remote_page_payloads",
+        lambda: False,
+    )
+
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [[record_payload("stale-remote-record")], []]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    entry = SourceCatalogEntry.objects.create(
+        source_url="https://www.ebanglalibrary.com/books/fallback-live-record/",
+        title="Fallback Live Record",
+        author_line="Source Author",
+        normalized_title="fallback live record",
+        normalized_display="fallback live record source author",
+        raw_data={"category": "Fallback Category", "publisher": "Source Publisher"},
+    )
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "syncing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
+    assert not BookRecord.objects.filter(pk="stale-remote-record").exists()
+    assert BookRecord.objects.filter(pk=str(entry.id)).exists()
+    assert BookCreationRequest.objects.filter(
+        book_record_id=str(entry.id),
+        state="initial",
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_catalog_automation_can_pause_and_stop_active_sync(client):
     login_processing_admin(client)
     sync_state = get_sync_state()
@@ -562,6 +846,106 @@ def test_catalog_automation_can_pause_and_stop_active_sync(client):
     assert payload["sync"]["status"] == "idle"
     assert payload["sync"]["message"] == "Automated catalog sync stopped."
     assert payload["automation"]["catalog"]["statusMessage"] == "Automated catalog sync stopped."
+
+
+@pytest.mark.django_db
+def test_manual_sync_start_reuses_paused_automation_checkpoint(client):
+    login_processing_admin(client)
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [
+        [record_payload("shared-page-1", name="Shared Page One")],
+        [record_payload("shared-page-2", name="Shared Page Two")],
+        [],
+    ]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    assert response.json()["sync"]["runMode"] == "catalog_automation"
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "pausing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+    assert payload["sync"]["fetchedCount"] == 1
+
+    response = client.post("/api/processing/sync/start/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "manual"
+    assert payload["sync"]["message"] == "Reconciling saved records from the beginning."
+    assert payload["sync"]["fetchedCount"] == 1
+    assert payload["sync"]["pageIndex"] == 0
+    assert payload["sync"]["progress"]["savedData"]["fetchedCount"] == 1
+    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 0
+
+
+@pytest.mark.django_db
+def test_catalog_automation_run_reuses_paused_manual_checkpoint_and_creates_requests(client):
+    login_processing_admin(client)
+
+    response = client.post(
+        "/api/processing/sync/start/",
+        {
+            "remotePages": [
+                [record_payload("resume-auto-page-1", name="Resume Auto Page One")],
+                [record_payload("resume-auto-page-2", name="Resume Auto Page Two")],
+                [],
+            ]
+        },
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    assert response.json()["sync"]["runMode"] == "manual"
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "pausing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["runMode"] == "manual"
+    assert payload["sync"]["fetchedCount"] == 1
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+    assert payload["sync"]["message"] == "Restarting automated catalog sync from the beginning."
+    assert payload["sync"]["fetchedCount"] == 1
+    assert payload["sync"]["pageIndex"] == 0
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "syncing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
+    assert BookCreationRequest.objects.filter(
+        book_record_id="resume-auto-page-1",
+        state="initial",
+    ).exists()
+    assert BookCreationRequest.objects.filter(
+        book_record_id="resume-auto-page-2",
+        state="initial",
+    ).exists()
 
 
 @pytest.mark.django_db
@@ -637,7 +1021,7 @@ def test_incomplete_sync_honors_pause_requested_during_batch_advance(client, mon
     )
 
     assert response.status_code == 200
-    sync_state = get_sync_state()
+    sync_state = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
     sync_state.remote_pages = [["mid-incomplete-a"], ["mid-incomplete-b"], []]
     sync_state.save(update_fields=["remote_pages", "updated_at"])
 
@@ -697,7 +1081,7 @@ def test_incomplete_automation_can_pause_resume_and_complete(client):
     )
 
     assert response.status_code == 200
-    sync_state = get_sync_state()
+    sync_state = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
     sync_state.remote_pages = [["resume-incomplete-a"], ["resume-incomplete-b"], []]
     sync_state.save(update_fields=["remote_pages", "updated_at"])
 
@@ -726,6 +1110,196 @@ def test_incomplete_automation_can_pause_resume_and_complete(client):
     assert payload["sync"]["status"] == "idle"
     assert payload["sync"]["message"] == "Incomplete catalog sync complete. Resolved 2 books."
     assert BookRecord.objects.get(pk="resume-incomplete-b").resolved_from_incomplete is True
+
+
+@pytest.mark.django_db
+def test_incomplete_automation_uses_incomplete_sync_remote_pages_source(client, monkeypatch):
+    login_processing_admin(client)
+    expected_pages = [
+        [
+            {
+                "id": "live-incomplete-record",
+                "name": "Live Incomplete Record",
+                "url": "https://www.ebanglalibrary.com/books/live-incomplete-record/",
+                "category": "অসম্পূর্ণ বই",
+                "writer": "Live Writer",
+                "translator": "",
+                "composer": "",
+                "publisher": "Live Press",
+                "updatedAt": timezone.now().isoformat(),
+                "wasIncomplete": True,
+                "willResolveToCategory": "Novel",
+            }
+        ],
+        [],
+    ]
+    monkeypatch.setattr(
+        "apps.processing.services.incomplete_sync_remote_pages",
+        lambda: expected_pages,
+    )
+
+    response = client.post(
+        "/api/processing/automation/incomplete/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    sync_state = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    assert sync_state.remote_pages == expected_pages
+    assert response.json()["sync"]["runMode"] == "incomplete_automation"
+
+
+@pytest.mark.django_db
+def test_incomplete_automation_live_sync_fetches_incrementally_and_resolves_stale_records(
+    client,
+    monkeypatch,
+):
+    login_processing_admin(client)
+    BookRecord.objects.create(
+        id="stale-incomplete-live",
+        name="Stale Incomplete Live",
+        url="https://www.ebanglalibrary.com/books/stale-incomplete-live/",
+        category="অসম্পূর্ণ বই",
+        writer="Writer One",
+        publisher="Example Press",
+        was_incomplete=True,
+        resolved_from_incomplete=False,
+        will_resolve_to_category="Novel",
+    )
+
+    page_calls = []
+
+    def fake_fetch_live_incomplete_page(_resolver, page_number):
+        page_calls.append(page_number)
+        if page_number == 1:
+            return [
+                {
+                    "id": "live-incomplete-page-1",
+                    "name": "Live Incomplete Page 1",
+                    "url": "https://www.ebanglalibrary.com/books/live-incomplete-page-1/",
+                    "category": "অসম্পূর্ণ বই",
+                    "writer": "Live Writer",
+                    "translator": "",
+                    "composer": "",
+                    "publisher": "Live Press",
+                    "updatedAt": timezone.now().isoformat(),
+                    "wasIncomplete": True,
+                    "resolvedFromIncomplete": False,
+                    "willResolveToCategory": "Novel",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_use_live_incomplete_fetch",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.fetch_live_incomplete_page",
+        fake_fetch_live_incomplete_page,
+    )
+
+    response = client.post(
+        "/api/processing/automation/incomplete/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "incomplete_automation"
+    assert payload["sync"]["remotePages"] == []
+    assert payload["sync"]["progress"]["savedData"]["liveFetch"] is True
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["fetchedCount"] == 1
+    assert BookRecord.objects.filter(pk="live-incomplete-page-1").exists()
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["message"] == "Incomplete catalog sync complete. Resolved 1 book."
+    assert page_calls == [1, 2]
+    stale_record = BookRecord.objects.get(pk="stale-incomplete-live")
+    assert stale_record.resolved_from_incomplete is True
+    assert stale_record.category == "Novel"
+
+
+@pytest.mark.django_db
+def test_incomplete_automation_live_sync_pause_and_resume_restarts_from_beginning(
+    client,
+    monkeypatch,
+):
+    login_processing_admin(client)
+
+    def fake_fetch_live_incomplete_page(_resolver, page_number):
+        if page_number == 1:
+            return [
+                {
+                    "id": "paused-live-incomplete",
+                    "name": "Paused Live Incomplete",
+                    "url": "https://www.ebanglalibrary.com/books/paused-live-incomplete/",
+                    "category": "অসম্পূর্ণ বই",
+                    "writer": "Live Writer",
+                    "translator": "",
+                    "composer": "",
+                    "publisher": "Live Press",
+                    "updatedAt": timezone.now().isoformat(),
+                    "wasIncomplete": True,
+                    "resolvedFromIncomplete": False,
+                    "willResolveToCategory": "Novel",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_use_live_incomplete_fetch",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.fetch_live_incomplete_page",
+        fake_fetch_live_incomplete_page,
+    )
+
+    response = client.post(
+        "/api/processing/automation/incomplete/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    assert response.json()["sync"]["status"] == "pausing"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["progress"]["savedData"]["liveFetch"] is True
+    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 1
+
+    sync_state = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+    assert sync_state.page_index == 1
+    assert len(sync_state.remote_pages) == 1
+
+    response = client.post("/api/processing/sync/resume/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["message"] == "Restarting incomplete catalog sync from the beginning."
+    assert payload["sync"]["progress"]["savedData"]["liveFetch"] is True
+    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 0
+
+    sync_state.refresh_from_db()
+    assert sync_state.page_index == 0
+    assert sync_state.remote_pages == []
 
 
 @pytest.mark.django_db
@@ -929,7 +1503,7 @@ def test_processing_sync_task_returns_json_safe_sync_snapshot(monkeypatch):
 
     result = run_processing_sync_task.run("default")
 
-    assert result["singleton_key"] == "default"
+    assert result["singleton_key"] == "catalog"
     assert result["status"] == "paused"
     assert result["run_mode"] == "catalog_automation"
     assert result["page_index"] == 2
@@ -962,6 +1536,10 @@ def test_processing_pipeline_does_not_reenqueue_queued_request_while_dispatch_is
         lambda: False,
     )
     monkeypatch.setattr(
+        "apps.processing.services.processing_workers_available",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
         "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
         fake_apply_async,
     )
@@ -980,12 +1558,12 @@ def test_processing_pipeline_does_not_reenqueue_queued_request_while_dispatch_is
         }
     ]
     processing_request = BookCreationRequest.objects.get(book_record=record)
-    assert processing_request.state == "initial"
+    assert processing_request.state == "queued"
 
     response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
 
     assert response.status_code == 200
-    assert response.json()["advancedCount"] == 1
+    assert response.json()["advancedCount"] == 0
     processing_request.refresh_from_db()
     assert processing_request.state == "queued"
 
@@ -1047,6 +1625,10 @@ def test_processing_pipeline_dispatches_queued_request_even_with_initial_backlog
         lambda: False,
     )
     monkeypatch.setattr(
+        "apps.processing.services.processing_workers_available",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
         "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
         fake_apply_async,
     )
@@ -1101,6 +1683,10 @@ def test_processing_pipeline_requeues_stale_dispatch_marker(client, monkeypatch)
         lambda: False,
     )
     monkeypatch.setattr(
+        "apps.processing.services.processing_workers_available",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
         "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
         fake_apply_async,
     )
@@ -1146,7 +1732,7 @@ def test_processing_sync_dispatches_to_processing_queue(monkeypatch):
     assert sync_state.queue_name == "processing"
     assert sync_state.last_error == ""
     assert len(dispatch_calls) == 1
-    assert dispatch_calls[0]["args"] == ("default",)
+    assert dispatch_calls[0]["args"] == ("catalog",)
     assert dispatch_calls[0]["kwargs"]["queue"] == "processing"
     assert dispatch_calls[0]["kwargs"]["task_id"] == sync_state.task_id
 

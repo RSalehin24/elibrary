@@ -31,6 +31,20 @@ const PROCESSING_TABLE_PREFETCH_TRIGGER = 30;
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
+const PROCESSING_STATE_PATH = "/processing/state/?includeLists=0";
+const DEFAULT_SYNC_CARD = {
+  status: "idle",
+  runMode: SYNC_RUN_MODE_MANUAL,
+  message: "Ready to sync.",
+};
+const DEFAULT_AUTOMATION_CARD = {
+  enabled: false,
+  interval: "weekly",
+  time: "03:00",
+  saved: false,
+  lastRunAt: null,
+  statusMessage: "",
+};
 
 function formatDate(value) {
   if (!value) {
@@ -148,6 +162,8 @@ function IconOnlyActionButton({
   const visualStateClass =
     state === "pausing"
       ? " is-pending"
+      : state === "paused"
+        ? " is-paused"
       : state === "running" || state === "syncing"
         ? " is-running"
         : "";
@@ -341,6 +357,143 @@ function processingTablePath({
   return `/processing/table/?${params.toString()}`;
 }
 
+function processingCardPath(cardKey) {
+  const params = new URLSearchParams({ card: cardKey });
+  return `/processing/card/?${params.toString()}`;
+}
+
+function processingCardFromState(cardKey, statePayload) {
+  const summary = statePayload?.summary || {};
+  const syncStates = statePayload?.syncStates || {};
+  const catalogSync = syncStates.catalog || statePayload?.sync || null;
+  const incompleteSync = syncStates.incomplete || statePayload?.sync || null;
+  const automation = statePayload?.automation || {};
+
+  const cards = {
+    "catalog-overview": {
+      card: "catalog-overview",
+      summary: summary.catalog || {},
+    },
+    "catalog-sync": {
+      card: "catalog-sync",
+      sync: catalogSync || DEFAULT_SYNC_CARD,
+    },
+    "catalog-automation": {
+      card: "catalog-automation",
+      sync: catalogSync || DEFAULT_SYNC_CARD,
+      automation: automation.catalog || DEFAULT_AUTOMATION_CARD,
+    },
+    "create-overview": {
+      card: "create-overview",
+      summary: summary.create || {},
+    },
+    "on-hold-overview": {
+      card: "on-hold-overview",
+      summary: summary.onHold || {},
+    },
+    "incomplete-overview": {
+      card: "incomplete-overview",
+      summary: summary.incomplete || {},
+    },
+    "incomplete-automation": {
+      card: "incomplete-automation",
+      sync: incompleteSync || DEFAULT_SYNC_CARD,
+      automation: automation.incomplete || DEFAULT_AUTOMATION_CARD,
+    },
+  };
+
+  return cards[cardKey] || null;
+}
+
+function useProcessingCardData({ cardKey, enabled, refreshToken }) {
+  const [cardState, setCardState] = useState({
+    data: null,
+    loadedOnce: false,
+    initialLoading: false,
+    refreshing: false,
+    error: "",
+  });
+  const requestSeqRef = useRef(0);
+  const lastRefreshTokenRef = useRef(refreshToken);
+
+  const loadCard = useCallback(async () => {
+    const requestSeq = requestSeqRef.current + 1;
+    requestSeqRef.current = requestSeq;
+
+    setCardState((current) => ({
+      ...current,
+      initialLoading: !current.loadedOnce,
+      refreshing: current.loadedOnce,
+      error: "",
+    }));
+
+    try {
+      let payload;
+      try {
+        payload = await apiFetch(processingCardPath(cardKey));
+      } catch (nextError) {
+        if (nextError?.status !== 404) {
+          throw nextError;
+        }
+
+        const statePayload = await apiFetch(PROCESSING_STATE_PATH);
+        payload = processingCardFromState(cardKey, statePayload);
+        if (!payload) {
+          throw nextError;
+        }
+      }
+      if (requestSeqRef.current !== requestSeq) {
+        return null;
+      }
+      setCardState({
+        data: payload,
+        loadedOnce: true,
+        initialLoading: false,
+        refreshing: false,
+        error: "",
+      });
+      return payload;
+    } catch (nextError) {
+      if (requestSeqRef.current !== requestSeq) {
+        return null;
+      }
+      setCardState((current) => ({
+        ...current,
+        loadedOnce: true,
+        initialLoading: false,
+        refreshing: false,
+        error: nextError.message || "Unable to load card.",
+      }));
+      return null;
+    }
+  }, [cardKey]);
+
+  useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+    loadCard();
+    return undefined;
+  }, [cardKey, enabled, loadCard]);
+
+  useEffect(() => {
+    if (!enabled || !cardState.loadedOnce) {
+      return undefined;
+    }
+    if (lastRefreshTokenRef.current === refreshToken) {
+      return undefined;
+    }
+    lastRefreshTokenRef.current = refreshToken;
+    loadCard();
+    return undefined;
+  }, [enabled, refreshToken, cardState.loadedOnce, loadCard]);
+
+  return {
+    ...cardState,
+    reload: loadCard,
+  };
+}
+
 function TableSkeletonRows({
   pageId,
   cardId,
@@ -441,7 +594,7 @@ function TableSkeletonRows({
   ));
 }
 
-function useProcessingTableData({ cardKey, filters, enabled, stateVersion }) {
+function useProcessingTableData({ cardKey, filters, enabled, refreshToken }) {
   const [tableState, setTableState] = useState({
     rows: [],
     totalCount: 0,
@@ -457,6 +610,7 @@ function useProcessingTableData({ cardKey, filters, enabled, stateVersion }) {
   const tableShellRef = useRef(null);
   const observerRef = useRef(null);
   const requestSeqRef = useRef(0);
+  const lastRefreshTokenRef = useRef(refreshToken);
   const deferredQuery = useDeferredValue(filters.q);
 
   const loadRows = useCallback(
@@ -642,6 +796,10 @@ function useProcessingTableData({ cardKey, filters, enabled, stateVersion }) {
     if (!enabled || !tableState.loadedOnce) {
       return undefined;
     }
+    if (lastRefreshTokenRef.current === refreshToken) {
+      return undefined;
+    }
+    lastRefreshTokenRef.current = refreshToken;
     loadRows({
       offset: 0,
       limit: Math.max(PROCESSING_TABLE_BATCH_SIZE, tableState.rows.length),
@@ -652,7 +810,7 @@ function useProcessingTableData({ cardKey, filters, enabled, stateVersion }) {
   }, [
     enabled,
     loadRows,
-    stateVersion,
+    refreshToken,
     tableState.loadedOnce,
     tableState.rows.length,
   ]);
@@ -698,7 +856,7 @@ function ProcessingDataCard({
     status: "",
   });
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const { canLoadProcessingState, stateVersion } = useBookProcessing();
+  const { canLoadProcessingState, refreshVersions } = useBookProcessing();
   const showSelectionColumn = actions.length > 0 && !readOnly;
   const splitBookColumn = bookColumnMode === "split";
   const showActionColumn = typeof renderRowAction === "function";
@@ -721,14 +879,13 @@ function ProcessingDataCard({
     loadingMore,
     refreshing,
     error: tableError,
-    refreshRows,
     tableShellRef,
     observeLoadTrigger,
   } = useProcessingTableData({
     cardKey,
     filters,
     enabled: canLoadProcessingState,
-    stateVersion,
+    refreshToken: refreshVersions[cardKey] || 0,
   });
 
   const filterFields = useMemo(
@@ -811,7 +968,6 @@ function ProcessingDataCard({
     const result = await action.onAction(ids, selectedRows);
     if (result) {
       setSelectedIds([]);
-      await refreshRows();
     }
   }
 
@@ -1138,8 +1294,8 @@ function ProcessingDataCard({
 function AutomationPanel({
   pageId,
   title,
-  automation,
-  sync,
+  automation = DEFAULT_AUTOMATION_CARD,
+  sync = DEFAULT_SYNC_CARD,
   loading = false,
   saving = false,
   running = false,
@@ -1147,7 +1303,6 @@ function AutomationPanel({
   onRun,
   onPause,
   onResume,
-  onStop,
   className = "",
 }) {
   const [form, setForm] = useState({
@@ -1155,24 +1310,50 @@ function AutomationPanel({
     interval: automation.interval,
     time: automation.time,
   });
+  const [optimisticSync, setOptimisticSync] = useState(null);
   const runMode =
     pageId === "catalog"
       ? SYNC_RUN_MODE_CATALOG_AUTOMATION
       : SYNC_RUN_MODE_INCOMPLETE_AUTOMATION;
   const runLabel =
     pageId === "catalog" ? "automated catalog sync" : "incomplete catalog sync";
-  const ownsSync = sync.status !== "idle" && sync.runMode === runMode;
-  const blockedByOtherSync = sync.status !== "idle" && sync.runMode !== runMode;
-  const isRunning =
-    ownsSync && (sync.status === "syncing" || sync.status === "pausing");
-  const isPausing = ownsSync && sync.status === "pausing";
-  const isPaused = ownsSync && sync.status === "paused";
+  const runMessage =
+    pageId === "catalog"
+      ? "Automated catalog sync is running."
+      : "Incomplete catalog sync is running.";
+  const pauseMessage =
+    pageId === "catalog"
+      ? "Pausing automated catalog sync after the current page finishes."
+      : "Pausing incomplete catalog sync after the current batch finishes.";
+  const resumeMessage =
+    pageId === "catalog"
+      ? "Resuming automated catalog sync from saved progress."
+      : "Restarting incomplete catalog sync from the beginning.";
+  const effectiveSync =
+    sync.status !== "idle" || !optimisticSync
+      ? sync
+      : {
+          ...sync,
+          status: optimisticSync.status,
+          message: optimisticSync.message,
+          runMode,
+        };
+  const hasActiveSync =
+    effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
+  const hasOwnedSync = hasActiveSync || effectiveSync.status === "paused";
+  const ownsSync =
+    hasOwnedSync && effectiveSync.runMode === runMode;
+  const blockedByOtherSync =
+    hasActiveSync && effectiveSync.runMode !== runMode;
+  const isRunning = ownsSync;
+  const isPausing = ownsSync && effectiveSync.status === "pausing";
+  const isPaused = ownsSync && effectiveSync.status === "paused";
   const busy = saving || running;
-  const controlsDisabled = busy || ownsSync || blockedByOtherSync;
-  const statusMessage = ownsSync
-    ? sync.message || ""
+  const controlsDisabled = busy || hasActiveSync || blockedByOtherSync;
+  const statusMessage = effectiveSync.status !== "idle"
+    ? effectiveSync.message || ""
     : automation.statusMessage || "";
-  const showFooter = busy || Boolean(statusMessage);
+  const showFooter = saving || Boolean(statusMessage);
 
   useEffect(() => {
     setForm({
@@ -1181,6 +1362,33 @@ function AutomationPanel({
       time: automation.time,
     });
   }, [automation.enabled, automation.interval, automation.time]);
+
+  useEffect(() => {
+    if (sync.status !== "idle") {
+      setOptimisticSync(null);
+    }
+  }, [sync.status, sync.runMode]);
+
+  useEffect(() => {
+    if (!optimisticSync || sync.status !== "idle" || typeof window === "undefined") {
+      return undefined;
+    }
+    const timerId = window.setTimeout(() => {
+      setOptimisticSync(null);
+    }, 4000);
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [optimisticSync, sync.status]);
+
+  async function runWithOptimisticState(nextOptimisticSync, action) {
+    setOptimisticSync(nextOptimisticSync);
+    const result = await action?.();
+    if (!result) {
+      setOptimisticSync(null);
+    }
+    return result;
+  }
 
   if (loading) {
     return (
@@ -1241,7 +1449,14 @@ function AutomationPanel({
         icon: <PlayIcon />,
         state: "paused",
         disabled: busy,
-        onClick: onResume,
+        onClick: () =>
+          runWithOptimisticState(
+            {
+              status: "syncing",
+              message: resumeMessage,
+            },
+            onResume,
+          ),
       }
     : isRunning
       ? {
@@ -1249,14 +1464,28 @@ function AutomationPanel({
           icon: <PauseIcon />,
           state: isPausing ? "pausing" : "syncing",
           disabled: busy || isPausing,
-          onClick: onPause,
+          onClick: () =>
+            runWithOptimisticState(
+              {
+                status: "pausing",
+                message: pauseMessage,
+              },
+              onPause,
+            ),
         }
       : {
           label: `Run ${runLabel}`,
           icon: <PlayIcon />,
           state: "idle",
           disabled: busy || blockedByOtherSync,
-          onClick: onRun,
+          onClick: () =>
+            runWithOptimisticState(
+              {
+                status: "syncing",
+                message: runMessage,
+              },
+              onRun,
+            ),
         };
 
   return (
@@ -1352,22 +1581,15 @@ function AutomationPanel({
           </button>
         </div>
       </div>
-      {busy || statusMessage ? (
+      {showFooter ? (
         <div className="processing-card-footer">
           <div className="processing-card-status">
-            {busy || isRunning ? (
+            {saving ? (
               <span
                 className="processing-inline-loader"
                 data-testid={`${pageId}-automation-loader`}
               >
-                <LoadingSpinner size={14} />{" "}
-                {saving
-                  ? "Saving"
-                  : isPausing
-                    ? "Pausing"
-                    : isRunning
-                      ? "Running"
-                      : ""}
+                <LoadingSpinner size={14} /> Saving
               </span>
             ) : null}
             {statusMessage ? (
@@ -1385,25 +1607,27 @@ function AutomationPanel({
   );
 }
 
-function CatalogSyncPanel({ className = "", loading = false }) {
+function CatalogSyncPanel({
+  className = "",
+  loading = false,
+  sync = DEFAULT_SYNC_CARD,
+}) {
   const [pauseRequested, setPauseRequested] = useState(false);
-  const {
-    state,
-    busyCards,
-    startCatalogSync,
-    pauseCatalogSync,
-    resumeCatalogSync,
-  } = useBookProcessing();
-  const sync = state.sync;
+  const { busyCards, startCatalogSync, pauseCatalogSync, resumeCatalogSync } =
+    useBookProcessing();
   const syncBusy = Boolean(busyCards["catalog-sync"]);
-  const manualOwnsSync =
-    sync.runMode === SYNC_RUN_MODE_MANUAL && sync.status !== "idle";
-  const automationOwnsSync =
-    sync.runMode !== SYNC_RUN_MODE_MANUAL && sync.status !== "idle";
-  const isSyncing =
-    manualOwnsSync && (sync.status === "syncing" || sync.status === "pausing");
+  const hasActiveSync =
+    sync.status === "syncing" || sync.status === "pausing";
+  const hasPausedSync = sync.status === "paused";
+  const manualIsPaused =
+    hasPausedSync && sync.runMode === SYNC_RUN_MODE_MANUAL;
+  const manualOwnsActiveSync =
+    hasActiveSync && sync.runMode === SYNC_RUN_MODE_MANUAL;
+  const otherModeOwnsSync =
+    hasActiveSync && sync.runMode !== SYNC_RUN_MODE_MANUAL;
+  const isSyncing = manualOwnsActiveSync;
   const isPausing =
-    manualOwnsSync && (pauseRequested || sync.status === "pausing");
+    manualOwnsActiveSync && (pauseRequested || sync.status === "pausing");
   const syncMessageLines = splitSyncMessage(sync.message);
 
   useEffect(() => {
@@ -1450,7 +1674,7 @@ function CatalogSyncPanel({ className = "", loading = false }) {
   }
 
   const control =
-    sync.status === "paused"
+    manualIsPaused
       ? {
           testId: "catalog-sync-resume-btn",
           label: "Resume sync",
@@ -1473,8 +1697,8 @@ function CatalogSyncPanel({ className = "", loading = false }) {
             label: "Start sync",
             icon: <PlayIcon />,
             state: "idle",
-            disabled: syncBusy || automationOwnsSync,
-            onClick: startCatalogSync,
+            disabled: syncBusy || otherModeOwnsSync,
+            onClick: () => startCatalogSync(sync.remotePages),
           };
 
   return (
@@ -1540,25 +1764,52 @@ function CatalogSyncPanel({ className = "", loading = false }) {
 
 export function CatalogProcessingPage() {
   const {
-    state,
     busyCards,
-    loaded,
+    canLoadProcessingState,
+    refreshVersions,
     createRequestsForRecords,
     saveCatalogAutomation,
     runCatalogAutomation,
     pauseCatalogAutomation,
     resumeCatalogAutomation,
-    stopCatalogAutomation,
   } = useBookProcessing();
+  const {
+    data: catalogOverviewCard,
+    loadedOnce: catalogOverviewLoaded,
+  } = useProcessingCardData({
+    cardKey: "catalog-overview",
+    enabled: canLoadProcessingState,
+    refreshToken: refreshVersions["catalog-overview"] || 0,
+  });
+  const {
+    data: catalogSyncCard,
+    loadedOnce: catalogSyncLoaded,
+  } = useProcessingCardData({
+    cardKey: "catalog-sync",
+    enabled: canLoadProcessingState,
+    refreshToken: refreshVersions["catalog-sync"] || 0,
+  });
+  const {
+    data: catalogAutomationCard,
+    loadedOnce: catalogAutomationLoaded,
+  } = useProcessingCardData({
+    cardKey: "catalog-automation",
+    enabled: canLoadProcessingState,
+    refreshToken: refreshVersions["catalog-automation"] || 0,
+  });
   const catalogAutomationSaving = Boolean(busyCards["catalog-automation-save"]);
   const catalogAutomationRunning = Boolean(busyCards["catalog-automation-run"]);
-  const summary = state.summary?.catalog || {};
+  const summary = catalogOverviewCard?.summary || {};
+  const catalogSync = catalogSyncCard?.sync || DEFAULT_SYNC_CARD;
+  const catalogAutomation = catalogAutomationCard?.automation || DEFAULT_AUTOMATION_CARD;
+  const catalogAutomationSync =
+    catalogAutomationCard?.sync || DEFAULT_SYNC_CARD;
 
   return (
     <PageFrame pageId="catalog" title="Catalog">
       <OverviewPanel
         pageId="catalog"
-        loading={!loaded}
+        loading={!catalogOverviewLoaded}
         stats={[
           { id: "records", label: "Book Records", value: summary.records || 0 },
           {
@@ -1582,21 +1833,21 @@ export function CatalogProcessingPage() {
       <div className="processing-card-grid processing-card-grid--catalog">
         <CatalogSyncPanel
           className="processing-catalog-sync-card"
-          loading={!loaded}
+          loading={!catalogSyncLoaded}
+          sync={catalogSync}
         />
         <AutomationPanel
           pageId="catalog"
           title="Automation"
-          automation={state.automation.catalog}
-          sync={state.sync}
-          loading={!loaded}
+          automation={catalogAutomation}
+          sync={catalogAutomationSync}
+          loading={!catalogAutomationLoaded}
           saving={catalogAutomationSaving}
           running={catalogAutomationRunning}
           onSave={saveCatalogAutomation}
           onRun={runCatalogAutomation}
           onPause={pauseCatalogAutomation}
           onResume={resumeCatalogAutomation}
-          onStop={stopCatalogAutomation}
           className="processing-catalog-automation-card"
         />
       </div>
@@ -1609,6 +1860,7 @@ export function CatalogProcessingPage() {
         busy={Boolean(busyCards["catalog-records"])}
         className="processing-catalog-card processing-catalog-records-card"
         bookColumnMode="split"
+        showDetailsColumn={false}
         actions={[
           {
             id: "create",
@@ -1649,14 +1901,25 @@ function CreateCard({
 }
 
 export function CreateProcessingPage() {
-  const { state, loaded, deleteRequests, pauseRequests } = useBookProcessing();
-  const summary = state.summary?.create || {};
+  const {
+    canLoadProcessingState,
+    refreshVersions,
+    deleteRequests,
+    pauseRequests,
+  } = useBookProcessing();
+  const { data: createOverviewCard, loadedOnce: createOverviewLoaded } =
+    useProcessingCardData({
+      cardKey: "create-overview",
+      enabled: canLoadProcessingState,
+      refreshToken: refreshVersions["create-overview"] || 0,
+    });
+  const summary = createOverviewCard?.summary || {};
 
   return (
     <PageFrame pageId="create" title="Create">
       <OverviewPanel
         pageId="create"
-        loading={!loaded}
+        loading={!createOverviewLoaded}
         stats={[
           {
             id: "requests",
@@ -1787,8 +2050,8 @@ function OnHoldCard({
 
 export function OnHoldProcessingPage() {
   const {
-    state,
-    loaded,
+    canLoadProcessingState,
+    refreshVersions,
     resumePausedRequests,
     retryFailedRequests,
     markDuplicateRequestsAsNew,
@@ -1796,13 +2059,19 @@ export function OnHoldProcessingPage() {
     createAgainRequests,
     deleteRequests,
   } = useBookProcessing();
-  const summary = state.summary?.onHold || {};
+  const { data: onHoldOverviewCard, loadedOnce: onHoldOverviewLoaded } =
+    useProcessingCardData({
+      cardKey: "on-hold-overview",
+      enabled: canLoadProcessingState,
+      refreshToken: refreshVersions["on-hold-overview"] || 0,
+    });
+  const summary = onHoldOverviewCard?.summary || {};
 
   return (
     <PageFrame pageId="on-hold" title="On Hold">
       <OverviewPanel
         pageId="on-hold"
-        loading={!loaded}
+        loading={!onHoldOverviewLoaded}
         stats={[
           {
             id: "paused",
@@ -1913,14 +2182,13 @@ export function OnHoldProcessingPage() {
 
 export function IncompleteProcessingPage() {
   const {
-    state,
     busyCards,
-    loaded,
+    canLoadProcessingState,
+    refreshVersions,
     saveIncompleteAutomation,
     runIncompleteAutomation,
     pauseIncompleteAutomation,
     resumeIncompleteAutomation,
-    stopIncompleteAutomation,
     recreateCompletedRequests,
     deleteRequests,
   } = useBookProcessing();
@@ -1930,13 +2198,32 @@ export function IncompleteProcessingPage() {
   const incompleteAutomationRunning = Boolean(
     busyCards["incomplete-automation-run"],
   );
-  const summary = state.summary?.incomplete || {};
+  const {
+    data: incompleteOverviewCard,
+    loadedOnce: incompleteOverviewLoaded,
+  } = useProcessingCardData({
+    cardKey: "incomplete-overview",
+    enabled: canLoadProcessingState,
+    refreshToken: refreshVersions["incomplete-overview"] || 0,
+  });
+  const {
+    data: incompleteAutomationCard,
+    loadedOnce: incompleteAutomationLoaded,
+  } = useProcessingCardData({
+    cardKey: "incomplete-automation",
+    enabled: canLoadProcessingState,
+    refreshToken: refreshVersions["incomplete-automation"] || 0,
+  });
+  const summary = incompleteOverviewCard?.summary || {};
+  const incompleteAutomation =
+    incompleteAutomationCard?.automation || DEFAULT_AUTOMATION_CARD;
+  const incompleteSync = incompleteAutomationCard?.sync || DEFAULT_SYNC_CARD;
 
   return (
     <PageFrame pageId="incomplete" title="Incomplete">
       <OverviewPanel
         pageId="incomplete"
-        loading={!loaded}
+        loading={!incompleteOverviewLoaded}
         stats={[
           {
             id: "incomplete",
@@ -1954,16 +2241,15 @@ export function IncompleteProcessingPage() {
         <AutomationPanel
           pageId="incomplete"
           title="Automation"
-          automation={state.automation.incomplete}
-          sync={state.sync}
-          loading={!loaded}
+          automation={incompleteAutomation}
+          sync={incompleteSync}
+          loading={!incompleteAutomationLoaded}
           saving={incompleteAutomationSaving}
           running={incompleteAutomationRunning}
           onSave={saveIncompleteAutomation}
           onRun={runIncompleteAutomation}
           onPause={pauseIncompleteAutomation}
           onResume={resumeIncompleteAutomation}
-          onStop={stopIncompleteAutomation}
           className="processing-card-span-full processing-incomplete-automation-card"
         />
         <ProcessingDataCard

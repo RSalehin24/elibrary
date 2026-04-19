@@ -210,6 +210,10 @@ def generate_css():
         background-color: white;
         border-radius: 5px;
       }
+      
+      .toc-lesson a {
+        text-decoration: none;
+      }
 
       .toc-lesson strong {
         font-size: 1.2em;

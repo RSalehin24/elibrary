@@ -4,13 +4,11 @@ import BookTable from "../components/BookTable";
 import CatalogToolbar from "../components/CatalogToolbar";
 import ExportActions from "../components/ExportActions";
 import LoadingSpinner from "../components/LoadingSpinner";
-import PageLoader from "../components/PageLoader";
-import PropertyTableControls, {
-  useClientPagination,
-} from "../components/PropertyTableControls";
+import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import TagInput from "../components/TagInput";
 import { useToast } from "../hooks/useToast";
 import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
+import { normalizeCatalogListPayload } from "../utils/catalogBooks";
 import { getExportBlockState } from "../utils/export";
 import {
   clearPendingExport,
@@ -73,6 +71,12 @@ const listFilterFields = [
   },
 ];
 
+const manualBookToolbarFields = listFilterFields.filter(
+  (field) => field.key !== "sort",
+);
+const manualBookSortOptions =
+  listFilterFields.find((field) => field.key === "sort")?.options || [];
+
 function PlusIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -129,34 +133,32 @@ export default function ManualBooksPage() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [filters, setFilters] = useState(defaultListFilters);
+  const [appliedFilters, setAppliedFilters] = useState(defaultListFilters);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [manualBooks, setManualBooks] = useState([]);
   const [contributorOptions, setContributorOptions] = useState([]);
   const [categoryOptions, setCategoryOptions] = useState([]);
-  const [loadingList, setLoadingList] = useState(true);
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [downloadState, setDownloadState] = useState(
     () => pendingExportRef.current?.mode || "",
   );
   const [highlightedBookId, setHighlightedBookId] = useState("");
-  const [error, setError] = useState("");
-  const pagination = useClientPagination(manualBooks);
-
-  async function loadManualBooks(nextFilters = filters) {
-    try {
-      setLoadingList(true);
-      const payload = await apiFetch(
-        `/catalog/manual-books/${toQueryString(nextFilters)}`,
-      );
-      setManualBooks(payload);
-      setError("");
-    } catch (nextError) {
-      setError(nextError.message);
-    } finally {
-      setLoadingList(false);
-    }
-  }
+  const {
+    entries: manualBooks,
+    totalCount,
+    hasMore,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error,
+    reload,
+    prependEntry,
+    tableShellRef,
+    observeLoadTrigger,
+  } = useInfiniteCatalogBooks({
+    endpoint: "/catalog/manual-books/",
+    filters: appliedFilters,
+  });
 
   async function loadOptions() {
     try {
@@ -190,8 +192,35 @@ export default function ManualBooksPage() {
     }
   }
 
+  async function loadAllManualBooksForExport(nextFilters = appliedFilters) {
+    const pageSize = 100;
+    const normalizedFilters = {
+      ...nextFilters,
+      page: "1",
+      limit: String(pageSize),
+    };
+    const firstPayload = normalizeCatalogListPayload(
+      await apiFetch(`/catalog/manual-books/${toQueryString(normalizedFilters)}`),
+    );
+    const allEntries = [...firstPayload.entries];
+    const totalPages = Number(firstPayload.pagination.page_count) || 1;
+
+    for (let page = 2; page <= totalPages; page += 1) {
+      const nextPayload = normalizeCatalogListPayload(
+        await apiFetch(
+          `/catalog/manual-books/${toQueryString({
+            ...normalizedFilters,
+            page: String(page),
+          })}`,
+        ),
+      );
+      allEntries.push(...nextPayload.entries);
+    }
+
+    return allEntries;
+  }
+
   useEffect(() => {
-    loadManualBooks(defaultListFilters);
     loadOptions();
   }, []);
 
@@ -263,10 +292,7 @@ export default function ManualBooksPage() {
           price: form.price === "" ? null : form.price,
         },
       });
-      setManualBooks((current) => [
-        payload,
-        ...current.filter((book) => book.id !== payload.id),
-      ]);
+      prependEntry(payload);
       setHighlightedBookId(payload.id);
       setForm(emptyForm);
       setComposerOpen(true);
@@ -275,6 +301,7 @@ export default function ManualBooksPage() {
         `Added ${payload.catalog_code}. Ready for the next manual book.`,
       );
       loadOptions();
+      void reload({ preserveRows: true });
     } catch (nextError) {
       toast.error(nextError.message);
     } finally {
@@ -284,39 +311,37 @@ export default function ManualBooksPage() {
 
   function applyListFilters(event) {
     event.preventDefault();
-    pagination.resetPage();
-    loadManualBooks(filters);
+    setAppliedFilters(filters);
   }
 
   function resetListFilters() {
-    pagination.resetPage();
     setFilters(defaultListFilters);
-    loadManualBooks(defaultListFilters);
+    setAppliedFilters(defaultListFilters);
   }
 
   function clearSearch(nextFilters) {
-    pagination.resetPage();
     setFilters(nextFilters);
-    loadManualBooks(nextFilters);
+    setAppliedFilters(nextFilters);
   }
 
   async function runDownload(mode) {
-    const blocked = getExportBlockState({
-      items: manualBooks,
-      loading: loadingList,
-      error,
-      nounSingular: "manual book",
-      nounPlural: "manual books",
-    });
-    if (blocked) {
-      toast[blocked.type](blocked.message);
-      return;
-    }
-
     try {
+      const exportItems = await loadAllManualBooksForExport(appliedFilters);
+      const blocked = getExportBlockState({
+        items: exportItems,
+        loading: initialLoading || refreshing,
+        error,
+        nounSingular: "manual book",
+        nounPlural: "manual books",
+      });
+      if (blocked) {
+        toast[blocked.type](blocked.message);
+        return;
+      }
+
       const exportRequest = writePendingExport(EXPORT_STORAGE_KEY, {
         mode,
-        items: manualBooks,
+        items: exportItems,
         title: "Physical Books' List Export",
         filename: "manual-books.csv",
       });
@@ -343,9 +368,9 @@ export default function ManualBooksPage() {
     }
   }
 
-  const resultCount = error || loadingList ? "" : `${manualBooks.length}`;
-  const sortOptions =
-    listFilterFields.find((field) => field.key === "sort")?.options || [];
+  const resultCount =
+    error && !manualBooks.length ? "" : `${totalCount}`;
+  const showErrorState = Boolean(error && !manualBooks.length && !initialLoading);
   const headerActions = (
     <div className="manual-books-toolbar-actions">
       <ExportActions
@@ -371,26 +396,6 @@ export default function ManualBooksPage() {
       </div>
     </div>
   );
-  const tableControls = (
-    <PropertyTableControls
-      sortValue={filters.sort}
-      sortOptions={sortOptions}
-      onSortChange={(nextSort) => {
-        const nextFilters = { ...filters, sort: nextSort };
-        pagination.resetPage();
-        setFilters(nextFilters);
-        loadManualBooks(nextFilters);
-      }}
-      rowsPerPage={pagination.rowsPerPage}
-      onRowsPerPageChange={pagination.setRowsPerPage}
-      page={pagination.page}
-      pageCount={pagination.pageCount}
-      hasPrevious={pagination.hasPrevious}
-      hasNext={pagination.hasNext}
-      onPageChange={pagination.setPage}
-      disabled={loadingList}
-    />
-  );
 
   return (
     <div className="catalog-page page-stack">
@@ -400,7 +405,7 @@ export default function ManualBooksPage() {
         <CatalogToolbar
           filters={filters}
           setFilters={setFilters}
-          fields={listFilterFields}
+          fields={manualBookToolbarFields}
           defaultFilters={defaultListFilters}
           filtersExpanded={filtersExpanded}
           setFiltersExpanded={setFiltersExpanded}
@@ -408,16 +413,24 @@ export default function ManualBooksPage() {
           onReset={resetListFilters}
           searchPlaceholder="Search manual books, book IDs, writers..."
           resultCount={resultCount}
+          resultCountLoading={initialLoading || refreshing}
           searchActionsExtra={headerActions}
+          sortValue={filters.sort}
+          sortOptions={manualBookSortOptions}
+          onSortChange={(nextSort) => {
+            const nextFilters = { ...filters, sort: nextSort };
+            setFilters(nextFilters);
+            setAppliedFilters(nextFilters);
+          }}
+          sortAriaLabel="Sort manual books"
           searchRowCompact
           searchRowClassName="catalog-search-row--property-compact"
           onSearchClear={clearSearch}
           inline
           bare
-          buttonsLoading={loadingList}
+          buttonsLoading={initialLoading || refreshing}
+          buttonsDisabled={initialLoading || loadingMore || refreshing}
         />
-
-        <div className="catalog-page-controls-row">{tableControls}</div>
       </header>
 
       {composerOpen ? (
@@ -585,20 +598,21 @@ export default function ManualBooksPage() {
         </section>
       ) : null}
 
-      {loadingList ? (
-        <PageLoader
-          label="Loading manual books"
-          detail="Fetching the physical-book catalog and recent additions."
-          variant="table"
-        />
-      ) : error ? (
+      {showErrorState ? (
         <div className="page-state page-state-error">{error}</div>
       ) : (
         <BookTable
-          books={pagination.items}
+          books={manualBooks}
           emptyLabel="No manual books found."
           linkFilters={{ record_type: "manual" }}
           highlightedBookId={highlightedBookId}
+          shellClassName="catalog-table-shell--incremental"
+          shellRef={tableShellRef}
+          hasMore={hasMore}
+          observeLoadTrigger={observeLoadTrigger}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          refreshing={refreshing}
         />
       )}
     </div>
