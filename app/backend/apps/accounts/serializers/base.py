@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.accounts.models import User
@@ -74,5 +75,14 @@ class ManagedUserSerializer(UserSerializer):
 
 
 class ProfileSerializer(UserSerializer):
+    kindle_emails = serializers.ListField(child=serializers.EmailField(), read_only=True)
+    kindle_sender_email = serializers.SerializerMethodField()
+
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields
+        fields = UserSerializer.Meta.fields + [
+            "kindle_emails",
+            "kindle_sender_email",
+        ]
+
+    def get_kindle_sender_email(self, _obj):
+        return getattr(settings, "KINDLE_DELIVERY_FROM_EMAIL", "") or ""

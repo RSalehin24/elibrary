@@ -118,6 +118,26 @@ async function mockAuthenticatedSession(page) {
       body: JSON.stringify({ detail: "ok" }),
     });
   });
+  await page.route("**/api/catalog/books/**", async (route) => {
+    const url = new URL(route.request().url());
+    const pageNumber = Number(url.searchParams.get("page") || "1");
+    const limit = Number(url.searchParams.get("limit") || "60");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        entries: [],
+        pagination: {
+          page: pageNumber,
+          limit,
+          total_count: 0,
+          page_count: 1,
+          has_previous: false,
+          has_next: false,
+        },
+      }),
+    });
+  });
 }
 
 function clone(value) {
@@ -1247,6 +1267,77 @@ test.describe("processing pages replacement", () => {
         .or(page.getByTestId("create-created-row-request-new-remote"))
         .first(),
     ).toBeVisible();
+  });
+
+  test("manual sync pause persists while navigating away from processing routes", async ({
+    page,
+  }) => {
+    const remotePaused = record({
+      id: "pause-remote",
+      name: "Pause Remote Book",
+      updatedAt: iso(10),
+    });
+
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        sync: {
+          ...baseState().sync,
+          remotePages: [[remotePaused], []],
+        },
+        ui: {
+          ...baseState().ui,
+          syncDelayMs: 2_000,
+        },
+      }),
+    );
+
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+
+    await page.getByTestId("catalog-sync-pause-btn").click();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "pausing",
+    );
+
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (
+        url.includes("/api/processing/") ||
+        url.includes("/api/auth/session/") ||
+        url.includes("/api/csrf/") ||
+        url.includes("/api/catalog/books/")
+      ) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({}),
+      });
+    });
+
+    await page.getByRole("link", { name: "Home", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "All Books", exact: true }),
+    ).toBeVisible();
+    await page.waitForTimeout(4_500);
+    await page.getByRole("button", { name: "Processing" }).click();
+    await page.getByRole("link", { name: "Catalog", exact: true }).click();
+
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible({
+      timeout: 1_200,
+    });
+    await expect(page.getByTestId("catalog-sync-progress")).toContainText(
+      "Saved 1 record",
+      { timeout: 1_200 },
+    );
   });
 
   test("processing cards show skeletons and fetch the next batch after scrolling", async ({

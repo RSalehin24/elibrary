@@ -42,6 +42,7 @@ export function useBookDetailActions({
   const [pickingEpub, setPickingEpub] = useState(false);
   const [replacingEpub, setReplacingEpub] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [sendingToKindle, setSendingToKindle] = useState(false);
 
   function clearAssetLoading(assetId) {
     setAssetLoadingCounts((current) => {
@@ -360,6 +361,25 @@ export function useBookDetailActions({
     }
   }
 
+  async function sendToKindle() {
+    if (!book || !detail.epubAsset || sendingToKindle) {
+      return;
+    }
+
+    try {
+      setSendingToKindle(true);
+      const payload = await apiFetch(`/access/books/${slug}/send-to-kindle/`, {
+        method: "POST",
+        body: {},
+      });
+      toast.success(payload?.detail || "Sent to Kindle.");
+    } catch (nextError) {
+      toast.error(nextError.message);
+    } finally {
+      setSendingToKindle(false);
+    }
+  }
+
   return {
     assetLoadingCounts,
     confirmDeleteBook,
@@ -382,6 +402,8 @@ export function useBookDetailActions({
     reviewUpdating,
     savingMetadata,
     savingReview,
+    sendToKindle,
+    sendingToKindle,
     saveMetadata,
     setDeleteDialogOpen,
     updateMetadataReview,

@@ -51,6 +51,8 @@ export default function ProfilePage() {
   const [profileImageFile, setProfileImageFile] = useState(null);
   const [profileImagePreview, setProfileImagePreview] = useState("");
   const [removeProfileImage, setRemoveProfileImage] = useState(false);
+  const [kindleEmailsText, setKindleEmailsText] = useState("");
+  const [kindleSectionOpen, setKindleSectionOpen] = useState(false);
   const [passwordSectionOpen, setPasswordSectionOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -84,6 +86,8 @@ export default function ProfilePage() {
         setProfileImageFile(null);
         setProfileImagePreview(profilePayload.profile_image_url || "");
         setRemoveProfileImage(false);
+        setKindleEmailsText((profilePayload.kindle_emails || []).join("\n"));
+        setKindleSectionOpen(false);
         setPasswordSectionOpen(false);
         setCurrentPassword("");
         setNewPassword("");
@@ -106,6 +110,8 @@ export default function ProfilePage() {
     setProfileImageFile(null);
     setProfileImagePreview(sourceProfile?.profile_image_url || "");
     setRemoveProfileImage(false);
+    setKindleEmailsText((sourceProfile?.kindle_emails || []).join("\n"));
+    setKindleSectionOpen(false);
     setPasswordSectionOpen(false);
     setCurrentPassword("");
     setNewPassword("");
@@ -157,6 +163,7 @@ export default function ProfilePage() {
       if (removeProfileImage) {
         body.append("remove_profile_image", "true");
       }
+      body.append("kindle_emails_text", kindleEmailsText);
       if (hasPasswordChanges) {
         body.append("current_password", currentPassword);
         body.append("new_password", newPassword);
@@ -295,6 +302,8 @@ export default function ProfilePage() {
     fullName.trim() || profile?.full_name || profile?.email || "Profile";
   const visibleInitials = initialsForUser(visibleName);
   const roleLabel = roleLabelForProfile(profile);
+  const kindleSenderEmail = profile?.kindle_sender_email || "the app sender email";
+  const configuredKindleEmails = profile?.kindle_emails || [];
   const hasPasswordChanges = Boolean(
     currentPassword || newPassword || confirmNewPassword,
   );
@@ -303,12 +312,15 @@ export default function ProfilePage() {
       fullName.trim() !== (profile?.full_name || "") ||
       Boolean(profileImageFile) ||
       removeProfileImage ||
+      kindleEmailsText.trim() !== (profile?.kindle_emails || []).join("\n") ||
       hasPasswordChanges,
     [
       fullName,
       profile?.full_name,
+      profile?.kindle_emails,
       profileImageFile,
       removeProfileImage,
+      kindleEmailsText,
       hasPasswordChanges,
     ],
   );
@@ -374,6 +386,14 @@ export default function ProfilePage() {
               <div className="settings-row">
                 <span>Two-Factor</span>
                 <strong>{twoFactorStatusLabel()}</strong>
+              </div>
+              <div className="settings-row">
+                <span>Kindle Mails</span>
+                <strong>
+                  {configuredKindleEmails.length
+                    ? `${configuredKindleEmails.length} configured`
+                    : "Not set"}
+                </strong>
               </div>
             </div>
           </div>
@@ -547,6 +567,44 @@ export default function ProfilePage() {
                         </div>
                       </label>
                     </div>
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="detail-main profile-password-card">
+                <div className="panel-header">
+                  <div className="profile-section-heading">
+                    <h2>Kindle Mails</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() =>
+                      setKindleSectionOpen((current) => !current)
+                    }
+                  >
+                    {kindleSectionOpen ? "Hide" : "Expand"}
+                  </button>
+                </div>
+
+                {kindleSectionOpen ? (
+                  <div className="profile-password-panel">
+                    <label className="field-span-full">
+                      <span className="fact-label">Kindle Email Addresses</span>
+                      <textarea
+                        value={kindleEmailsText}
+                        onChange={(event) =>
+                          setKindleEmailsText(event.target.value)
+                        }
+                        rows={5}
+                        placeholder="yourname@kindle.com&#10;shared-kindle@free.kindle.com"
+                      />
+                    </label>
+                    <p className="form-helper-text">
+                      Enter one Kindle email per line. In Amazon Personal
+                      Document Settings, allow <strong>{kindleSenderEmail}</strong>{" "}
+                      in the Approved Personal Document E-mail List.
+                    </p>
                   </div>
                 ) : null}
               </section>

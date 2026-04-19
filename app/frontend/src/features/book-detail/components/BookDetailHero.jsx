@@ -21,6 +21,7 @@ export default function BookDetailHero({
   primaryContributorGroup,
   regenerating,
   replacingEpub,
+  sendingToKindle,
   supportingContributorGroups,
 }) {
   return (
@@ -159,6 +160,20 @@ export default function BookDetailHero({
               {launchingReader ? "Opening..." : "Open reader"}
             </span>
           </button>
+          {detail.epubAsset ? (
+            <button
+              type="button"
+              data-testid="book-send-to-kindle-button"
+              className="ghost-button"
+              onClick={actions.sendToKindle}
+              disabled={sendingToKindle || detail.hasActiveProcessing}
+            >
+              <span className="button-label">
+                {sendingToKindle ? <LoadingSpinner size={16} /> : null}
+                {sendingToKindle ? "Sending..." : "Send to Kindle"}
+              </span>
+            </button>
+          ) : null}
           {detail.downloadableAssets.map((asset) => {
             const isDownloading = Boolean(assetLoadingCounts[asset.id]);
             const isHtmlPreviewLocked =

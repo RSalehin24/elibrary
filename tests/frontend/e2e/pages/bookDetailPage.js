@@ -70,6 +70,10 @@ export class BookDetailPageModel {
     return this.page.getByTestId("book-asset-epub");
   }
 
+  sendToKindleButton() {
+    return this.page.getByTestId("book-send-to-kindle-button");
+  }
+
   openReaderButton() {
     return this.page.getByTestId("book-open-reader-button");
   }

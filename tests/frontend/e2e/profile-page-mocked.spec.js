@@ -5,6 +5,8 @@ const profilePayload = {
   email: "profile-user@example.com",
   full_name: "Profile User",
   profile_image_url: "",
+  kindle_emails: ["reader@kindle.com"],
+  kindle_sender_email: "library-sender@example.com",
   is_active: true,
   is_staff: false,
   is_superuser: false,
@@ -35,6 +37,7 @@ function twoFactorStatus({ enabled = false, pendingSetup = false } = {}) {
 async function installProfileRoutes(page) {
   let totpEnabled = false;
   let pendingSetup = false;
+  let currentProfile = { ...profilePayload };
 
   await page.route("**/api/csrf/", async (route) => {
     await route.fulfill({ status: 204, body: "" });
@@ -47,10 +50,26 @@ async function installProfileRoutes(page) {
     });
   });
   await page.route("**/api/auth/profile/", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const postData = route.request().postDataBuffer();
+      const requestBody = postData ? postData.toString("utf-8") : "";
+      const match = requestBody.match(
+        /name="kindle_emails_text"\r\n\r\n([\s\S]*?)\r\n--/,
+      );
+      if (match) {
+        currentProfile = {
+          ...currentProfile,
+          kindle_emails: match[1]
+            .split(/\r?\n/)
+            .map((value) => value.trim())
+            .filter(Boolean),
+        };
+      }
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(profilePayload),
+      body: JSON.stringify(currentProfile),
     });
   });
   await page.route("**/api/auth/2fa/status/", async (route) => {
@@ -174,5 +193,24 @@ test.describe("Profile Page TOTP Notifications", () => {
     await page.getByLabel("Verification Code").fill("123456");
     await page.getByRole("button", { name: "Verify and Enable" }).click();
     await expect(page.getByRole("status")).toContainText("Two-factor enabled.");
+  });
+
+  test("kindle mails can be edited from the collapsed profile section", async ({
+    page,
+  }) => {
+    await installProfileRoutes(page);
+    await openProfileEditor(page);
+
+    await page.getByRole("button", { name: "Expand" }).nth(1).click();
+    await page
+      .getByLabel("Kindle Email Addresses")
+      .fill("reader@kindle.com\nshared@free.kindle.com");
+    await page.getByRole("button", { name: "Save Changes" }).click();
+
+    await expect(page.getByRole("status")).toContainText("Profile updated.");
+    await expect(page.getByText("shared@free.kindle.com")).toBeVisible();
+    await expect(
+      page.getByText("library-sender@example.com", { exact: false }).first(),
+    ).toBeVisible();
   });
 });

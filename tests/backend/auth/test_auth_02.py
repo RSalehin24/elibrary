@@ -87,6 +87,36 @@ def test_authenticated_user_can_update_profile_name(client):
 
 
 @pytest.mark.django_db
+def test_profile_exposes_and_updates_kindle_emails(settings, client):
+    settings.KINDLE_DELIVERY_FROM_EMAIL = "library-sender@example.com"
+    user = User.objects.create_user(
+        email="kindle-profile@example.com",
+        password="strong-password-123",
+        full_name="Kindle User",
+    )
+    client.force_login(user)
+
+    response = client.patch(
+        "/api/auth/profile/",
+        data=json.dumps(
+            {
+                "kindle_emails_text": "reader@kindle.com\nreader@free.kindle.com\nreader@kindle.com",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    user.refresh_from_db()
+    assert user.kindle_emails == [
+        "reader@kindle.com",
+        "reader@free.kindle.com",
+    ]
+    assert response.json()["kindle_emails"] == user.kindle_emails
+    assert response.json()["kindle_sender_email"] == "library-sender@example.com"
+
+
+@pytest.mark.django_db
 def test_authenticated_user_can_upload_profile_image(client):
     user = User.objects.create_user(
         email="photo@example.com",

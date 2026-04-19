@@ -9,6 +9,7 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.catalog.models import Book
 from apps.ingestion.models import BookSubmission, ProcessingJob, SourceCatalogEntry
+from apps.processing import services as processing_services
 from apps.processing.models import (
     BookCreationRequest,
     BookRecord,
@@ -553,6 +554,107 @@ def test_catalog_automation_can_pause_and_stop_active_sync(client):
 
 
 @pytest.mark.django_db
+def test_processing_sync_honors_pause_requested_during_page_advance(client, monkeypatch):
+    login_processing_admin(client)
+
+    response = client.post(
+        "/api/processing/sync/start/",
+        {
+            "remotePages": [
+                [record_payload("mid-page-pause-a")],
+                [record_payload("mid-page-pause-b")],
+                [],
+            ]
+        },
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+
+    original_upsert = processing_services.upsert_remote_records
+
+    def pause_after_upsert(*args, **kwargs):
+        result = original_upsert(*args, **kwargs)
+        processing_services.pause_sync()
+        return result
+
+    monkeypatch.setattr(
+        "apps.processing.services.upsert_remote_records",
+        pause_after_upsert,
+    )
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 1
+    assert payload["sync"]["fetchedCount"] == 1
+    assert BookRecord.objects.filter(pk="mid-page-pause-a").exists()
+    assert not BookRecord.objects.filter(pk="mid-page-pause-b").exists()
+
+
+@pytest.mark.django_db
+def test_incomplete_sync_honors_pause_requested_during_batch_advance(client, monkeypatch):
+    login_processing_admin(client)
+    BookRecord.objects.create(
+        id="mid-incomplete-a",
+        name="Mid Incomplete A",
+        url="https://example.test/books/mid-incomplete-a",
+        category="অসম্পূর্ণ বই",
+        writer="Writer One",
+        publisher="Example Press",
+        was_incomplete=True,
+        resolved_from_incomplete=False,
+        will_resolve_to_category="Novel",
+    )
+    BookRecord.objects.create(
+        id="mid-incomplete-b",
+        name="Mid Incomplete B",
+        url="https://example.test/books/mid-incomplete-b",
+        category="অসম্পূর্ণ বই",
+        writer="Writer Two",
+        publisher="Example Press",
+        was_incomplete=True,
+        resolved_from_incomplete=False,
+        will_resolve_to_category="Novel",
+    )
+
+    response = client.post(
+        "/api/processing/automation/incomplete/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [["mid-incomplete-a"], ["mid-incomplete-b"], []]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    original_resolve = processing_services.resolve_incomplete_records
+
+    def pause_after_resolve(*args, **kwargs):
+        resolved = original_resolve(*args, **kwargs)
+        processing_services.pause_sync()
+        return resolved
+
+    monkeypatch.setattr(
+        "apps.processing.services.resolve_incomplete_records",
+        pause_after_resolve,
+    )
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["runMode"] == "incomplete_automation"
+    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 1
+    assert payload["sync"]["updatedCount"] == 1
+    assert BookRecord.objects.get(pk="mid-incomplete-a").resolved_from_incomplete is True
+    assert BookRecord.objects.get(pk="mid-incomplete-b").resolved_from_incomplete is False
+
+
+@pytest.mark.django_db
 def test_catalog_automation_ignores_incomplete_remote_pages_shape(client):
     login_processing_admin(client)
     entry = SourceCatalogEntry.objects.create(
@@ -835,6 +937,59 @@ def test_processing_pipeline_dispatches_queued_request_even_with_initial_backlog
     assert dispatch_calls == [
         {
             "args": ("queued-backlog-request",),
+            "kwargs": {"queue": "processing"},
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_processing_pipeline_requeues_stale_dispatch_marker(client, monkeypatch):
+    login_processing_admin(client)
+    record = BookRecord.objects.create(
+        id="stale-dispatch-record",
+        name="Stale Dispatch Record",
+        url="https://example.test/books/stale-dispatch-record",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+        book_creation_state="queued",
+    )
+    processing_request = BookCreationRequest.objects.create(
+        id="stale-dispatch-request",
+        book_record=record,
+        state="queued",
+        progress={
+            "_dispatchRequestedAt": (
+                timezone.now() - timedelta(minutes=5)
+            ).isoformat(),
+            "_dispatchTaskId": "stale-processing-task",
+        },
+    )
+    dispatch_calls = []
+
+    def fake_apply_async(*, args, **kwargs):
+        dispatch_calls.append({"args": tuple(args), "kwargs": dict(kwargs)})
+        return SimpleNamespace(id="fresh-processing-task")
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_run_processing_jobs_inline",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
+        fake_apply_async,
+    )
+
+    response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    assert response.json()["advancedCount"] == 1
+    processing_request.refresh_from_db()
+    assert processing_request.state == "queued"
+    assert processing_request.progress["_dispatchTaskId"] == "fresh-processing-task"
+    assert dispatch_calls == [
+        {
+            "args": ("stale-dispatch-request",),
             "kwargs": {"queue": "processing"},
         }
     ]

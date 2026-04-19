@@ -104,6 +104,15 @@
   display: block;
 }
 
+.toc-record-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.toc-record-pills {
+  flex-wrap: wrap;
+}
+
 .toc-record-content {
   display: grid;
   align-content: start;
@@ -120,6 +129,10 @@
 .toc-record-content-item {
   display: block;
   line-height: 1.45;
+}
+
+.toc-record-content .toc-record-list {
+  grid-template-columns: 1fr;
 }
 
 .toc-record-content::-webkit-scrollbar {

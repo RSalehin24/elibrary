@@ -19,6 +19,30 @@ async function waitForUrl(url, timeoutMs = 120_000) {
         return;
       }
     } catch {}
+
+    try {
+      const statusCode = execFileSync(
+        "curl",
+        [
+          "-sS",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          "--max-time",
+          "5",
+          url,
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      ).trim();
+      if (["200", "302", "401"].includes(statusCode)) {
+        return;
+      }
+    } catch {}
+
     await delay(1000);
   }
   throw new Error(`Timed out waiting for ${url}`);
@@ -34,31 +58,48 @@ async function writeSuperAdminStorageState({ frontend, repoRoot }) {
   const context = await browser.newContext({ baseURL: frontend });
   const page = await context.newPage();
 
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(
-    env.SUPER_ADMIN_EMAIL || "admin@example.com",
-  );
-  await page
-    .locator("label", { hasText: "Password" })
-    .locator("input")
-    .first()
-    .fill(env.SUPER_ADMIN_PASSWORD || "changeme");
-  await page.getByRole("button", { name: /Continue|Verify/ }).click();
-  await Promise.race([
-    page.waitForURL("**/home", { timeout: 15_000 }).catch(() => null),
-    page
-      .getByRole("heading", { name: "All Books" })
-      .waitFor({
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await page.goto("/login", {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+      await page.getByLabel("Email").fill(
+        env.SUPER_ADMIN_EMAIL || "admin@example.com",
+      );
+      await page
+        .locator("label", { hasText: "Password" })
+        .locator("input")
+        .first()
+        .fill(env.SUPER_ADMIN_PASSWORD || "changeme");
+      await page.getByRole("button", { name: /Continue|Verify/ }).click();
+      await Promise.race([
+        page.waitForURL("**/home", { timeout: 15_000 }).catch(() => null),
+        page
+          .getByRole("heading", { name: "All Books" })
+          .waitFor({
+            state: "visible",
+            timeout: 15_000,
+          })
+          .catch(() => null),
+      ]);
+      await page.goto("/home", { waitUntil: "domcontentloaded" });
+      await page.getByRole("heading", { name: "All Books" }).waitFor({
         state: "visible",
         timeout: 15_000,
-      })
-      .catch(() => null),
-  ]);
-  await page.goto("/home", { waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "All Books" }).waitFor({
-    state: "visible",
-    timeout: 15_000,
-  });
+      });
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      await delay((attempt + 1) * 1000);
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
 
   fs.mkdirSync(path.dirname(authStatePath), { recursive: true });
   await context.storageState({ path: authStatePath });
@@ -89,8 +130,6 @@ export default async function globalSetup() {
   if (process.env.PLAYWRIGHT_SKIP_STACK_START !== "1") {
     startDetachedStack({ env, repoRoot });
   }
-
-  await Promise.all([waitForUrl(frontend), waitForUrl(backendSessionUrl)]);
 
   if (process.env.PLAYWRIGHT_SKIP_E2E_SEED !== "1") {
     execFileSync(path.join(repoRoot, "tests/scripts/seed-e2e-data.sh"), {

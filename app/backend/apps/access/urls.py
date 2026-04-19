@@ -3,6 +3,7 @@ from django.urls import path
 from apps.access.views import (
     AccessReferenceDataView,
     BookAssetDownloadView,
+    BookSendToKindleView,
     BookmarkDeleteView,
     BookmarkListCreateView,
     PermissionGrantDetailView,
@@ -23,6 +24,7 @@ urlpatterns = [
     path("grants/<uuid:pk>/", PermissionGrantDetailView.as_view(), name="access-grant-detail"),
     path("references/", AccessReferenceDataView.as_view(), name="access-reference-data"),
     path("books/<path:slug>/download/<slug:asset_type>/", BookAssetDownloadView.as_view(), name="access-book-asset-download"),
+    path("books/<path:slug>/send-to-kindle/", BookSendToKindleView.as_view(), name="access-book-send-to-kindle"),
     path("books/<path:slug>/reader-launch/", ReaderLaunchView.as_view(), name="access-reader-launch"),
     path("reader/<str:token>/manifest/", ReaderManifestView.as_view(), name="access-reader-manifest"),
     path("reader/<str:token>/epub/<path:asset_path>", ReaderEpubDownloadView.as_view(), name="access-reader-epub-asset"),

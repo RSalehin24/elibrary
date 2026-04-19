@@ -93,6 +93,7 @@ export default function BookDetailPage() {
         primaryContributorGroup={detail.primaryContributorGroup}
         regenerating={actions.regenerating}
         replacingEpub={actions.replacingEpub}
+        sendingToKindle={actions.sendingToKindle}
         supportingContributorGroups={detail.supportingContributorGroups}
       />
 

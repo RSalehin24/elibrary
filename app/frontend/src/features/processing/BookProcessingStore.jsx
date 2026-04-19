@@ -7,11 +7,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { useLocation } from "react-router-dom";
 import { apiFetch } from "../../api/client";
 import { useSession } from "../../hooks/useSession";
-import { isProcessingRoute } from "../layout/navigation";
 import { useToast } from "../../hooks/useToast";
+import { hasCapability } from "../../utils/capabilities";
 import {
   createCreatedNotificationBuffer,
   createdNotificationDescription,
@@ -20,6 +19,7 @@ import { ACTIVE_REQUEST_STATES } from "./types";
 
 const ProcessingPagesContext = createContext(null);
 const AGGREGATED_NOTIFICATION_WINDOW_MS = 2 * 60 * 1000;
+const PROCESSING_STATE_REFRESH_MS = 15 * 1000;
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
@@ -341,12 +341,15 @@ function notifyStateTransitions(previousState, nextState, toast, options = {}) {
   const previousHasActiveRequests =
     (previousNotifications.activeRequests || 0) > 0;
   const nextHasActiveRequests = (nextNotifications.activeRequests || 0) > 0;
+  const nextQueueCount = nextState.summary?.create?.queue || 0;
+  const nextProcessingCount = nextState.summary?.create?.processing || 0;
+  const pipelineDrained = nextQueueCount === 0 && nextProcessingCount === 0;
 
   if (createdDelta > 0) {
     handleCreatedCompletions(createdDelta, {
-      flushImmediately: !nextHasActiveRequests,
+      flushImmediately: pipelineDrained,
     });
-  } else if (!nextHasActiveRequests) {
+  } else if (pipelineDrained) {
     handleCreatedCompletions(0, { flushImmediately: true });
   }
 
@@ -489,13 +492,12 @@ export function BookProcessingProvider({ children }) {
   const stateRef = useRef(state);
   const hasAppliedInitialStateRef = useRef(false);
   const syncAdvanceInFlightRef = useRef(false);
+  const syncControlInFlightRef = useRef(false);
   const pipelineAdvanceInFlightRef = useRef(false);
-  const location = useLocation();
-  const { authenticated, loading } = useSession();
+  const { authenticated, loading, user } = useSession();
   const toast = useToast();
-  const processingRouteActive = isProcessingRoute(location.pathname);
   const canLoadProcessingState =
-    processingRouteActive && authenticated && !loading;
+    authenticated && !loading && hasCapability(user, "processing:manage");
 
   useEffect(() => {
     stateRef.current = state;
@@ -506,7 +508,7 @@ export function BookProcessingProvider({ children }) {
       createCreatedNotificationBuffer({
         onFlush: (completedCount) => {
           toast.success({
-            title: "Book created",
+            title: completedCount === 1 ? "Book created" : "Books created",
             description: createdNotificationDescription(completedCount),
           });
         },
@@ -578,6 +580,35 @@ export function BookProcessingProvider({ children }) {
     loadState().catch(() => {});
   }, [canLoadProcessingState, loadState]);
 
+  useEffect(() => {
+    if (!canLoadProcessingState) {
+      return undefined;
+    }
+
+    const hasActiveRequests =
+      (state.summary?.notifications?.activeRequests || 0) > 0;
+    const activeSync =
+      state.sync.status === "syncing" ||
+      state.sync.status === "pausing" ||
+      state.sync.status === "paused";
+    if (hasActiveRequests || activeSync) {
+      return undefined;
+    }
+
+    const timerId = window.setInterval(() => {
+      loadState().catch(() => {});
+    }, PROCESSING_STATE_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [
+    canLoadProcessingState,
+    loadState,
+    state.summary?.notifications?.activeRequests,
+    state.sync.status,
+  ]);
+
   const runCardAction = useCallback(
     async (cardId, request, options = {}) => {
       setBusyCards((current) => ({
@@ -617,9 +648,21 @@ export function BookProcessingProvider({ children }) {
     [applyServerState, toast],
   );
 
+  const runSyncControlAction = useCallback(
+    async (cardId, request, options = {}) => {
+      syncControlInFlightRef.current = true;
+      try {
+        return await runCardAction(cardId, request, options);
+      } finally {
+        syncControlInFlightRef.current = false;
+      }
+    },
+    [runCardAction],
+  );
+
   const startCatalogSync = useCallback(() => {
     const remotePages = catalogRemotePages(stateRef.current.sync.remotePages);
-    return runCardAction(
+    return runSyncControlAction(
       "catalog-sync",
       () =>
         apiFetch(processingSummaryPath("/processing/sync/start/"), {
@@ -634,11 +677,11 @@ export function BookProcessingProvider({ children }) {
           }),
       },
     );
-  }, [runCardAction]);
+  }, [runSyncControlAction]);
 
   const pauseCatalogSync = useCallback(
     () =>
-      runCardAction(
+      runSyncControlAction(
         "catalog-sync",
         () =>
           apiFetch(processingSummaryPath("/processing/sync/pause/"), {
@@ -652,12 +695,12 @@ export function BookProcessingProvider({ children }) {
             }),
         },
       ),
-    [runCardAction],
+    [runSyncControlAction],
   );
 
   const resumeCatalogSync = useCallback(
     () =>
-      runCardAction(
+      runSyncControlAction(
         "catalog-sync",
         () =>
           apiFetch(processingSummaryPath("/processing/sync/resume/"), {
@@ -672,12 +715,12 @@ export function BookProcessingProvider({ children }) {
             }),
         },
       ),
-    [runCardAction],
+    [runSyncControlAction],
   );
 
   const stopSync = useCallback(
     (cardId = "catalog-sync") =>
-      runCardAction(
+      runSyncControlAction(
         cardId,
         () =>
           apiFetch(processingSummaryPath("/processing/sync/stop/"), {
@@ -692,7 +735,7 @@ export function BookProcessingProvider({ children }) {
             }),
         },
       ),
-    [runCardAction],
+    [runSyncControlAction],
   );
 
   const createRequestsForRecords = useCallback(
@@ -748,7 +791,7 @@ export function BookProcessingProvider({ children }) {
 
   const runCatalogAutomation = useCallback(
     () =>
-      runCardAction(
+      runSyncControlAction(
         "catalog-automation-run",
         () =>
           apiFetch(
@@ -765,12 +808,12 @@ export function BookProcessingProvider({ children }) {
             }),
         },
       ),
-    [runCardAction],
+    [runSyncControlAction],
   );
 
   const pauseCatalogAutomation = useCallback(
     () =>
-      runCardAction(
+      runSyncControlAction(
         "catalog-automation-run",
         () =>
           apiFetch(processingSummaryPath("/processing/sync/pause/"), {
@@ -785,7 +828,7 @@ export function BookProcessingProvider({ children }) {
             }),
         },
       ),
-    [runCardAction],
+    [runSyncControlAction],
   );
 
   const stopCatalogAutomation = useCallback(
@@ -818,7 +861,7 @@ export function BookProcessingProvider({ children }) {
 
   const runIncompleteAutomation = useCallback(
     () =>
-      runCardAction(
+      runSyncControlAction(
         "incomplete-automation-run",
         () =>
           apiFetch(
@@ -836,12 +879,12 @@ export function BookProcessingProvider({ children }) {
           },
         },
       ),
-    [runCardAction],
+    [runSyncControlAction],
   );
 
   const pauseIncompleteAutomation = useCallback(
     () =>
-      runCardAction(
+      runSyncControlAction(
         "incomplete-automation-run",
         () =>
           apiFetch(processingSummaryPath("/processing/sync/pause/"), {
@@ -856,7 +899,7 @@ export function BookProcessingProvider({ children }) {
             }),
         },
       ),
-    [runCardAction],
+    [runSyncControlAction],
   );
 
   const stopIncompleteAutomation = useCallback(
@@ -948,7 +991,10 @@ export function BookProcessingProvider({ children }) {
 
     const timerId = window.setInterval(
       async () => {
-        if (syncAdvanceInFlightRef.current) {
+        if (
+          syncAdvanceInFlightRef.current ||
+          syncControlInFlightRef.current
+        ) {
           return;
         }
         syncAdvanceInFlightRef.current = true;

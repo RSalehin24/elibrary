@@ -32,10 +32,35 @@ test.describe("Book Detail Page", () => {
     await loginAsSuperAdmin(page);
   });
 
+  test("book detail shows the fetched table of contents summary", async ({
+    page,
+  }) => {
+    const bookPage = new BookDetailPageModel(page);
+
+    await bookPage.goto(seedData.books.detail.slug);
+
+    await expect(
+      page.getByRole("heading", { name: "Table of Contents", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Chapter 1", { exact: true })).toBeVisible();
+  });
+
   test("open reader launches the reader route from the book detail page", async ({
     page,
   }) => {
-    await openReaderFromBookDetail(page);
+    const bookPage = new BookDetailPageModel(page);
+
+    await bookPage.goto(seedData.books.detail.slug);
+    await expect(bookPage.sendToKindleButton()).toBeVisible();
+    await bookPage.openReaderButton().click();
+
+    await expect(page).toHaveURL(/\/reader\?/);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("manifest"), {
+        timeout: 15_000,
+      })
+      .toBeTruthy();
+    await expect(page.locator("#reader-view")).toBeVisible();
   });
 
   test("reader controls stay functional after the epub loads", async ({

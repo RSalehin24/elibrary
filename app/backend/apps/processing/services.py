@@ -12,6 +12,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import CharField, F, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from apps.catalog.services import find_existing_book_by_source_url
@@ -75,6 +76,7 @@ SYNC_ACTIVE_STATUSES = {
 }
 PROCESSING_STALE_AFTER = timedelta(minutes=20)
 PROCESSING_STALE_MESSAGE = "Processing exceeded 20 minutes without completing."
+PROCESSING_DISPATCH_STALE_AFTER = timedelta(minutes=2)
 MAX_PROCESSING_REQUEST_ATTEMPTS = 3
 DEFAULT_AUTOMATION_INTERVAL = "weekly"
 DEFAULT_AUTOMATION_TIME = time_type(3, 0)
@@ -214,6 +216,15 @@ def get_sync_state():
         defaults={"message": "Ready to sync."},
     )
     return state
+
+
+def persisted_sync_status(state):
+    latest_status = (
+        ProcessingSyncState.objects.filter(pk=state.pk)
+        .values_list("status", flat=True)
+        .first()
+    )
+    return latest_status or state.status
 
 
 def normalize_automation_settings(automation_settings):
@@ -859,7 +870,8 @@ def advance_catalog_sync_once(state, run_mode):
     state.appended_count += result["appended_count"]
     state.page_index += 1
     next_page = state.remote_pages[state.page_index] if state.page_index < len(state.remote_pages) else []
-    if state.status == ProcessingSyncStatus.PAUSING:
+    latest_status = persisted_sync_status(state)
+    if latest_status == ProcessingSyncStatus.PAUSING:
         state.status = ProcessingSyncStatus.PAUSED
         state.progress = build_sync_progress(
             run_mode,
@@ -873,6 +885,8 @@ def advance_catalog_sync_once(state, run_mode):
             f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
         )
         update_automation_run_status(run_mode, state.message)
+    elif latest_status != ProcessingSyncStatus.SYNCING:
+        return ProcessingSyncState.objects.get(pk=state.pk)
     elif not next_page:
         if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
             return complete_catalog_automation(state)
@@ -899,7 +913,8 @@ def advance_incomplete_sync_once(state):
     state.updated_count += len(resolved)
     state.page_index += 1
     next_page = state.remote_pages[state.page_index] if state.page_index < len(state.remote_pages) else []
-    if state.status == ProcessingSyncStatus.PAUSING:
+    latest_status = persisted_sync_status(state)
+    if latest_status == ProcessingSyncStatus.PAUSING:
         state.status = ProcessingSyncStatus.PAUSED
         state.progress = build_sync_progress(
             SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
@@ -912,6 +927,8 @@ def advance_incomplete_sync_once(state):
             f"{'record' if state.fetched_count == 1 else 'records'} before pausing."
         )
         update_automation_run_status(SYNC_RUN_MODE_INCOMPLETE_AUTOMATION, state.message)
+    elif latest_status != ProcessingSyncStatus.SYNCING:
+        return ProcessingSyncState.objects.get(pk=state.pk)
     elif not next_page:
         return complete_incomplete_automation(state)
     else:
@@ -977,7 +994,8 @@ def run_processing_sync(singleton_key="default", task_id=""):
             state.appended_count += result["appended_count"]
             state.page_index += 1
 
-            if state.status == ProcessingSyncStatus.PAUSING:
+            latest_status = persisted_sync_status(state)
+            if latest_status == ProcessingSyncStatus.PAUSING:
                 state.status = ProcessingSyncStatus.PAUSED
                 state.progress = build_sync_progress(
                     run_mode,
@@ -993,6 +1011,8 @@ def run_processing_sync(singleton_key="default", task_id=""):
                 state.save()
                 update_automation_run_status(run_mode, state.message)
                 return state
+            if latest_status != ProcessingSyncStatus.SYNCING:
+                return ProcessingSyncState.objects.get(pk=state.pk)
 
             state.progress = build_sync_progress(
                 run_mode,
@@ -1705,7 +1725,17 @@ def _request_dispatch_pending(processing_request):
         return False
 
     progress = _request_progress(processing_request)
-    return bool(progress.get(PROCESSING_DISPATCH_REQUESTED_AT_KEY))
+    requested_at_raw = progress.get(PROCESSING_DISPATCH_REQUESTED_AT_KEY)
+    if not requested_at_raw:
+        return False
+
+    requested_at = parse_datetime(str(requested_at_raw))
+    if requested_at is None:
+        return False
+    if timezone.is_naive(requested_at):
+        requested_at = timezone.make_aware(requested_at, timezone.get_current_timezone())
+
+    return (timezone.now() - requested_at) < PROCESSING_DISPATCH_STALE_AFTER
 
 
 def _request_progress_without_dispatch_marker(progress):

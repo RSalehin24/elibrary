@@ -48,6 +48,7 @@ class User(AbstractUser, TimeStampedModel):
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=255, blank=True)
     profile_image = models.FileField(upload_to=profile_image_upload_to, blank=True)
+    kindle_emails = models.JSONField(default=list, blank=True)
     totp_required = models.BooleanField(default=False)
     email_setup_pending = models.BooleanField(default=False)
     password_setup_nonce = models.PositiveIntegerField(default=0)

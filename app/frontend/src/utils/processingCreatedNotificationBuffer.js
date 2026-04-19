@@ -1,7 +1,7 @@
 export const CREATED_NOTIFICATION_INTERVAL_MS = 3 * 60 * 1000;
 
 export function createdNotificationDescription(count) {
-  return `${count} request(s) completed successfully.`;
+  return count === 1 ? "1 book created." : `${count} books created.`;
 }
 
 export function createCreatedNotificationBuffer({

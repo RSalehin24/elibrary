@@ -423,6 +423,36 @@ test.describe("processing replacement live smoke", () => {
     }
   });
 
+  test("queued create requests leave the queue on the real processing worker", async ({
+    page,
+  }) => {
+    const smoke = liveSmokeData();
+
+    await processingPost(page, "/processing/sync/start/", {
+      remotePages: [[smoke.catalog], []],
+    });
+    await processingPost(page, "/processing/sync/advance/");
+    await processingPost(page, "/processing/records/create-requests/", {
+      ids: [smoke.catalog.id],
+    });
+
+    const location = await waitForTableRowLocation(
+      page,
+      [
+        "create-processing",
+        "create-created",
+        "on-hold-failed",
+        "on-hold-duplicate",
+        "on-hold-deleted",
+      ],
+      smoke.catalog.name,
+      (item) => item.recordId === smoke.catalog.id,
+      { attempts: 60, delayMs: 500 },
+    );
+
+    expect(location.row.recordId).toBe(smoke.catalog.id);
+  });
+
   test("manual catalog sync uses real backend state", async ({ page }) => {
     const smoke = liveSmokeData();
 
@@ -443,6 +473,60 @@ test.describe("processing replacement live smoke", () => {
     await expect(
       page.getByTestId(`catalog-records-row-${smoke.manualB.id}`),
     ).toBeVisible();
+  });
+
+  test("manual sync pause survives non-processing navigation with the real backend", async ({
+    page,
+  }) => {
+    const smoke = liveSmokeData();
+    const remotePages = [
+      ...Array.from({ length: 12 }, (_, index) => [
+        {
+          ...smoke.manualA,
+          id: `${smoke.manualA.id}-${index + 1}`,
+          name: `${smoke.manualA.name} ${index + 1}`,
+          url: `${smoke.manualA.url}-${index + 1}`,
+        },
+      ]),
+      [],
+    ];
+
+    await seedIdleRemotePages(page, remotePages);
+
+    await page.goto("/catalog");
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "syncing",
+    );
+
+    await page.getByTestId("catalog-sync-pause-btn").click();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
+      "data-state",
+      "pausing",
+    );
+
+    await page.getByRole("link", { name: "Home", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "All Books", exact: true }),
+    ).toBeVisible();
+
+    const pausedSummary = await waitForProcessingSummary(
+      page,
+      (payload) => payload.sync?.status === "paused",
+      {
+        description: "manual sync to pause while away from processing pages",
+      },
+    );
+    expect(pausedSummary.sync.message).toContain("before pausing");
+
+    await page.getByRole("button", { name: "Processing" }).click();
+    await page.getByRole("link", { name: "Catalog", exact: true }).click();
+
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-progress")).toContainText(
+      "Saved",
+    );
   });
 
   test("catalog automation uses real backend state", async ({ page }) => {

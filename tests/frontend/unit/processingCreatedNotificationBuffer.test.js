@@ -98,6 +98,6 @@ test("created notifications can flush immediately when pipeline is done", () => 
 test("created notification message stays consistent", () => {
   assert.equal(
     createdNotificationDescription(10),
-    "10 request(s) completed successfully.",
+    "10 books created.",
   );
 });
