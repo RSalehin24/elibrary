@@ -92,6 +92,19 @@
   min-width: 0;
 }
 
+.access-user-editor-primary-row {
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.access-user-editor-primary-row > label {
+  align-self: start;
+}
+
+.access-user-email-field #access-user-email-feedback {
+  margin-top: 4px;
+}
+
 .access-user-submit-actions {
   margin-top: 10px;
 }

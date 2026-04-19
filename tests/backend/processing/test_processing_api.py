@@ -1655,6 +1655,106 @@ def test_processing_pipeline_dispatches_queued_request_even_with_initial_backlog
 
 
 @pytest.mark.django_db
+def test_processing_create_requests_dispatches_without_worker_probe(client, monkeypatch):
+    login_processing_admin(client)
+    record = BookRecord.objects.create(
+        id="probe-free-dispatch-record",
+        name="Probe Free Dispatch Record",
+        url="https://example.test/books/probe-free-dispatch-record",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+    )
+    dispatch_calls = []
+
+    def fake_apply_async(*, args, **kwargs):
+        dispatch_calls.append({"args": tuple(args), "kwargs": dict(kwargs)})
+        return SimpleNamespace(id="probe-free-task")
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_run_processing_jobs_inline",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.processing_workers_available",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(
+        "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
+        fake_apply_async,
+    )
+
+    response = client.post(
+        "/api/processing/records/create-requests/",
+        {"ids": [record.id]},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    processing_request = BookCreationRequest.objects.get(book_record=record)
+    assert processing_request.state == "queued"
+    assert processing_request.progress["_dispatchTaskId"] == "probe-free-task"
+    assert dispatch_calls == [
+        {
+            "args": ("request-probe-free-dispatch-record",),
+            "kwargs": {"queue": "processing"},
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_processing_pipeline_falls_back_to_inline_when_dispatch_fails(
+    client, monkeypatch
+):
+    login_processing_admin(client)
+    record = BookRecord.objects.create(
+        id="dispatch-failure-record",
+        name="Dispatch Failure Record",
+        url="https://example.test/books/dispatch-failure-record",
+        category="Fiction",
+        writer="Writer One",
+        publisher="Example Press",
+        book_creation_state="queued",
+    )
+    processing_request = BookCreationRequest.objects.create(
+        id="dispatch-failure-request",
+        book_record=record,
+        state="queued",
+    )
+
+    def fake_run_processing_request(request):
+        request.state = "created"
+        request.error_message = ""
+        request.save(update_fields=["state", "error_message", "updated_at"])
+        processing_services.sync_record_state(request.book_record)
+        return request
+
+    monkeypatch.setattr(
+        "apps.processing.services.should_run_processing_jobs_inline",
+        lambda: False,
+    )
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(
+        "apps.processing.tasks.kickoff_book_creation_request_task.apply_async",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("broker unavailable")),
+    )
+    monkeypatch.setattr(
+        "apps.processing.services._run_processing_request",
+        fake_run_processing_request,
+    )
+
+    response = client.post("/api/processing/pipeline/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    assert response.json()["advancedCount"] == 1
+    processing_request.refresh_from_db()
+    record.refresh_from_db()
+    assert processing_request.state == "created"
+    assert record.book_creation_state == "created"
+
+
+@pytest.mark.django_db
 def test_processing_pipeline_requeues_stale_dispatch_marker(client, monkeypatch):
     login_processing_admin(client)
     record = BookRecord.objects.create(

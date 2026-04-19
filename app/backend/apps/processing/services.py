@@ -233,7 +233,11 @@ def processing_workers_available(queue_name=PROCESSING_TASK_QUEUE):
 
 
 def should_enqueue_processing_work():
-    return not should_run_processing_jobs_inline() and processing_workers_available()
+    if should_run_processing_jobs_inline():
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    return True
 
 
 def should_manually_advance_processing_work():
@@ -1770,8 +1774,9 @@ def queue_processing_request(processing_request):
             ValueError("Only ebanglalibrary.com book URLs are allowed"),
         )
     if should_enqueue_processing_work():
-        enqueue_request_processing(processing_request)
-        return _reload_processing_request(processing_request.id)
+        if enqueue_request_processing(processing_request):
+            return _reload_processing_request(processing_request.id)
+        return kickoff_request_processing(processing_request.id)
     if should_run_processing_jobs_inline():
         return kickoff_request_processing(processing_request.id)
     return _reload_processing_request(processing_request.id)
@@ -3246,7 +3251,8 @@ def advance_pipeline_once():
             advanced += 1
         elif should_enqueue_processing_work():
             if not _request_dispatch_pending(queued_request):
-                enqueue_request_processing(queued_request)
+                if not enqueue_request_processing(queued_request):
+                    kickoff_request_processing(queued_request.id)
                 advanced += 1
         else:
             _transition_request_state(

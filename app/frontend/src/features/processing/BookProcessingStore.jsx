@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { useLocation } from "react-router-dom";
-import { apiFetch, resolveAppUrl } from "../../api/client";
+import { apiFetch, resolveApiUrl } from "../../api/client";
 import { useSession } from "../../hooks/useSession";
 import { useToast } from "../../hooks/useToast";
 import { hasCapability } from "../../utils/capabilities";
@@ -193,9 +193,6 @@ export function BookProcessingProvider({ children }) {
     if (!onProcessingPage || !canLoadProcessingState) {
       return undefined;
     }
-    if (processingState.loadedOnce && !processingState.error) {
-      return undefined;
-    }
 
     let cancelled = false;
     setProcessingState((current) => ({
@@ -230,8 +227,6 @@ export function BookProcessingProvider({ children }) {
     applyProcessingPayload,
     canLoadProcessingState,
     onProcessingPage,
-    processingState.error,
-    processingState.loadedOnce,
   ]);
 
   const runCardAction = useCallback(
@@ -292,7 +287,7 @@ export function BookProcessingProvider({ children }) {
     }
 
     let disposed = false;
-    const nextSource = new EventSource(resolveAppUrl("/processing/stream/"), {
+    const nextSource = new EventSource(resolveApiUrl("/processing/stream/"), {
       withCredentials: true,
     });
     eventSourceRef.current = nextSource;

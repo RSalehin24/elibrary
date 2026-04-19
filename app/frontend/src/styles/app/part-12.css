@@ -126,6 +126,20 @@
   align-content: start;
 }
 
+.processing-table .processing-table-skeleton-row {
+  display: table-row;
+}
+
+.processing-table .processing-table-skeleton-row td {
+  vertical-align: top;
+}
+
+.processing-table .processing-table-skeleton-row .processing-table-link,
+.processing-table .processing-table-skeleton-row .processing-table-skeleton-stack,
+.processing-table .processing-table-skeleton-row .processing-contributors-list {
+  width: 100%;
+}
+
 .processing-table {
   min-width: 980px;
   table-layout: fixed;

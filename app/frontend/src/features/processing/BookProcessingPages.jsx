@@ -678,7 +678,7 @@ function TableSkeletonRows({
   return Array.from({ length: count }, (_, index) => (
     <tr
       key={`${incremental ? "more" : "initial"}-skeleton-${index}`}
-      className={`processing-skeleton-row${
+      className={`processing-skeleton-row processing-table-skeleton-row${
         splitBookColumn ? " processing-skeleton-row--split" : ""
       }`}
       data-testid={

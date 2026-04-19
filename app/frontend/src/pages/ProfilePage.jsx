@@ -669,10 +669,9 @@ export default function ProfilePage() {
                 {kindleSectionOpen ? (
                   <div className="profile-password-panel">
                     <p className="form-helper-text">
-                      In Amazon Personal Document Settings, allow{" "}
-                      <strong>{kindleSenderEmail}</strong> in the Approved
-                      Personal Document E-mail List. Enter one Kindle email in
-                      each field below.
+                      <p className="profile-kindle-info-margin"> > Allow{" "}
+                      <strong>{kindleSenderEmail}</strong> in <i>Manage Your Content and Devices > Preferences > Personal Document Settings</i> in your Amazon settings.</p> 
+                      <p> > For adding multiple emails please ensure <strong>Personal Document Archiving</strong> is disabled.</p> 
                     </p>
                     <div className="profile-kindle-email-list">
                       {kindleEmails.map((email, index) => {

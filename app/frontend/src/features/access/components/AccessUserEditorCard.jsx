@@ -46,7 +46,7 @@ export default function AccessUserEditorCard({
 
       <form className="stack-form" onSubmit={onSubmit} data-testid="access-user-form">
         <fieldset className="form-fieldset-reset" disabled={submittingUser}>
-          <div className="detail-facts">
+          <div className="detail-facts access-user-editor-primary-row">
             <label>
               <span className="fact-label">Name</span>
               <input
@@ -62,7 +62,7 @@ export default function AccessUserEditorCard({
                 readOnly={isEditingUser}
               />
             </label>
-            <label>
+            <label className="access-user-email-field">
               <span className="fact-label">Email</span>
               <input
                 type="email"

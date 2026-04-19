@@ -4,6 +4,10 @@
   gap: 14px;
 }
 
+.profile-kindle-info-margin {
+  margin-bottom: 7px !important;
+}
+
 .profile-password-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

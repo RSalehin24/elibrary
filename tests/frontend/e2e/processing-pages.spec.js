@@ -1328,6 +1328,10 @@ test.describe("processing pages replacement", () => {
       "height",
       "58px",
     );
+    await expect(page.getByTestId("catalog-sync-start-btn")).toHaveCSS(
+      "color",
+      "rgb(236, 255, 246)",
+    );
 
     await page.getByTestId("catalog-sync-start-btn").click();
     await expect(page.getByTestId("catalog-sync-loader")).toBeVisible();
@@ -1342,6 +1346,10 @@ test.describe("processing pages replacement", () => {
       "pausing",
     );
     await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toHaveCSS(
+      "color",
+      "rgb(236, 255, 246)",
+    );
     await expect(page.getByTestId("catalog-sync-loader")).toHaveCount(0);
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
       "Catalog now has 2 book records",
@@ -1516,6 +1524,17 @@ test.describe("processing pages replacement", () => {
         .locator(".processing-value-skeleton"),
     ).toBeVisible();
     await expect(page.getByTestId("catalog-records-table-skeleton")).toBeVisible();
+    await expect.poll(async () =>
+      page.getByTestId("catalog-records-table-skeleton").evaluate((row) => ({
+        rowDisplay: window.getComputedStyle(row).display,
+        firstCellDisplay: window.getComputedStyle(
+          row.querySelector("td"),
+        ).display,
+      })),
+    ).toEqual({
+      rowDisplay: "table-row",
+      firstCellDisplay: "table-cell",
+    });
 
     await expect(page.getByTestId("catalog-records-row-scroll-record-00")).toBeVisible();
     await expect(page.getByTestId("catalog-records-count")).toContainText("95");
