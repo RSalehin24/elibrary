@@ -137,6 +137,10 @@
     grid-template-columns: 1fr;
   }
 
+  .manual-book-form-span-3 {
+    grid-column: 1;
+  }
+
   .catalog-search-row {
     grid-template-columns: 1fr;
   }

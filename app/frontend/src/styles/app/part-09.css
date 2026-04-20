@@ -319,6 +319,18 @@
   align-self: center;
 }
 
+.processing-card-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.processing-card-title-row h2 {
+  min-width: 0;
+}
+
 .processing-card-head-meta h2 {
   display: inline-flex;
   align-items: center;
@@ -376,6 +388,17 @@
   gap: 8px;
   min-width: 0;
   flex-wrap: nowrap;
+}
+
+.processing-card-head-actions {
+  grid-column: 1 / -1;
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.processing-card-head-actions .processing-bulk-actions {
+  margin-left: 0;
 }
 
 .processing-card-head-search {

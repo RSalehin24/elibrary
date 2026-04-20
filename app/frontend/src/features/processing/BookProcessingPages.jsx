@@ -1214,6 +1214,26 @@ function ProcessingDataCard({
     setFilters((current) => ({ ...current, q: nextQuery }));
   }
 
+  const bulkActions = actions.length ? (
+    <div className="processing-bulk-actions">
+      {actions.map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          className={
+            action.danger ? "ghost-button danger-button" : "primary-button"
+          }
+          disabled={busy || initialLoading || selectedRows.length === 0}
+          onClick={() => runAction(action)}
+          data-testid={`${pageId}-${cardId}-${action.id}-btn`}
+        >
+          {action.label}
+          {selectedRows.length ? ` (${selectedRows.length})` : ""}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
   return (
     <section
       className={`detail-card processing-card processing-list-card processing-replacement-card${
@@ -1224,7 +1244,20 @@ function ProcessingDataCard({
       <div className="processing-card-head processing-card-head--list">
         <div className="processing-card-head-line">
           <div className="processing-card-head-meta">
-            <h2>{title}</h2>
+            <div className="processing-card-title-row">
+              <h2>{title}</h2>
+              <span
+                className="catalog-result-count processing-card-title-count"
+                aria-label={`${totalCount} results`}
+                data-testid={`${pageId}-${cardId}-count`}
+              >
+                {showInitialTableSkeleton ? (
+                  <ProcessingCountSkeleton />
+                ) : (
+                  totalCount
+                )}
+              </span>
+            </div>
           </div>
           <div className="processing-card-head-search">
             <label
@@ -1264,18 +1297,10 @@ function ProcessingDataCard({
                 </span>
               ) : null}
             </button>
-            <span
-              className="catalog-result-count"
-              aria-label={`${totalCount} results`}
-              data-testid={`${pageId}-${cardId}-count`}
-            >
-              {showInitialTableSkeleton ? (
-                <ProcessingCountSkeleton />
-              ) : (
-                totalCount
-              )}
-            </span>
           </div>
+          {bulkActions ? (
+            <div className="processing-card-head-actions">{bulkActions}</div>
+          ) : null}
         </div>
       </div>
 
@@ -1302,49 +1327,26 @@ function ProcessingDataCard({
         statusFilter={filters.status}
       />
 
-      {actions.length || busy ? (
+      {busy ? (
         <div className="processing-bulk-bar">
           <div className="processing-bulk-status">
-            {busy ? (
-              <span
-                className="processing-inline-loader"
-                data-testid={`${pageId}-${cardId}-loader`}
-              >
-                <LoadingSpinner size={14} /> Working
-              </span>
-            ) : null}
+            <span
+              className="processing-inline-loader"
+              data-testid={`${pageId}-${cardId}-loader`}
+            >
+              <LoadingSpinner size={14} /> Working
+            </span>
           </div>
-          {actions.length ? (
-            <div className="processing-bulk-actions">
-              {actions.map((action) => (
-                <button
-                  key={action.id}
-                  type="button"
-                  className={
-                    action.danger
-                      ? "ghost-button danger-button"
-                      : "primary-button"
-                  }
-                  disabled={busy || initialLoading || selectedRows.length === 0}
-                  onClick={() => runAction(action)}
-                  data-testid={`${pageId}-${cardId}-${action.id}-btn`}
-                >
-                  {action.label}
-                  {selectedRows.length ? ` (${selectedRows.length})` : ""}
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
       ) : null}
 
       <div
         ref={tableShellRef}
-        className="processing-table-shell"
+        className="processing-table-shell processing-table-shell--mobile-cards"
         aria-busy={initialLoading || loadingMore || refreshing}
       >
         <table
-          className="simple-table processing-table"
+          className="simple-table processing-table table-mobile-cards"
           data-testid={`${pageId}-${cardId}-table`}
         >
           <colgroup>
@@ -1436,7 +1438,10 @@ function ProcessingDataCard({
                   }
                 >
                   {showSelectionColumn ? (
-                    <td className="processing-col-select">
+                    <td
+                      className="processing-col-select"
+                      data-label="Select"
+                    >
                       <input
                         type="checkbox"
                         className="processing-checkbox"
@@ -1452,12 +1457,15 @@ function ProcessingDataCard({
                   ) : null}
                   {splitBookColumn ? (
                     <>
-                      <td className="processing-col-name">
+                      <td
+                        className="processing-col-name"
+                        data-label="Name"
+                      >
                         <div className="processing-table-primary">
                           <strong>{row.title}</strong>
                         </div>
                       </td>
-                      <td className="processing-col-url">
+                      <td className="processing-col-url" data-label="URL">
                         {row.url ? (
                           <span className="processing-table-link">
                             {row.displayUrl || row.url}
@@ -1468,7 +1476,10 @@ function ProcessingDataCard({
                       </td>
                     </>
                   ) : (
-                    <td className="processing-col-book-wide">
+                    <td
+                      className="processing-col-book-wide"
+                      data-label="Book"
+                    >
                       <div className="processing-table-primary">
                         <strong>{row.title}</strong>
                         {row.url ? (
@@ -1479,25 +1490,34 @@ function ProcessingDataCard({
                       </div>
                     </td>
                   )}
-                  <td className="processing-col-contributors-wide">
+                  <td
+                    className="processing-col-contributors-wide"
+                    data-label="Credits"
+                  >
                     <ContributorsCell row={row} />
                   </td>
-                  <td className="processing-col-category">
+                  <td className="processing-col-category" data-label="Category">
                     {row.category || "Uncategorized"}
                   </td>
-                  <td className="processing-col-status">
+                  <td className="processing-col-status" data-label="Status">
                     {REQUEST_STATE_LABELS[row.status] || row.status}
                   </td>
                   {showDetailsColumn ? (
-                    <td className="processing-col-details">
+                    <td
+                      className="processing-col-details"
+                      data-label={detailsLabel}
+                    >
                       {requestDetails(row) || "Ready"}
                     </td>
                   ) : null}
-                  <td className="processing-col-updated">
+                  <td className="processing-col-updated" data-label="Updated">
                     {formatDate(row.updatedAt)}
                   </td>
                   {showActionColumn ? (
-                    <td className="processing-col-action">
+                    <td
+                      className="processing-col-action"
+                      data-label={actionLabel}
+                    >
                       {renderRowAction(row) || (
                         <span className="processing-table-muted">-</span>
                       )}
@@ -1507,7 +1527,9 @@ function ProcessingDataCard({
               ))
             ) : (
               <tr>
-                <td colSpan={visibleColumnCount}>{tableError || emptyLabel}</td>
+                <td colSpan={visibleColumnCount} className="table-empty-cell">
+                  {tableError || emptyLabel}
+                </td>
               </tr>
             )}
             {showRefreshSkeletonRows ? (

@@ -147,8 +147,11 @@ export default function AccessUsersTableCard({
           </div>
         </div>
       </div>
-      <div className="table-shell">
-        <table className="simple-table" data-testid="access-users-table">
+      <div className="table-shell access-users-table-shell">
+        <table
+          className="simple-table access-users-table table-mobile-cards"
+          data-testid="access-users-table"
+        >
           <thead>
             <tr>
               <th>Name</th>
@@ -166,17 +169,22 @@ export default function AccessUsersTableCard({
 
                 return (
                   <tr key={entry.id}>
-                    <td>{entry.full_name || "-"}</td>
-                    <td>{entry.email}</td>
-                    <td>{entry.is_active ? "Active" : "Disabled"}</td>
-                    <td>
+                    <td data-label="Name">{entry.full_name || "-"}</td>
+                    <td data-label="Email">{entry.email}</td>
+                    <td data-label="Status">
+                      {entry.is_active ? "Active" : "Disabled"}
+                    </td>
+                    <td data-label="Two-Factor">
                       {entry.totp_required
                         ? "Required"
                         : entry.totp_enabled
                           ? "Enabled"
                           : "Optional"}
                     </td>
-                    <td className="access-permission-cell">
+                    <td
+                      className="access-permission-cell"
+                      data-label="Account Permissions"
+                    >
                       {accountAccessLabels.length ? (
                         <div
                           className="access-permission-list"
@@ -196,7 +204,7 @@ export default function AccessUsersTableCard({
                         <span className="access-permission-empty">-</span>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Actions">
                       <div className="table-actions">
                         {`${entry.id}` === `${currentUserId}` ||
                         entry.is_superuser ? (
@@ -238,7 +246,7 @@ export default function AccessUsersTableCard({
               })
             ) : (
               <tr>
-                <td colSpan={6}>
+                <td colSpan={6} className="table-empty-cell">
                   No users found for the current search and filter.
                 </td>
               </tr>

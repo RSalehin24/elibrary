@@ -101,10 +101,12 @@ export default function BookTable({
   return (
     <div
       ref={shellRef}
-      className={`catalog-table-shell${shellClassName ? ` ${shellClassName}` : ""}`}
+      className={`catalog-table-shell book-table-shell${
+        shellClassName ? ` ${shellClassName}` : ""
+      }`}
       aria-busy={initialLoading || loadingMore || refreshing}
     >
-      <table className="catalog-table book-table">
+      <table className="catalog-table book-table table-mobile-cards">
         <colgroup>
           <col className="book-table-col-id" />
           <col className="book-table-col-title" />
@@ -151,12 +153,12 @@ export default function BookTable({
                       : undefined
                   }
                 >
-                  <td className="table-code-cell">
+                  <td className="table-code-cell" data-label="Book ID">
                     <BookRouteLink slug={book.slug} className="table-code-link">
                       {book.catalog_code || "Pending"}
                     </BookRouteLink>
                   </td>
-                  <td className="table-title-cell">
+                  <td className="table-title-cell" data-label="Title">
                     <BookRouteLink slug={book.slug} className="table-title-link">
                       {book.title}
                     </BookRouteLink>
@@ -167,30 +169,32 @@ export default function BookTable({
                           : "Library record")}
                     </span>
                   </td>
-                  <td>{renderWriterCell(book, linkFilters)}</td>
-                  <td>
+                  <td data-label="Contributors">
+                    {renderWriterCell(book, linkFilters)}
+                  </td>
+                  <td data-label="Category">
                     {categories.length ? (
                       renderLinkedValues(categories, "category", linkFilters)
                     ) : (
                       <span className="table-muted">Unsorted</span>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Series">
                     {series.length ? (
                       series.join(", ")
                     ) : (
                       <span className="table-muted">Standalone</span>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Type">
                     <span
                       className={`table-type-pill table-type-pill-${book.record_type || "digital"}`}
                     >
                       {book.record_type === "manual" ? "Manual" : "Digital"}
                     </span>
                   </td>
-                  <td>{formatBookDate(book.created_at)}</td>
-                  <td className="table-action-cell">
+                  <td data-label="Created">{formatBookDate(book.created_at)}</td>
+                  <td className="table-action-cell" data-label="Action">
                     <BookRouteLink
                       slug={book.slug}
                       className="ghost-button table-row-action"
