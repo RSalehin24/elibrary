@@ -20,21 +20,28 @@ const PROCESSING_ROUTE_PATHS = new Set([
   "/on-hold",
   "/incomplete",
 ]);
-const PROCESSING_STATE_PATH = "/processing/state/";
 const PROCESSING_SYNC_SCOPE_CATALOG = "catalog";
 const PROCESSING_SYNC_SCOPE_INCOMPLETE = "incomplete";
-const DEFAULT_PROCESSING_STATE = {
-  summary: {},
-  sync: null,
-  syncStates: {},
-  automation: {},
-  orchestration: {},
-  records: [],
-  requests: [],
-  loadedOnce: false,
-  initialLoading: false,
-  error: "",
-};
+const PROCESSING_CARD_KEYS = [
+  "catalog-overview",
+  "catalog-sync",
+  "catalog-automation",
+  "catalog-records",
+  "create-overview",
+  "create-requests",
+  "create-queue",
+  "create-processing",
+  "create-created",
+  "on-hold-overview",
+  "on-hold-paused",
+  "on-hold-failed",
+  "on-hold-duplicate",
+  "on-hold-deleted",
+  "incomplete-overview",
+  "incomplete-automation",
+  "incomplete-records",
+  "incomplete-completed",
+];
 
 function countLabel(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
@@ -64,6 +71,17 @@ function catalogRemotePages(remotePages) {
     return remotePages;
   }
   return [];
+}
+
+function processingPath(path) {
+  return path.includes("?") ? `${path}&includeLists=0` : `${path}?includeLists=0`;
+}
+
+function normalizeTargets(targets) {
+  if (Array.isArray(targets) && targets.length > 0) {
+    return Array.from(new Set(targets.filter(Boolean)));
+  }
+  return [...PROCESSING_CARD_KEYS];
 }
 
 function notifyRequestAction(toast, action, changedCount, options = {}) {
@@ -133,41 +151,10 @@ function notifyRequestAction(toast, action, changedCount, options = {}) {
   });
 }
 
-function mergeProcessingPayload(current, payload) {
-  if (!payload || typeof payload !== "object") {
-    return current;
-  }
-
-  return {
-    summary:
-      payload.summary && typeof payload.summary === "object"
-        ? payload.summary
-        : current.summary,
-    sync: payload.sync && typeof payload.sync === "object" ? payload.sync : current.sync,
-    syncStates:
-      payload.syncStates && typeof payload.syncStates === "object"
-        ? payload.syncStates
-        : current.syncStates,
-    automation:
-      payload.automation && typeof payload.automation === "object"
-        ? payload.automation
-        : current.automation,
-    orchestration:
-      payload.orchestration && typeof payload.orchestration === "object"
-        ? payload.orchestration
-        : current.orchestration,
-    records: Array.isArray(payload.records) ? payload.records : current.records,
-    requests: Array.isArray(payload.requests) ? payload.requests : current.requests,
-    loadedOnce: true,
-    initialLoading: false,
-    error: "",
-  };
-}
-
 export function BookProcessingProvider({ children }) {
   const [busyCards, setBusyCards] = useState({});
-  const [processingState, setProcessingState] = useState(DEFAULT_PROCESSING_STATE);
   const [streamMode, setStreamMode] = useState("idle");
+  const [cardRefreshTokens, setCardRefreshTokens] = useState({});
   const eventSourceRef = useRef(null);
   const location = useLocation();
   const { authenticated, loading, user } = useSession();
@@ -176,58 +163,30 @@ export function BookProcessingProvider({ children }) {
     authenticated && !loading && hasCapability(user, "processing:manage");
   const onProcessingPage = PROCESSING_ROUTE_PATHS.has(location.pathname);
 
-  const applyProcessingPayload = useCallback((payload) => {
-    setProcessingState((current) => mergeProcessingPayload(current, payload));
+  const invalidateProcessingTargets = useCallback((targets) => {
+    const nextTargets = normalizeTargets(targets);
+    setCardRefreshTokens((current) => {
+      const next = { ...current };
+      nextTargets.forEach((target) => {
+        next[target] = (next[target] || 0) + 1;
+      });
+      return next;
+    });
   }, []);
+
+  const getCardRefreshToken = useCallback(
+    (cardKey) => cardRefreshTokens[cardKey] || 0,
+    [cardRefreshTokens],
+  );
 
   useEffect(() => {
     if (canLoadProcessingState) {
       return undefined;
     }
-    setProcessingState(DEFAULT_PROCESSING_STATE);
+    setCardRefreshTokens({});
     setStreamMode("idle");
     return undefined;
   }, [canLoadProcessingState]);
-
-  useEffect(() => {
-    if (!onProcessingPage || !canLoadProcessingState) {
-      return undefined;
-    }
-
-    let cancelled = false;
-    setProcessingState((current) => ({
-      ...current,
-      initialLoading: true,
-      error: "",
-    }));
-
-    apiFetch(PROCESSING_STATE_PATH)
-      .then((payload) => {
-        if (cancelled) {
-          return;
-        }
-        applyProcessingPayload(payload);
-      })
-      .catch((loadError) => {
-        if (cancelled) {
-          return;
-        }
-        setProcessingState((current) => ({
-          ...current,
-          loadedOnce: true,
-          initialLoading: false,
-          error: loadError.message || "Unable to load processing state.",
-        }));
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    applyProcessingPayload,
-    canLoadProcessingState,
-    onProcessingPage,
-  ]);
 
   const runCardAction = useCallback(
     async (cardId, request, options = {}) => {
@@ -237,7 +196,9 @@ export function BookProcessingProvider({ children }) {
       }));
       try {
         const payload = await request();
-        applyProcessingPayload(payload);
+        invalidateProcessingTargets(
+          payload?.targets || options.invalidateTargets || [cardId],
+        );
         if (typeof options.onSuccess === "function") {
           options.onSuccess(payload, toast);
         }
@@ -264,7 +225,7 @@ export function BookProcessingProvider({ children }) {
         });
       }
     },
-    [applyProcessingPayload, toast],
+    [invalidateProcessingTargets, toast],
   );
 
   useEffect(() => {
@@ -287,9 +248,12 @@ export function BookProcessingProvider({ children }) {
     }
 
     let disposed = false;
-    const nextSource = new EventSource(resolveApiUrl("/processing/stream/"), {
-      withCredentials: true,
-    });
+    const nextSource = new EventSource(
+      resolveApiUrl("/processing/stream/?includeLists=0"),
+      {
+        withCredentials: true,
+      },
+    );
     eventSourceRef.current = nextSource;
     setStreamMode("connecting");
 
@@ -298,9 +262,10 @@ export function BookProcessingProvider({ children }) {
         return;
       }
       try {
-        applyProcessingPayload(JSON.parse(event.data || "{}"));
+        const payload = JSON.parse(event.data || "{}");
+        invalidateProcessingTargets(payload.targets);
       } catch {
-        // Ignore malformed stream payloads and keep the current state.
+        invalidateProcessingTargets(PROCESSING_CARD_KEYS);
       }
     };
 
@@ -310,8 +275,9 @@ export function BookProcessingProvider({ children }) {
       }
       setStreamMode("connected");
     });
-    nextSource.addEventListener("snapshot", handlePayload);
+    nextSource.addEventListener("invalidation", handlePayload);
     nextSource.addEventListener("state", handlePayload);
+    nextSource.addEventListener("snapshot", handlePayload);
     nextSource.onerror = () => {
       if (disposed || eventSourceRef.current !== nextSource) {
         return;
@@ -327,14 +293,14 @@ export function BookProcessingProvider({ children }) {
       }
       setStreamMode("idle");
     };
-  }, [applyProcessingPayload, canLoadProcessingState, onProcessingPage]);
+  }, [canLoadProcessingState, invalidateProcessingTargets, onProcessingPage]);
 
   const startCatalogSync = useCallback(
     (remotePages) =>
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch("/processing/sync/start/", {
+          apiFetch(processingPath("/processing/sync/start/"), {
             method: "POST",
             ...(catalogRemotePages(remotePages).length
               ? { body: { remotePages: catalogRemotePages(remotePages) } }
@@ -356,9 +322,12 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause"), {
-            method: "POST",
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause")),
+            {
+              method: "POST",
+            },
+          ),
         {
           onSuccess: (_, nextToast) =>
             nextToast.info({
@@ -375,10 +344,13 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume"), {
-            method: "POST",
-            body: { runMode: "manual" },
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume")),
+            {
+              method: "POST",
+              body: { runMode: "manual" },
+            },
+          ),
         {
           onSuccess: (_, nextToast) =>
             nextToast.info({
@@ -395,9 +367,12 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-sync",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop"), {
-            method: "POST",
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop")),
+            {
+              method: "POST",
+            },
+          ),
       ),
     [runCardAction],
   );
@@ -407,7 +382,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-records",
         () =>
-          apiFetch("/processing/records/create-requests/", {
+          apiFetch(processingPath("/processing/records/create-requests/"), {
             method: "POST",
             body: { ids: recordIds },
           }),
@@ -435,7 +410,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-save",
         () =>
-          apiFetch("/processing/automation/catalog/", {
+          apiFetch(processingPath("/processing/automation/catalog/"), {
             method: "POST",
             body: form,
           }),
@@ -455,7 +430,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch("/processing/automation/catalog/run/", {
+          apiFetch(processingPath("/processing/automation/catalog/run/"), {
             method: "POST",
           }),
         {
@@ -474,15 +449,18 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause"), {
-            method: "POST",
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "pause")),
+            {
+              method: "POST",
+            },
+          ),
         {
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Catalog automation pausing",
               description:
-                "Automated catalog sync will pause after the current page.",
+                "Automated catalog sync will pause after the current page finishes.",
             }),
         },
       ),
@@ -494,10 +472,13 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume"), {
-            method: "POST",
-            body: { runMode: "catalog_automation" },
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "resume")),
+            {
+              method: "POST",
+              body: { runMode: "catalog_automation" },
+            },
+          ),
         {
           onSuccess: (_, nextToast) =>
             nextToast.info({
@@ -515,9 +496,12 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "catalog-automation-run",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop"), {
-            method: "POST",
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_CATALOG, "stop")),
+            {
+              method: "POST",
+            },
+          ),
       ),
     [runCardAction],
   );
@@ -527,7 +511,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-save",
         () =>
-          apiFetch("/processing/automation/incomplete/", {
+          apiFetch(processingPath("/processing/automation/incomplete/"), {
             method: "POST",
             body: form,
           }),
@@ -547,7 +531,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch("/processing/automation/incomplete/run/", {
+          apiFetch(processingPath("/processing/automation/incomplete/run/"), {
             method: "POST",
           }),
         {
@@ -566,9 +550,12 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "pause"), {
-            method: "POST",
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "pause")),
+            {
+              method: "POST",
+            },
+          ),
         {
           onSuccess: (_, nextToast) =>
             nextToast.info({
@@ -586,10 +573,13 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "resume"), {
-            method: "POST",
-            body: { runMode: "incomplete_automation" },
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "resume")),
+            {
+              method: "POST",
+              body: { runMode: "incomplete_automation" },
+            },
+          ),
         {
           onSuccess: (_, nextToast) =>
             nextToast.info({
@@ -607,9 +597,12 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         "incomplete-automation-run",
         () =>
-          apiFetch(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "stop"), {
-            method: "POST",
-          }),
+          apiFetch(
+            processingPath(scopedSyncPath(PROCESSING_SYNC_SCOPE_INCOMPLETE, "stop")),
+            {
+              method: "POST",
+            },
+          ),
       ),
     [runCardAction],
   );
@@ -619,7 +612,7 @@ export function BookProcessingProvider({ children }) {
       runCardAction(
         cardId,
         () =>
-          apiFetch("/processing/requests/action/", {
+          apiFetch(processingPath("/processing/requests/action/"), {
             method: "POST",
             body: {
               ids: requestIds,
@@ -689,8 +682,9 @@ export function BookProcessingProvider({ children }) {
     () => ({
       busyCards,
       canLoadProcessingState,
-      processingState,
       streamMode,
+      getCardRefreshToken,
+      invalidateProcessingTargets,
       startCatalogSync,
       pauseCatalogSync,
       resumeCatalogSync,
@@ -722,12 +716,13 @@ export function BookProcessingProvider({ children }) {
       createAgainRequests,
       createRequestsForRecords,
       deleteRequests,
+      getCardRefreshToken,
+      invalidateProcessingTargets,
       markDuplicateRequestsAsNew,
       pauseCatalogAutomation,
       pauseCatalogSync,
       pauseIncompleteAutomation,
       pauseRequests,
-      processingState,
       recreateCompletedRequests,
       resumeCatalogAutomation,
       resumeCatalogSync,

@@ -54,6 +54,19 @@ def record_payload(record_id, **overrides):
     return payload
 
 
+class FakeProcessingCheckpointRedis:
+    def __init__(self, initial=None):
+        self.store = dict(initial or {})
+
+    def set(self, key, value):
+        self.store[key] = value
+        return True
+
+    def delete(self, key):
+        self.store.pop(key, None)
+        return 1
+
+
 def test_parse_incomplete_catalog_page_reads_entry_title_links():
     soup = processing_services.BeautifulSoup(
         """
@@ -146,6 +159,38 @@ def test_processing_invalidation_targets_ignore_incomplete_cards_for_unrelated_r
 
 
 @pytest.mark.django_db
+def test_processing_invalidation_targets_ignore_catalog_records_for_pipeline_only_progression():
+    record = BookRecord.objects.create(
+        id="catalog-pipeline-record",
+        name="Catalog Pipeline Record",
+        url="https://example.test/books/catalog-pipeline-record",
+        category="Novel",
+        writer="Writer One",
+        publisher="Example Press",
+    )
+    request = BookCreationRequest.objects.create(
+        id="catalog-pipeline-request",
+        book_record=record,
+        state="initial",
+    )
+    previous_snapshot = processing_services.processing_invalidation_snapshot()
+
+    request.state = "queued"
+    request.save(update_fields=["state", "updated_at"])
+    processing_services.sync_record_state(record)
+    next_snapshot = processing_services.processing_invalidation_snapshot()
+
+    targets = processing_services.processing_invalidation_targets(
+        previous_snapshot,
+        next_snapshot,
+    )
+
+    assert "create-requests" in targets
+    assert "create-queue" in targets
+    assert "catalog-records" not in targets
+
+
+@pytest.mark.django_db
 def test_processing_invalidation_targets_include_incomplete_cards_for_incomplete_updates():
     record = BookRecord.objects.create(
         id="incomplete-target-record",
@@ -179,6 +224,33 @@ def test_processing_invalidation_targets_include_incomplete_cards_for_incomplete
     assert processing_services.PROCESSING_CARD_INCOMPLETE_OVERVIEW in targets
     assert "incomplete-records" in targets
     assert "incomplete-completed" in targets
+
+
+@pytest.mark.django_db
+def test_processing_invalidation_targets_keep_updated_card_idle_during_incomplete_hydration():
+    previous_snapshot = processing_services.processing_invalidation_snapshot()
+
+    BookRecord.objects.create(
+        id="hydrating-incomplete-record",
+        name="Hydrating Incomplete Record",
+        url="https://example.test/books/hydrating-incomplete-record",
+        category="অসম্পূর্ণ বই",
+        writer="Writer One",
+        publisher="Example Press",
+        was_incomplete=True,
+        resolved_from_incomplete=False,
+        will_resolve_to_category="Novel",
+    )
+    next_snapshot = processing_services.processing_invalidation_snapshot()
+
+    targets = processing_services.processing_invalidation_targets(
+        previous_snapshot,
+        next_snapshot,
+    )
+
+    assert processing_services.PROCESSING_CARD_INCOMPLETE_OVERVIEW in targets
+    assert "incomplete-records" in targets
+    assert "incomplete-completed" not in targets
 
 
 @pytest.mark.django_db
@@ -289,6 +361,60 @@ def test_processing_sync_persists_records_and_reconciles_resume(client):
 
 
 @pytest.mark.django_db
+def test_processing_sync_mirrors_checkpoint_progress_and_clears_it_on_stop(
+    client, monkeypatch
+):
+    login_processing_admin(client)
+
+    class FakeCheckpointClient:
+        def __init__(self):
+            self.store = {}
+
+        def set(self, key, value):
+            self.store[key] = value
+
+        def delete(self, key):
+            self.store.pop(key, None)
+
+    fake_checkpoint_client = FakeCheckpointClient()
+    monkeypatch.setattr(
+        "apps.processing.services.processing_checkpoint_client",
+        lambda: fake_checkpoint_client,
+    )
+
+    response = client.post(
+        "/api/processing/sync/start/",
+        {
+            "remotePages": [
+                [record_payload("mirrored-sync-record", name="Mirrored Sync Record")],
+                [],
+            ]
+        },
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    checkpoint_key = processing_services.processing_sync_checkpoint_key("catalog")
+    mirrored_payload = json.loads(fake_checkpoint_client.store[checkpoint_key])
+    assert mirrored_payload["status"] == "syncing"
+    assert mirrored_payload["progress"]["savedData"]["nextPageIndex"] == 0
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+
+    mirrored_payload = json.loads(fake_checkpoint_client.store[checkpoint_key])
+    assert mirrored_payload["status"] == "paused"
+    assert mirrored_payload["progress"]["savedData"]["nextPageIndex"] == 1
+    assert mirrored_payload["fetchedCount"] == 1
+
+    response = client.post("/api/processing/sync/stop/", content_type="application/json")
+    assert response.status_code == 200
+    assert checkpoint_key not in fake_checkpoint_client.store
+
+
+@pytest.mark.django_db
 def test_processing_sync_uses_persisted_source_catalog_when_no_remote_pages(client):
     login_processing_admin(client)
     entry = SourceCatalogEntry.objects.create(
@@ -349,15 +475,16 @@ def test_processing_stream_advances_sync_and_emits_invalidation(client, monkeypa
     stream = iter(response.streaming_content)
     assert next(stream).decode() == "event: connected\ndata: {}\n\n"
 
-    snapshot = next(stream).decode()
-    assert "event: snapshot" in snapshot
-    assert '"syncStates"' in snapshot
-    assert '"records"' in snapshot
-
-    state_update = next(stream).decode()
-    assert "event: state" in state_update
-    assert '"syncStates"' in state_update
-    assert '"records"' in state_update
+    invalidation = next(stream).decode()
+    assert "event: invalidation" in invalidation
+    payload = json.loads(invalidation.split("data: ", 1)[1])
+    assert set(payload["targets"]) == {
+        "catalog-overview",
+        "catalog-records",
+        "catalog-sync",
+        "catalog-automation",
+    }
+    assert payload["final"] is True
 
     sync_state = get_sync_state()
     assert sync_state.status == "idle"
@@ -572,6 +699,7 @@ def test_processing_table_paginates_catalog_rows_and_applies_filters(client):
     assert len(payload["rows"]) == 60
     assert payload["pagination"]["totalCount"] == 75
     assert payload["pagination"]["hasMore"] is True
+    assert payload["hasMore"] is True
     assert payload["pagination"]["nextOffset"] == 60
     assert "Novel" in payload["filters"]["categoryOptions"]
     assert "Poetry" in payload["filters"]["categoryOptions"]
@@ -584,6 +712,7 @@ def test_processing_table_paginates_catalog_rows_and_applies_filters(client):
     payload = response.json()
     assert len(payload["rows"]) == 15
     assert payload["pagination"]["hasMore"] is False
+    assert payload["hasMore"] is False
 
     response = client.get(
         "/api/processing/table/?card=catalog-records&category=Poetry&status=created"
@@ -678,7 +807,7 @@ def test_processing_table_keeps_on_hold_cards_scoped_to_request_status(client):
 
 
 @pytest.mark.django_db
-def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requests(client):
+def test_catalog_automation_waits_for_manual_runtime_before_creating_requests(client):
     login_processing_admin(client)
     BookRecord.objects.create(
         id="existing-record",
@@ -718,7 +847,8 @@ def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requ
     assert response.status_code == 200
     payload = response.json()
     assert payload["sync"]["status"] == "syncing"
-    assert payload["sync"]["runMode"] == "catalog_automation"
+    assert payload["sync"]["runMode"] == "manual"
+    assert not BookCreationRequest.objects.exists()
 
     response = client.post("/api/processing/sync/advance/", content_type="application/json")
     assert response.status_code == 200
@@ -729,6 +859,25 @@ def test_catalog_automation_reconciles_pending_remote_pages_before_creating_requ
     assert payload["sync"]["status"] == "idle"
     assert BookRecord.objects.filter(pk="new-record").exists()
     assert BookRecord.objects.get(pk="existing-record").name == "Existing Record Revised"
+    assert not BookCreationRequest.objects.exists()
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
     assert BookCreationRequest.objects.filter(
         book_record_id="existing-record",
         state="initial",
@@ -854,7 +1003,7 @@ def test_catalog_automation_can_pause_and_stop_active_sync(client):
 
 
 @pytest.mark.django_db
-def test_manual_sync_start_reuses_paused_automation_checkpoint(client):
+def test_manual_sync_start_does_not_take_over_paused_automation_runtime(client):
     login_processing_admin(client)
     sync_state = get_sync_state()
     sync_state.remote_pages = [
@@ -885,17 +1034,18 @@ def test_manual_sync_start_reuses_paused_automation_checkpoint(client):
     response = client.post("/api/processing/sync/start/", content_type="application/json")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sync"]["status"] == "syncing"
-    assert payload["sync"]["runMode"] == "manual"
-    assert payload["sync"]["message"] == "Reconciling saved records from the beginning."
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+    assert payload["sync"]["message"].startswith("Sync progress saved.")
+    assert "Catalog now has 1 book record." in payload["sync"]["message"]
     assert payload["sync"]["fetchedCount"] == 1
-    assert payload["sync"]["pageIndex"] == 0
+    assert payload["sync"]["pageIndex"] == 1
     assert payload["sync"]["progress"]["savedData"]["fetchedCount"] == 1
-    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 0
+    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 1
 
 
 @pytest.mark.django_db
-def test_catalog_automation_run_reuses_paused_manual_checkpoint_and_creates_requests(client):
+def test_catalog_automation_run_does_not_take_over_paused_manual_runtime(client):
     login_processing_admin(client)
 
     response = client.post(
@@ -929,28 +1079,13 @@ def test_catalog_automation_run_reuses_paused_manual_checkpoint_and_creates_requ
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sync"]["status"] == "syncing"
-    assert payload["sync"]["runMode"] == "catalog_automation"
-    assert payload["sync"]["message"] == "Restarting automated catalog sync from the beginning."
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["runMode"] == "manual"
+    assert payload["sync"]["message"].startswith("Sync progress saved.")
+    assert "Catalog now has 1 book record." in payload["sync"]["message"]
     assert payload["sync"]["fetchedCount"] == 1
-    assert payload["sync"]["pageIndex"] == 0
-
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-    assert response.status_code == 200
-    assert response.json()["sync"]["status"] == "syncing"
-
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["sync"]["status"] == "idle"
-    assert BookCreationRequest.objects.filter(
-        book_record_id="resume-auto-page-1",
-        state="initial",
-    ).exists()
-    assert BookCreationRequest.objects.filter(
-        book_record_id="resume-auto-page-2",
-        state="initial",
-    ).exists()
+    assert payload["sync"]["pageIndex"] == 1
+    assert not BookCreationRequest.objects.exists()
 
 
 @pytest.mark.django_db
@@ -1213,7 +1348,7 @@ def test_incomplete_automation_live_sync_fetches_incrementally_and_resolves_stal
     payload = response.json()
     assert payload["sync"]["status"] == "syncing"
     assert payload["sync"]["runMode"] == "incomplete_automation"
-    assert payload["sync"]["remotePages"] == []
+    assert "remotePages" not in payload["sync"]
     assert payload["sync"]["progress"]["savedData"]["liveFetch"] is True
 
     response = client.post("/api/processing/sync/advance/", content_type="application/json")
@@ -1515,6 +1650,89 @@ def test_processing_sync_task_returns_json_safe_sync_snapshot(monkeypatch):
     assert result["fetched_count"] == 3
     assert result["remote_pages"] == remote_pages
     json.dumps(result)
+
+
+@pytest.mark.django_db
+def test_processing_sync_serialization_repairs_stale_checkpoint_mirror(monkeypatch):
+    fake_redis = FakeProcessingCheckpointRedis()
+    monkeypatch.setattr(
+        "apps.processing.services.processing_checkpoint_client",
+        lambda: fake_redis,
+    )
+
+    sync_state = get_sync_state()
+    sync_state.status = ProcessingSyncStatus.PAUSED
+    sync_state.progress = {
+        "runMode": "manual",
+        "triggerSource": "button",
+        "savedAt": timezone.now().isoformat(),
+        "savedData": {
+            "runMode": "manual",
+            "triggerSource": "button",
+            "nextPageIndex": 3,
+            "fetchedCount": 42,
+        },
+    }
+    sync_state.page_index = 3
+    sync_state.fetched_count = 42
+    sync_state.message = "Sync progress saved."
+    sync_state.save(
+        update_fields=[
+            "status",
+            "progress",
+            "page_index",
+            "fetched_count",
+            "message",
+            "updated_at",
+        ]
+    )
+
+    checkpoint_key = processing_services.processing_sync_checkpoint_key("catalog")
+    fake_redis.store[checkpoint_key] = json.dumps(
+        {
+            "scope": "catalog",
+            "status": "paused",
+            "runMode": "manual",
+            "triggerSource": "button",
+            "pageIndex": 1,
+            "fetchedCount": 7,
+            "progress": {
+                "savedAt": "2000-01-01T00:00:00+00:00",
+                "savedData": {"nextPageIndex": 1},
+            },
+        }
+    )
+
+    payload = processing_services.serialize_sync_state(
+        sync_state,
+        include_remote_pages=False,
+    )
+
+    assert payload["pageIndex"] == 3
+    mirrored_payload = json.loads(fake_redis.store[checkpoint_key])
+    assert mirrored_payload["pageIndex"] == 3
+    assert mirrored_payload["fetchedCount"] == 42
+    assert mirrored_payload["progress"]["savedData"]["nextPageIndex"] == 3
+
+
+@pytest.mark.django_db
+def test_processing_sync_checkpoint_mirror_clears_when_runtime_returns_to_idle(monkeypatch):
+    fake_redis = FakeProcessingCheckpointRedis()
+    monkeypatch.setattr(
+        "apps.processing.services.processing_checkpoint_client",
+        lambda: fake_redis,
+    )
+
+    processing_services.run_manual_catalog_sync(
+        [[record_payload("mirror-stop-record")], []]
+    )
+
+    checkpoint_key = processing_services.processing_sync_checkpoint_key("catalog")
+    assert checkpoint_key in fake_redis.store
+
+    processing_services.stop_sync("catalog")
+
+    assert checkpoint_key not in fake_redis.store
 
 
 @pytest.mark.django_db

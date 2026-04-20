@@ -1,3 +1,5 @@
+import json
+import hashlib
 import logging
 import os
 import sys
@@ -17,6 +19,8 @@ from django.db.models import CharField, F, Max, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
+from redis import Redis
+from redis.exceptions import RedisError
 
 from apps.catalog.services import find_existing_book_by_source_url
 from apps.ingestion.models import SourceCatalogEntry, SubmissionOrigin
@@ -58,6 +62,8 @@ logger = logging.getLogger(__name__)
 SYNC_RUN_MODE_MANUAL = "manual"
 SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation"
 SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation"
+SYNC_TRIGGER_SOURCE_BUTTON = "button"
+SYNC_TRIGGER_SOURCE_SCHEDULER = "scheduler"
 PROCESSING_SYNC_KEY_CATALOG = "catalog"
 PROCESSING_SYNC_KEY_INCOMPLETE = "incomplete"
 INCOMPLETE_CATEGORY_KEYWORDS = (
@@ -99,6 +105,7 @@ PROCESSING_PUSH_TICK_LOCK_KEY = "processing:push-tick"
 PROCESSING_PUSH_TICK_LOCK_SECONDS = 1
 PROCESSING_DISPATCH_REQUESTED_AT_KEY = "_dispatchRequestedAt"
 PROCESSING_DISPATCH_TASK_ID_KEY = "_dispatchTaskId"
+PROCESSING_SYNC_CHECKPOINT_KEY_PREFIX = "processing:sync-checkpoint"
 PROCESSING_TABLE_DEFAULT_LIMIT = 60
 PROCESSING_TABLE_MAX_LIMIT = 600
 PROCESSING_CARD_CATALOG_OVERVIEW = "catalog-overview"
@@ -148,6 +155,11 @@ PROCESSING_WORKER_AVAILABILITY = {
     "checked_at": 0.0,
     "available": None,
 }
+PROCESSING_CHECKPOINT_REDIS = {
+    "url": "",
+    "client": None,
+    "disabled": False,
+}
 
 
 def normalize_category_key(value):
@@ -172,6 +184,16 @@ def sync_run_mode(state):
     return progress.get("runMode") or saved_data.get("runMode") or SYNC_RUN_MODE_MANUAL
 
 
+def sync_trigger_source(state):
+    progress = state.progress if isinstance(state.progress, dict) else {}
+    saved_data = progress.get("savedData") if isinstance(progress.get("savedData"), dict) else {}
+    return (
+        progress.get("triggerSource")
+        or saved_data.get("triggerSource")
+        or SYNC_TRIGGER_SOURCE_BUTTON
+    )
+
+
 def sync_key_for_run_mode(run_mode):
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         return PROCESSING_SYNC_KEY_INCOMPLETE
@@ -192,6 +214,153 @@ def sync_state_task_payload(state):
         "message": state.message,
         "run_mode": sync_run_mode(state),
     }
+
+
+def snapshot_fingerprint(values):
+    digest = hashlib.sha256()
+    for value in values:
+        digest.update(str(value).encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def processing_sync_checkpoint_key(sync_key):
+    return f"{PROCESSING_SYNC_CHECKPOINT_KEY_PREFIX}:{sync_key}"
+
+
+def processing_checkpoint_redis_url():
+    return str(
+        getattr(settings, "PROCESSING_CHECKPOINT_REDIS_URL", "")
+        or settings.CELERY_BROKER_URL
+        or ""
+    ).strip()
+
+
+def processing_checkpoint_client():
+    redis_url = processing_checkpoint_redis_url()
+    if not redis_url:
+        return None
+
+    if (
+        PROCESSING_CHECKPOINT_REDIS["client"] is not None
+        and PROCESSING_CHECKPOINT_REDIS["url"] == redis_url
+        and not PROCESSING_CHECKPOINT_REDIS["disabled"]
+    ):
+        return PROCESSING_CHECKPOINT_REDIS["client"]
+
+    if (
+        PROCESSING_CHECKPOINT_REDIS["disabled"]
+        and PROCESSING_CHECKPOINT_REDIS["url"] == redis_url
+    ):
+        return None
+
+    try:
+        client = Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=0.5,
+            socket_timeout=0.5,
+        )
+        PROCESSING_CHECKPOINT_REDIS.update(
+            {
+                "url": redis_url,
+                "client": client,
+                "disabled": False,
+            }
+        )
+        return client
+    except Exception:
+        logger.debug(
+            "Processing checkpoint Redis client initialization failed.",
+            exc_info=True,
+        )
+        PROCESSING_CHECKPOINT_REDIS.update(
+            {
+                "url": redis_url,
+                "client": None,
+                "disabled": True,
+            }
+        )
+        return None
+
+
+def processing_checkpoint_payload(state):
+    progress = state.progress if isinstance(state.progress, dict) else None
+    if not progress:
+        return None
+
+    return {
+        "scope": state.singleton_key,
+        "status": state.status,
+        "runMode": sync_run_mode(state),
+        "triggerSource": sync_trigger_source(state),
+        "pageIndex": state.page_index,
+        "fetchedCount": state.fetched_count,
+        "skippedCount": state.skipped_count,
+        "updatedCount": state.updated_count,
+        "appendedCount": state.appended_count,
+        "message": state.message,
+        "progress": progress,
+        "updatedAt": state.updated_at.isoformat() if state.updated_at else "",
+    }
+
+
+def clear_processing_checkpoint_mirror(sync_key):
+    client = processing_checkpoint_client()
+    if client is None:
+        return False
+
+    try:
+        client.delete(processing_sync_checkpoint_key(sync_key))
+        return True
+    except RedisError:
+        logger.debug(
+            "Processing checkpoint Redis delete failed for %s.",
+            sync_key,
+            exc_info=True,
+        )
+        return False
+
+
+def mirror_processing_checkpoint(state):
+    client = processing_checkpoint_client()
+    if client is None:
+        return False
+
+    payload = processing_checkpoint_payload(state)
+    checkpoint_key = processing_sync_checkpoint_key(state.singleton_key)
+    try:
+        if payload is None:
+            client.delete(checkpoint_key)
+        else:
+            client.set(checkpoint_key, json.dumps(payload))
+        return True
+    except RedisError:
+        logger.debug(
+            "Processing checkpoint Redis write failed for %s.",
+            state.singleton_key,
+            exc_info=True,
+        )
+        return False
+
+
+def sync_checkpoint_progress(state):
+    progress = state.progress if isinstance(state.progress, dict) else None
+    if progress:
+        mirror_processing_checkpoint(state)
+    else:
+        clear_processing_checkpoint_mirror(state.singleton_key)
+    return progress
+
+
+def save_sync_state(state, *, update_fields=None):
+    if update_fields is None:
+        state.save()
+    else:
+        unique_fields = list(dict.fromkeys(update_fields))
+        state.save(update_fields=unique_fields)
+    sync_checkpoint_progress(state)
+    return state
 
 
 def should_run_processing_jobs_inline():
@@ -235,9 +404,9 @@ def processing_workers_available(queue_name=PROCESSING_TASK_QUEUE):
 def should_enqueue_processing_work():
     if should_run_processing_jobs_inline():
         return False
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
-    return True
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    return processing_workers_available()
 
 
 def should_manually_advance_processing_work():
@@ -305,12 +474,22 @@ def sync_pause_message(run_mode):
     return "Pausing after the current page finishes."
 
 
-def build_sync_progress(run_mode, *, next_page_index=0, fetched_count=0, saved_at=None, live_fetch=False):
+def build_sync_progress(
+    run_mode,
+    *,
+    next_page_index=0,
+    fetched_count=0,
+    saved_at=None,
+    live_fetch=False,
+    trigger_source=SYNC_TRIGGER_SOURCE_BUTTON,
+):
     payload = {
         "runMode": run_mode,
+        "triggerSource": trigger_source,
         "checkpoint": f"page-{next_page_index}",
         "savedData": {
             "runMode": run_mode,
+            "triggerSource": trigger_source,
             "fetchedCount": fetched_count,
             "nextPageIndex": next_page_index,
         },
@@ -344,6 +523,7 @@ def get_sync_state(sync_key=PROCESSING_SYNC_KEY_CATALOG):
         singleton_key=sync_key,
         defaults={"message": "Ready to sync."},
     )
+    sync_checkpoint_progress(state)
     return state
 
 
@@ -367,20 +547,37 @@ def active_sync_scope(default=PROCESSING_SYNC_KEY_CATALOG):
     return default
 
 
-def serialize_sync_state(state):
-    return {
+def sync_is_active_or_paused(state):
+    return state.status in {
+        ProcessingSyncStatus.SYNCING,
+        ProcessingSyncStatus.PAUSING,
+        ProcessingSyncStatus.PAUSED,
+    }
+
+
+def sync_owner_conflicts(state, run_mode):
+    return sync_is_active_or_paused(state) and sync_run_mode(state) != run_mode
+
+
+def serialize_sync_state(state, *, include_remote_pages=True):
+    progress = sync_checkpoint_progress(state)
+    payload = {
         "status": state.status,
-        "progress": state.progress,
+        "progress": progress,
         "fetchedCount": state.fetched_count,
         "skippedCount": state.skipped_count,
         "updatedCount": state.updated_count,
         "appendedCount": state.appended_count,
         "message": state.message,
-        "remotePages": state.remote_pages,
         "pageIndex": state.page_index,
         "runMode": sync_run_mode(state),
+        "triggerSource": sync_trigger_source(state),
+        "scope": state.singleton_key,
         "workerManaged": bool(state.task_id),
     }
+    if include_remote_pages:
+        payload["remotePages"] = state.remote_pages
+    return payload
 
 
 def serialize_automation_settings(automation_settings):
@@ -725,7 +922,10 @@ def dispatch_sync_task(sync_state, *, force=False):
     sync_state.task_id = assigned_task_id
     sync_state.queue_name = PROCESSING_TASK_QUEUE
     sync_state.last_error = ""
-    sync_state.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
+    save_sync_state(
+        sync_state,
+        update_fields=["task_id", "queue_name", "last_error", "updated_at"],
+    )
 
     try:
         async_result = run_processing_sync_task.apply_async(
@@ -736,13 +936,16 @@ def dispatch_sync_task(sync_state, *, force=False):
         dispatched_task_id = getattr(async_result, "id", assigned_task_id) or assigned_task_id
         if dispatched_task_id != assigned_task_id:
             sync_state.task_id = dispatched_task_id
-            sync_state.save(update_fields=["task_id", "updated_at"])
+            save_sync_state(sync_state, update_fields=["task_id", "updated_at"])
     except Exception as exc:
         logger.warning("Processing sync task dispatch failed.", exc_info=True)
         sync_state.task_id = ""
         sync_state.queue_name = "inline-fallback"
         sync_state.last_error = str(exc)
-        sync_state.save(update_fields=["task_id", "queue_name", "last_error", "updated_at"])
+        save_sync_state(
+            sync_state,
+            update_fields=["task_id", "queue_name", "last_error", "updated_at"],
+        )
         run_processing_sync_until_blocked(
             singleton_key=sync_state.singleton_key,
             task_id="",
@@ -974,6 +1177,7 @@ def start_sync(
     *,
     run_mode=SYNC_RUN_MODE_MANUAL,
     sync_key=None,
+    trigger_source=SYNC_TRIGGER_SOURCE_BUTTON,
 ):
     sync_key = sync_key or sync_key_for_run_mode(run_mode)
     live_fetch = False
@@ -992,7 +1196,11 @@ def start_sync(
     state = get_sync_state(sync_key)
     state.remote_pages = remote_pages
     state.status = ProcessingSyncStatus.SYNCING
-    state.progress = build_sync_progress(run_mode, live_fetch=live_fetch)
+    state.progress = build_sync_progress(
+        run_mode,
+        live_fetch=live_fetch,
+        trigger_source=trigger_source,
+    )
     state.page_index = 0
     state.fetched_count = 0
     state.skipped_count = 0
@@ -1002,7 +1210,7 @@ def start_sync(
     state.task_id = ""
     state.queue_name = ""
     state.last_error = ""
-    state.save()
+    save_sync_state(state)
     update_automation_run_status(run_mode, state.message)
     if should_enqueue_processing_work():
         dispatch_sync_task(state, force=True)
@@ -1022,9 +1230,13 @@ def pause_sync(sync_key=None):
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
             live_fetch=sync_uses_live_fetch(state),
+            trigger_source=sync_trigger_source(state),
         )
         state.message = sync_pause_message(run_mode)
-        state.save(update_fields=["status", "progress", "message", "updated_at"])
+        save_sync_state(
+            state,
+            update_fields=["status", "progress", "message", "updated_at"],
+        )
         update_automation_run_status(run_mode, state.message)
     return state
 
@@ -1033,6 +1245,7 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
     state = get_sync_state(sync_key)
     run_mode = run_mode or sync_run_mode(state)
     live_fetch = sync_uses_live_fetch(state)
+    trigger_source = sync_trigger_source(state)
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         state.remote_pages = [] if live_fetch else incomplete_sync_remote_pages()
         next_page_index = 0
@@ -1050,12 +1263,14 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
         next_page_index=next_page_index,
         fetched_count=state.fetched_count,
         live_fetch=live_fetch,
+        trigger_source=trigger_source,
     )
     state.page_index = next_page_index
     state.task_id = ""
     state.queue_name = ""
     state.message = resume_message
-    state.save(
+    save_sync_state(
+        state,
         update_fields=[
             "remote_pages",
             "status",
@@ -1091,7 +1306,8 @@ def stop_sync(sync_key=None):
     state.task_id = ""
     state.queue_name = ""
     state.message = f"{sync_run_label(run_mode)} stopped."
-    state.save(
+    save_sync_state(
+        state,
         update_fields=[
             "status",
             "progress",
@@ -1114,7 +1330,8 @@ def finalize_sync(state, *, message=None):
         f"Sync complete. Updated {state.updated_count}, "
         f"Skipped {state.skipped_count}, Added {state.appended_count}."
     )
-    state.save(
+    save_sync_state(
+        state,
         update_fields=[
             "status",
             "progress",
@@ -1140,7 +1357,8 @@ def fail_sync(state, error):
     state.queue_name = ""
     state.last_error = str(error)
     state.message = f"{sync_run_label(run_mode)} failed: {error}"
-    state.save(
+    save_sync_state(
+        state,
         update_fields=[
             "status",
             "progress",
@@ -1168,14 +1386,7 @@ def complete_catalog_automation(state):
             )
             continue
         latest_request = latest_request_for_record(record)
-        latest_state = latest_request.state if latest_request else record.book_creation_state
-        eligible = (
-            latest_request is None and record.book_creation_state == BookCreationState.NOT_CREATED
-        ) or latest_state in {
-            BookCreationRequestState.FAILED,
-            BookCreationRequestState.DELETED,
-        }
-        if eligible:
+        if latest_request is None and record.book_creation_state == BookCreationState.NOT_CREATED:
             processing_request = create_request_for_record(
                 record,
                 origin=SubmissionOrigin.AUTOMATION,
@@ -1351,7 +1562,7 @@ def stale_incomplete_record_ids(remote_pages):
 def complete_live_incomplete_sync(state):
     resolved = resolve_incomplete_records(stale_incomplete_record_ids(state.remote_pages))
     state.updated_count = len(resolved)
-    state.save(update_fields=["updated_count", "updated_at"])
+    save_sync_state(state, update_fields=["updated_count", "updated_at"])
     return complete_incomplete_automation(state, resolved_count=len(resolved))
 
 
@@ -1394,6 +1605,7 @@ def advance_live_incomplete_sync_once(state):
             fetched_count=state.fetched_count,
             saved_at=timezone.now().isoformat(),
             live_fetch=True,
+            trigger_source=sync_trigger_source(state),
         )
         state.message = (
             f"Saved progress for {state.fetched_count} "
@@ -1408,12 +1620,13 @@ def advance_live_incomplete_sync_once(state):
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
             live_fetch=True,
+            trigger_source=sync_trigger_source(state),
         )
         state.message = sync_progress_message(
             SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
             state.fetched_count,
         )
-    state.save()
+    save_sync_state(state)
     return state
 
 
@@ -1440,6 +1653,7 @@ def advance_catalog_sync_once(state, run_mode):
             fetched_count=state.fetched_count,
             saved_at=timezone.now().isoformat(),
             live_fetch=sync_uses_live_fetch(state),
+            trigger_source=sync_trigger_source(state),
         )
         state.message = f"Sync progress saved. {catalog_record_total_message()}"
         update_automation_run_status(run_mode, state.message)
@@ -1455,9 +1669,10 @@ def advance_catalog_sync_once(state, run_mode):
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
             live_fetch=sync_uses_live_fetch(state),
+            trigger_source=sync_trigger_source(state),
         )
         state.message = sync_progress_message(run_mode, state.fetched_count)
-    state.save()
+    save_sync_state(state)
     return state
 
 
@@ -1473,7 +1688,7 @@ def advance_incomplete_sync_once(state):
     if not page:
         resolved = resolve_incomplete_records(stale_incomplete_record_ids(state.remote_pages))
         state.updated_count = len(resolved)
-        state.save(update_fields=["updated_count", "updated_at"])
+        save_sync_state(state, update_fields=["updated_count", "updated_at"])
         return complete_incomplete_automation(state, resolved_count=len(resolved))
 
     if isinstance(page, list) and all(not isinstance(item, dict) for item in page):
@@ -1491,6 +1706,7 @@ def advance_incomplete_sync_once(state):
                 fetched_count=state.fetched_count,
                 saved_at=timezone.now().isoformat(),
                 live_fetch=sync_uses_live_fetch(state),
+                trigger_source=sync_trigger_source(state),
             )
             state.message = (
                 f"Saved progress for {state.fetched_count} "
@@ -1507,12 +1723,13 @@ def advance_incomplete_sync_once(state):
                 next_page_index=state.page_index,
                 fetched_count=state.fetched_count,
                 live_fetch=sync_uses_live_fetch(state),
+                trigger_source=sync_trigger_source(state),
             )
             state.message = sync_progress_message(
                 SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
                 state.fetched_count,
             )
-        state.save()
+        save_sync_state(state)
         return state
 
     result = upsert_remote_records(page)
@@ -1530,6 +1747,7 @@ def advance_incomplete_sync_once(state):
             fetched_count=state.fetched_count,
             saved_at=timezone.now().isoformat(),
             live_fetch=sync_uses_live_fetch(state),
+            trigger_source=sync_trigger_source(state),
         )
         state.message = (
             f"Saved progress for {state.fetched_count} "
@@ -1541,7 +1759,7 @@ def advance_incomplete_sync_once(state):
     elif not next_page:
         resolved = resolve_incomplete_records(stale_incomplete_record_ids(state.remote_pages))
         state.updated_count = len(resolved)
-        state.save(update_fields=["updated_count", "updated_at"])
+        save_sync_state(state, update_fields=["updated_count", "updated_at"])
         return complete_incomplete_automation(state, resolved_count=len(resolved))
     else:
         state.progress = build_sync_progress(
@@ -1549,12 +1767,13 @@ def advance_incomplete_sync_once(state):
             next_page_index=state.page_index,
             fetched_count=state.fetched_count,
             live_fetch=sync_uses_live_fetch(state),
+            trigger_source=sync_trigger_source(state),
         )
         state.message = sync_progress_message(
             SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
             state.fetched_count,
         )
-    state.save()
+    save_sync_state(state)
     return state
 
 
@@ -1651,9 +1870,10 @@ def run_processing_sync_until_blocked(
                     fetched_count=state.fetched_count,
                     saved_at=timezone.now().isoformat(),
                     live_fetch=True,
+                    trigger_source=sync_trigger_source(state),
                 )
                 state.message = f"Sync progress saved. {catalog_record_total_message()}"
-                state.save()
+                save_sync_state(state)
                 update_automation_run_status(run_mode, state.message)
                 return state
             if latest_status != ProcessingSyncStatus.SYNCING:
@@ -1664,9 +1884,10 @@ def run_processing_sync_until_blocked(
                 next_page_index=state.page_index,
                 fetched_count=state.fetched_count,
                 live_fetch=True,
+                trigger_source=sync_trigger_source(state),
             )
             state.message = sync_progress_message(run_mode, state.fetched_count)
-            state.save()
+            save_sync_state(state)
     except Exception as exc:
         logger.exception("Live processing sync failed.", extra={"task_id": task_id})
         return fail_sync(state, exc)
@@ -2006,14 +2227,16 @@ def build_processing_record_table_payload(
             )
         )
 
+    pagination = processing_pagination_payload(
+        total_count,
+        offset,
+        limit,
+        len(rows),
+    )
     return {
         "rows": rows,
-        "pagination": processing_pagination_payload(
-            total_count,
-            offset,
-            limit,
-            len(rows),
-        ),
+        "pagination": pagination,
+        "hasMore": pagination["hasMore"],
         "filters": {
             "categoryOptions": category_options,
             "statusOptions": status_options,
@@ -2048,14 +2271,16 @@ def build_processing_request_table_payload(
         for processing_request in page_requests
     ]
 
+    pagination = processing_pagination_payload(
+        total_count,
+        offset,
+        limit,
+        len(rows),
+    )
     return {
         "rows": rows,
-        "pagination": processing_pagination_payload(
-            total_count,
-            offset,
-            limit,
-            len(rows),
-        ),
+        "pagination": pagination,
+        "hasMore": pagination["hasMore"],
         "filters": {
             "categoryOptions": category_options,
             "statusOptions": status_options,
@@ -2315,11 +2540,11 @@ def processing_card_payload(card):
         },
         PROCESSING_CARD_CATALOG_SYNC: {
             "card": PROCESSING_CARD_CATALOG_SYNC,
-            "sync": serialize_sync_state(catalog_sync),
+            "sync": serialize_sync_state(catalog_sync, include_remote_pages=False),
         },
         PROCESSING_CARD_CATALOG_AUTOMATION: {
             "card": PROCESSING_CARD_CATALOG_AUTOMATION,
-            "sync": serialize_sync_state(catalog_sync),
+            "sync": serialize_sync_state(catalog_sync, include_remote_pages=False),
             "automation": serialize_automation_settings(catalog_automation),
         },
         PROCESSING_CARD_CREATE_OVERVIEW: {
@@ -2336,7 +2561,7 @@ def processing_card_payload(card):
         },
         PROCESSING_CARD_INCOMPLETE_AUTOMATION: {
             "card": PROCESSING_CARD_INCOMPLETE_AUTOMATION,
-            "sync": serialize_sync_state(incomplete_sync),
+            "sync": serialize_sync_state(incomplete_sync, include_remote_pages=False),
             "automation": serialize_automation_settings(incomplete_automation),
         },
     }
@@ -2363,23 +2588,78 @@ def processing_incomplete_invalidation_snapshot():
     )["latest"]
 
     return {
-        "counts": incomplete_counts,
-        "completedRequestCount": completed_incomplete_requests.count(),
-        "latestRecordUpdatedAt": (
-            latest_incomplete_record_updated_at.isoformat()
-            if latest_incomplete_record_updated_at
-            else None
-        ),
-        "latestCompletedRequestUpdatedAt": (
-            latest_incomplete_completed_request.isoformat()
-            if latest_incomplete_completed_request
-            else None
-        ),
+        "current": {
+            "counts": incomplete_counts,
+            "latestRecordUpdatedAt": (
+                latest_incomplete_record_updated_at.isoformat()
+                if latest_incomplete_record_updated_at
+                else None
+            ),
+        },
+        "updated": {
+            "count": completed_incomplete_requests.count(),
+            "latestUpdatedAt": (
+                latest_incomplete_completed_request.isoformat()
+                if latest_incomplete_completed_request
+                else None
+            ),
+        },
     }
+
+
+def processing_catalog_record_lock_snapshot():
+    queryset = (
+        BookRecord.objects.select_related("linked_book")
+        .prefetch_related(processing_request_prefetch())
+        .order_by("id")
+    )
+    selectable_ids = []
+    blocked_ids = []
+    for record in queryset:
+        target_ids = selectable_ids if record_is_selectable(record) else blocked_ids
+        target_ids.append(str(record.id))
+
+    return {
+        "selectableCount": len(selectable_ids),
+        "blockedCount": len(blocked_ids),
+        "selectableFingerprint": snapshot_fingerprint(selectable_ids),
+        "blockedFingerprint": snapshot_fingerprint(blocked_ids),
+    }
+
+
+def processing_incomplete_completed_snapshot():
+    queryset = BookCreationRequest.objects.filter(
+        state=BookCreationRequestState.CREATED,
+        book_record__was_incomplete=True,
+        book_record__resolved_from_incomplete=True,
+    ).order_by("id")
+    latest_updated_at = queryset.aggregate(latest=Max("updated_at"))["latest"]
+    ids = list(queryset.values_list("id", flat=True))
+    return {
+        "count": len(ids),
+        "latestUpdatedAt": latest_updated_at.isoformat() if latest_updated_at else None,
+        "idsFingerprint": snapshot_fingerprint(ids),
+    }
+
+
+def processing_request_state_snapshot():
+    snapshot = {}
+    for state in BookCreationRequestState.values:
+        queryset = BookCreationRequest.objects.filter(state=state).order_by("id")
+        latest_updated_at = queryset.aggregate(latest=Max("updated_at"))["latest"]
+        ids = list(queryset.values_list("id", flat=True))
+        snapshot[state] = {
+            "count": len(ids),
+            "latestUpdatedAt": latest_updated_at.isoformat() if latest_updated_at else None,
+            "idsFingerprint": snapshot_fingerprint(ids),
+        }
+    return snapshot
 
 
 def processing_invalidation_snapshot():
     request_counts = processing_request_counts()
+    summary = processing_summary_payload()
+    request_state_snapshot = processing_request_state_snapshot()
     latest_record_updated_at = BookRecord.objects.aggregate(
         latest=Max("updated_at")
     )["latest"]
@@ -2392,8 +2672,10 @@ def processing_invalidation_snapshot():
     incomplete_automation = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
 
     return {
+        "summary": summary,
         "requests": {
             "counts": request_counts,
+            "states": request_state_snapshot,
             "latestUpdatedAt": (
                 latest_request_updated_at.isoformat()
                 if latest_request_updated_at
@@ -2410,6 +2692,8 @@ def processing_invalidation_snapshot():
             ),
         },
         "incompleteData": processing_incomplete_invalidation_snapshot(),
+        "catalogRecordLocks": processing_catalog_record_lock_snapshot(),
+        "incompleteCompleted": processing_incomplete_completed_snapshot(),
         "catalogSync": {
             "status": catalog_sync.status,
             "runMode": sync_run_mode(catalog_sync),
@@ -2417,6 +2701,7 @@ def processing_invalidation_snapshot():
             "pageIndex": catalog_sync.page_index,
             "fetchedCount": catalog_sync.fetched_count,
             "updatedCount": catalog_sync.updated_count,
+            "appendedCount": catalog_sync.appended_count,
             "updatedAt": catalog_sync.updated_at.isoformat(),
         },
         "incompleteSync": {
@@ -2426,6 +2711,7 @@ def processing_invalidation_snapshot():
             "pageIndex": incomplete_sync.page_index,
             "fetchedCount": incomplete_sync.fetched_count,
             "updatedCount": incomplete_sync.updated_count,
+            "appendedCount": incomplete_sync.appended_count,
             "updatedAt": incomplete_sync.updated_at.isoformat(),
         },
         "catalogAutomation": {
@@ -2457,15 +2743,69 @@ def processing_invalidation_snapshot():
     }
 
 
+def sync_snapshot_committed_data(previous_sync, next_sync):
+    return any(
+        previous_sync.get(key) != next_sync.get(key)
+        for key in ("pageIndex", "fetchedCount", "updatedCount", "appendedCount")
+    )
+
+
+def sync_snapshot_completed(previous_sync, next_sync):
+    if previous_sync.get("status") not in {"syncing", "pausing", "paused"}:
+        return False
+    if next_sync.get("status") != ProcessingSyncStatus.IDLE:
+        return False
+    return "complete" in str(next_sync.get("message") or "").casefold()
+
+
 def processing_invalidation_targets(previous_snapshot, next_snapshot):
     targets = []
-    if previous_snapshot.get("requests") != next_snapshot.get("requests"):
-        targets.extend(PROCESSING_REQUEST_DATA_TARGETS)
-    if previous_snapshot.get("records") != next_snapshot.get("records"):
-        targets.extend(PROCESSING_RECORD_DATA_TARGETS)
+
+    previous_summary = previous_snapshot.get("summary", {})
+    next_summary = next_snapshot.get("summary", {})
+    if previous_summary.get("catalog") != next_summary.get("catalog"):
+        targets.append(PROCESSING_CARD_CATALOG_OVERVIEW)
+    if previous_summary.get("create") != next_summary.get("create"):
+        targets.append(PROCESSING_CARD_CREATE_OVERVIEW)
+    if previous_summary.get("onHold") != next_summary.get("onHold"):
+        targets.append(PROCESSING_CARD_ON_HOLD_OVERVIEW)
+    if previous_summary.get("incomplete") != next_summary.get("incomplete"):
+        targets.append(PROCESSING_CARD_INCOMPLETE_OVERVIEW)
+
+    previous_request_states = previous_snapshot.get("requests", {}).get("states", {})
+    next_request_states = next_snapshot.get("requests", {}).get("states", {})
+    for card_id, states in PROCESSING_REQUEST_CARD_STATES.items():
+        state_changed = any(
+            previous_request_states.get(state) != next_request_states.get(state)
+            for state in states
+        )
+        if state_changed:
+            targets.append(card_id)
+
+    previous_catalog_sync = previous_snapshot.get("catalogSync", {})
+    next_catalog_sync = next_snapshot.get("catalogSync", {})
+    catalog_sync_changed = previous_catalog_sync != next_catalog_sync
+    if catalog_sync_changed and (
+        sync_snapshot_committed_data(previous_catalog_sync, next_catalog_sync)
+        or sync_snapshot_completed(previous_catalog_sync, next_catalog_sync)
+    ):
+        targets.append("catalog-records")
+    if previous_snapshot.get("catalogRecordLocks") != next_snapshot.get("catalogRecordLocks"):
+        targets.append("catalog-records")
+
+    previous_incomplete_sync = previous_snapshot.get("incompleteSync", {})
+    next_incomplete_sync = next_snapshot.get("incompleteSync", {})
+    incomplete_sync_changed = previous_incomplete_sync != next_incomplete_sync
+    if incomplete_sync_changed and (
+        sync_snapshot_committed_data(previous_incomplete_sync, next_incomplete_sync)
+        or sync_snapshot_completed(previous_incomplete_sync, next_incomplete_sync)
+    ):
+        targets.append("incomplete-records")
     if previous_snapshot.get("incompleteData") != next_snapshot.get("incompleteData"):
-        targets.extend(PROCESSING_INCOMPLETE_DATA_TARGETS)
-    if previous_snapshot.get("catalogSync") != next_snapshot.get("catalogSync"):
+        targets.append("incomplete-records")
+    if previous_snapshot.get("incompleteCompleted") != next_snapshot.get("incompleteCompleted"):
+        targets.append("incomplete-completed")
+    if catalog_sync_changed:
         targets.extend(
             [
                 PROCESSING_CARD_CATALOG_SYNC,
@@ -2476,9 +2816,7 @@ def processing_invalidation_targets(previous_snapshot, next_snapshot):
         "catalogAutomation"
     ):
         targets.append(PROCESSING_CARD_CATALOG_AUTOMATION)
-    if previous_snapshot.get("incompleteSync") != next_snapshot.get(
-        "incompleteSync"
-    ):
+    if incomplete_sync_changed:
         targets.append(PROCESSING_CARD_INCOMPLETE_AUTOMATION)
     if previous_snapshot.get("incompleteAutomation") != next_snapshot.get(
         "incompleteAutomation"
@@ -2526,10 +2864,14 @@ def advance_processing_push_tick():
         state__in=ACTIVE_STATES
     ).exists()
 
-    if active_sync_scopes:
+    can_manually_drive_work = (
+        should_run_processing_jobs_inline()
+        or should_manually_advance_processing_work()
+    )
+    if can_manually_drive_work and active_sync_scopes:
         for scope in active_sync_scopes:
             advance_sync_once(scope)
-    elif has_active_requests:
+    elif can_manually_drive_work and has_active_requests:
         advance_pipeline_once()
 
     return bool(active_sync_scopes or has_active_requests)
@@ -2586,27 +2928,118 @@ def update_automation_settings(kind, payload):
     return automation_settings
 
 
-def run_manual_catalog_sync(remote_pages=None):
+def _local_scheduled_datetime(now, scheduled_time):
+    local_now = timezone.localtime(now)
+    return local_now.replace(
+        hour=scheduled_time.hour,
+        minute=scheduled_time.minute,
+        second=0,
+        microsecond=0,
+    )
+
+
+def automation_is_due(automation_settings, *, now=None):
+    if not automation_settings.enabled:
+        return False
+
+    now = now or timezone.now()
+    scheduled_at = _local_scheduled_datetime(now, automation_settings.time)
+    local_now = timezone.localtime(now)
+    if local_now < scheduled_at:
+        return False
+
+    last_run_at = automation_settings.last_run_at
+    if last_run_at is None:
+        return True
+
+    last_local = timezone.localtime(last_run_at)
+    days_since_last_run = (scheduled_at.date() - last_local.date()).days
+
+    if automation_settings.interval == "daily":
+        return days_since_last_run >= 1
+    if automation_settings.interval == "weekly":
+        return days_since_last_run >= 7
+    if automation_settings.interval == "biweekly":
+        return days_since_last_run >= 14
+    if automation_settings.interval == "monthly":
+        return (
+            scheduled_at.year,
+            scheduled_at.month,
+        ) != (
+            last_local.year,
+            last_local.month,
+        )
+    return days_since_last_run >= 7
+
+
+def run_due_processing_automations(*, now=None):
+    now = now or timezone.now()
+    results = {}
+
+    catalog_settings = get_automation_settings(ProcessingAutomationKind.CATALOG)
+    if automation_is_due(catalog_settings, now=now):
+        state = run_catalog_automation(trigger_source=SYNC_TRIGGER_SOURCE_SCHEDULER)
+        results["catalog"] = {
+            "ran": sync_run_mode(state) == SYNC_RUN_MODE_CATALOG_AUTOMATION,
+            "status": state.status,
+            "runMode": sync_run_mode(state),
+        }
+    else:
+        results["catalog"] = {"ran": False, "status": "idle", "runMode": None}
+
+    incomplete_settings = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
+    if automation_is_due(incomplete_settings, now=now):
+        state = run_incomplete_automation(trigger_source=SYNC_TRIGGER_SOURCE_SCHEDULER)
+        results["incomplete"] = {
+            "ran": sync_run_mode(state) == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
+            "status": state.status,
+            "runMode": sync_run_mode(state),
+        }
+    else:
+        results["incomplete"] = {"ran": False, "status": "idle", "runMode": None}
+
+    return results
+
+
+def run_manual_catalog_sync(
+    remote_pages=None,
+    *,
+    trigger_source=SYNC_TRIGGER_SOURCE_BUTTON,
+):
     sync_state = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    if sync_owner_conflicts(sync_state, SYNC_RUN_MODE_MANUAL):
+        return sync_state
     if sync_state.status == ProcessingSyncStatus.PAUSED:
         return resume_sync(
             PROCESSING_SYNC_KEY_CATALOG,
             run_mode=SYNC_RUN_MODE_MANUAL,
         )
+    if sync_state.status in SYNC_ACTIVE_STATUSES:
+        return sync_state
     return start_sync(
         remote_pages or None,
         run_mode=SYNC_RUN_MODE_MANUAL,
         sync_key=PROCESSING_SYNC_KEY_CATALOG,
+        trigger_source=trigger_source,
     )
 
 
-def run_catalog_automation():
+def run_catalog_automation(*, trigger_source=SYNC_TRIGGER_SOURCE_BUTTON):
     sync_state = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+    if sync_owner_conflicts(sync_state, SYNC_RUN_MODE_CATALOG_AUTOMATION):
+        if trigger_source == SYNC_TRIGGER_SOURCE_SCHEDULER:
+            update_automation_run_status(
+                SYNC_RUN_MODE_CATALOG_AUTOMATION,
+                "Waiting for the catalog runtime to become idle.",
+            )
+        return sync_state
     if sync_state.status == ProcessingSyncStatus.PAUSED:
         return resume_sync(
             PROCESSING_SYNC_KEY_CATALOG,
             run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
         )
+    if sync_state.status in SYNC_ACTIVE_STATUSES:
+        return sync_state
     remote_pages = []
     if allow_processing_remote_page_payloads():
         remote_pages = catalog_remote_pages(sync_state.remote_pages)
@@ -2616,20 +3049,24 @@ def run_catalog_automation():
         remote_pages or None,
         run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
         sync_key=PROCESSING_SYNC_KEY_CATALOG,
+        trigger_source=trigger_source,
     )
 
 
-def run_incomplete_automation():
+def run_incomplete_automation(*, trigger_source=SYNC_TRIGGER_SOURCE_BUTTON):
     sync_state = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
     if sync_state.status == ProcessingSyncStatus.PAUSED:
         return resume_sync(
             PROCESSING_SYNC_KEY_INCOMPLETE,
             run_mode=SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
         )
+    if sync_state.status in SYNC_ACTIVE_STATUSES:
+        return sync_state
     return start_sync(
         None,
         run_mode=SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
         sync_key=PROCESSING_SYNC_KEY_INCOMPLETE,
+        trigger_source=trigger_source,
     )
 
 

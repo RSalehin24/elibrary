@@ -1,147 +1,29 @@
 import { expect, test } from "./support/playwright";
 import { getSuperAdminCredentials } from "./support/liveEnv";
 
-function liveSmokeData() {
-  const suffix = `${Date.now()}-${Math.round(Math.random() * 1_000_000)}`;
-  const now = new Date().toISOString();
-  return {
-    catalog: {
-      id: `live-catalog-record-${suffix}`,
-      name: `Live Smoke Catalog Book ${suffix}`,
-      url: `https://example.test/live-smoke-${suffix}`,
-      category: "Smoke",
-      writer: "Live Writer",
-      translator: null,
-      composer: null,
-      publisher: "Live Press",
-      updatedAt: now,
-      bookCreationState: "not_created",
-    },
-    paused: {
-      id: `live-paused-record-${suffix}`,
-      name: `Live Smoke Paused Book ${suffix}`,
-      url: `https://example.test/live-paused-${suffix}`,
-      category: "Smoke",
-      writer: "Live Writer",
-      translator: null,
-      composer: null,
-      publisher: "Live Press",
-      updatedAt: now,
-      bookCreationState: "not_created",
-    },
-    manualA: {
-      id: `live-manual-a-${suffix}`,
-      name: `Live Manual Sync A ${suffix}`,
-      url: `https://example.test/live-manual-a-${suffix}`,
-      category: "Smoke",
-      writer: "Manual Writer",
-      translator: null,
-      composer: null,
-      publisher: "Live Press",
-      updatedAt: now,
-      bookCreationState: "not_created",
-    },
-    manualB: {
-      id: `live-manual-b-${suffix}`,
-      name: `Live Manual Sync B ${suffix}`,
-      url: `https://example.test/live-manual-b-${suffix}`,
-      category: "Smoke",
-      writer: "Manual Writer",
-      translator: null,
-      composer: null,
-      publisher: "Live Press",
-      updatedAt: now,
-      bookCreationState: "not_created",
-    },
-    automationA: {
-      id: `live-automation-a-${suffix}`,
-      name: `Live Automation Sync A ${suffix}`,
-      url: `https://example.test/live-automation-a-${suffix}`,
-      category: "Smoke",
-      writer: "Automation Writer",
-      translator: null,
-      composer: null,
-      publisher: "Live Press",
-      updatedAt: now,
-      bookCreationState: "not_created",
-    },
-    automationB: {
-      id: `live-automation-b-${suffix}`,
-      name: `Live Automation Sync B ${suffix}`,
-      url: `https://example.test/live-automation-b-${suffix}`,
-      category: "Smoke",
-      writer: "Automation Writer",
-      translator: null,
-      composer: null,
-      publisher: "Live Press",
-      updatedAt: now,
-      bookCreationState: "not_created",
-    },
-    incomplete: {
-      id: `live-incomplete-${suffix}`,
-      name: `Live Incomplete Catalog Book ${suffix}`,
-      url: `https://example.test/live-incomplete-${suffix}`,
-      category: "অসম্পূর্ণ বই",
-      writer: "Incomplete Writer",
-      translator: null,
-      composer: null,
-      publisher: "Live Press",
-      updatedAt: now,
-      bookCreationState: "not_created",
-      wasIncomplete: true,
-      willResolveToCategory: "Novel",
-    },
-  };
-}
-
-async function processingPost(page, path, body = {}) {
+async function processingRequest(page, path, { method = "GET", body } = {}) {
   const result = await page.evaluate(
-    async ({ requestPath, requestBody }) => {
-      await fetch("/api/csrf/", { credentials: "include" });
-      const csrfMatch = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
-      const separator = requestPath.includes("?") ? "&" : "?";
-      const response = await fetch(
-        `/api${requestPath}${separator}includeLists=0`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            ...(csrfMatch
-              ? { "X-CSRFToken": decodeURIComponent(csrfMatch[1]) }
-              : {}),
-          },
-          body: JSON.stringify(requestBody),
-        },
-      );
-      const text = await response.text();
-      return {
-        ok: response.ok,
-        status: response.status,
-        text,
-      };
-    },
-    { requestPath: path, requestBody: body },
-  );
-
-  if (!result.ok) {
-    throw new Error(
-      `Processing API ${path} failed with ${result.status}: ${result.text}`,
-    );
-  }
-  return result.text ? JSON.parse(result.text) : null;
-}
-
-async function processingGet(page, path) {
-  const result = await page.evaluate(
-    async ({ requestPath }) => {
+    async ({ requestPath, requestMethod, requestBody }) => {
       const response = await fetch(`/api${requestPath}`, {
-        method: "GET",
+        method: requestMethod,
+        cache: "no-store",
         credentials: "include",
         headers: {
           Accept: "application/json",
+          ...(requestMethod === "GET"
+            ? {}
+            : {
+                "Content-Type": "application/json",
+                "X-CSRFToken":
+                  decodeURIComponent(
+                    document.cookie.match(/(?:^|; )csrftoken=([^;]+)/)?.[1] || "",
+                  ) || "",
+              }),
         },
+        body:
+          requestMethod === "GET" || requestBody === undefined
+            ? undefined
+            : JSON.stringify(requestBody),
       });
       const text = await response.text();
       return {
@@ -150,7 +32,11 @@ async function processingGet(page, path) {
         text,
       };
     },
-    { requestPath: path },
+    {
+      requestPath: path,
+      requestMethod: method,
+      requestBody: body,
+    },
   );
 
   if (!result.ok) {
@@ -158,15 +44,33 @@ async function processingGet(page, path) {
       `Processing API ${path} failed with ${result.status}: ${result.text}`,
     );
   }
+
   return result.text ? JSON.parse(result.text) : null;
 }
 
-async function processingSummary(page) {
-  return processingGet(page, "/processing/state/?includeLists=0");
+async function processingGet(page, path) {
+  return processingRequest(page, path);
+}
+
+async function processingPost(page, path, body = {}) {
+  await page.evaluate(async () => {
+    await fetch("/api/csrf/", { credentials: "include" });
+  });
+  return processingRequest(page, path, {
+    method: "POST",
+    body,
+  });
+}
+
+async function processingCard(page, card) {
+  return processingGet(
+    page,
+    `/processing/card/?${new URLSearchParams({ card }).toString()}`,
+  );
 }
 
 async function processingTable(page, card, params = {}) {
-  const search = new URLSearchParams({ card });
+  const search = new URLSearchParams({ card, limit: "60" });
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
       search.set(key, String(value));
@@ -175,84 +79,105 @@ async function processingTable(page, card, params = {}) {
   return processingGet(page, `/processing/table/?${search.toString()}`);
 }
 
-async function waitForProcessingSummary(
-  page,
-  predicate,
-  {
-    attempts = 40,
-    delayMs = 250,
-    description = "processing summary condition",
-  } = {},
-) {
-  let lastPayload = null;
+async function waitForCard(page, card, predicate, options = {}) {
+  const {
+    attempts = 90,
+    delayMs = 1000,
+    description = `${card} condition`,
+  } = options;
+  let payload = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastPayload = await processingSummary(page);
-    if (predicate(lastPayload)) {
-      return lastPayload;
+    payload = await processingCard(page, card);
+    if (predicate(payload)) {
+      return payload;
     }
     await page.waitForTimeout(delayMs);
   }
-
   throw new Error(
-    `Timed out waiting for ${description}. Last sync state: ${JSON.stringify(
-      lastPayload?.sync || null,
-    )}`,
+    `Timed out waiting for ${description}. Last payload: ${JSON.stringify(payload)}`,
   );
 }
 
-async function findTableRowLocation(page, cards, query, rowPredicate) {
-  for (const card of cards) {
-    const payload = await processingTable(page, card, { q: query, limit: 60 });
-    const row = payload.rows.find(rowPredicate);
-    if (row) {
-      return { card, row };
+async function waitForTable(page, card, predicate, options = {}) {
+  const {
+    params = {},
+    attempts = 90,
+    delayMs = 1000,
+    description = `${card} condition`,
+  } = options;
+  let payload = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    payload = await processingTable(page, card, params);
+    if (predicate(payload)) {
+      return payload;
     }
+    await page.waitForTimeout(delayMs);
   }
-  return null;
+  throw new Error(
+    `Timed out waiting for ${description}. Last payload: ${JSON.stringify(payload)}`,
+  );
 }
 
-async function waitForTableRowLocation(
+async function waitForRequestInCards(
   page,
   cards,
+  requestId,
   query,
-  rowPredicate,
-  { attempts = 30, delayMs = 250 } = {},
+  options = {},
 ) {
-  let location = null;
+  const {
+    attempts = 120,
+    delayMs = 1000,
+    description = `request ${requestId} in cards`,
+  } = options;
+  let snapshot = {};
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    location = await findTableRowLocation(page, cards, query, rowPredicate);
-    if (location) {
-      return location;
+    snapshot = {};
+    for (const card of cards) {
+      const payload = await processingTable(page, card, { q: query });
+      snapshot[card] = payload.rows.map((row) => ({
+        id: row.id,
+        requestId: row.requestId,
+        status: row.status,
+      }));
+      const matchingRow = payload.rows.find(
+        (row) => (row.requestId || row.id) === requestId,
+      );
+      if (matchingRow) {
+        return { card, row: matchingRow };
+      }
     }
     await page.waitForTimeout(delayMs);
   }
-
   throw new Error(
-    `Timed out waiting for a table row matching "${query}" in ${cards.join(", ")}.`,
+    `Timed out waiting for ${description}. Last snapshot: ${JSON.stringify(snapshot)}`,
   );
 }
 
-async function waitForCreateRequestLocation(
-  page,
-  query,
-  recordId,
-  options = {},
-) {
-  return waitForTableRowLocation(
+async function ensureProcessingQuiescent(page) {
+  await processingPost(page, "/processing/sync/catalog/stop/?includeLists=0");
+  await processingPost(page, "/processing/sync/incomplete/stop/?includeLists=0");
+  await processingPost(page, "/processing/automation/catalog/?includeLists=0", {
+    enabled: false,
+    interval: "weekly",
+    time: "03:00",
+  });
+  await processingPost(page, "/processing/automation/incomplete/?includeLists=0", {
+    enabled: false,
+    interval: "weekly",
+    time: "03:00",
+  });
+  await waitForCard(
     page,
-    [
-      "create-requests",
-      "create-queue",
-      "create-processing",
-      "create-created",
-      "on-hold-paused",
-      "on-hold-failed",
-      "on-hold-duplicate",
-      "on-hold-deleted",
-    ],
-    query,
-    (item) => item.recordId === recordId,
-    options,
+    "catalog-sync",
+    (payload) => payload?.sync?.status === "idle",
+    { description: "catalog sync to become idle" },
+  );
+  await waitForCard(
+    page,
+    "incomplete-automation",
+    (payload) => payload?.sync?.status === "idle",
+    { description: "incomplete sync to become idle" },
   );
 }
 
@@ -287,459 +212,343 @@ async function loginSuperAdminThroughApi(page) {
   }
 }
 
-async function seedLiveProcessingState(page, smoke) {
-  await processingPost(page, "/processing/sync/start/", {
-    remotePages: [[smoke.catalog, smoke.paused], []],
-  });
-  await processingPost(page, "/processing/sync/advance/");
-  await processingPost(page, "/processing/records/create-requests/", {
-    ids: [smoke.paused.id],
-  });
-  await processingPost(page, "/processing/requests/action/", {
-    ids: [`request-${smoke.paused.id}`],
-    action: "pause",
-  });
+function nextMinuteTimeString() {
+  const nextMinute = new Date();
+  nextMinute.setMinutes(nextMinute.getMinutes() + 1, 0, 0);
+  const hours = String(nextMinute.getHours()).padStart(2, "0");
+  const minutes = String(nextMinute.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
-async function seedIdleRemotePages(page, remotePages) {
-  await processingPost(page, "/processing/sync/start/", { remotePages });
-  await processingPost(page, "/processing/sync/stop/");
-}
-
-function repeatedAutomationPages(smoke, count = 12) {
-  return [
-    ...Array.from({ length: count }, (_, index) => [
-      index % 2 === 0 ? smoke.automationA : smoke.automationB,
-    ]),
-    [],
-  ];
-}
-
-function repeatedIncompleteRecords(smoke, count = 120) {
-  return Array.from({ length: count }, (_, index) => ({
-    ...smoke.incomplete,
-    id: `${smoke.incomplete.id}-${index + 1}`,
-    name: `${smoke.incomplete.name} ${index + 1}`,
-    url: `${smoke.incomplete.url}-${index + 1}`,
-  }));
-}
-
-test.describe("processing replacement live smoke", () => {
+test.describe("processing live real-flow coverage", () => {
   test.beforeEach(async ({ page }) => {
     await loginSuperAdminThroughApi(page);
+    await ensureProcessingQuiescent(page);
   });
 
-  test("new processing routes render and share backend state", async ({
+  test("catalog manual runtime disables automation and catalog count stays server-backed", async ({
     page,
   }) => {
-    const smoke = liveSmokeData();
-    await seedLiveProcessingState(page, smoke);
+    test.setTimeout(120_000);
 
-    await page.goto("/catalog");
-    await expect(
-      page.getByRole("heading", { name: "Catalog", exact: true }),
-    ).toBeVisible();
-    await page.getByTestId("catalog-records-search").fill(smoke.catalog.name);
-    await expect(
-      page.getByTestId(`catalog-records-row-${smoke.catalog.id}`),
-    ).toBeVisible();
-
-    await processingPost(page, "/processing/records/create-requests/", {
-      ids: [smoke.catalog.id],
+    await page.goto("/catalog", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("catalog-page")).toBeVisible({
+      timeout: 30_000,
     });
 
-    const location = await waitForCreateRequestLocation(
-      page,
-      smoke.catalog.name,
-      smoke.catalog.id,
-    );
+    const initialTable = await processingTable(page, "catalog-records");
+    await expect.poll(
+      async () =>
+        (await page.getByTestId("catalog-records-count").textContent())?.trim(),
+    ).toBe(String(initialTable.pagination.totalCount));
 
-    await page.goto("/create");
-    await expect(
-      page.getByRole("heading", { name: "Create", exact: true }),
-    ).toBeVisible();
-    if (location.card.startsWith("create-")) {
-      await page
-        .getByTestId(`${location.card}-search`)
-        .fill(smoke.catalog.name);
-      await expect(
-        page.getByTestId(`${location.card}-row-${location.row.id}`),
-      ).toBeVisible();
-    } else {
-      await page.goto("/on-hold");
-      await expect(
-        page.getByRole("heading", { name: "On Hold", exact: true }),
-      ).toBeVisible();
-      await page
-        .getByTestId(`${location.card}-search`)
-        .fill(smoke.catalog.name);
-      await expect(
-        page.getByTestId(`${location.card}-row-${location.row.id}`),
-      ).toBeVisible();
+    if (initialTable.rows.length > 0) {
+      const query = initialTable.rows[0].title;
+      await page.getByTestId("catalog-records-search").fill(query);
+      const filtered = await processingTable(page, "catalog-records", { q: query });
+      await expect.poll(
+        async () =>
+          (await page.getByTestId("catalog-records-count").textContent())?.trim(),
+      ).toBe(String(filtered.pagination.totalCount));
     }
 
-    await page.goto("/on-hold");
-    await expect(
-      page.getByRole("heading", { name: "On Hold", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId(`on-hold-paused-row-request-${smoke.paused.id}`),
-    ).toBeVisible();
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-pause-btn")).toBeVisible();
+    await expect(page.getByTestId("catalog-automation-run-btn")).toBeDisabled();
 
-    await page.goto("/incomplete");
-    await expect(
-      page.getByRole("heading", { name: "Incomplete", exact: true, level: 1 }),
-    ).toBeVisible();
-  });
-
-  test("real catalog request creation is discoverable through processing tables", async ({
-    page,
-  }) => {
-    const smoke = liveSmokeData();
-
-    await processingPost(page, "/processing/sync/start/", {
-      remotePages: [[smoke.catalog], []],
-    });
-    await processingPost(page, "/processing/sync/advance/");
-
-    await page.goto("/catalog");
-    await page.getByTestId("catalog-records-search").fill(smoke.catalog.name);
-    await processingPost(page, "/processing/records/create-requests/", {
-      ids: [smoke.catalog.id],
-    });
-    const location = await waitForCreateRequestLocation(
+    await page.getByTestId("catalog-sync-pause-btn").click();
+    await waitForCard(
       page,
-      smoke.catalog.name,
-      smoke.catalog.id,
+      "catalog-sync",
+      (payload) => payload?.sync?.status === "paused",
+      { description: "manual catalog pause" },
     );
 
-    if (location.card.startsWith("create-")) {
-      await page.goto("/create");
-      await page
-        .getByTestId(`${location.card}-search`)
-        .fill(smoke.catalog.name);
-      await expect(
-        page.getByTestId(`${location.card}-row-${location.row.id}`),
-      ).toBeVisible();
-    } else {
-      await page.goto("/on-hold");
-      await page
-        .getByTestId(`${location.card}-search`)
-        .fill(smoke.catalog.name);
-      await expect(
-        page.getByTestId(`${location.card}-row-${location.row.id}`),
-      ).toBeVisible();
-    }
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("catalog-automation-run-btn")).toBeDisabled();
+
+    await processingPost(page, "/processing/sync/catalog/stop/?includeLists=0");
   });
 
-  test("queued create requests leave the queue on the real processing worker", async ({
+  test("catalog automation run button shares the same runtime ownership as manual", async ({
     page,
   }) => {
-    const smoke = liveSmokeData();
+    test.setTimeout(120_000);
 
-    await processingPost(page, "/processing/sync/start/", {
-      remotePages: [[smoke.catalog], []],
-    });
-    await processingPost(page, "/processing/sync/advance/");
-    await processingPost(page, "/processing/records/create-requests/", {
-      ids: [smoke.catalog.id],
+    await page.goto("/catalog");
+    await page.getByTestId("catalog-automation-run-btn").click();
+
+    await expect.poll(
+      async () => (await page.getByTestId("catalog-automation-run-btn").getAttribute("data-state")) || "",
+    ).toMatch(/syncing|pausing|paused/);
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled({
+      timeout: 30_000,
     });
 
-    const location = await waitForTableRowLocation(
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await waitForCard(
+      page,
+      "catalog-automation",
+      (payload) => payload?.sync?.status === "paused",
+      { description: "catalog automation pause" },
+    );
+
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
+    await processingPost(page, "/processing/sync/catalog/stop/?includeLists=0");
+  });
+
+  test("scheduled catalog automation uses the same live runtime as button-started automation", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    const scheduledTime = nextMinuteTimeString();
+    await page.goto("/catalog");
+
+    const toggle = page.getByTestId("catalog-automation-enabled");
+    if (!(await toggle.isChecked())) {
+      await toggle.check();
+    }
+    await page.getByTestId("catalog-automation-interval").selectOption("daily");
+    await page.getByTestId("catalog-automation-time").fill(scheduledTime);
+    await page.getByTestId("catalog-automation-save-btn").click();
+
+    await expect(page.getByTestId("catalog-automation-status")).toContainText("Saved");
+
+    const scheduledRun = await waitForCard(
+      page,
+      "catalog-automation",
+      (payload) =>
+        payload?.sync?.triggerSource === "scheduler" &&
+        payload?.sync?.runMode === "catalog_automation" &&
+        ["syncing", "pausing", "paused"].includes(payload?.sync?.status),
+      {
+        attempts: 150,
+        delayMs: 1000,
+        description: "scheduled catalog automation to start",
+      },
+    );
+
+    expect(scheduledRun.sync.triggerSource).toBe("scheduler");
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
+
+    await processingPost(page, "/processing/sync/catalog/stop/?includeLists=0");
+    await processingPost(page, "/processing/automation/catalog/?includeLists=0", {
+      enabled: false,
+      interval: "weekly",
+      time: "03:00",
+    });
+  });
+
+  test("incomplete automation stays separate from catalog runtime and incomplete counts are server-backed", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+
+    await page.goto("/incomplete", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("incomplete-page")).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const incompleteTable = await processingTable(page, "incomplete-records");
+    await expect.poll(
+      async () =>
+        (await page.getByTestId("incomplete-records-count").textContent())?.trim(),
+    ).toBe(String(incompleteTable.pagination.totalCount));
+
+    await page.getByTestId("incomplete-automation-run-btn").click();
+    await waitForCard(
+      page,
+      "incomplete-automation",
+      (payload) => ["syncing", "pausing", "paused"].includes(payload?.sync?.status),
+      { description: "incomplete automation to start" },
+    );
+
+    await page.goto("/catalog");
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+
+    await processingPost(page, "/processing/sync/incomplete/stop/?includeLists=0");
+  });
+
+  test("created deletion hydrates deleted card and create again returns the request to live flow", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    await page.goto("/create", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("create-page")).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const createdTable = await processingTable(page, "create-created");
+    if (!createdTable.pagination.totalCount || !createdTable.rows.length) {
+      test.skip(true, "No live created requests are currently available.");
+    }
+
+    const createdRow = createdTable.rows[0];
+    const createdRequestId = createdRow.requestId || createdRow.id;
+
+    await expect.poll(
+      async () =>
+        (await page.getByTestId("create-created-count").textContent())?.trim(),
+    ).toBe(String(createdTable.pagination.totalCount));
+
+    await page.getByTestId("create-created-search").fill(createdRow.title);
+    const filteredCreatedTable = await processingTable(page, "create-created", {
+      q: createdRow.title,
+    });
+    await expect.poll(
+      async () =>
+        (await page.getByTestId("create-created-count").textContent())?.trim(),
+    ).toBe(String(filteredCreatedTable.pagination.totalCount));
+
+    await expect(
+      page.getByTestId(`create-created-select-${createdRequestId}`),
+    ).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByTestId(`create-created-select-${createdRequestId}`).check();
+    await page.getByTestId("create-created-delete-btn").click();
+
+    await waitForTable(
+      page,
+      "on-hold-deleted",
+      (payload) =>
+        payload.rows.some(
+          (row) => (row.requestId || row.id) === createdRequestId,
+        ),
+      {
+        params: { q: createdRow.title },
+        description: "deleted card to hydrate after deleting a created request",
+      },
+    );
+
+    await page.goto("/on-hold", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("on-hold-page")).toBeVisible({
+      timeout: 30_000,
+    });
+
+    await page.getByTestId("on-hold-deleted-search").fill(createdRow.title);
+    const deletedFilteredTable = await processingTable(page, "on-hold-deleted", {
+      q: createdRow.title,
+    });
+    await expect.poll(
+      async () =>
+        (await page.getByTestId("on-hold-deleted-count").textContent())?.trim(),
+    ).toBe(String(deletedFilteredTable.pagination.totalCount));
+
+    await expect(
+      page.getByTestId(`on-hold-deleted-select-${createdRequestId}`),
+    ).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByTestId(`on-hold-deleted-select-${createdRequestId}`).check();
+    await page.getByTestId("on-hold-deleted-create-again-btn").click();
+
+    await waitForTable(
+      page,
+      "on-hold-deleted",
+      (payload) =>
+        !payload.rows.some(
+          (row) => (row.requestId || row.id) === createdRequestId,
+        ),
+      {
+        params: { q: createdRow.title },
+        description: "recreated request to leave the deleted card",
+      },
+    );
+
+    const relocated = await waitForRequestInCards(
       page,
       [
+        "create-requests",
+        "create-queue",
         "create-processing",
         "create-created",
         "on-hold-failed",
         "on-hold-duplicate",
-        "on-hold-deleted",
       ],
-      smoke.catalog.name,
-      (item) => item.recordId === smoke.catalog.id,
-      { attempts: 60, delayMs: 500 },
-    );
-
-    expect(location.row.recordId).toBe(smoke.catalog.id);
-  });
-
-  test("manual catalog sync uses real backend state", async ({ page }) => {
-    const smoke = liveSmokeData();
-
-    await seedIdleRemotePages(page, [[smoke.manualA], [smoke.manualB], []]);
-    await page.goto("/catalog");
-    await page.getByTestId("catalog-records-search").fill("Live Manual Sync");
-
-    await processingPost(page, "/processing/sync/start/", {
-      remotePages: [[smoke.manualA], [smoke.manualB], []],
-    });
-    await processingPost(page, "/processing/sync/advance/");
-    await processingPost(page, "/processing/sync/advance/");
-    await page.reload();
-    await page.getByTestId("catalog-records-search").fill("Live Manual Sync");
-    await expect(
-      page.getByTestId(`catalog-records-row-${smoke.manualA.id}`),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId(`catalog-records-row-${smoke.manualB.id}`),
-    ).toBeVisible();
-  });
-
-  test("manual sync pause survives non-processing navigation with the real backend", async ({
-    page,
-  }) => {
-    const smoke = liveSmokeData();
-    const remotePages = [
-      ...Array.from({ length: 12 }, (_, index) => [
-        {
-          ...smoke.manualA,
-          id: `${smoke.manualA.id}-${index + 1}`,
-          name: `${smoke.manualA.name} ${index + 1}`,
-          url: `${smoke.manualA.url}-${index + 1}`,
-        },
-      ]),
-      [],
-    ];
-
-    await seedIdleRemotePages(page, remotePages);
-
-    await page.goto("/catalog");
-    await page.getByTestId("catalog-sync-start-btn").click();
-    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
-      "data-state",
-      "syncing",
-    );
-
-    await page.getByTestId("catalog-sync-pause-btn").click();
-    await expect(page.getByTestId("catalog-sync-pause-btn")).toHaveAttribute(
-      "data-state",
-      "pausing",
-    );
-
-    await page.getByRole("link", { name: "Home", exact: true }).click();
-    await expect(
-      page.getByRole("heading", { name: "All Books", exact: true }),
-    ).toBeVisible();
-
-    const pausedSummary = await waitForProcessingSummary(
-      page,
-      (payload) => payload.sync?.status === "paused",
+      createdRequestId,
+      createdRow.title,
       {
-        description: "manual sync to pause while away from processing pages",
+        description: "recreated request to re-enter live processing flow",
       },
     );
-    expect(pausedSummary.sync.message).toContain("Catalog now has");
 
-    await page.getByRole("button", { name: "Processing" }).click();
-    await page.getByRole("link", { name: "Catalog", exact: true }).click();
-
-    await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
-    await expect(page.getByTestId("catalog-sync-progress")).toContainText(
-      "Catalog now has",
-    );
+    expect(relocated.card).not.toBe("on-hold-deleted");
   });
 
-  test("catalog automation uses real backend state", async ({ page }) => {
-    const smoke = liveSmokeData();
+  test("duplicate resolution keeps counts server-backed and moves the request out of duplicate", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
 
-    await seedIdleRemotePages(page, [
-      [smoke.automationA],
-      [smoke.automationB],
-      [],
-    ]);
-    await processingPost(page, "/processing/automation/catalog/run/");
-    for (let step = 0; step < 2; step += 1) {
-      await processingPost(page, "/processing/sync/advance/");
+    await page.goto("/on-hold", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("on-hold-page")).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const duplicateTable = await processingTable(page, "on-hold-duplicate");
+    if (!duplicateTable.pagination.totalCount || !duplicateTable.rows.length) {
+      test.skip(true, "No live duplicate requests are currently available.");
     }
 
-    await page.goto("/catalog");
-    await page
-      .getByTestId("catalog-records-search")
-      .fill("Live Automation Sync");
-    const automationA = await waitForTableRowLocation(
-      page,
-      ["catalog-records"],
-      smoke.automationA.name,
-      (item) => item.recordId === smoke.automationA.id,
-      { attempts: 20, delayMs: 250 },
-    );
-    const automationB = await waitForTableRowLocation(
-      page,
-      ["catalog-records"],
-      smoke.automationB.name,
-      (item) => item.recordId === smoke.automationB.id,
-      { attempts: 20, delayMs: 250 },
-    );
-    expect(automationA.row.recordId).toBe(smoke.automationA.id);
-    expect(automationB.row.recordId).toBe(smoke.automationB.id);
-  });
+    const duplicateRow = duplicateTable.rows[0];
+    const duplicateRequestId = duplicateRow.requestId || duplicateRow.id;
 
-  test("catalog automation can pause and resume with the real backend", async ({
-    page,
-  }) => {
-    const smoke = liveSmokeData();
+    await expect.poll(
+      async () =>
+        (await page.getByTestId("on-hold-duplicate-count").textContent())?.trim(),
+    ).toBe(String(duplicateTable.pagination.totalCount));
 
-    await seedIdleRemotePages(page, repeatedAutomationPages(smoke, 14));
-    await page.goto("/catalog");
-
-    await page.getByTestId("catalog-automation-run-btn").click();
-    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
-      "data-state",
-      "syncing",
-    );
-
-    await page.getByTestId("catalog-automation-run-btn").click();
-    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
-      "data-state",
-      /pausing|paused/,
-    );
-
-    await waitForProcessingSummary(
-      page,
-      (payload) =>
-        payload.sync?.status === "paused" &&
-        payload.sync?.runMode === "catalog_automation",
-      { description: "catalog automation to pause" },
-    );
-    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
-      "data-state",
-      "paused",
-    );
-
-    await page.getByTestId("catalog-automation-run-btn").click();
-    await waitForProcessingSummary(
-      page,
-      (payload) =>
-        payload.sync?.status === "syncing" &&
-        payload.sync?.runMode === "catalog_automation",
-      { description: "catalog automation to resume" },
-    );
-
-    const completedSummary = await waitForProcessingSummary(
-      page,
-      (payload) =>
-        payload.sync?.status === "idle" &&
-        payload.automation?.catalog?.statusMessage?.includes("Created"),
-      { attempts: 80, delayMs: 250, description: "catalog automation to finish" },
-    );
-    expect(completedSummary.automation.catalog.statusMessage).toContain("Created");
-  });
-
-  test("incomplete automation resolves real incomplete-category records", async ({
-    page,
-  }) => {
-    const smoke = liveSmokeData();
-
-    await processingPost(page, "/processing/sync/start/", {
-      remotePages: [[smoke.incomplete], []],
+    await page.getByTestId("on-hold-duplicate-search").fill(duplicateRow.title);
+    const filteredDuplicateTable = await processingTable(page, "on-hold-duplicate", {
+      q: duplicateRow.title,
     });
-    await processingPost(page, "/processing/sync/advance/");
+    await expect.poll(
+      async () =>
+        (await page.getByTestId("on-hold-duplicate-count").textContent())?.trim(),
+    ).toBe(String(filteredDuplicateTable.pagination.totalCount));
 
-    await page.goto("/incomplete");
     await expect(
-      page.getByRole("heading", { name: "Incomplete", exact: true, level: 1 }),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId(`incomplete-records-row-${smoke.incomplete.id}`),
-    ).toBeVisible();
-
-    await page.getByTestId("incomplete-automation-run-btn").click();
-    await waitForProcessingSummary(
-      page,
-      (payload) =>
-        payload.sync.runMode === "incomplete_automation" ||
-        payload.sync.status === "idle",
-      { description: "incomplete automation to start" },
-    );
-    const location = await waitForTableRowLocation(
-      page,
-      ["incomplete-completed"],
-      smoke.incomplete.name,
-      (item) => item.recordId === smoke.incomplete.id,
-      { attempts: 20, delayMs: 250 },
-    );
-
-    await page.goto("/incomplete");
-    await page
-      .getByTestId(`${location.card}-search`)
-      .fill(smoke.incomplete.name);
-    await expect(
-      page.getByTestId(`${location.card}-row-${location.row.id}`),
-    ).toBeVisible();
-  });
-
-  test("incomplete automation can pause and resume with the real backend", async ({
-    page,
-  }) => {
-    const smoke = liveSmokeData();
-    const incompleteRecords = repeatedIncompleteRecords(smoke, 120);
-
-    await processingPost(page, "/processing/sync/start/", {
-      remotePages: [incompleteRecords, []],
+      page.getByTestId(`on-hold-duplicate-select-${duplicateRequestId}`),
+    ).toBeVisible({
+      timeout: 30_000,
     });
-    await processingPost(page, "/processing/sync/advance/");
-    await processingPost(page, "/processing/sync/stop/");
+    await page.getByTestId(`on-hold-duplicate-select-${duplicateRequestId}`).check();
+    await page.getByTestId("on-hold-duplicate-new-btn").click();
 
-    await page.goto("/incomplete");
-    await page.getByTestId("incomplete-records-search").fill(smoke.incomplete.name);
-    await expect(
-      page.getByTestId(`incomplete-records-row-${incompleteRecords[0].id}`),
-    ).toBeVisible();
-
-    await page.getByTestId("incomplete-automation-run-btn").click();
-    await expect(
-      page.getByTestId("incomplete-automation-run-btn"),
-    ).toHaveAttribute("data-state", "syncing");
-
-    await page.getByTestId("incomplete-automation-run-btn").click();
-    await expect(
-      page.getByTestId("incomplete-automation-run-btn"),
-    ).toHaveAttribute("data-state", /pausing|paused/);
-
-    await waitForProcessingSummary(
+    await waitForTable(
       page,
+      "on-hold-duplicate",
       (payload) =>
-        payload.sync?.status === "paused" &&
-        payload.sync?.runMode === "incomplete_automation",
-      { description: "incomplete automation to pause" },
+        !payload.rows.some(
+          (row) => (row.requestId || row.id) === duplicateRequestId,
+        ),
+      {
+        params: { q: duplicateRow.title },
+        description: "duplicate request to leave duplicate card after marking new",
+      },
     );
-    await expect(
-      page.getByTestId("incomplete-automation-run-btn"),
-    ).toHaveAttribute("data-state", "paused");
 
-    await page.getByTestId("incomplete-automation-run-btn").click();
-    await waitForProcessingSummary(
+    const relocated = await waitForRequestInCards(
       page,
-      (payload) =>
-        payload.sync?.status === "syncing" &&
-        payload.sync?.runMode === "incomplete_automation",
-      { description: "incomplete automation to resume" },
+      [
+        "create-requests",
+        "create-queue",
+        "create-processing",
+        "create-created",
+        "on-hold-failed",
+      ],
+      duplicateRequestId,
+      duplicateRow.title,
+      {
+        description: "resolved duplicate request to re-enter live processing flow",
+      },
     );
 
-    const completedSummary = await waitForProcessingSummary(
-      page,
-      (payload) =>
-        payload.sync?.status === "idle" &&
-        payload.automation?.incomplete?.statusMessage?.includes("Resolved"),
-      { attempts: 80, delayMs: 250, description: "incomplete automation to finish" },
-    );
-    expect(completedSummary.automation.incomplete.statusMessage).toContain(
-      "Resolved",
-    );
-  });
-
-  test("legacy processing URLs redirect to replacement pages", async ({
-    page,
-  }) => {
-    await page.goto("/processing-catalog-books");
-    await expect(page).toHaveURL(/\/catalog$/);
-
-    await page.goto("/processing-my-requests");
-    await expect(page).toHaveURL(/\/create$/);
-
-    await page.goto("/processing-failed-requests");
-    await expect(page).toHaveURL(/\/on-hold$/);
-
-    await page.goto("/processing-incomplete-check");
-    await expect(page).toHaveURL(/\/incomplete$/);
+    expect(relocated.card).not.toBe("on-hold-duplicate");
   });
 });

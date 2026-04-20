@@ -3,6 +3,7 @@ import time
 
 from django.http import StreamingHttpResponse
 from rest_framework.exceptions import ValidationError
+from rest_framework.renderers import BaseRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -142,10 +143,13 @@ def base_state_payload():
 
     return {
         "summary": processing_summary_payload(),
-        "sync": serialize_sync_state(primary_sync),
+        "sync": serialize_sync_state(primary_sync, include_remote_pages=False),
         "syncStates": {
-            "catalog": serialize_sync_state(catalog_sync),
-            "incomplete": serialize_sync_state(incomplete_sync),
+            "catalog": serialize_sync_state(catalog_sync, include_remote_pages=False),
+            "incomplete": serialize_sync_state(
+                incomplete_sync,
+                include_remote_pages=False,
+            ),
         },
         "orchestration": {
             "manualPipelineAdvance": should_manually_advance_processing_work(),
@@ -172,20 +176,80 @@ def state_payload(*, include_lists=True):
     return payload
 
 
-def stream_state_payload(previous_snapshot=None, next_snapshot=None):
-    payload = base_state_payload()
-
-    if previous_snapshot is None or next_snapshot is None:
-        payload["records"] = serialized_processing_records()
-        payload["requests"] = serialized_processing_requests()
-        return payload
-
-    if previous_snapshot.get("records") != next_snapshot.get("records"):
-        payload["records"] = serialized_processing_records()
-    if previous_snapshot.get("requests") != next_snapshot.get("requests"):
-        payload["requests"] = serialized_processing_requests()
-
+def state_response_payload(*, previous_snapshot=None, include_lists=True, extra=None):
+    payload = state_payload(include_lists=include_lists)
+    if previous_snapshot is not None:
+        next_snapshot = processing_invalidation_snapshot()
+        payload["targets"] = processing_invalidation_targets(
+            previous_snapshot,
+            next_snapshot,
+        )
+    if extra:
+        payload.update(extra)
     return payload
+
+
+def processing_response(payload):
+    response = Response(payload)
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
+
+
+def snapshot_has_active_work(snapshot):
+    request_counts = snapshot.get("requests", {}).get("counts", {})
+    has_active_requests = any(
+        request_counts.get(state, 0)
+        for state in ("initial", "queued", "processing")
+    )
+    has_active_sync = any(
+        snapshot.get(key, {}).get("status") in {"syncing", "pausing"}
+        for key in ("catalogSync", "incompleteSync")
+    )
+    return has_active_requests or has_active_sync
+
+
+def snapshot_event_scope(snapshot):
+    if snapshot.get("incompleteSync", {}).get("status") in {"syncing", "pausing", "paused"}:
+        return PROCESSING_SYNC_KEY_INCOMPLETE
+    if snapshot.get("catalogSync", {}).get("status") in {"syncing", "pausing", "paused"}:
+        return PROCESSING_SYNC_KEY_CATALOG
+    return None
+
+
+def stream_event_payload(snapshot, *, targets, transition_count=0, final=False):
+    scope = snapshot_event_scope(snapshot)
+    sync_key = "incompleteSync" if scope == PROCESSING_SYNC_KEY_INCOMPLETE else "catalogSync"
+    sync_state = snapshot.get(sync_key, {}) if scope else {}
+    payload = {
+        "eventId": int(time.time() * 1000),
+        "targets": list(dict.fromkeys(targets)),
+    }
+    if scope:
+        payload["scope"] = scope
+    if sync_state.get("runMode"):
+        payload["triggerMode"] = sync_state["runMode"]
+    if sync_state.get("status"):
+        payload["phase"] = sync_state["status"]
+    elif transition_count:
+        payload["phase"] = "pipeline"
+    if "pageIndex" in sync_state:
+        payload["pageIndex"] = sync_state.get("pageIndex", 0)
+    if transition_count:
+        payload["transitionCount"] = transition_count
+    if final:
+        payload["final"] = True
+    return payload
+
+
+class EventStreamRenderer(BaseRenderer):
+    media_type = "text/event-stream"
+    format = "event-stream"
+    charset = "utf-8"
+    render_style = "binary"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data if data is not None else b""
 
 
 class ProcessingStateView(APIView):
@@ -196,7 +260,7 @@ class ProcessingStateView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return processing_response(state_payload(include_lists=include_lists))
 
 
 class ProcessingCardView(APIView):
@@ -215,37 +279,31 @@ class ProcessingCardView(APIView):
         except KeyError as exc:
             raise ValidationError({"card": [f"Unsupported processing card: {exc.args[0]}"]}) from exc
 
-        return Response(payload)
+        return processing_response(payload)
 
 
 class ProcessingStreamView(APIView):
     permission_classes = [CanManageProcessing]
+    renderer_classes = [EventStreamRenderer]
 
     def get(self, request):
         keepalive_seconds = 15
         active_snapshot_interval_seconds = 1
         idle_snapshot_interval_seconds = 4
-
-        def has_active_work(snapshot):
-            request_counts = snapshot.get("requests", {}).get("counts", {})
-            has_active_requests = any(
-                request_counts.get(state, 0)
-                for state in ("initial", "queued", "processing")
-            )
-            has_active_sync = any(
-                snapshot.get(key, {}).get("status") in {"syncing", "pausing"}
-                for key in ("catalogSync", "incompleteSync")
-            )
-            return has_active_requests or has_active_sync
+        request_batch_threshold = 25
+        max_batch_window_seconds = 2
 
         def stream():
             yield "event: connected\ndata: {}\n\n"
-            yield f"event: snapshot\ndata: {json.dumps(state_payload())}\n\n"
             last_snapshot = processing_invalidation_snapshot()
+            pending_targets = []
+            pending_transition_count = 0
+            pending_snapshot = last_snapshot
+            last_flush_at = time.monotonic()
             idle_seconds = 0
             snapshot_interval_seconds = (
                 active_snapshot_interval_seconds
-                if has_active_work(last_snapshot)
+                if snapshot_has_active_work(last_snapshot)
                 else idle_snapshot_interval_seconds
             )
             try:
@@ -253,35 +311,82 @@ class ProcessingStreamView(APIView):
                     time.sleep(snapshot_interval_seconds)
                     advance_processing_push_tick()
                     next_snapshot = processing_invalidation_snapshot()
+                    had_active_work = snapshot_has_active_work(last_snapshot)
+                    has_active_work = snapshot_has_active_work(next_snapshot)
                     targets = processing_invalidation_targets(
                         last_snapshot,
                         next_snapshot,
                     )
                     if targets:
-                        payload = json.dumps(
-                            stream_state_payload(
-                                previous_snapshot=last_snapshot,
-                                next_snapshot=next_snapshot,
-                            )
+                        pending_targets.extend(targets)
+                        pending_snapshot = next_snapshot
+                        sync_changed = (
+                            last_snapshot.get("catalogSync") != next_snapshot.get("catalogSync")
+                            or last_snapshot.get("incompleteSync") != next_snapshot.get("incompleteSync")
+                            or last_snapshot.get("catalogAutomation")
+                            != next_snapshot.get("catalogAutomation")
+                            or last_snapshot.get("incompleteAutomation")
+                            != next_snapshot.get("incompleteAutomation")
                         )
-                        yield f"event: state\ndata: {payload}\n\n"
+                        if sync_changed:
+                            pending_transition_count = 0
+                        else:
+                            pending_transition_count += 1
+
+                        should_flush = (
+                            sync_changed
+                            or pending_transition_count >= request_batch_threshold
+                            or (had_active_work and not has_active_work)
+                            or (time.monotonic() - last_flush_at) >= max_batch_window_seconds
+                        )
+
+                        if should_flush:
+                            payload = json.dumps(
+                                stream_event_payload(
+                                    pending_snapshot,
+                                    targets=pending_targets,
+                                    transition_count=pending_transition_count,
+                                    final=had_active_work and not has_active_work,
+                                )
+                            )
+                            yield f"event: invalidation\ndata: {payload}\n\n"
+                            pending_targets = []
+                            pending_transition_count = 0
+                            last_flush_at = time.monotonic()
                         last_snapshot = next_snapshot
                         idle_seconds = 0
                     else:
+                        if pending_targets and (
+                            (time.monotonic() - last_flush_at) >= max_batch_window_seconds
+                            or not has_active_work
+                        ):
+                            payload = json.dumps(
+                                stream_event_payload(
+                                    pending_snapshot,
+                                    targets=pending_targets,
+                                    transition_count=pending_transition_count,
+                                    final=had_active_work and not has_active_work,
+                                )
+                            )
+                            yield f"event: invalidation\ndata: {payload}\n\n"
+                            pending_targets = []
+                            pending_transition_count = 0
+                            last_flush_at = time.monotonic()
                         idle_seconds += snapshot_interval_seconds
                         if idle_seconds >= keepalive_seconds:
                             yield ": keepalive\n\n"
                             idle_seconds = 0
                     snapshot_interval_seconds = (
                         active_snapshot_interval_seconds
-                        if has_active_work(next_snapshot)
+                        if snapshot_has_active_work(next_snapshot) or pending_targets
                         else idle_snapshot_interval_seconds
                     )
             except GeneratorExit:
                 return
 
         response = StreamingHttpResponse(stream(), content_type="text/event-stream")
-        response["Cache-Control"] = "no-cache"
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response["Pragma"] = "no-cache"
         response["X-Accel-Buffering"] = "no"
         return response
 
@@ -317,27 +422,33 @@ class ProcessingTableView(APIView):
         except KeyError as exc:
             raise ValidationError({"card": [f"Unsupported processing table: {exc.args[0]}"]}) from exc
 
-        return Response(payload)
+        return processing_response(payload)
 
 
 class ProcessingPipelineAdvanceView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
+        previous_snapshot = processing_invalidation_snapshot()
         advanced = advance_pipeline_once()
         include_lists = truthy_query_param(
             request.query_params.get("includeLists"),
             default=True,
         )
-        payload = state_payload(include_lists=include_lists)
-        payload["advancedCount"] = advanced
-        return Response(payload)
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+                extra={"advancedCount": advanced},
+            )
+        )
 
 
 class ProcessingSyncStartView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
+        previous_snapshot = processing_invalidation_snapshot()
         serializer = SyncStartSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         remote_pages = (
@@ -350,13 +461,19 @@ class ProcessingSyncStartView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )
 
 
 class ProcessingSyncPauseView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request, scope=None):
+        previous_snapshot = processing_invalidation_snapshot()
         pause_sync(
             normalize_sync_scope(
                 scope,
@@ -367,13 +484,19 @@ class ProcessingSyncPauseView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )
 
 
 class ProcessingSyncAdvanceView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request, scope=None):
+        previous_snapshot = processing_invalidation_snapshot()
         advance_sync_once(
             normalize_sync_scope(
                 scope,
@@ -384,13 +507,19 @@ class ProcessingSyncAdvanceView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )
 
 
 class ProcessingSyncResumeView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request, scope=None):
+        previous_snapshot = processing_invalidation_snapshot()
         sync_key = normalize_sync_scope(
             scope,
             default=active_sync_scope(),
@@ -407,13 +536,19 @@ class ProcessingSyncResumeView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )
 
 
 class ProcessingSyncStopView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request, scope=None):
+        previous_snapshot = processing_invalidation_snapshot()
         stop_sync(
             normalize_sync_scope(
                 scope,
@@ -424,13 +559,19 @@ class ProcessingSyncStopView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )
 
 
 class ProcessingRecordCreateRequestsView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
+        previous_snapshot = processing_invalidation_snapshot()
         serializer = BulkIdsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         created = create_requests_for_record_ids(
@@ -441,15 +582,20 @@ class ProcessingRecordCreateRequestsView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        payload = state_payload(include_lists=include_lists)
-        payload["createdCount"] = len(created)
-        return Response(payload)
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+                extra={"createdCount": len(created)},
+            )
+        )
 
 
 class ProcessingRequestActionView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
+        previous_snapshot = processing_invalidation_snapshot()
         serializer = RequestActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         changed = apply_request_action(
@@ -462,9 +608,13 @@ class ProcessingRequestActionView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        payload = state_payload(include_lists=include_lists)
-        payload["changedCount"] = len(changed)
-        return Response(payload)
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+                extra={"changedCount": len(changed)},
+            )
+        )
 
 
 class ProcessingAutomationView(APIView):
@@ -472,6 +622,7 @@ class ProcessingAutomationView(APIView):
     kind = None
 
     def post(self, request):
+        previous_snapshot = processing_invalidation_snapshot()
         serializer = AutomationUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         update_automation_settings(self.kind, serializer.validated_data)
@@ -479,7 +630,12 @@ class ProcessingAutomationView(APIView):
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )
 
 
 class ProcessingCatalogAutomationView(ProcessingAutomationView):
@@ -494,21 +650,33 @@ class ProcessingCatalogAutomationRunView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
+        previous_snapshot = processing_invalidation_snapshot()
         run_catalog_automation()
         include_lists = truthy_query_param(
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )
 
 
 class ProcessingIncompleteAutomationRunView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request):
+        previous_snapshot = processing_invalidation_snapshot()
         run_incomplete_automation()
         include_lists = truthy_query_param(
             request.query_params.get("includeLists"),
             default=True,
         )
-        return Response(state_payload(include_lists=include_lists))
+        return Response(
+            state_response_payload(
+                previous_snapshot=previous_snapshot,
+                include_lists=include_lists,
+            )
+        )

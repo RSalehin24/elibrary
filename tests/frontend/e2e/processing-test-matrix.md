@@ -1,47 +1,48 @@
-# Processing E2E Test Matrix
+# Processing Real-Flow Test Matrix
+
+This matrix mirrors the live-flow processing plan. It intentionally excludes
+mocked route coverage, synthetic `remotePages` injection, seeded processing
+rows, and simulated runtime interruptions for processing scenarios.
 
 ## User Stories
 
-1. As an operator, I need catalog sync to run end to end, pause safely, resume from the beginning, and complete without leaving records behind.
-2. As an operator, I need every processing page card to isolate its own loaders, disabled controls, search, filters, and visible counts.
-3. As an operator, I need automatic request progression to keep moving across `initial`, `queued`, `processing`, and terminal states without requiring manual refreshes.
-4. As an operator, I need paused, failed, duplicate, deleted, and incomplete records to move between pages predictably with valid actions only.
-5. As an operator, I need notifications when actions complete and when the system detects duplicates or failures so I can react without inspecting every card manually.
-6. As an operator, I need long-running processing work to stop surfacing as active work once it exceeds the allowed window and be visible as a failure instead.
+1. As an operator, I need Catalog Manual Sync and Catalog Automation to control one shared catalog runtime so they cannot run at the same time.
+2. As an operator, I need button-started and scheduler-started runs inside the same scope to behave identically.
+3. As an operator, I need `catalog-records`, `incomplete-records`, and the relevant overview cards to hydrate while sync is still running.
+4. As an operator, I need search, filter, and count to stay card-local and reflect the full matched dataset, not only the rows already rendered.
+5. As an operator, I need each request-state card to update independently so one card changing does not disturb unrelated cards.
+6. As an operator, I need Catalog Automation to create initial requests only for records with no prior request history.
+7. As an operator, I need records that leave the live `অসম্পূর্ণ বই` category after a successful incomplete run to move into `Updated`.
 
-## Matrix
+## Deterministic Live Scenarios
 
-| Area | Story | Scenario | Expected result |
-| --- | --- | --- | --- |
-| Catalog | Manual sync | Start sync and let it run | Sync advances through all remote pages, returns to idle automatically, shows completion status, and leaves all fetched rows in the table |
-| Catalog | Manual sync | Pause during an active sync | Pause button switches to `Pausing...`, current page finishes, progress is saved, and resume restarts reconciliation from page 1 |
-| Catalog | Records card | Create requests from selectable rows | Only eligible rows can be selected, bulk create shows a loader in the records card only, and created requests enter the pipeline |
-| Catalog | Automation | Run catalog automation | Only `not_created`, `failed`, and `deleted` records receive new initial requests, then the pipeline auto-advances them |
-| Create | Requests / Queue / Processing / Created | Card isolation | A busy card disables only its own controls while the other create-page cards remain interactive |
-| Create | Processing | Pause active work | Progress is saved, the row leaves `Processing`, and the request appears in `On Hold / Paused` |
-| Create | Created | Delete completed work | The row leaves `Created`, moves to `On Hold / Deleted`, and linked-book deletion is requested when applicable |
-| On Hold | Paused | Resume paused requests | Resume sets `isResumed`, returns the row to `Create / Requests`, and the pipeline keeps moving afterward |
-| On Hold | Failed | Retry failed requests | Retry returns the row to `Create / Requests` and clears the previous failure message |
-| On Hold | Duplicate | Confirm duplicate | Duplicate confirmation keeps the catalog row locked until the original request reaches a terminal failure or deletion state |
-| On Hold | Deleted | Create again | Deleted rows can be recreated back into `Create / Requests` without affecting unrelated cards |
-| Incomplete | Automation | Resolve incomplete records | Automation reclassifies completed records, updates overview counts, and surfaces the resolved rows in `Updated` |
-| Incomplete | Updated | Recreate or delete resolved items | Recreate sends the request back to `Create / Requests`; delete moves it to `On Hold / Deleted` |
-| Notifications | Action feedback | Create / save / sync completion | Success or info toasts appear for request creation, automation saves, sync start, sync pause, and sync completion |
-| Notifications | Terminal feedback | Duplicate, failed, stale, and created transitions | Duplicate detection shows a notice, failed requests show an alert, created requests show success, and stale processing is surfaced as failed work |
+| Area | Scenario | Expected result |
+| --- | --- | --- |
+| Catalog runtime | Manual run ownership | Starting Manual Sync disables the Catalog Automation run control until the catalog runtime returns to idle |
+| Catalog runtime | Automation run ownership | Starting Catalog Automation disables the Manual Sync run control until the catalog runtime returns to idle |
+| Catalog runtime | Scheduler parity | A scheduler-started catalog automation shows the same owner/runtime behavior as a button-started catalog automation |
+| Catalog cards | Records hydration during sync | `catalog-records` refetches after each fully reconciled page flush and shows the server-reported total count |
+| Catalog cards | Overview hydration during sync | `catalog-overview` refetches only when aggregate counts change during the run |
+| Catalog automation | Post-sync request creation | Only records with no request history receive new `initial` requests after catalog automation completes |
+| Create cards | Bucket movement | `Requests`, `Queue`, `Processing`, and `Created` refetch only when rows enter or leave their own bucket |
+| On Hold cards | Bucket movement | `Paused`, `Failed`, `Duplicate`, and `Deleted` refetch only when rows enter or leave their own bucket |
+| On Hold cards | Created to Deleted to Create Again | A real created request moves into `Deleted`, hydrates that card, and then leaves `Deleted` again through `Create Again` |
+| On Hold cards | Duplicate to New | A real duplicate request leaves `Duplicate` and re-enters live processing flow through the `New` action |
+| Incomplete cards | In-run hydration | `incomplete-records` and `incomplete-overview` hydrate during incomplete sync, not only at the end |
+| Updated card | Final diff movement | Records removed from the live `অসম্পূর্ণ বই` category appear in `Updated` after the final successful diff |
+| Card-local filters | Search/filter/count | Counts reflect the full matched dataset for the current card filter set, even when only the first 60 rows are rendered |
+| Empty state | Empty to non-empty | An empty mounted card becomes non-empty only when live matching rows actually arrive |
 
-## Covered Edge Cases
+## Best-Effort Live Scenarios
 
-- Full manual sync completion with no explicit pause
-- Pause-after-current-page sync behavior
-- Automated request creation eligibility filtering
-- Duplicate confirmation locking and unlock after the original request becomes terminal
-- Stale processing timeout after 20 minutes
-- Cross-card loader and disabled-control isolation
-- Read-only incomplete rows with no actions
-- Action completion notifications plus duplicate/failure transition notifications
+| Area | Scenario | Result handling |
+| --- | --- | --- |
+| Remote source | eBanglaLibrary outage | Verify only if naturally observed in the real run |
+| Remote source | Rate limiting or transient omissions | Verify only if naturally observed in the real run |
+| Worker runtime | Worker crash or restart | Verify only if naturally observed in the real run |
 
-## Automated Coverage
+## Real-Flow Coverage
 
-- `tests/backend/processing/test_processing_api.py`
-- `tests/frontend/e2e/processing-pages.spec.js`
-- `tests/frontend/e2e/processing-pages-live.spec.js` for live smoke coverage when the local frontend base URL is available
+- `tests/frontend/e2e/processing-pages-live.spec.js`
+- `tests/scripts/test-processing-live.sh`
+- Live development stack with frontend, backend, worker, processing-worker, beat, Redis, Postgres, and real eBanglaLibrary flow

@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { apiFetch } from "../../api/client";
 import BookRouteLink from "../../components/BookRouteLink";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import {
@@ -649,19 +650,118 @@ function filterTableRows(rows, filters) {
   });
 }
 
+function processingCardPath(cardKey) {
+  const search = new URLSearchParams({ card: cardKey });
+  return `/processing/card/?${search.toString()}`;
+}
+
+function processingTablePath(cardKey, filters, offset, limit) {
+  const search = new URLSearchParams({
+    card: cardKey,
+    offset: String(offset),
+    limit: String(limit),
+  });
+  if (filters.q) {
+    search.set("q", filters.q);
+  }
+  if (filters.category) {
+    search.set("category", filters.category);
+  }
+  if (filters.status) {
+    search.set("status", filters.status);
+  }
+  return `/processing/table/?${search.toString()}`;
+}
+
 function useProcessingCardData({ cardKey, enabled }) {
-  const { processingState } = useBookProcessing();
-  const data = useMemo(
-    () => processingCardFromState(cardKey, processingState),
-    [cardKey, processingState],
-  );
+  const { getCardRefreshToken } = useBookProcessing();
+  const refreshToken = getCardRefreshToken(cardKey);
+  const requestIdRef = useRef(0);
+  const [cardState, setCardState] = useState({
+    data: null,
+    loadedOnce: false,
+    initialLoading: false,
+    refreshing: false,
+    error: "",
+  });
+
+  const loadCard = useCallback(() => {
+    if (!enabled) {
+      setCardState({
+        data: null,
+        loadedOnce: false,
+        initialLoading: false,
+        refreshing: false,
+        error: "",
+      });
+      return Promise.resolve(null);
+    }
+
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setCardState((current) => ({
+      ...current,
+      initialLoading: !current.loadedOnce,
+      refreshing: current.loadedOnce,
+      error: "",
+    }));
+
+    return apiFetch(processingCardPath(cardKey), { cache: "no-store" })
+      .then((payload) => {
+        if (requestIdRef.current !== requestId) {
+          return payload;
+        }
+        setCardState({
+          data: payload,
+          loadedOnce: true,
+          initialLoading: false,
+          refreshing: false,
+          error: "",
+        });
+        return payload;
+      })
+      .catch((loadError) => {
+        if (requestIdRef.current !== requestId) {
+          return null;
+        }
+        setCardState((current) => ({
+          ...current,
+          loadedOnce: true,
+          initialLoading: false,
+          refreshing: false,
+          error: loadError.message || "Unable to load processing card.",
+        }));
+        return null;
+      });
+  }, [cardKey, enabled]);
+
+  useEffect(() => {
+    loadCard();
+    return undefined;
+  }, [loadCard, refreshToken]);
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      !["syncing", "pausing"].includes(cardState.data?.sync?.status || "")
+    ) {
+      return undefined;
+    }
+
+    const timerId = window.setInterval(() => {
+      loadCard();
+    }, 2000);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [cardState.data?.sync?.status, enabled, loadCard]);
 
   return {
-    data,
-    loadedOnce: enabled ? processingState.loadedOnce : false,
-    initialLoading: Boolean(enabled && processingState.initialLoading),
-    refreshing: false,
-    error: enabled ? processingState.error : "",
+    data: cardState.data,
+    loadedOnce: enabled ? cardState.loadedOnce : false,
+    initialLoading: Boolean(enabled && cardState.initialLoading),
+    refreshing: Boolean(enabled && cardState.refreshing),
+    error: enabled ? cardState.error : "",
   };
 }
 
@@ -766,74 +866,103 @@ function TableSkeletonRows({
 }
 
 function useProcessingTableData({ cardKey, filters, enabled }) {
-  const { processingState } = useBookProcessing();
+  const { getCardRefreshToken } = useBookProcessing();
   const tableShellRef = useRef(null);
   const observerRef = useRef(null);
   const loadMoreTimerRef = useRef(null);
-  const [visibleCount, setVisibleCount] = useState(PROCESSING_TABLE_BATCH_SIZE);
+  const requestIdRef = useRef(0);
+  const refreshToken = getCardRefreshToken(cardKey);
+  const lastRefreshTokenRef = useRef(refreshToken);
+  const [tableState, setTableState] = useState({
+    rows: [],
+    totalCount: 0,
+    categoryOptions: [],
+    statusOptions: [],
+    hasMore: false,
+    loadedOnce: false,
+    initialLoading: false,
+    refreshing: false,
+    error: "",
+  });
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const allRows = useMemo(
-    () =>
-      enabled
-        ? tableRowsForCard(
-            cardKey,
-            processingState.records || [],
-            processingState.requests || [],
-          )
-        : [],
-    [
-      cardKey,
-      enabled,
-      processingState.records,
-      processingState.requests,
-    ],
-  );
+  const fetchTable = useCallback(
+    async ({ offset = 0, limit = PROCESSING_TABLE_BATCH_SIZE, append = false }) => {
+      if (!enabled) {
+        return null;
+      }
 
-  const categoryOptions = useMemo(
-    () => sortedUniqueValues(allRows.map((row) => row.category)),
-    [allRows],
-  );
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
+      setTableState((current) => ({
+        ...current,
+        initialLoading: !current.loadedOnce && !append,
+        refreshing: current.loadedOnce && !append,
+        error: "",
+      }));
 
-  const statusOptions = useMemo(
-    () => sortedUniqueValues(allRows.map((row) => row.status)),
-    [allRows],
+      try {
+        const payload = await apiFetch(
+          processingTablePath(cardKey, filters, offset, limit),
+          { cache: "no-store" },
+        );
+        if (requestIdRef.current !== requestId) {
+          return payload;
+        }
+        setTableState((current) => ({
+          rows: append ? [...current.rows, ...(payload.rows || [])] : payload.rows || [],
+          totalCount: payload?.pagination?.totalCount || 0,
+          categoryOptions: payload?.filters?.categoryOptions || [],
+          statusOptions: payload?.filters?.statusOptions || [],
+          hasMore: Boolean(payload?.pagination?.hasMore),
+          loadedOnce: true,
+          initialLoading: false,
+          refreshing: false,
+          error: "",
+        }));
+        return payload;
+      } catch (loadError) {
+        if (requestIdRef.current !== requestId) {
+          return null;
+        }
+        setTableState((current) => ({
+          ...current,
+          loadedOnce: true,
+          initialLoading: false,
+          refreshing: false,
+          error: loadError.message || "Unable to load processing table.",
+        }));
+        return null;
+      }
+    },
+    [cardKey, enabled, filters],
   );
-
-  const filteredRows = useMemo(
-    () =>
-      filterTableRows(allRows, {
-        ...filters,
-        q: filters.q,
-      }),
-    [allRows, filters],
-  );
-
-  const hasMore = visibleCount < filteredRows.length;
 
   const loadMore = useCallback(() => {
-    if (!enabled || !hasMore || loadingMore) {
+    if (!enabled || !tableState.hasMore || loadingMore) {
       return;
     }
     setLoadingMore(true);
     if (typeof window === "undefined") {
-      setVisibleCount((current) =>
-        Math.min(filteredRows.length, current + PROCESSING_TABLE_BATCH_SIZE),
-      );
-      setLoadingMore(false);
+      fetchTable({
+        offset: tableState.rows.length,
+        limit: PROCESSING_TABLE_BATCH_SIZE,
+        append: true,
+      }).finally(() => setLoadingMore(false));
       return;
     }
     if (loadMoreTimerRef.current) {
       window.clearTimeout(loadMoreTimerRef.current);
     }
     loadMoreTimerRef.current = window.setTimeout(() => {
-      setVisibleCount((current) =>
-        Math.min(filteredRows.length, current + PROCESSING_TABLE_BATCH_SIZE),
-      );
-      setLoadingMore(false);
+      fetchTable({
+        offset: tableState.rows.length,
+        limit: PROCESSING_TABLE_BATCH_SIZE,
+        append: true,
+      }).finally(() => setLoadingMore(false));
       loadMoreTimerRef.current = null;
     }, 120);
-  }, [enabled, filteredRows.length, hasMore, loadingMore]);
+  }, [enabled, fetchTable, loadingMore, tableState.hasMore, tableState.rows.length]);
 
   const observeLoadTrigger = useCallback(
     (node) => {
@@ -845,9 +974,9 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
       if (
         !node ||
         !enabled ||
-        !processingState.loadedOnce ||
+        !tableState.loadedOnce ||
         loadingMore ||
-        !hasMore
+        !tableState.hasMore
       ) {
         return;
       }
@@ -867,28 +996,52 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
     },
     [
       enabled,
-      hasMore,
       loadingMore,
       loadMore,
-      processingState.loadedOnce,
+      tableState.hasMore,
+      tableState.loadedOnce,
     ],
   );
 
   useEffect(() => {
-    setVisibleCount(PROCESSING_TABLE_BATCH_SIZE);
     setLoadingMore(false);
     if (typeof window !== "undefined" && loadMoreTimerRef.current) {
       window.clearTimeout(loadMoreTimerRef.current);
       loadMoreTimerRef.current = null;
     }
+    if (!enabled) {
+      setTableState({
+        rows: [],
+        totalCount: 0,
+        categoryOptions: [],
+        statusOptions: [],
+        hasMore: false,
+        loadedOnce: false,
+        initialLoading: false,
+        refreshing: false,
+        error: "",
+      });
+      return undefined;
+    }
+    fetchTable({ offset: 0, limit: PROCESSING_TABLE_BATCH_SIZE });
     return undefined;
-  }, [
-    cardKey,
-    filters.q,
-    filters.category,
-    filters.status,
-    allRows.length,
-  ]);
+  }, [cardKey, enabled, fetchTable, filters.category, filters.q, filters.status]);
+
+  useEffect(() => {
+    if (!enabled || !tableState.loadedOnce) {
+      lastRefreshTokenRef.current = refreshToken;
+      return undefined;
+    }
+    if (lastRefreshTokenRef.current === refreshToken) {
+      return undefined;
+    }
+    lastRefreshTokenRef.current = refreshToken;
+    fetchTable({
+      offset: 0,
+      limit: Math.max(PROCESSING_TABLE_BATCH_SIZE, tableState.rows.length || 0),
+    });
+    return undefined;
+  }, [cardKey, enabled, fetchTable, refreshToken, tableState.loadedOnce, tableState.rows.length]);
 
   useEffect(() => {
     return () => {
@@ -902,21 +1055,16 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
   }, []);
 
   return {
-    rows: filteredRows.slice(0, visibleCount),
-    totalCount: filteredRows.length,
-    categoryOptions,
-    statusOptions,
-    hasMore,
-    loadedOnce: enabled ? processingState.loadedOnce : false,
-    initialLoading:
-      Boolean(
-        enabled &&
-          processingState.initialLoading &&
-          !processingState.loadedOnce,
-      ),
+    rows: tableState.rows,
+    totalCount: tableState.totalCount,
+    categoryOptions: tableState.categoryOptions,
+    statusOptions: tableState.statusOptions,
+    hasMore: tableState.hasMore,
+    loadedOnce: enabled ? tableState.loadedOnce : false,
+    initialLoading: Boolean(enabled && tableState.initialLoading),
     loadingMore,
-    refreshing: false,
-    error: enabled ? processingState.error : "",
+    refreshing: Boolean(enabled && tableState.refreshing),
+    error: enabled ? tableState.error : "",
     loadMore,
     tableShellRef,
     observeLoadTrigger,
@@ -1430,11 +1578,11 @@ function AutomationPanel({
         };
   const hasActiveSync =
     effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
-  const hasOwnedSync = hasActiveSync || effectiveSync.status === "paused";
+  const hasOwnedSync = effectiveSync.status !== "idle";
   const ownsSync =
     hasOwnedSync && effectiveSync.runMode === runMode;
   const blockedByOtherSync =
-    hasActiveSync && effectiveSync.runMode !== runMode;
+    hasOwnedSync && effectiveSync.runMode !== runMode;
   const isRunning = ownsSync;
   const isPausing = ownsSync && effectiveSync.status === "pausing";
   const isPaused = ownsSync && effectiveSync.status === "paused";
@@ -1703,28 +1851,59 @@ function CatalogSyncPanel({
   sync = DEFAULT_SYNC_CARD,
 }) {
   const [pauseRequested, setPauseRequested] = useState(false);
+  const [optimisticSync, setOptimisticSync] = useState(null);
   const { busyCards, startCatalogSync, pauseCatalogSync, resumeCatalogSync } =
     useBookProcessing();
   const syncBusy = Boolean(busyCards["catalog-sync"]);
+  const effectiveSync =
+    sync.status !== "idle" || !optimisticSync
+      ? sync
+      : {
+          ...sync,
+          status: optimisticSync.status,
+          message: optimisticSync.message,
+          runMode: SYNC_RUN_MODE_MANUAL,
+        };
   const hasActiveSync =
-    sync.status === "syncing" || sync.status === "pausing";
-  const hasPausedSync = sync.status === "paused";
+    effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
+  const hasPausedSync = effectiveSync.status === "paused";
   const manualIsPaused =
-    hasPausedSync && sync.runMode === SYNC_RUN_MODE_MANUAL;
+    hasPausedSync && effectiveSync.runMode === SYNC_RUN_MODE_MANUAL;
   const manualOwnsActiveSync =
-    hasActiveSync && sync.runMode === SYNC_RUN_MODE_MANUAL;
+    hasActiveSync && effectiveSync.runMode === SYNC_RUN_MODE_MANUAL;
   const otherModeOwnsSync =
-    hasActiveSync && sync.runMode !== SYNC_RUN_MODE_MANUAL;
+    effectiveSync.status !== "idle" &&
+    effectiveSync.runMode !== SYNC_RUN_MODE_MANUAL;
   const isSyncing = manualOwnsActiveSync;
   const isPausing =
-    manualOwnsActiveSync && (pauseRequested || sync.status === "pausing");
-  const syncMessageLines = splitSyncMessage(sync.message);
+    manualOwnsActiveSync &&
+    (pauseRequested || effectiveSync.status === "pausing");
+  const syncMessageLines = splitSyncMessage(effectiveSync.message);
 
   useEffect(() => {
     if (!isSyncing) {
       setPauseRequested(false);
     }
   }, [isSyncing]);
+
+  useEffect(() => {
+    if (sync.status !== "idle") {
+      setOptimisticSync(null);
+    }
+  }, [sync.status, sync.runMode]);
+
+  useEffect(() => {
+    if (!optimisticSync || sync.status !== "idle" || typeof window === "undefined") {
+      return undefined;
+    }
+
+    const timerId = window.setTimeout(() => {
+      setOptimisticSync(null);
+    }, 4000);
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [optimisticSync, sync.status]);
 
   if (loading) {
     return (
@@ -1763,6 +1942,15 @@ function CatalogSyncPanel({
     await pauseCatalogSync();
   }
 
+  async function runWithOptimisticSync(nextOptimisticSync, action) {
+    setOptimisticSync(nextOptimisticSync);
+    const result = await action?.();
+    if (!result) {
+      setOptimisticSync(null);
+    }
+    return result;
+  }
+
   const control =
     manualIsPaused
       ? {
@@ -1771,7 +1959,14 @@ function CatalogSyncPanel({
           icon: <PlayIcon />,
           state: "paused",
           disabled: syncBusy,
-          onClick: resumeCatalogSync,
+          onClick: () =>
+            runWithOptimisticSync(
+              {
+                status: "syncing",
+                message: "Reconciling saved records from the beginning.",
+              },
+              resumeCatalogSync,
+            ),
         }
       : isSyncing
         ? {
@@ -1788,7 +1983,14 @@ function CatalogSyncPanel({
             icon: <PlayIcon />,
             state: "idle",
             disabled: syncBusy || otherModeOwnsSync,
-            onClick: () => startCatalogSync(sync.remotePages),
+            onClick: () =>
+              runWithOptimisticSync(
+                {
+                  status: "syncing",
+                  message: "Syncing catalog records.",
+                },
+                () => startCatalogSync(),
+              ),
           };
 
   return (

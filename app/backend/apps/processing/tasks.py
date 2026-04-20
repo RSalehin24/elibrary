@@ -4,6 +4,7 @@ from .models import BookCreationRequest, BookCreationRequestState
 from .services import (
     PROCESSING_SYNC_KEY_CATALOG,
     kickoff_request_processing,
+    run_due_processing_automations,
     run_processing_sync_until_blocked,
     sync_state_task_payload,
 )
@@ -37,3 +38,8 @@ def kickoff_book_creation_request_task(self, request_id):
         "state": request.state,
         "submission_id": str(request.submission_id or ""),
     }
+
+
+@shared_task
+def run_due_processing_automations_task():
+    return run_due_processing_automations()

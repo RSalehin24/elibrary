@@ -13,6 +13,10 @@ app.conf.beat_schedule = {
         "task": "apps.ingestion.tasks.run_catalog_automation_schedule_task",
         "schedule": crontab(),
     },
+    "run-processing-automation-scheduler": {
+        "task": "apps.processing.tasks.run_due_processing_automations_task",
+        "schedule": crontab(),
+    },
     "recover-stale-processing-jobs": {
         "task": "apps.ingestion.tasks.recover_stale_processing_jobs_task",
         "schedule": crontab(),
