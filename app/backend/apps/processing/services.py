@@ -14,8 +14,20 @@ from bs4 import BeautifulSoup
 from config.celery import app as celery_app
 from django.conf import settings
 from django.core.cache import cache
-from django.db import transaction
-from django.db.models import CharField, F, Max, OuterRef, Prefetch, Q, Subquery
+from django.db import IntegrityError, transaction
+from django.db.models import (
+    Case,
+    CharField,
+    F,
+    IntegerField,
+    Max,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
@@ -823,9 +835,19 @@ def upsert_remote_records(records):
             create_kwargs = dict(defaults)
             if preferred_id and not BookRecord.objects.filter(pk=preferred_id).exists():
                 create_kwargs["id"] = preferred_id
-            BookRecord.objects.create(**create_kwargs)
-            appended_count += 1
-            continue
+            try:
+                BookRecord.objects.create(**create_kwargs)
+                appended_count += 1
+                continue
+            except IntegrityError:
+                record = (
+                    BookRecord.objects.select_related("linked_book")
+                    .filter(Q(pk=data["id"]) | Q(url=data["url"]))
+                    .order_by("id")
+                    .first()
+                )
+                if record is None:
+                    raise
 
         changed_fields = [
             field_name
@@ -2181,6 +2203,19 @@ def annotate_record_processing_status(queryset):
     )
 
 
+def order_catalog_records_queryset(queryset):
+    return queryset.annotate(
+        processing_status_rank=Case(
+            When(
+                processing_status=BookCreationState.NOT_CREATED,
+                then=Value(0),
+            ),
+            default=Value(1),
+            output_field=IntegerField(),
+        )
+    ).order_by("processing_status_rank", "name", "id")
+
+
 def processing_pagination_payload(total_count, offset, limit, returned_count):
     next_offset = offset + returned_count
     return {
@@ -2381,10 +2416,11 @@ def processing_table_payload(card, *, query="", category="", status="", offset=0
 
     if card == "catalog-records":
         return build_processing_record_table_payload(
-            annotate_record_processing_status(
-                BookRecord.objects.select_related("linked_book")
-                .prefetch_related(processing_request_prefetch())
-                .order_by("name", "id")
+            order_catalog_records_queryset(
+                annotate_record_processing_status(
+                    BookRecord.objects.select_related("linked_book")
+                    .prefetch_related(processing_request_prefetch())
+                )
             ),
             query=query_value,
             category=category,
@@ -3241,6 +3277,17 @@ def _mark_request_duplicate(processing_request, existing_book):
     return processing_request
 
 
+def duplicate_candidate_is_current_book(processing_request, candidate_book):
+    if candidate_book is None:
+        return False
+
+    current_book = processing_linked_book(
+        processing_request.book_record,
+        processing_request,
+    )
+    return bool(current_book and current_book.id == candidate_book.id)
+
+
 def _persist_processing_book(processing_request, normalized_url, scraped_data):
     submission_stub = SimpleNamespace(resolved_url=normalized_url)
     target_book = (
@@ -3369,7 +3416,10 @@ def _process_request_once(processing_request):
 
     if not processing_request.is_confirmed_not_duplicate:
         source_duplicate = find_existing_book_by_source_url(normalized_url)
-        if source_duplicate:
+        if source_duplicate and not duplicate_candidate_is_current_book(
+            processing_request,
+            source_duplicate,
+        ):
             return _mark_request_duplicate(processing_request, source_duplicate)
 
     scraped_data = _saved_scraped_data_for_resume(processing_request)
@@ -3397,7 +3447,10 @@ def _process_request_once(processing_request):
         processing_request,
         scraped_data,
     )
-    if duplicate_book:
+    if duplicate_book and not duplicate_candidate_is_current_book(
+        processing_request,
+        duplicate_book,
+    ):
         return _mark_request_duplicate(processing_request, duplicate_book)
 
     book = _persist_processing_book(processing_request, normalized_url, scraped_data)
@@ -3488,8 +3541,65 @@ def kickoff_request_processing(request_id, actor=None):
 
 
 def refresh_processing_state():
+    repair_self_linked_duplicate_requests()
     for record in BookRecord.objects.order_by("name", "id"):
         sync_record_state(record)
+
+
+def repair_self_linked_duplicate_requests():
+    repaired = []
+    queryset = (
+        BookCreationRequest.objects.filter(
+            state=BookCreationRequestState.DUPLICATE,
+            linked_book__isnull=False,
+            linked_book__deleted_at__isnull=True,
+            duplicate_of_request__isnull=True,
+            duplicate_of_record__isnull=True,
+        )
+        .select_related("book_record", "linked_book", "book_record__linked_book")
+        .order_by("created_at", "id")
+    )
+
+    for processing_request in queryset:
+        current_book = processing_linked_book(
+            processing_request.book_record,
+            processing_request,
+        )
+        if current_book is None or current_book.id != processing_request.linked_book_id:
+            continue
+
+        processing_request.state = BookCreationRequestState.CREATED
+        processing_request.progress = None
+        processing_request.error_message = ""
+        processing_request.duplicate_confirmed = False
+        processing_request.save(
+            update_fields=[
+                "state",
+                "progress",
+                "error_message",
+                "duplicate_confirmed",
+                "updated_at",
+            ]
+        )
+
+        record = processing_request.book_record
+        record_update_fields = []
+        if record.linked_book_id != current_book.id:
+            record.linked_book = current_book
+            record_update_fields.append("linked_book")
+        if record.is_duplicate:
+            record.is_duplicate = False
+            record_update_fields.append("is_duplicate")
+        if record.duplicate_of_record_id:
+            record.duplicate_of_record = None
+            record_update_fields.append("duplicate_of_record")
+        if record_update_fields:
+            record.save(update_fields=[*record_update_fields, "updated_at"])
+
+        sync_record_state(record)
+        repaired.append(processing_request)
+
+    return repaired
 
 
 def mark_stale_processing_requests():
@@ -3508,6 +3618,7 @@ def mark_stale_processing_requests():
         sync_record_state(processing_request.book_record)
         recovered.append(processing_request)
         queue_processing_request(processing_request)
+    repair_self_linked_duplicate_requests()
     return recovered
 
 

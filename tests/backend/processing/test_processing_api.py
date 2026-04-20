@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from django.db import IntegrityError
 from django.utils import timezone
 
 from apps.accounts.models import User
@@ -705,6 +706,7 @@ def test_processing_table_paginates_catalog_rows_and_applies_filters(client):
     assert "Poetry" in payload["filters"]["categoryOptions"]
     assert "created" in payload["filters"]["statusOptions"]
     assert "not_created" in payload["filters"]["statusOptions"]
+    assert {row["status"] for row in payload["rows"]} == {"not_created"}
 
     response = client.get("/api/processing/table/?card=catalog-records&offset=60&limit=60")
 
@@ -713,6 +715,8 @@ def test_processing_table_paginates_catalog_rows_and_applies_filters(client):
     assert len(payload["rows"]) == 15
     assert payload["pagination"]["hasMore"] is False
     assert payload["hasMore"] is False
+    assert [row["status"] for row in payload["rows"][:9]] == ["not_created"] * 9
+    assert [row["status"] for row in payload["rows"][9:]] == ["created"] * 6
 
     response = client.get(
         "/api/processing/table/?card=catalog-records&category=Poetry&status=created"
@@ -765,6 +769,49 @@ def test_processing_table_keeps_create_cards_scoped_to_request_status(client):
         assert [row["requestId"] for row in payload["rows"]] == [request_ids[card_id]]
         assert {row["status"] for row in payload["rows"]} == {status}
         assert payload["filters"]["statusOptions"] == [status]
+
+
+@pytest.mark.django_db
+def test_upsert_remote_records_recovers_when_concurrent_insert_wins(monkeypatch):
+    payload = record_payload(
+        "race-record",
+        name="Race Winner",
+        url="https://example.test/books/race-record",
+        category="Novel",
+        writer="Writer One",
+        publisher="Example Press",
+    )
+    original_create = BookRecord.objects.create
+    race_triggered = {"value": False}
+
+    def create_with_concurrent_insert(**kwargs):
+        if race_triggered["value"]:
+            return original_create(**kwargs)
+
+        race_triggered["value"] = True
+        original_create(
+            id="race-record-competing",
+            name="Competing Insert",
+            url=kwargs["url"],
+            category="Poetry",
+            writer="Other Writer",
+            publisher="Other Press",
+        )
+        raise IntegrityError("duplicate key value violates unique constraint")
+
+    monkeypatch.setattr(BookRecord.objects, "create", create_with_concurrent_insert)
+
+    result = processing_services.upsert_remote_records([payload])
+
+    record = BookRecord.objects.get(url=payload["url"])
+    assert BookRecord.objects.count() == 1
+    assert result["appended_count"] == 0
+    assert result["updated_count"] == 1
+    assert result["skipped_count"] == 0
+    assert record.name == "Race Winner"
+    assert record.category == "Novel"
+    assert record.writer == "Writer One"
+    assert record.publisher == "Example Press"
 
 
 @pytest.mark.django_db
@@ -2272,6 +2319,132 @@ def test_processing_actions_persist_request_state_and_book_deletion(client):
     created_book.refresh_from_db()
     assert created.state == "deleted"
     assert created_book.deleted_at is not None
+
+
+@pytest.mark.django_db
+def test_processing_create_again_reuses_own_linked_book_and_finishes_created(
+    client,
+    monkeypatch,
+):
+    login_processing_admin(client)
+    existing_book = Book.objects.create(title="Existing Created Book", state="ready")
+    record = BookRecord.objects.create(
+        id="recreate-created-record",
+        name="Recreate Created",
+        url="https://www.ebanglalibrary.com/books/recreate-created/",
+        category="Fiction",
+        writer="Writer",
+        publisher="Press",
+        book_creation_state="deleted",
+        linked_book=existing_book,
+    )
+    processing_request = BookCreationRequest.objects.create(
+        id="recreate-created-request",
+        book_record=record,
+        state="deleted",
+        linked_book=existing_book,
+    )
+
+    monkeypatch.setattr(
+        "apps.processing.services.capture_source_page_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.find_existing_book_by_source_url",
+        lambda *_args, **_kwargs: existing_book,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.find_exact_existing_book",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.detect_metadata_duplicate",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services.scrape_book",
+        lambda *_args, **_kwargs: {
+            "book_info": "",
+            "main_content": "<p>body</p>",
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "apps.processing.services._persist_processing_book",
+        lambda *_args, **_kwargs: existing_book,
+    )
+
+    response = client.post(
+        "/api/processing/requests/action/",
+        {"ids": [processing_request.id], "action": "create_again"},
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    for _ in range(10):
+        response = client.post(
+            "/api/processing/pipeline/advance/",
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        processing_request.refresh_from_db()
+        if processing_request.state == BookCreationRequest.State.CREATED:
+            break
+        time_module.sleep(0.1)
+
+    processing_request.refresh_from_db()
+    record.refresh_from_db()
+    assert processing_request.state == "created"
+    assert processing_request.linked_book_id == existing_book.id
+    assert processing_request.duplicate_of_request_id is None
+    assert processing_request.duplicate_of_record_id is None
+    assert record.book_creation_state == "created"
+    assert record.linked_book_id == existing_book.id
+    assert record.is_duplicate is False
+    assert record.duplicate_of_record_id is None
+
+
+@pytest.mark.django_db
+def test_processing_tables_repair_self_linked_duplicates_to_created(client):
+    login_processing_admin(client)
+    existing_book = Book.objects.create(title="Existing Ready Book", state="ready")
+    record = BookRecord.objects.create(
+        id="self-linked-duplicate-record",
+        name="Self Linked Duplicate",
+        url="https://example.test/books/self-linked-duplicate",
+        category="Fiction",
+        writer="Writer",
+        publisher="Press",
+        book_creation_state="duplicate",
+        linked_book=existing_book,
+        is_duplicate=True,
+    )
+    processing_request = BookCreationRequest.objects.create(
+        id="self-linked-duplicate-request",
+        book_record=record,
+        state="duplicate",
+        linked_book=existing_book,
+    )
+
+    duplicate_response = client.get("/api/processing/table/?card=on-hold-duplicate")
+    assert duplicate_response.status_code == 200
+    assert duplicate_response.json()["pagination"]["totalCount"] == 0
+
+    processing_request.refresh_from_db()
+    record.refresh_from_db()
+    assert processing_request.state == "created"
+    assert processing_request.duplicate_of_request_id is None
+    assert processing_request.duplicate_of_record_id is None
+    assert record.book_creation_state == "created"
+    assert record.is_duplicate is False
+    assert record.duplicate_of_record_id is None
+
+    created_response = client.get("/api/processing/table/?card=create-created")
+    assert created_response.status_code == 200
+    created_ids = {
+        row["requestId"] or row["id"] for row in created_response.json()["rows"]
+    }
+    assert processing_request.id in created_ids
 
 
 @pytest.mark.django_db

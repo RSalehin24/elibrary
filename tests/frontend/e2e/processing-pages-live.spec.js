@@ -154,6 +154,101 @@ async function waitForRequestInCards(
   );
 }
 
+async function waitForRecordFinalCard(page, recordId, query, options = {}) {
+  const {
+    attempts = 180,
+    delayMs = 1000,
+    description = `record ${recordId} to reach a terminal processing card`,
+  } = options;
+  const cards = [
+    "create-requests",
+    "create-queue",
+    "create-processing",
+    "create-created",
+    "on-hold-failed",
+    "on-hold-duplicate",
+  ];
+  let snapshot = {};
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    snapshot = {};
+    for (const card of cards) {
+      const payload = await processingTable(page, card, { q: query });
+      snapshot[card] = payload.rows.map((row) => ({
+        id: row.id,
+        recordId: row.recordId,
+        requestId: row.requestId,
+        status: row.status,
+      }));
+      const matchingRow = payload.rows.find((row) => row.recordId === recordId);
+      if (!matchingRow) {
+        continue;
+      }
+      if (["create-created", "on-hold-failed", "on-hold-duplicate"].includes(card)) {
+        return { card, row: matchingRow };
+      }
+    }
+    await page.waitForTimeout(delayMs);
+  }
+  throw new Error(
+    `Timed out waiting for ${description}. Last snapshot: ${JSON.stringify(snapshot)}`,
+  );
+}
+
+async function ensureCreatedRequest(
+  page,
+  { requireDuplicateEligible = false } = {},
+) {
+  const existingCreated = await processingTable(page, "create-created");
+  const existingCreatedRow = existingCreated.rows.find(
+    (row) => !requireDuplicateEligible || !row.isConfirmedNotDuplicate,
+  );
+  if (existingCreatedRow) {
+    return existingCreatedRow;
+  }
+
+  const catalogTable = await processingTable(page, "catalog-records");
+  const candidates = catalogTable.rows.filter((row) => row.selectable).slice(0, 5);
+  if (candidates.length === 0) {
+    throw new Error("No selectable catalog records are available to create a real request.");
+  }
+
+  let lastTerminalLocation = null;
+  for (const candidate of candidates) {
+    const response = await processingPost(
+      page,
+      "/processing/records/create-requests/?includeLists=0",
+      { ids: [candidate.recordId || candidate.id] },
+    );
+    if (!response?.createdCount) {
+      continue;
+    }
+
+    lastTerminalLocation = await waitForRecordFinalCard(
+      page,
+      candidate.recordId || candidate.id,
+      candidate.title,
+      {
+        description: `record ${candidate.title} to finish real processing`,
+      },
+    );
+    if (lastTerminalLocation.card === "create-created") {
+      return lastTerminalLocation.row;
+    }
+  }
+
+  throw new Error(
+    `Unable to provision a live created request. Last terminal location: ${JSON.stringify(lastTerminalLocation)}`,
+  );
+}
+
+async function ensureDuplicateRequest(page) {
+  const existingDuplicate = await processingTable(page, "on-hold-duplicate");
+  if (existingDuplicate.rows.length > 0) {
+    return existingDuplicate.rows[0];
+  }
+  throw new Error("No natural live duplicate request is currently available.");
+}
+
 async function ensureProcessingQuiescent(page) {
   await processingPost(page, "/processing/sync/catalog/stop/?includeLists=0");
   await processingPost(page, "/processing/sync/incomplete/stop/?includeLists=0");
@@ -178,6 +273,20 @@ async function ensureProcessingQuiescent(page) {
     "incomplete-automation",
     (payload) => payload?.sync?.status === "idle",
     { description: "incomplete sync to become idle" },
+  );
+  await waitForCard(
+    page,
+    "create-overview",
+    (payload) => {
+      const summary = payload?.summary || {};
+      return (
+        Number(summary.requests || 0) +
+          Number(summary.queue || 0) +
+          Number(summary.processing || 0) ===
+        0
+      );
+    },
+    { description: "processing request pipeline to become idle" },
   );
 }
 
@@ -372,6 +481,57 @@ test.describe("processing live real-flow coverage", () => {
     await processingPost(page, "/processing/sync/incomplete/stop/?includeLists=0");
   });
 
+  test("scheduled incomplete automation uses the same live runtime as the run button", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    const scheduledTime = nextMinuteTimeString();
+    await page.goto("/incomplete", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("incomplete-page")).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const toggle = page.getByTestId("incomplete-automation-enabled");
+    if (!(await toggle.isChecked())) {
+      await toggle.check();
+    }
+    await page
+      .getByTestId("incomplete-automation-interval")
+      .selectOption("daily");
+    await page.getByTestId("incomplete-automation-time").fill(scheduledTime);
+    await page.getByTestId("incomplete-automation-save-btn").click();
+
+    await expect(page.getByTestId("incomplete-automation-status")).toContainText(
+      "Saved",
+    );
+
+    const scheduledRun = await waitForCard(
+      page,
+      "incomplete-automation",
+      (payload) =>
+        payload?.sync?.triggerSource === "scheduler" &&
+        payload?.sync?.runMode === "incomplete_automation" &&
+        ["syncing", "pausing", "paused"].includes(payload?.sync?.status),
+      {
+        attempts: 150,
+        delayMs: 1000,
+        description: "scheduled incomplete automation to start",
+      },
+    );
+
+    expect(scheduledRun.sync.triggerSource).toBe("scheduler");
+    await page.goto("/catalog", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+
+    await processingPost(page, "/processing/sync/incomplete/stop/?includeLists=0");
+    await processingPost(page, "/processing/automation/incomplete/?includeLists=0", {
+      enabled: false,
+      interval: "weekly",
+      time: "03:00",
+    });
+  });
+
   test("created deletion hydrates deleted card and create again returns the request to live flow", async ({
     page,
   }) => {
@@ -382,13 +542,9 @@ test.describe("processing live real-flow coverage", () => {
       timeout: 30_000,
     });
 
-    const createdTable = await processingTable(page, "create-created");
-    if (!createdTable.pagination.totalCount || !createdTable.rows.length) {
-      test.skip(true, "No live created requests are currently available.");
-    }
-
-    const createdRow = createdTable.rows[0];
+    const createdRow = await ensureCreatedRequest(page);
     const createdRequestId = createdRow.requestId || createdRow.id;
+    const createdTable = await processingTable(page, "create-created");
 
     await expect.poll(
       async () =>
@@ -447,7 +603,7 @@ test.describe("processing live real-flow coverage", () => {
     await page.getByTestId(`on-hold-deleted-select-${createdRequestId}`).check();
     await page.getByTestId("on-hold-deleted-create-again-btn").click();
 
-    await waitForTable(
+    const emptyDeletedTable = await waitForTable(
       page,
       "on-hold-deleted",
       (payload) =>
@@ -459,25 +615,23 @@ test.describe("processing live real-flow coverage", () => {
         description: "recreated request to leave the deleted card",
       },
     );
+    expect(emptyDeletedTable.pagination.totalCount).toBe(0);
 
     const relocated = await waitForRequestInCards(
       page,
       [
-        "create-requests",
-        "create-queue",
-        "create-processing",
         "create-created",
         "on-hold-failed",
-        "on-hold-duplicate",
       ],
       createdRequestId,
       createdRow.title,
       {
-        description: "recreated request to re-enter live processing flow",
+        attempts: 180,
+        description: "recreated request to finish processing again",
       },
     );
 
-    expect(relocated.card).not.toBe("on-hold-deleted");
+    expect(["create-created", "on-hold-failed"]).toContain(relocated.card);
   });
 
   test("duplicate resolution keeps counts server-backed and moves the request out of duplicate", async ({
@@ -490,13 +644,17 @@ test.describe("processing live real-flow coverage", () => {
       timeout: 30_000,
     });
 
-    const duplicateTable = await processingTable(page, "on-hold-duplicate");
-    if (!duplicateTable.pagination.totalCount || !duplicateTable.rows.length) {
-      test.skip(true, "No live duplicate requests are currently available.");
+    let duplicateRow = null;
+    try {
+      duplicateRow = await ensureDuplicateRequest(page);
+    } catch (error) {
+      test.skip(
+        true,
+        error instanceof Error ? error.message : "No live duplicate request is available.",
+      );
     }
-
-    const duplicateRow = duplicateTable.rows[0];
     const duplicateRequestId = duplicateRow.requestId || duplicateRow.id;
+    const duplicateTable = await processingTable(page, "on-hold-duplicate");
 
     await expect.poll(
       async () =>
@@ -545,10 +703,19 @@ test.describe("processing live real-flow coverage", () => {
       duplicateRequestId,
       duplicateRow.title,
       {
+        attempts: 180,
         description: "resolved duplicate request to re-enter live processing flow",
       },
     );
 
-    expect(relocated.card).not.toBe("on-hold-duplicate");
+    expect(
+      [
+        "create-requests",
+        "create-queue",
+        "create-processing",
+        "create-created",
+        "on-hold-failed",
+      ],
+    ).toContain(relocated.card);
   });
 });
