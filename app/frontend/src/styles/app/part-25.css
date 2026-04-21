@@ -257,19 +257,13 @@
   }
 
   .processing-list-card {
-    --processing-list-card-height: 520px;
+    --processing-list-card-height: 724px;
   }
 
-  .processing-catalog-card {
-    --processing-list-card-height: 676px;
-  }
-
-  .processing-catalog-height-card {
-    --processing-list-card-height: 676px;
-  }
-
+  .processing-catalog-card,
+  .processing-catalog-height-card,
   .processing-secondary-height-card {
-    --processing-list-card-height: 600px;
+    --processing-list-card-height: 724px;
   }
 
   .catalog-toolbar-secondary-layout {

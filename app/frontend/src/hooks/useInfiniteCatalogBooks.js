@@ -36,6 +36,7 @@ export function useInfiniteCatalogBooks({
   const tableShellRef = useRef(null);
   const observerRef = useRef(null);
   const requestSeqRef = useRef(0);
+  const previousEndpointRef = useRef(endpoint);
 
   useEffect(() => {
     tableStateRef.current = tableState;
@@ -47,21 +48,29 @@ export function useInfiniteCatalogBooks({
       limit = CATALOG_TABLE_BATCH_SIZE,
       append = false,
       preserveRows = false,
+      resetState = false,
     } = {}) => {
       const requestSeq = requestSeqRef.current + 1;
       requestSeqRef.current = requestSeq;
 
-      setTableState((current) => ({
-        ...current,
-        initialLoading: !append && !preserveRows && !current.loadedOnce,
-        loadingMore: append,
-        refreshing: !append && (preserveRows || current.loadedOnce),
-        error: "",
-        entries:
-          append || preserveRows || current.loadedOnce ? current.entries : [],
-        totalCount:
-          append || preserveRows || current.loadedOnce ? current.totalCount : 0,
-      }));
+      setTableState((current) => {
+        const keepExistingRows =
+          append || preserveRows || (!resetState && current.loadedOnce);
+
+        return {
+          ...current,
+          currentPage: resetState && !append ? 0 : current.currentPage,
+          hasMore: resetState && !append ? false : current.hasMore,
+          initialLoading:
+            !append && !preserveRows && (!current.loadedOnce || resetState),
+          loadingMore: append,
+          refreshing:
+            !append && !resetState && (preserveRows || current.loadedOnce),
+          error: "",
+          entries: keepExistingRows ? current.entries : [],
+          totalCount: keepExistingRows ? current.totalCount : 0,
+        };
+      });
 
       try {
         const payload = await apiFetch(
@@ -100,10 +109,16 @@ export function useInfiniteCatalogBooks({
 
         setTableState((current) => ({
           ...current,
+          currentPage: resetState && !append ? 0 : current.currentPage,
+          hasMore: resetState && !append ? false : current.hasMore,
           entries:
-            append || preserveRows || current.loadedOnce ? current.entries : [],
+            append || preserveRows || (!resetState && current.loadedOnce)
+              ? current.entries
+              : [],
           totalCount:
-            append || preserveRows || current.loadedOnce ? current.totalCount : 0,
+            append || preserveRows || (!resetState && current.loadedOnce)
+              ? current.totalCount
+              : 0,
           loadedOnce: true,
           initialLoading: false,
           loadingMore: false,
@@ -208,15 +223,18 @@ export function useInfiniteCatalogBooks({
     }
 
     const hasLoadedRows = tableStateRef.current.entries.length > 0;
+    const endpointChanged = previousEndpointRef.current !== endpoint;
+    previousEndpointRef.current = endpoint;
     loadPage({
       page: 1,
       limit: CATALOG_TABLE_BATCH_SIZE,
       append: false,
-      preserveRows: hasLoadedRows,
+      preserveRows: hasLoadedRows && !endpointChanged,
+      resetState: endpointChanged,
     });
 
     return undefined;
-  }, [enabled, loadPage]);
+  }, [enabled, endpoint, loadPage]);
 
   useEffect(() => {
     return () => {

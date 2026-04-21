@@ -355,7 +355,7 @@ export function BookProcessingProvider({ children }) {
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Sync resumed",
-              description: "Catalog sync resumed from saved progress.",
+              description: "Catalog sync resumed from the saved endpoint.",
             }),
         },
       ),
@@ -436,8 +436,8 @@ export function BookProcessingProvider({ children }) {
         {
           onSuccess: (_, nextToast) =>
             nextToast.info({
-              title: "Catalog automation started",
-              description: "Automated catalog sync is running.",
+              title: "Catalog automation running",
+              description: "Catalog automation picked up the shared catalog work.",
             }),
         },
       ),
@@ -483,8 +483,7 @@ export function BookProcessingProvider({ children }) {
           onSuccess: (_, nextToast) =>
             nextToast.info({
               title: "Catalog automation resumed",
-              description:
-                "Automated catalog sync resumed from saved progress.",
+              description: "Catalog automation resumed shared progress.",
             }),
         },
       ),

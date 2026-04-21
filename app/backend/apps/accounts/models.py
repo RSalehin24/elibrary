@@ -67,6 +67,8 @@ class User(AbstractUser, TimeStampedModel):
 
     @property
     def has_totp_enabled(self):
+        if hasattr(self, "has_totp_enabled_value"):
+            return bool(self.has_totp_enabled_value)
         try:
             from django_otp.plugins.otp_totp.models import TOTPDevice
         except ImportError:
@@ -86,6 +88,14 @@ class User(AbstractUser, TimeStampedModel):
     def global_grant_scopes(self):
         if self.is_superuser:
             return []
+
+        prefetched_global_grants = getattr(
+            self,
+            "prefetched_active_global_grants",
+            None,
+        )
+        if prefetched_global_grants is not None:
+            return sorted({grant.scope for grant in prefetched_global_grants})
 
         try:
             from apps.access.models import PermissionGrant

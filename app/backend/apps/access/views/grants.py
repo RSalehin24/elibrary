@@ -40,6 +40,20 @@ class AccessReferenceDataView(APIView):
     permission_classes = [IsSuperAdmin]
 
     def get(self, request):
+        view_mode = str(request.query_params.get("view", "access") or "access").strip().lower()
+        account_scopes = [{"value": scope.value, "label": scope.label} for scope in ACCOUNT_MANAGEABLE_PERMISSION_SCOPES]
+        if view_mode == "users":
+            return Response(
+                {
+                    "users": [],
+                    "books": [],
+                    "categories": [],
+                    "writers": [],
+                    "account_scopes": account_scopes,
+                    "scoped_scopes": [],
+                }
+            )
+
         users = [
             {
                 "id": user.id,
@@ -58,7 +72,6 @@ class AccessReferenceDataView(APIView):
             {"id": contributor.id, "name": contributor.name, "slug": contributor.slug}
             for contributor in Contributor.objects.filter(book_contributions__role=ContributorRole.AUTHOR).distinct().order_by("name")
         ]
-        account_scopes = [{"value": scope.value, "label": scope.label} for scope in ACCOUNT_MANAGEABLE_PERMISSION_SCOPES]
         scoped_scopes = [{"value": scope.value, "label": scope.label} for scope in SCOPED_PERMISSION_SCOPES]
         return Response(
             {

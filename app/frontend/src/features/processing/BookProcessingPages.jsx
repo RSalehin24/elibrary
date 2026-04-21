@@ -1087,6 +1087,7 @@ function ProcessingDataCard({
   bookColumnMode = "combined",
   actionLabel = "Action",
   renderRowAction = null,
+  countPlacement = "title",
 }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [filters, setFilters] = useState({
@@ -1234,6 +1235,20 @@ function ProcessingDataCard({
     </div>
   ) : null;
 
+  const countBadge = (
+    <span
+      className="catalog-result-count processing-card-title-count"
+      aria-label={`${totalCount} results`}
+      data-testid={`${pageId}-${cardId}-count`}
+    >
+      {showInitialTableSkeleton ? (
+        <ProcessingCountSkeleton />
+      ) : (
+        totalCount
+      )}
+    </span>
+  );
+
   return (
     <section
       className={`detail-card processing-card processing-list-card processing-replacement-card${
@@ -1246,17 +1261,7 @@ function ProcessingDataCard({
           <div className="processing-card-head-meta">
             <div className="processing-card-title-row">
               <h2>{title}</h2>
-              <span
-                className="catalog-result-count processing-card-title-count"
-                aria-label={`${totalCount} results`}
-                data-testid={`${pageId}-${cardId}-count`}
-              >
-                {showInitialTableSkeleton ? (
-                  <ProcessingCountSkeleton />
-                ) : (
-                  totalCount
-                )}
-              </span>
+              {countPlacement === "title" ? countBadge : null}
             </div>
           </div>
           <div className="processing-card-head-search">
@@ -1297,6 +1302,7 @@ function ProcessingDataCard({
                 </span>
               ) : null}
             </button>
+            {countPlacement === "inline-tools" ? countBadge : null}
           </div>
           {bulkActions ? (
             <div className="processing-card-head-actions">{bulkActions}</div>
@@ -1575,20 +1581,6 @@ function AutomationPanel({
     pageId === "catalog"
       ? SYNC_RUN_MODE_CATALOG_AUTOMATION
       : SYNC_RUN_MODE_INCOMPLETE_AUTOMATION;
-  const runLabel =
-    pageId === "catalog" ? "automated catalog sync" : "incomplete catalog sync";
-  const runMessage =
-    pageId === "catalog"
-      ? "Automated catalog sync is running."
-      : "Incomplete catalog sync is running.";
-  const pauseMessage =
-    pageId === "catalog"
-      ? "Pausing automated catalog sync after the current page finishes."
-      : "Pausing incomplete catalog sync after the current batch finishes.";
-  const resumeMessage =
-    pageId === "catalog"
-      ? "Resuming automated catalog sync from saved progress."
-      : "Restarting incomplete catalog sync from the beginning.";
   const effectiveSync =
     sync.status !== "idle" || !optimisticSync
       ? sync
@@ -1598,13 +1590,46 @@ function AutomationPanel({
           message: optimisticSync.message,
           runMode,
         };
+  const syncPhase = effectiveSync.phase || effectiveSync.progress?.phase || "sync";
+  const savedRequestCreation =
+    pageId === "catalog" &&
+    effectiveSync.progress?.requestCreation?.baseCheckpointToken &&
+    effectiveSync.progress?.savedData?.checkpointToken &&
+    effectiveSync.progress.requestCreation.baseCheckpointToken ===
+      effectiveSync.progress.savedData.checkpointToken;
+  const isRequestCreationPhase =
+    pageId === "catalog" &&
+    (syncPhase === "request_creation" ||
+      (effectiveSync.status === "idle" && Boolean(savedRequestCreation)));
+  const runLabel = isRequestCreationPhase
+    ? "automated request creation"
+    : pageId === "catalog"
+      ? "automated catalog sync"
+      : "incomplete catalog sync";
+  const runMessage = isRequestCreationPhase
+    ? "Resuming automated request creation from saved progress."
+    : pageId === "catalog"
+      ? effectiveSync.status === "paused" || effectiveSync.progress?.savedData
+        ? "Continuing automated catalog sync from the saved endpoint."
+        : "Automated catalog sync is running."
+      : "Incomplete catalog sync is running.";
+  const pauseMessage = isRequestCreationPhase
+    ? "Pausing automated request creation after the current batch finishes."
+    : pageId === "catalog"
+      ? "Pausing automated catalog sync after the current page finishes."
+      : "Pausing incomplete catalog sync after the current batch finishes.";
+  const resumeMessage = isRequestCreationPhase
+    ? "Resuming automated request creation from saved progress."
+    : pageId === "catalog"
+      ? "Continuing automated catalog sync from the saved endpoint."
+      : "Restarting incomplete catalog sync from the beginning.";
   const hasActiveSync =
     effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
   const hasOwnedSync = effectiveSync.status !== "idle";
   const ownsSync =
     hasOwnedSync && effectiveSync.runMode === runMode;
   const blockedByOtherSync =
-    hasOwnedSync && effectiveSync.runMode !== runMode;
+    hasActiveSync && effectiveSync.runMode !== runMode;
   const isRunning = ownsSync;
   const isPausing = ownsSync && effectiveSync.status === "pausing";
   const isPaused = ownsSync && effectiveSync.status === "paused";
@@ -1886,6 +1911,7 @@ function CatalogSyncPanel({
           message: optimisticSync.message,
           runMode: SYNC_RUN_MODE_MANUAL,
         };
+  const syncPhase = effectiveSync.phase || effectiveSync.progress?.phase || "sync";
   const hasActiveSync =
     effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
   const hasPausedSync = effectiveSync.status === "paused";
@@ -1894,7 +1920,7 @@ function CatalogSyncPanel({
   const manualOwnsActiveSync =
     hasActiveSync && effectiveSync.runMode === SYNC_RUN_MODE_MANUAL;
   const otherModeOwnsSync =
-    effectiveSync.status !== "idle" &&
+    hasActiveSync &&
     effectiveSync.runMode !== SYNC_RUN_MODE_MANUAL;
   const isSyncing = manualOwnsActiveSync;
   const isPausing =
@@ -1985,7 +2011,7 @@ function CatalogSyncPanel({
             runWithOptimisticSync(
               {
                 status: "syncing",
-                message: "Reconciling saved records from the beginning.",
+                message: "Continuing catalog sync from the saved endpoint.",
               },
               resumeCatalogSync,
             ),
@@ -2009,7 +2035,12 @@ function CatalogSyncPanel({
               runWithOptimisticSync(
                 {
                   status: "syncing",
-                  message: "Syncing catalog records.",
+                  message:
+                    effectiveSync.status === "paused" || effectiveSync.progress?.savedData
+                      ? "Continuing catalog sync from the saved endpoint."
+                      : syncPhase === "request_creation"
+                        ? "Continuing catalog sync from the saved endpoint."
+                        : "Syncing catalog records.",
                 },
                 () => startCatalogSync(),
               ),
@@ -2168,9 +2199,10 @@ export function CatalogProcessingPage() {
         title="Book Records"
         description="Synced catalog records ready for book creation."
         busy={Boolean(busyCards["catalog-records"])}
-        className="processing-catalog-card processing-catalog-records-card"
+        className="processing-inline-count-card processing-catalog-card processing-catalog-records-card"
         bookColumnMode="split"
         showDetailsColumn={false}
+        countPlacement="inline-tools"
         actions={[
           {
             id: "create",
@@ -2201,8 +2233,9 @@ function CreateCard({
       title={title}
       description={description}
       busy={Boolean(busyCards[`create-${cardId}`])}
-      className="processing-create-card"
+      className="processing-inline-count-card processing-create-card"
       showDetailsColumn={false}
+      countPlacement="inline-tools"
       actions={actions}
       actionLabel={actionLabel}
       renderRowAction={renderRowAction}
@@ -2349,9 +2382,10 @@ function OnHoldCard({
       title={title}
       description={description}
       busy={Boolean(busyCards[`on-hold-${cardId}`])}
+      countPlacement="inline-tools"
       actions={actions}
       detailsLabel={detailsLabel}
-      className={className}
+      className={`processing-inline-count-card${className ? ` ${className}` : ""}`}
     />
   );
 }
@@ -2561,7 +2595,9 @@ export function IncompleteProcessingPage() {
           cardKey="incomplete-records"
           title="Incomplete"
           description="Records currently classified as incomplete."
+          className="processing-inline-count-card processing-incomplete-records-card"
           bookColumnMode="split"
+          countPlacement="inline-tools"
           readOnly
         />
         <ProcessingDataCard
@@ -2570,7 +2606,9 @@ export function IncompleteProcessingPage() {
           cardKey="incomplete-completed"
           title="Updated"
           description="Records resolved by incomplete automation."
+          className="processing-inline-count-card processing-incomplete-completed-card"
           busy={Boolean(busyCards["incomplete-completed"])}
+          countPlacement="inline-tools"
           actions={[
             {
               id: "recreate",

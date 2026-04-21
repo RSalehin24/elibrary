@@ -1,33 +1,73 @@
+import { CATALOG_TABLE_PREFETCH_TRIGGER } from "../../../utils/catalogBooks";
+
+function AccessUsersSkeletonRows({ count = 5, incremental = false }) {
+  return Array.from({ length: count }, (_, index) => (
+    <tr
+      key={`${incremental ? "more" : "initial"}-user-skeleton-${index}`}
+      className="processing-skeleton-row processing-table-skeleton-row access-users-table-skeleton-row"
+      aria-hidden="true"
+    >
+      <td data-label="Name">
+        <span className="skeleton-line skeleton-line-lg" />
+      </td>
+      <td data-label="Email">
+        <span className="skeleton-line skeleton-line-lg" />
+      </td>
+      <td data-label="Status">
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td data-label="Two-Factor">
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td data-label="Account Permissions">
+        <div className="access-permission-list">
+          <span className="access-permission-chip skeleton-pill" />
+          <span className="access-permission-chip skeleton-pill" />
+        </div>
+      </td>
+      <td data-label="Actions">
+        <div className="table-actions">
+          <span className="ghost-button skeleton-button skeleton-button-sm" />
+          <span className="ghost-button skeleton-button skeleton-button-sm" />
+        </div>
+      </td>
+    </tr>
+  ));
+}
+
 export default function AccessUsersTableCard({
   currentUserId,
-  filteredManagedUsers,
   getAccountAccessLabels,
+  hasMoreManagedUsers,
+  loadingMoreUsers,
+  loadingUsers,
+  observeUsersLoadTrigger,
   onClearSearch,
   onDeleteUser,
   onEditUser,
   onResendSetupEmail,
-  onSetUsersPage,
-  onSetUsersRowsPerPage,
   onUpdateUsersSearch,
   onUpdateUsersSort,
   onUpdateUsersStatus,
-  pagedManagedUsers,
-  propertyTableRowOptions,
+  refreshingUsers,
   resendingSetupUserId,
+  tableShellRef,
+  totalManagedUsers,
   userListFilters,
-  usersHasNext,
-  usersHasPrevious,
-  usersPage,
-  usersPageCount,
-  usersRowsPerPage,
+  usersError,
+  visibleManagedUsers,
 }) {
+  const showInitialSkeleton = loadingUsers && !visibleManagedUsers.length;
+  const showRefreshSkeletonRows =
+    (loadingMoreUsers || refreshingUsers) && visibleManagedUsers.length > 0;
+
   return (
-    <section className="detail-card" data-testid="access-users-section">
+    <section className="detail-card access-users-card" data-testid="access-users-section">
       <div className="access-users-header">
-        <h2>Users</h2>
-        <div className="access-users-header-row">
+        <div className="access-users-toolbar">
+          <h2 className="access-users-toolbar-title">Users</h2>
           <label
-            className="access-users-search-field"
+            className="access-users-search-field access-users-toolbar-search"
             aria-label="Search users"
           >
             <span className="catalog-search-icon" aria-hidden="true">
@@ -51,103 +91,56 @@ export default function AccessUsersTableCard({
               autoComplete="off"
             />
           </label>
-          <label className="catalog-toolbar-field catalog-toolbar-field-sort">
-            <span className="fact-label catalog-toolbar-inline-label">
-              Filter
-            </span>
+          <div className="catalog-toolbar-field access-users-filter-field">
             <select
               className="catalog-toolbar-select"
+              aria-label="Filter users"
               value={userListFilters.status}
               onChange={(event) => onUpdateUsersStatus(event.target.value)}
             >
+              <option value="" disabled>
+                Filter
+              </option>
               <option value="all">All users</option>
               <option value="active">Active</option>
               <option value="disabled">Disabled</option>
               <option value="totp_required">Two-factor required</option>
             </select>
-          </label>
-          <span
-            className="access-users-result-count"
-            aria-label={`${filteredManagedUsers.length} users`}
-          >
-            {filteredManagedUsers.length}
-          </span>
-        </div>
-        <div className="catalog-toolbar-secondary property-table-controls access-users-table-controls">
-          <label className="catalog-toolbar-field catalog-toolbar-field-sort">
-            <span className="fact-label catalog-toolbar-inline-label">Sort</span>
+          </div>
+          <div className="catalog-toolbar-field access-users-sort-field">
             <select
               className="catalog-toolbar-select"
+              aria-label="Sort users"
               value={userListFilters.sort}
               onChange={(event) => onUpdateUsersSort(event.target.value)}
             >
+              <option value="" disabled>
+                Sort
+              </option>
               <option value="name_asc">Name A-Z</option>
               <option value="name_desc">Name Z-A</option>
               <option value="email_asc">Email A-Z</option>
               <option value="email_desc">Email Z-A</option>
               <option value="status">Status</option>
             </select>
-          </label>
-          <label className="catalog-toolbar-field catalog-toolbar-field-rows">
-            <span className="fact-label catalog-toolbar-inline-label">Rows</span>
-            <select
-              className="catalog-toolbar-select"
-              value={String(usersRowsPerPage)}
-              onChange={(event) =>
-                onSetUsersRowsPerPage(
-                  Number(event.target.value) || usersRowsPerPage,
-                )
-              }
-            >
-              {propertyTableRowOptions.map((option) => (
-                <option key={`users-rows-${option}`} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="catalog-pagination">
-            <span className="catalog-page-indicator">
-              Page {usersPage} / {usersPageCount}
-            </span>
-            <div className="catalog-pagination-actions">
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onSetUsersPage(1)}
-                disabled={!usersHasPrevious}
-              >
-                First
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onSetUsersPage(Math.max(1, usersPage - 1))}
-                disabled={!usersHasPrevious}
-              >
-                Prev
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onSetUsersPage(usersPage + 1)}
-                disabled={!usersHasNext}
-              >
-                Next
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onSetUsersPage(usersPageCount)}
-                disabled={!usersHasNext}
-              >
-                Last
-              </button>
-            </div>
           </div>
+          <span
+            className="access-users-result-count access-users-toolbar-count"
+            aria-label={`${totalManagedUsers} users`}
+          >
+            {showInitialSkeleton ? (
+              <span className="skeleton-line skeleton-line-sm" />
+            ) : (
+              totalManagedUsers
+            )}
+          </span>
         </div>
       </div>
-      <div className="table-shell access-users-table-shell">
+      <div
+        ref={tableShellRef}
+        className="processing-table-shell processing-table-shell--mobile-cards access-users-table-shell"
+        aria-busy={loadingUsers || loadingMoreUsers || refreshingUsers}
+      >
         <table
           className="simple-table access-users-table table-mobile-cards"
           data-testid="access-users-table"
@@ -163,12 +156,27 @@ export default function AccessUsersTableCard({
             </tr>
           </thead>
           <tbody>
-            {pagedManagedUsers.length ? (
-              pagedManagedUsers.map((entry) => {
+            {showInitialSkeleton ? (
+              <AccessUsersSkeletonRows />
+            ) : visibleManagedUsers.length ? (
+              visibleManagedUsers.map((entry, rowIndex) => {
                 const accountAccessLabels = getAccountAccessLabels(entry);
 
                 return (
-                  <tr key={entry.id}>
+                  <tr
+                    key={entry.id}
+                    ref={
+                      hasMoreManagedUsers &&
+                      rowIndex ===
+                        Math.max(
+                          0,
+                          visibleManagedUsers.length -
+                            CATALOG_TABLE_PREFETCH_TRIGGER,
+                        )
+                        ? observeUsersLoadTrigger
+                        : undefined
+                    }
+                  >
                     <td data-label="Name">{entry.full_name || "-"}</td>
                     <td data-label="Email">{entry.email}</td>
                     <td data-label="Status">
@@ -247,10 +255,13 @@ export default function AccessUsersTableCard({
             ) : (
               <tr>
                 <td colSpan={6} className="table-empty-cell">
-                  No users found for the current search and filter.
+                  {usersError || "No users found for the current search and filter."}
                 </td>
               </tr>
             )}
+            {showRefreshSkeletonRows ? (
+              <AccessUsersSkeletonRows count={3} incremental />
+            ) : null}
           </tbody>
         </table>
       </div>

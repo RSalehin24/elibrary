@@ -1,4 +1,5 @@
 import { apiFetch } from "./http";
+import { toQueryString } from "../utils/query";
 
 export const authApi = {
   session: () => apiFetch("/auth/session/"),
@@ -7,7 +8,7 @@ export const authApi = {
   profile: () => apiFetch("/auth/profile/"),
   updateProfile: (body) =>
     apiFetch("/auth/profile/", { method: "PATCH", body }),
-  users: () => apiFetch("/auth/users/"),
+  users: (params) => apiFetch(`/auth/users/${toQueryString(params)}`),
   createUser: (body) => apiFetch("/auth/users/", { method: "POST", body }),
   updateUser: (id, body) =>
     apiFetch(`/auth/users/${id}/`, { method: "PATCH", body }),

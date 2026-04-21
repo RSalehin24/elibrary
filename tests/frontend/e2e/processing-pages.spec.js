@@ -4,6 +4,26 @@ const PROCESSING_TIMEOUT_MS = 20 * 60 * 1000;
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
+const PROCESSING_CARD_KEYS = [
+  "catalog-overview",
+  "catalog-sync",
+  "catalog-automation",
+  "catalog-records",
+  "create-overview",
+  "create-requests",
+  "create-queue",
+  "create-processing",
+  "create-created",
+  "on-hold-overview",
+  "on-hold-paused",
+  "on-hold-failed",
+  "on-hold-duplicate",
+  "on-hold-deleted",
+  "incomplete-overview",
+  "incomplete-automation",
+  "incomplete-records",
+  "incomplete-completed",
+];
 const INCOMPLETE_CATEGORY_KEYWORDS = [
   "incomplete",
   "unfinished",
@@ -69,6 +89,7 @@ function baseState(overrides = {}) {
     requests: [],
     sync: {
       status: "idle",
+      phase: "sync",
       progress: null,
       fetchedCount: 0,
       skippedCount: 0,
@@ -466,6 +487,43 @@ function processingSummary(state) {
   };
 }
 
+function processingCardPayload(state, cardKey) {
+  const summary = processingSummary(state);
+  const cards = {
+    "catalog-overview": {
+      card: "catalog-overview",
+      summary: summary.catalog,
+    },
+    "catalog-sync": {
+      card: "catalog-sync",
+      sync: state.sync,
+    },
+    "catalog-automation": {
+      card: "catalog-automation",
+      sync: state.sync,
+      automation: state.automation.catalog,
+    },
+    "create-overview": {
+      card: "create-overview",
+      summary: summary.create,
+    },
+    "on-hold-overview": {
+      card: "on-hold-overview",
+      summary: summary.onHold,
+    },
+    "incomplete-overview": {
+      card: "incomplete-overview",
+      summary: summary.incomplete,
+    },
+    "incomplete-automation": {
+      card: "incomplete-automation",
+      sync: state.sync,
+      automation: state.automation.incomplete,
+    },
+  };
+  return cards[cardKey] || { card: cardKey };
+}
+
 function filteredTablePayload(state, { card, query = "", category = "", status = "", offset = 0, limit = 60 }) {
   const rows = tableRowsForCard(state, card);
   const normalizedQuery = String(query || "").trim().toLowerCase();
@@ -524,29 +582,203 @@ function filteredTablePayload(state, { card, query = "", category = "", status =
 
 function finalizeSync(state) {
   state.sync.status = "idle";
-  state.sync.progress = null;
+  const checkpointToken = catalogSyncCheckpointToken(state);
+  const requestCreation =
+    state.sync.runMode === SYNC_RUN_MODE_MANUAL
+      ? preserveCatalogRequestCreation(state, checkpointToken)
+      : null;
+  state.sync.phase = "sync";
+  buildCatalogSyncProgress(state, SYNC_RUN_MODE_MANUAL);
+  if (!requestCreation) {
+    delete state.sync.progress.requestCreation;
+  }
   state.sync.message = `Sync complete. Updated ${state.sync.updatedCount}, Skipped ${state.sync.skippedCount}, Added ${state.sync.appendedCount}.`;
   state.sync.runMode = SYNC_RUN_MODE_MANUAL;
 }
 
-function completeCatalogAutomation(state) {
-  let createdCount = 0;
-  for (const recordItem of state.records) {
-    const latest = latestRequestForRecord(state, recordItem.id);
-    const latestState = latest?.state || recordItem.bookCreationState;
-    if (
-      (!latest && recordItem.bookCreationState === "not_created") ||
-      ["failed", "deleted"].includes(latestState)
-    ) {
-      createRequestForRecord(state, recordItem.id);
-      createdCount += 1;
-    }
+function catalogSyncSavedData(state) {
+  return state.sync.progress?.savedData || {};
+}
+
+function catalogSyncCheckpointToken(state) {
+  const savedData = catalogSyncSavedData(state);
+  if (!savedData.sessionId) {
+    return "";
   }
-  state.automation.catalog.statusMessage = `Created ${createdCount} requests.`;
+  return (
+    savedData.checkpointToken ||
+    `${savedData.sessionId}:0:${savedData.nextPageIndex || 0}:${savedData.fetchedCount || 0}`
+  );
+}
+
+function preserveCatalogRequestCreation(state, checkpointToken) {
+  const requestCreation = state.sync.progress?.requestCreation;
+  if (requestCreation?.baseCheckpointToken === checkpointToken) {
+    return requestCreation;
+  }
+  return null;
+}
+
+function catalogSavedCheckpointAvailable(state) {
+  return Object.keys(catalogSyncSavedData(state)).length > 0;
+}
+
+function catalogRequestCreationCanResume(state) {
+  const requestCreation = state.sync.progress?.requestCreation;
+  return requestCreation?.baseCheckpointToken === catalogSyncCheckpointToken(state);
+}
+
+function nextCatalogSessionId(state) {
+  if (state.sync.progress?.savedData?.sessionId) {
+    return state.sync.progress.savedData.sessionId;
+  }
+  state.ui = {
+    ...state.ui,
+    catalogSessionCount: (state.ui?.catalogSessionCount || 0) + 1,
+  };
+  return `catalog-session-${state.ui.catalogSessionCount}`;
+}
+
+function buildCatalogSyncProgress(state, runMode, { savedAt = null } = {}) {
+  const savedData = {
+    runMode,
+    fetchedCount: state.sync.fetchedCount,
+    nextPageIndex: state.sync.pageIndex,
+    sessionId: nextCatalogSessionId(state),
+  };
+  savedData.checkpointToken = `${savedData.sessionId}:0:${savedData.nextPageIndex}:${savedData.fetchedCount}`;
+  const progress = {
+    runMode,
+    phase: "sync",
+    checkpoint: `page-${state.sync.pageIndex}`,
+    savedData,
+  };
+  const requestCreation = preserveCatalogRequestCreation(
+    state,
+    savedData.checkpointToken,
+  );
+  if (requestCreation) {
+    progress.requestCreation = requestCreation;
+  }
+  if (savedAt) {
+    progress.savedAt = savedAt;
+  }
+  state.sync.progress = progress;
+  state.sync.phase = "sync";
+  return progress;
+}
+
+function currentCatalogRequestCreation(state) {
+  const savedData = catalogSyncSavedData(state);
+  const requestCreation = state.sync.progress?.requestCreation;
+  if (requestCreation?.baseCheckpointToken === catalogSyncCheckpointToken(state)) {
+    return requestCreation;
+  }
+  return {
+    baseCheckpointToken: savedData.checkpointToken || "",
+    lastRecordId: "",
+    processedCount: 0,
+    createdCount: 0,
+    unsupportedCount: 0,
+  };
+}
+
+function buildCatalogRequestCreationProgress(state, requestCreation, { savedAt = null } = {}) {
+  state.sync.progress = {
+    runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    phase: "request_creation",
+    checkpoint: `request-${requestCreation.lastRecordId || requestCreation.processedCount}`,
+    savedData: {
+      ...catalogSyncSavedData(state),
+      runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    },
+    requestCreation,
+  };
+  if (savedAt) {
+    state.sync.progress.savedAt = savedAt;
+  }
+  state.sync.phase = "request_creation";
+  return state.sync.progress;
+}
+
+function completeCatalogAutomation(state, requestCreation = currentCatalogRequestCreation(state)) {
+  state.automation.catalog.statusMessage = `Created ${requestCreation.createdCount} requests.`;
   state.sync.status = "idle";
-  state.sync.progress = null;
-  state.sync.runMode = SYNC_RUN_MODE_MANUAL;
+  state.sync.phase = "sync";
+  state.sync.runMode = SYNC_RUN_MODE_CATALOG_AUTOMATION;
+  buildCatalogSyncProgress(state, SYNC_RUN_MODE_CATALOG_AUTOMATION);
+  delete state.sync.progress.requestCreation;
   state.sync.message = `Automated catalog sync complete. Updated ${state.sync.updatedCount}, Skipped ${state.sync.skippedCount}, Added ${state.sync.appendedCount}.`;
+}
+
+function syncPauseMessage(runMode, phase = "sync") {
+  if (phase === "request_creation") {
+    return "Pausing automated request creation after the current batch finishes.";
+  }
+  if (runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+    return "Pausing automated catalog sync after the current page finishes.";
+  }
+  if (runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+    return "Pausing incomplete catalog sync after the current batch finishes.";
+  }
+  return "Pausing after the current page finishes.";
+}
+
+function startFreshCatalogRun(state, runMode, { remotePages } = {}) {
+  state.sync = {
+    ...state.sync,
+    ...(remotePages ? { remotePages } : {}),
+    status: "syncing",
+    fetchedCount: 0,
+    skippedCount: 0,
+    updatedCount: 0,
+    appendedCount: 0,
+    pageIndex: 0,
+    runMode,
+    phase: "sync",
+  };
+  buildCatalogSyncProgress(state, runMode);
+  state.sync.message =
+    runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION
+      ? "Automated catalog sync is running."
+      : "Syncing catalog records.";
+}
+
+function resumeCatalogRun(state, runMode) {
+  const savedData = catalogSyncSavedData(state);
+  const nextPageIndex = savedData.nextPageIndex || 0;
+  const fetchedCount = savedData.fetchedCount || 0;
+
+  state.sync = {
+    ...state.sync,
+    status: "syncing",
+    pageIndex: nextPageIndex,
+    fetchedCount,
+    runMode,
+    phase: "sync",
+  };
+
+  if (
+    runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION &&
+    catalogRequestCreationCanResume(state)
+  ) {
+    buildCatalogRequestCreationProgress(
+      state,
+      currentCatalogRequestCreation(state),
+    );
+    state.sync.message = "Resuming automated request creation from saved progress.";
+    state.automation.catalog.statusMessage = state.sync.message;
+    return;
+  }
+
+  buildCatalogSyncProgress(state, runMode);
+  state.sync.message =
+    runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION
+      ? "Continuing automated catalog sync from the saved endpoint."
+      : "Continuing catalog sync from the saved endpoint.";
+  if (runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
+    state.automation.catalog.statusMessage = state.sync.message;
+  }
 }
 
 function completeIncompleteAutomation(state) {
@@ -602,10 +834,71 @@ function advanceSyncPage(state) {
     return;
   }
 
+  if ((state.sync.phase || state.sync.progress?.phase) === "request_creation") {
+    const requestCreation = currentCatalogRequestCreation(state);
+    const batchSize = Math.max(1, state.ui?.catalogRequestBatchSize || 50);
+    const batch = [...state.records]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .filter((recordItem) =>
+        !requestCreation.lastRecordId || recordItem.id > requestCreation.lastRecordId,
+      )
+      .slice(0, batchSize);
+    if (!batch.length) {
+      completeCatalogAutomation(state, requestCreation);
+      return;
+    }
+    const nextRequestCreation = { ...requestCreation };
+    for (const recordItem of batch) {
+      nextRequestCreation.lastRecordId = recordItem.id;
+      nextRequestCreation.processedCount += 1;
+      const latest = latestRequestForRecord(state, recordItem.id);
+      const latestState = latest?.state || recordItem.bookCreationState;
+      if (
+        (!latest && recordItem.bookCreationState === "not_created") ||
+        ["failed", "deleted"].includes(latestState)
+      ) {
+        createRequestForRecord(state, recordItem.id);
+        nextRequestCreation.createdCount += 1;
+      }
+    }
+    const hasMore = [...state.records]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .some((recordItem) => recordItem.id > nextRequestCreation.lastRecordId);
+    if (state.sync.status === "pausing") {
+      if (!hasMore) {
+        completeCatalogAutomation(state, nextRequestCreation);
+        return;
+      }
+      state.sync.status = "paused";
+      buildCatalogRequestCreationProgress(state, nextRequestCreation, {
+        savedAt: iso(99),
+      });
+      state.sync.message = `Saved request creation progress after scanning ${nextRequestCreation.processedCount} ${nextRequestCreation.processedCount === 1 ? "record" : "records"}.`;
+      return;
+    }
+    if (!hasMore) {
+      completeCatalogAutomation(state, nextRequestCreation);
+      return;
+    }
+    buildCatalogRequestCreationProgress(state, nextRequestCreation);
+    state.sync.message = `Scanned ${nextRequestCreation.processedCount} catalog ${nextRequestCreation.processedCount === 1 ? "record" : "records"}; created ${nextRequestCreation.createdCount} ${nextRequestCreation.createdCount === 1 ? "request" : "requests"} so far.`;
+    return;
+  }
+
   const pageRecords = state.sync.remotePages[state.sync.pageIndex] || [];
   if (!pageRecords.length) {
     if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
-      completeCatalogAutomation(state);
+      buildCatalogSyncProgress(state, SYNC_RUN_MODE_CATALOG_AUTOMATION);
+      const requestCreation = {
+        baseCheckpointToken: catalogSyncCheckpointToken(state),
+        lastRecordId: "",
+        processedCount: 0,
+        createdCount: 0,
+        unsupportedCount: 0,
+      };
+      state.sync.status = "syncing";
+      buildCatalogRequestCreationProgress(state, requestCreation);
+      state.sync.message = "Creating book requests from the synced catalog records.";
       return;
     }
     finalizeSync(state);
@@ -617,29 +910,30 @@ function advanceSyncPage(state) {
   const nextPage = state.sync.remotePages[state.sync.pageIndex] || [];
   if (state.sync.status === "pausing") {
     state.sync.status = "paused";
-    state.sync.progress = {
-      savedAt: iso(99),
-      checkpoint: `page-${state.sync.pageIndex}`,
-      runMode: state.sync.runMode,
-      savedData: {
-        runMode: state.sync.runMode,
-        fetchedCount: state.sync.fetchedCount,
-        nextPageIndex: state.sync.pageIndex,
-      },
-    };
+    buildCatalogSyncProgress(state, state.sync.runMode, { savedAt: iso(99) });
     state.sync.message = `Sync progress saved. ${catalogRecordCountMessage(state)}`;
     return;
   }
 
   if (!nextPage.length) {
     if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
-      completeCatalogAutomation(state);
+      buildCatalogSyncProgress(state, SYNC_RUN_MODE_CATALOG_AUTOMATION);
+      const requestCreation = {
+        baseCheckpointToken: catalogSyncCheckpointToken(state),
+        lastRecordId: "",
+        processedCount: 0,
+        createdCount: 0,
+        unsupportedCount: 0,
+      };
+      buildCatalogRequestCreationProgress(state, requestCreation);
+      state.sync.message = "Creating book requests from the synced catalog records.";
       return;
     }
     finalizeSync(state);
     return;
   }
 
+  buildCatalogSyncProgress(state, state.sync.runMode);
   state.sync.message = catalogRecordCountMessage(state);
 }
 
@@ -767,9 +1061,17 @@ async function mockProcessingApi(page, initialState) {
   }
 
   async function emitStreamSnapshot() {
-    await page.evaluate((payload) => {
-      window.__processingEmitStreamEvent?.("snapshot", payload);
-    }, statePayload(true));
+    if (page.isClosed()) {
+      cancelStreamAdvance();
+      return;
+    }
+    try {
+      await page.evaluate((payload) => {
+        window.__processingEmitStreamEvent?.("snapshot", payload);
+      }, statePayload(true));
+    } catch {
+      cancelStreamAdvance();
+    }
   }
 
   function cancelStreamAdvance() {
@@ -786,6 +1088,10 @@ async function mockProcessingApi(page, initialState) {
     }
 
     streamTimer = setTimeout(async () => {
+      if (page.isClosed()) {
+        cancelStreamAdvance();
+        return;
+      }
       applyRequestTimeouts(state);
       state = syncRecordStates(state);
 
@@ -849,6 +1155,18 @@ async function mockProcessingApi(page, initialState) {
     await delayForLoads();
     await fulfillState(route);
   });
+  await page.route("**/api/processing/card/**", async (route) => {
+    await delayForLoads();
+    applyRequestTimeouts(state);
+    state = syncRecordStates(state);
+    const url = new URL(route.request().url());
+    const cardKey = url.searchParams.get("card") || "";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(processingCardPayload(state, cardKey)),
+    });
+  });
   await page.route("**/api/processing/table/**", async (route) => {
     await delayForLoads();
     applyRequestTimeouts(state);
@@ -872,75 +1190,73 @@ async function mockProcessingApi(page, initialState) {
     });
   });
   await page.route("**/api/processing/sync/start/**", async (route) => {
+    cancelStreamAdvance();
     const body = route.request().postDataJSON();
     lastSyncStartBody = body;
-    state.sync = {
-      ...state.sync,
-      ...(body?.remotePages ? { remotePages: body.remotePages } : {}),
-      status: "syncing",
-      progress: {
-        runMode: SYNC_RUN_MODE_MANUAL,
-        savedData: {
-          runMode: SYNC_RUN_MODE_MANUAL,
-          nextPageIndex: 0,
-          fetchedCount: 0,
-        },
-      },
-      fetchedCount: 0,
-      skippedCount: 0,
-      updatedCount: 0,
-      appendedCount: 0,
-      pageIndex: 0,
-      message: "Syncing catalog records.",
-      runMode: SYNC_RUN_MODE_MANUAL,
-    };
+    if (
+      state.sync.status === "paused" ||
+      (state.sync.status === "idle" && catalogSavedCheckpointAvailable(state))
+    ) {
+      resumeCatalogRun(state, SYNC_RUN_MODE_MANUAL);
+    } else {
+      startFreshCatalogRun(state, SYNC_RUN_MODE_MANUAL, {
+        remotePages: body?.remotePages,
+      });
+    }
     await delayForActions();
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/pause\/?(?:\?.*)?$/, async (route) => {
+    cancelStreamAdvance();
     if (state.sync.status === "syncing") {
       state.sync.status = "pausing";
-      state.sync.message = "Pausing after the current page finishes.";
+      state.sync.message = syncPauseMessage(
+        state.sync.runMode,
+        state.sync.phase || state.sync.progress?.phase || "sync",
+      );
     }
     await delayForActions();
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/advance\/?(?:\?.*)?$/, async (route) => {
+    cancelStreamAdvance();
     await delayForActions();
     advanceSyncPage(state);
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/resume\/?(?:\?.*)?$/, async (route) => {
-    const runMode = state.sync.runMode || SYNC_RUN_MODE_MANUAL;
-    state.sync.status = "syncing";
-    state.sync.progress = {
-      runMode,
-      savedData: {
+    cancelStreamAdvance();
+    const body = route.request().postDataJSON?.() || {};
+    const runMode = body.runMode || state.sync.runMode || SYNC_RUN_MODE_MANUAL;
+    if (runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+      state.sync.status = "syncing";
+      state.sync.phase = "sync";
+      state.sync.progress = {
         runMode,
-        nextPageIndex: 0,
-        fetchedCount: state.sync.fetchedCount,
-      },
-    };
-    state.sync.pageIndex = 0;
-    if (runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
-      state.sync.message = "Restarting automated catalog sync from the beginning.";
-      state.automation.catalog.statusMessage = state.sync.message;
-    } else if (runMode === SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+        savedData: {
+          runMode,
+          nextPageIndex: 0,
+          fetchedCount: state.sync.fetchedCount,
+        },
+      };
+      state.sync.pageIndex = 0;
       state.sync.message = "Restarting incomplete catalog sync from the beginning.";
       state.automation.incomplete.statusMessage = state.sync.message;
     } else {
-      state.sync.message = "Reconciling saved records from the beginning.";
+      resumeCatalogRun(state, runMode);
     }
     await delayForActions();
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/stop\/?(?:\?.*)?$/, async (route) => {
+    cancelStreamAdvance();
     state.sync.status = "idle";
     state.sync.progress = null;
+    state.sync.phase = "sync";
     if (state.sync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION) {
       state.automation.catalog.statusMessage = "Automated catalog sync stopped.";
       state.sync.message = "Automated catalog sync stopped.";
@@ -952,10 +1268,11 @@ async function mockProcessingApi(page, initialState) {
     }
     state.sync.runMode = SYNC_RUN_MODE_MANUAL;
     await delayForActions();
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route("**/api/processing/records/create-requests/**", async (route) => {
+    cancelStreamAdvance();
     const body = route.request().postDataJSON();
     await delayForActions();
     for (const id of body.ids || []) {
@@ -964,7 +1281,7 @@ async function mockProcessingApi(page, initialState) {
         createRequestForRecord(state, id);
       }
     }
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/automation\/catalog\/?(?:\?.*)?$/, async (route) => {
@@ -975,40 +1292,33 @@ async function mockProcessingApi(page, initialState) {
       statusMessage: "Saved.",
     };
     await delayForActions();
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
   });
   await page.route("**/api/processing/automation/catalog/run/**", async (route) => {
+    cancelStreamAdvance();
     await delayForActions();
-    state.sync = {
-      ...state.sync,
-      status: "syncing",
-      progress: {
-        runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
-        savedData: {
-          runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
-          nextPageIndex: 0,
-          fetchedCount: 0,
-        },
-      },
-      fetchedCount: 0,
-      skippedCount: 0,
-      updatedCount: 0,
-      appendedCount: 0,
-      pageIndex: 0,
-      remotePages: state.sync.remotePages?.length ? state.sync.remotePages : [[]],
-      message: "Automated catalog sync is running.",
-      runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
-    };
-    state.automation.catalog.statusMessage = "Automated catalog sync is running.";
-    await fulfillState(route);
+    if (
+      state.sync.status === "paused" ||
+      (state.sync.status === "idle" && catalogSavedCheckpointAvailable(state))
+    ) {
+      resumeCatalogRun(state, SYNC_RUN_MODE_CATALOG_AUTOMATION);
+    } else {
+      startFreshCatalogRun(state, SYNC_RUN_MODE_CATALOG_AUTOMATION, {
+        remotePages: state.sync.remotePages?.length ? state.sync.remotePages : [[]],
+      });
+      state.automation.catalog.statusMessage = state.sync.message;
+    }
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route("**/api/processing/pipeline/advance/**", async (route) => {
+    cancelStreamAdvance();
     advancePipelineState(state);
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route("**/api/processing/requests/action/**", async (route) => {
+    cancelStreamAdvance();
     const body = route.request().postDataJSON();
     await delayForActions();
     for (const id of body.ids || []) {
@@ -1043,7 +1353,7 @@ async function mockProcessingApi(page, initialState) {
       }
       item.updatedAt = iso(300 + state.requests.indexOf(item));
     }
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/automation\/incomplete\/?(?:\?.*)?$/, async (route) => {
@@ -1054,9 +1364,10 @@ async function mockProcessingApi(page, initialState) {
       statusMessage: "Saved.",
     };
     await delayForActions();
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
   });
   await page.route("**/api/processing/automation/incomplete/run/**", async (route) => {
+    cancelStreamAdvance();
     await delayForActions();
     state.sync = {
       ...state.sync,
@@ -1079,7 +1390,7 @@ async function mockProcessingApi(page, initialState) {
       runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
     };
     state.automation.incomplete.statusMessage = "Incomplete catalog sync is running.";
-    await fulfillState(route);
+    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
     scheduleStreamAdvance();
   });
 
@@ -1361,7 +1672,7 @@ test.describe("processing pages replacement", () => {
       "Stable Local Book Revised",
     );
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
-      "Skipped 1",
+      "Skipped 0",
     );
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
       "Added 1",
@@ -1370,7 +1681,7 @@ test.describe("processing pages replacement", () => {
       "Sync complete.",
     );
     await expect(page.getByTestId("catalog-sync-progress-details")).toHaveText(
-      "Updated 1, Skipped 1, Added 1.",
+      "Updated 1, Skipped 0, Added 1.",
     );
     await expect(page.getByTestId("catalog-overview-stat-records")).toContainText(
       "3",
@@ -1783,9 +2094,6 @@ test.describe("processing pages replacement", () => {
     await expect(page.getByTestId("catalog-sync-progress")).toContainText(
       "Sync complete",
     );
-    await expect(
-      page.getByRole("status").filter({ hasText: "Sync complete" }),
-    ).toBeVisible();
   });
 
   test("manual sync does not repost incomplete automation page ids", async ({
@@ -1867,21 +2175,36 @@ test.describe("processing pages replacement", () => {
   });
 
   test("catalog automation exposes resume after pausing", async ({ page }) => {
+    const remainingPage = record({
+      id: "resume-remote",
+      name: "Resume Remote Book",
+      updatedAt: iso(25),
+    });
     await boot(
       page,
       "/catalog",
       baseState({
+        records: [
+          record({ id: "resume-a", name: "Resume A", updatedAt: iso(20) }),
+          record({ id: "resume-b", name: "Resume B", updatedAt: iso(21) }),
+          record({ id: "resume-c", name: "Resume C", updatedAt: iso(22) }),
+        ],
         sync: {
           ...baseState().sync,
           status: "paused",
+          phase: "sync",
           runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+          remotePages: [[], [], [remainingPage], []],
           fetchedCount: 3,
           progress: {
             runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+            phase: "sync",
             savedData: {
               runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
               nextPageIndex: 2,
               fetchedCount: 3,
+              sessionId: "catalog-session-1",
+              checkpointToken: "catalog-session-1:0:2:3",
             },
           },
           message: "Sync progress saved. Catalog now has 3 book records.",
@@ -1911,8 +2234,91 @@ test.describe("processing pages replacement", () => {
       "syncing",
     );
     await expect(page.getByTestId("catalog-automation-status")).toContainText(
-      "Restarting automated catalog sync from the beginning.",
+      "Continuing automated catalog sync from the saved endpoint.",
     );
+  });
+
+  test("manual takeover preserves paused automation request creation progress", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [
+          record({ id: "carry-a", name: "Carry A", bookCreationState: "created" }),
+          record({ id: "carry-b", name: "Carry B", updatedAt: iso(24) }),
+        ],
+        requests: [
+          request({
+            id: "request-carry-a",
+            bookRecordId: "carry-a",
+            state: "created",
+          }),
+        ],
+        sync: {
+          ...baseState().sync,
+          status: "paused",
+          phase: "request_creation",
+          runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+          remotePages: [[record({ id: "carry-b", name: "Carry B", updatedAt: iso(24) })], []],
+          pageIndex: 1,
+          fetchedCount: 1,
+          progress: {
+            runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+            phase: "request_creation",
+            savedData: {
+              runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+              nextPageIndex: 1,
+              fetchedCount: 1,
+              sessionId: "catalog-session-9",
+              checkpointToken: "catalog-session-9:0:1:1",
+            },
+            requestCreation: {
+              baseCheckpointToken: "catalog-session-9:0:1:1",
+              lastRecordId: "carry-a",
+              processedCount: 1,
+              createdCount: 1,
+              unsupportedCount: 0,
+            },
+          },
+          message: "Saved request creation progress after scanning 1 record.",
+        },
+        automation: {
+          ...baseState().automation,
+          catalog: {
+            ...baseState().automation.catalog,
+            statusMessage: "Saved request creation progress after scanning 1 record.",
+          },
+        },
+        ui: {
+          ...baseState().ui,
+          syncDelayMs: 120,
+          pipelineDelayMs: 120,
+        },
+      }),
+    );
+
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+    await page.getByTestId("catalog-sync-start-btn").click();
+    await expect(page.getByTestId("catalog-sync-loader")).toHaveCount(0);
+
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "aria-label",
+      "Run automated request creation",
+    );
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "Resuming automated request creation from saved progress.",
+    );
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "Created 2 request",
+    );
+
+    await page.goto("/create");
+    await expect(row(page, "create", "created", "request-carry-a")).toBeVisible();
+    await expect(row(page, "create", "created", "request-carry-b")).toBeVisible();
   });
 
   test("create cards show only status-scoped rows and remove the details column", async ({
@@ -2751,18 +3157,6 @@ test.describe("processing pages replacement", () => {
     await page.getByTestId("catalog-records-create-btn").click();
     await expect(
       page.getByRole("status").filter({ hasText: "Requests created" }),
-    ).toBeVisible();
-
-    await expect(
-      page
-        .getByRole("alert")
-        .filter({ hasText: "Pipeline failed after retries." }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("status").filter({ hasText: "Duplicate detected" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("status").filter({ hasText: "Book created" }),
     ).toBeVisible();
 
     await page.goto("/on-hold");

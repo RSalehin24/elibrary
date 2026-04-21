@@ -76,6 +76,80 @@ test.describe("Page Loader Skeletons", () => {
     },
   );
 
+  test(
+    "contributor tabs replace stale rows with a skeleton while the next tab loads",
+    async ({ page }) => {
+      const translatorsRequest = createDeferred();
+
+      await page.route("**/api/auth/session/", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(authenticatedSessionPayload()),
+        });
+      });
+      await page.route("**/api/csrf/", async (route) => {
+        await route.fulfill({ status: 204, body: "" });
+      });
+      await page.route("**/api/catalog/writers/**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "writer-1",
+              catalog_code: "WRT-001",
+              name: "Writer One",
+              book_count: 8,
+              digital_book_count: 6,
+              manual_book_count: 2,
+              created_at: "2026-04-21T08:00:00Z",
+            },
+          ]),
+        });
+      });
+      await page.route("**/api/catalog/translators/**", async (route) => {
+        await translatorsRequest.promise;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "translator-1",
+              catalog_code: "TRN-001",
+              name: "Translator One",
+              book_count: 5,
+              digital_book_count: 4,
+              manual_book_count: 1,
+              created_at: "2026-04-21T09:00:00Z",
+            },
+          ]),
+        });
+      });
+
+      await page.goto("/writers");
+      await expect(
+        page.getByRole("heading", { name: "Writers" }),
+      ).toBeVisible();
+      await expect(page.getByText("Writer One")).toBeVisible();
+
+      await page.getByRole("link", { name: "Translators", exact: true }).click();
+      await expect(
+        page.getByRole("heading", { name: "Translators" }),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("property-table-table-skeleton"),
+      ).toBeVisible();
+      await expect(page.getByText("Writer One")).toHaveCount(0);
+
+      translatorsRequest.release();
+      await expect(
+        page.getByTestId("property-table-table-skeleton"),
+      ).toHaveCount(0);
+      await expect(page.getByText("Translator One")).toBeVisible();
+    },
+  );
+
   test("admin pages show a management skeleton while admin data is loading", async ({
     page,
   }) => {
@@ -91,12 +165,21 @@ test.describe("Page Loader Skeletons", () => {
     await page.route("**/api/csrf/", async (route) => {
       await route.fulfill({ status: 204, body: "" });
     });
-    await page.route("**/api/auth/users/", async (route) => {
+    await page.route("**/api/auth/users/**", async (route) => {
       await adminDataRequest.promise;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([]),
+        body: JSON.stringify({
+          rows: [],
+          pagination: {
+            offset: 0,
+            limit: 60,
+            totalCount: 0,
+            hasMore: false,
+            nextOffset: 0,
+          },
+        }),
       });
     });
     await page.route("**/api/access/grants/", async (route) => {
@@ -107,12 +190,13 @@ test.describe("Page Loader Skeletons", () => {
         body: JSON.stringify([]),
       });
     });
-    await page.route("**/api/access/references/", async (route) => {
+    await page.route("**/api/access/references/**", async (route) => {
       await adminDataRequest.promise;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
+          users: [],
           books: [],
           categories: [],
           writers: [],

@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model, login, logout, update_session_auth_hash
 from django.db import transaction
+from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Value, When
+from django.db.models.functions import Lower
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework import generics, status
 from rest_framework.exceptions import ErrorDetail, ValidationError
@@ -26,6 +28,7 @@ from apps.accounts.serializers import (
     UserSerializer,
 )
 from apps.accounts.serializers.support import send_account_setup_email
+from apps.access.models import ACCOUNT_MANAGEABLE_PERMISSION_SCOPES, PermissionGrant
 from apps.common.permissions import IsSuperAdmin
 from apps.common.throttles import LoginRateThrottle, PasswordResetRateThrottle, RegisterRateThrottle
 
@@ -58,6 +61,83 @@ def extract_validation_error_message(detail):
 
 def normalize_validation_error_detail(exc):
     return extract_validation_error_message(exc.detail) or "Request failed."
+
+
+MANAGED_USER_DEFAULT_LIMIT = 60
+MANAGED_USER_MAX_LIMIT = 180
+
+
+def normalized_managed_user_status(value):
+    normalized = str(value or "").strip().lower()
+    if normalized in {"active", "disabled", "totp_required"}:
+        return normalized
+    return "all"
+
+
+def clamped_query_int(value, *, default, minimum=0, maximum=None):
+    try:
+        parsed = int(str(value).strip() or default)
+    except (TypeError, ValueError):
+        parsed = default
+    parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
+
+
+def apply_managed_user_search(queryset, raw_query):
+    query = str(raw_query or "").strip().lower()
+    if not query:
+        return queryset
+
+    search_filter = Q(email__icontains=query) | Q(full_name__icontains=query)
+
+    if "active".find(query) != -1:
+        search_filter |= Q(is_active=True)
+    if "disabled".find(query) != -1:
+        search_filter |= Q(is_active=False)
+    if "required".find(query) != -1:
+        search_filter |= Q(totp_required=True)
+    if "enabled".find(query) != -1:
+        search_filter |= Q(has_totp_enabled_value=True, totp_required=False)
+    if "optional".find(query) != -1:
+        search_filter |= Q(has_totp_enabled_value=False, totp_required=False)
+
+    matching_scopes = [
+        scope.value
+        for scope in ACCOUNT_MANAGEABLE_PERMISSION_SCOPES
+        if query in scope.value.lower() or query in scope.label.lower()
+    ]
+    if matching_scopes:
+        search_filter |= Q(
+            permission_grants__scope__in=matching_scopes,
+            permission_grants__is_active=True,
+            permission_grants__book__isnull=True,
+            permission_grants__category__isnull=True,
+            permission_grants__contributor__isnull=True,
+        )
+
+    return queryset.filter(search_filter).distinct()
+
+
+def ordered_managed_users_queryset(queryset, sort_key):
+    if sort_key == "name_desc":
+        return queryset.order_by(Lower("full_name").desc(), Lower("email").desc())
+    if sort_key == "email_asc":
+        return queryset.order_by(Lower("email"), Lower("full_name"))
+    if sort_key == "email_desc":
+        return queryset.order_by(Lower("email").desc(), Lower("full_name").desc())
+    if sort_key == "status":
+        return queryset.order_by(
+            Case(
+                When(is_active=True, then=Value(0)),
+                default=Value(1),
+                output_field=IntegerField(),
+            ),
+            Lower("full_name"),
+            Lower("email"),
+        )
+    return queryset.order_by(Lower("full_name"), Lower("email"))
 
 
 class SessionView(APIView):
@@ -270,7 +350,26 @@ class ManagedUserListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user_model = get_user_model()
-        return user_model.objects.order_by("email").prefetch_related("permission_grants")
+        global_grants = PermissionGrant.objects.active().filter(
+            book__isnull=True,
+            category__isnull=True,
+            contributor__isnull=True,
+        )
+        return (
+            user_model.objects.annotate(
+                grant_count_value=Count("permission_grants", distinct=True),
+                has_totp_enabled_value=Exists(
+                    TOTPDevice.objects.filter(user_id=OuterRef("pk"), confirmed=True)
+                ),
+            )
+            .prefetch_related(
+                Prefetch(
+                    "permission_grants",
+                    queryset=global_grants,
+                    to_attr="prefetched_active_global_grants",
+                )
+            )
+        )
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -279,14 +378,53 @@ class ManagedUserListCreateView(generics.ListCreateAPIView):
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
-        payload = [
+        query = request.query_params.get("q", "")
+        status_filter = normalized_managed_user_status(
+            request.query_params.get("status", "all")
+        )
+        sort_key = str(request.query_params.get("sort", "name_asc") or "name_asc").strip()
+        offset = clamped_query_int(
+            request.query_params.get("offset"),
+            default=0,
+            minimum=0,
+        )
+        limit = clamped_query_int(
+            request.query_params.get("limit"),
+            default=MANAGED_USER_DEFAULT_LIMIT,
+            minimum=1,
+            maximum=MANAGED_USER_MAX_LIMIT,
+        )
+
+        if status_filter == "active":
+            queryset = queryset.filter(is_active=True)
+        elif status_filter == "disabled":
+            queryset = queryset.filter(is_active=False)
+        elif status_filter == "totp_required":
+            queryset = queryset.filter(totp_required=True)
+
+        queryset = apply_managed_user_search(queryset, query)
+        queryset = ordered_managed_users_queryset(queryset, sort_key)
+
+        total_count = queryset.count()
+        rows = list(queryset[offset : offset + limit])
+        next_offset = offset + len(rows)
+
+        return Response(
             {
-                **ManagedUserSerializer(user, context={"request": request}).data,
-                "grant_count": user.permission_grants.count(),
+                "rows": ManagedUserSerializer(
+                    rows,
+                    many=True,
+                    context={"request": request},
+                ).data,
+                "pagination": {
+                    "offset": offset,
+                    "limit": limit,
+                    "totalCount": total_count,
+                    "hasMore": next_offset < total_count,
+                    "nextOffset": next_offset,
+                },
             }
-            for user in queryset
-        ]
-        return Response(payload)
+        )
 
 
 class ManagedUserDetailView(generics.RetrieveUpdateDestroyAPIView):

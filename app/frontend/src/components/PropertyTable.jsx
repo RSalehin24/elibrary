@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement } from "react";
+import { Children, cloneElement, isValidElement } from "react";
 import { CATALOG_TABLE_PREFETCH_TRIGGER } from "../utils/catalogBooks";
 
 function PropertyTableSkeletonRows({
@@ -40,6 +40,32 @@ function PropertyTableSkeletonRows({
   ));
 }
 
+function clonePropertyRow(row, headers, rowRef = undefined) {
+  if (!isValidElement(row)) {
+    return row;
+  }
+
+  if (row.type !== "tr") {
+    return rowRef ? cloneElement(row, { ref: rowRef }) : row;
+  }
+
+  let headerIndex = 0;
+  const children = Children.map(row.props.children, (cell) => {
+    if (!isValidElement(cell) || cell.type !== "td") {
+      return cell;
+    }
+
+    const dataLabel = cell.props["data-label"] || headers[headerIndex];
+    headerIndex += 1;
+
+    return dataLabel
+      ? cloneElement(cell, { "data-label": dataLabel })
+      : cell;
+  });
+
+  return cloneElement(row, rowRef ? { ref: rowRef } : null, children);
+}
+
 export default function PropertyTable({
   headers,
   columnKinds,
@@ -58,7 +84,12 @@ export default function PropertyTable({
   const showInitialSkeleton = (initialLoading || refreshing) && !items.length;
   const showIncrementalSkeleton =
     (loadingMore || refreshing) && items.length > 0;
-  const tableClasses = ["catalog-table", "property-table", tableClassName]
+  const tableClasses = [
+    "catalog-table",
+    "property-table",
+    "table-mobile-cards",
+    tableClassName,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -88,13 +119,11 @@ export default function PropertyTable({
                 rowIndex ===
                   Math.max(0, items.length - CATALOG_TABLE_PREFETCH_TRIGGER);
 
-              if (!shouldObserveRow || !isValidElement(row)) {
-                return row;
-              }
-
-              return cloneElement(row, {
-                ref: observeLoadTrigger,
-              });
+              return clonePropertyRow(
+                row,
+                headers,
+                shouldObserveRow ? observeLoadTrigger : undefined,
+              );
             })
           ) : (
             <tr>

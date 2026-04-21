@@ -27,6 +27,7 @@ export default function AccessPage() {
     scopedScopes,
     scopeLabelMap,
   } = useAccessAdminData({
+    activeTab,
     isSuperAdmin,
     userId: user?.id,
     toast,
@@ -34,9 +35,8 @@ export default function AccessPage() {
   const accessUsers = useAccessUsers({
     allAccountScopeValues: accountScopes.map((scope) => scope.value),
     applyActiveTab,
-    currentUserId: user?.id,
+    enabled: activeTab === "users",
     loadAdminData,
-    managedUsers,
     scopeLabelMap,
     toast,
   });
@@ -94,26 +94,25 @@ export default function AccessPage() {
 
           <AccessUsersTableCard
             currentUserId={user?.id}
-            filteredManagedUsers={accessUsers.filteredManagedUsers}
             getAccountAccessLabels={accessUsers.getAccountAccessLabels}
+            hasMoreManagedUsers={accessUsers.hasMoreManagedUsers}
+            loadingMoreUsers={accessUsers.loadingMoreUsers}
+            loadingUsers={accessUsers.loadingUsers}
             onClearSearch={accessUsers.clearUsersSearch}
             onDeleteUser={accessUsers.requestDeleteUser}
             onEditUser={accessUsers.startEditing}
+            observeUsersLoadTrigger={accessUsers.observeUsersLoadTrigger}
             onResendSetupEmail={accessUsers.resendSetupEmail}
-            onSetUsersPage={accessUsers.setUsersPage}
-            onSetUsersRowsPerPage={accessUsers.setUsersRowsPerPage}
             onUpdateUsersSearch={accessUsers.updateUsersSearch}
             onUpdateUsersSort={accessUsers.updateUsersSort}
             onUpdateUsersStatus={accessUsers.updateUsersStatus}
-            pagedManagedUsers={accessUsers.pagedManagedUsers}
-            propertyTableRowOptions={accessUsers.PROPERTY_TABLE_ROW_OPTIONS}
+            refreshingUsers={accessUsers.refreshingUsers}
             resendingSetupUserId={accessUsers.resendingSetupUserId}
+            tableShellRef={accessUsers.tableShellRef}
+            totalManagedUsers={accessUsers.totalManagedUsers}
             userListFilters={accessUsers.userListFilters}
-            usersHasNext={accessUsers.usersHasNext}
-            usersHasPrevious={accessUsers.usersHasPrevious}
-            usersPage={accessUsers.usersPage}
-            usersPageCount={accessUsers.usersPageCount}
-            usersRowsPerPage={accessUsers.usersRowsPerPage}
+            usersError={accessUsers.usersError}
+            visibleManagedUsers={accessUsers.visibleManagedUsers}
           />
         </>
       ) : (

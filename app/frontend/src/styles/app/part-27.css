@@ -29,6 +29,7 @@ body.app-mobile-nav-open {
     .book-hero,
     .book-hero-actions,
     .access-users-header,
+    .access-users-toolbar,
     .access-users-header-row
   )
   > * {
@@ -246,12 +247,13 @@ body.app-mobile-nav-open {
     position: fixed;
     top: 76px;
     right: 12px;
-    bottom: 12px;
+    bottom: auto;
     left: 12px;
     z-index: 25;
     display: grid;
     gap: 14px;
     align-content: start;
+    max-height: calc(100dvh - 88px);
     padding: 16px;
     border: 1px solid rgba(17, 70, 54, 0.16);
     border-radius: 22px;
@@ -359,6 +361,19 @@ body.app-mobile-nav-open {
     background: linear-gradient(180deg, #135b45 0%, #0b3d2e 100%);
     color: #ecfff6;
     border-color: rgba(11, 61, 46, 0.42);
+  }
+
+  .mobile-nav-group-panel .mobile-nav-sub-link {
+    background: #d0f0c0;
+    color: #0f3d0f;
+    border-color: #b8ddb0;
+    box-shadow: none;
+  }
+
+  .mobile-nav-group-panel .mobile-nav-sub-link.is-active {
+    background: #0f7a0f;
+    color: #f4fff0;
+    border-color: #0f7a0f;
   }
 
   .mobile-nav-group-toggle.is-open {
@@ -484,36 +499,38 @@ body.app-mobile-nav-open {
 
   .access-users-header {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "title"
-      "top"
-      "controls";
-  }
-
-  .access-users-header-row {
-    justify-content: flex-start;
-    flex-wrap: wrap;
   }
 
   .access-users-search-field {
-    flex: 1 1 100%;
-    height: auto;
-    min-height: 42px;
-    padding-top: 5px;
-    padding-bottom: 5px;
+    height: 34px;
+    min-height: 34px;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-left: 34px;
+    padding-right: 10px;
   }
 
-  .access-users-table-controls {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .access-users-toolbar {
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
     grid-template-areas:
-      "sort rows"
-      "pagination pagination";
-    gap: 10px;
+      "title search search count"
+      "filter filter sort sort";
+    gap: 8px 6px;
   }
 
-  .access-users-table-controls .catalog-pagination {
-    width: 100%;
-    justify-content: space-between;
+  .access-users-search-field .catalog-search-icon {
+    left: 10px;
+  }
+
+  .access-users-toolbar .catalog-toolbar-field {
+    gap: 0;
+  }
+
+  .access-users-toolbar .catalog-toolbar-select {
+    min-height: 34px;
+    padding: 0 34px 0 10px;
+    border-radius: 999px;
+    font-size: 0.8rem;
   }
 
   .access-page .access-user-editor-primary-row {
@@ -706,8 +723,7 @@ body.app-mobile-nav-open {
   .catalog-toolbar-secondary-layout,
   .property-table-toolbar-layout,
   .catalog-toolbar-secondary,
-  .catalog-page-controls-row .property-table-controls,
-  .access-users-table-controls {
+  .catalog-page-controls-row .property-table-controls {
     grid-template-columns: 1fr;
     grid-template-areas:
       "sort"
@@ -934,29 +950,22 @@ body.app-mobile-nav-open {
   }
 
   .access-users-header {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "title"
-      "top"
-      "controls";
     align-items: stretch;
   }
 
-  .access-users-header-row {
-    display: grid;
-    grid-template-columns: 1fr;
-    justify-content: stretch;
-  }
-
+  .access-users-toolbar,
   .access-users-search-field,
-  .access-users-header-row .catalog-toolbar-field-sort,
-  .access-users-table-controls .catalog-toolbar-field-rows {
+  .access-users-filter-field,
+  .access-users-sort-field {
     width: 100%;
     min-width: 0;
   }
 
-  .access-users-result-count {
-    justify-self: start;
+  .access-users-toolbar-count {
+    justify-self: end;
+    min-width: 46px;
+    height: 34px;
+    padding: 0 8px;
   }
 
   .book-card {
@@ -1084,9 +1093,22 @@ body.app-mobile-nav-open {
     max-height: none;
   }
 
+  .access-users-table-shell {
+    --processing-mobile-record-shell-height: min(56dvh, 560px);
+    height: var(--processing-mobile-record-shell-height);
+    max-height: var(--processing-mobile-record-shell-height);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
   .processing-table-shell--mobile-cards {
+    --processing-mobile-record-shell-height: min(56dvh, 560px);
     height: auto;
-    overflow: visible;
+    max-height: var(--processing-mobile-record-shell-height);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -1111,8 +1133,7 @@ body.app-mobile-nav-open {
   .processing-catalog-card,
   .processing-catalog-height-card,
   .processing-secondary-height-card {
-    --processing-list-card-height: auto;
-    max-height: none;
+    max-height: var(--processing-list-card-height);
   }
 
   .processing-card-head-line {
@@ -1162,6 +1183,7 @@ body.app-mobile-nav-open {
     width: auto;
     min-width: 0;
     justify-content: flex-start;
+    flex-wrap: nowrap;
   }
 
   .processing-card-head-inline-tools .catalog-filter-toggle {
@@ -1181,7 +1203,7 @@ body.app-mobile-nav-open {
 
   .processing-card-head-actions {
     grid-area: actions;
-    grid-column: auto;
+    grid-column: 1 / -1;
     justify-self: stretch;
     width: 100%;
     min-width: 0;
@@ -1204,6 +1226,46 @@ body.app-mobile-nav-open {
     padding-left: 10px;
     line-height: 1.15;
     white-space: normal;
+  }
+
+  .processing-inline-count-card .processing-card-head-line {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title filter"
+      "search search"
+      "actions actions";
+  }
+
+  .processing-inline-count-card .processing-card-head-meta {
+    width: 100%;
+  }
+
+  .processing-inline-count-card .processing-card-head-inline-tools {
+    width: auto;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .processing-inline-count-card
+    .processing-card-head-inline-tools
+    .catalog-filter-toggle {
+    flex: 0 0 auto;
+    min-height: 34px;
+    height: 34px;
+    min-width: 0;
+    padding: 0 10px;
+  }
+
+  .processing-inline-count-card
+    .processing-card-head-inline-tools
+    .processing-card-title-count {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 0;
+    min-height: 34px;
+    height: 34px;
+    margin-left: 0;
+    padding: 0 10px;
   }
 
   .processing-bulk-bar,

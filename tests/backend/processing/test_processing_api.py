@@ -55,6 +55,14 @@ def record_payload(record_id, **overrides):
     return payload
 
 
+def advance_processing_sync(client, *, count=1):
+    response = None
+    for _ in range(count):
+        response = client.post("/api/processing/sync/advance/", content_type="application/json")
+        assert response.status_code == 200
+    return response
+
+
 class FakeProcessingCheckpointRedis:
     def __init__(self, initial=None):
         self.store = dict(initial or {})
@@ -349,14 +357,8 @@ def test_processing_sync_persists_records_and_reconciles_resume(client):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sync"]["status"] == "syncing"
-
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-
-    assert response.status_code == 200
-    payload = response.json()
     assert payload["sync"]["status"] == "idle"
-    assert payload["sync"]["skippedCount"] == 2
+    assert payload["sync"]["skippedCount"] == 0
     assert payload["sync"]["appendedCount"] == 1
     assert BookRecord.objects.filter(pk="new-record").exists()
 
@@ -437,10 +439,7 @@ def test_processing_sync_uses_persisted_source_catalog_when_no_remote_pages(clie
     payload = response.json()
     assert payload["sync"]["status"] == "syncing"
 
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = advance_processing_sync(client, count=2).json()
     assert payload["sync"]["status"] == "idle"
     record = BookRecord.objects.get(pk=str(entry.id))
     assert record.name == "Source Catalog Record"
@@ -897,12 +896,7 @@ def test_catalog_automation_waits_for_manual_runtime_before_creating_requests(cl
     assert payload["sync"]["runMode"] == "manual"
     assert not BookCreationRequest.objects.exists()
 
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-    assert response.status_code == 200
-
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-    assert response.status_code == 200
-    payload = response.json()
+    payload = advance_processing_sync(client, count=2).json()
     assert payload["sync"]["status"] == "idle"
     assert BookRecord.objects.filter(pk="new-record").exists()
     assert BookRecord.objects.get(pk="existing-record").name == "Existing Record Revised"
@@ -918,12 +912,7 @@ def test_catalog_automation_waits_for_manual_runtime_before_creating_requests(cl
     assert payload["sync"]["status"] == "syncing"
     assert payload["sync"]["runMode"] == "catalog_automation"
 
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-    assert response.status_code == 200
-
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-    assert response.status_code == 200
-    payload = response.json()
+    payload = advance_processing_sync(client, count=3).json()
     assert payload["sync"]["status"] == "idle"
     assert BookCreationRequest.objects.filter(
         book_record_id="existing-record",
@@ -953,10 +942,7 @@ def test_processing_sync_start_ignores_remote_pages_when_overrides_are_disabled(
     assert response.status_code == 200
     assert response.json()["sync"]["status"] == "syncing"
 
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = advance_processing_sync(client, count=2).json()
     assert payload["sync"]["status"] == "idle"
     assert not BookRecord.objects.filter(pk="ignored-record").exists()
 
@@ -994,9 +980,16 @@ def test_catalog_automation_ignores_stale_remote_pages_when_overrides_are_disabl
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
     assert not BookRecord.objects.filter(pk="stale-remote-record").exists()
     assert BookRecord.objects.filter(pk=str(entry.id)).exists()
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
     assert BookCreationRequest.objects.filter(
         book_record_id=str(entry.id),
         state="initial",
@@ -1039,7 +1032,8 @@ def test_catalog_automation_can_pause_and_stop_active_sync(client):
     payload = response.json()
     assert payload["sync"]["status"] == "syncing"
     assert payload["sync"]["runMode"] == "catalog_automation"
-    assert payload["sync"]["message"] == "Restarting automated catalog sync from the beginning."
+    assert payload["sync"]["message"] == "Continuing automated catalog sync from the saved endpoint."
+    assert payload["sync"]["pageIndex"] == 1
 
     response = client.post("/api/processing/sync/stop/", content_type="application/json")
     assert response.status_code == 200
@@ -1050,7 +1044,7 @@ def test_catalog_automation_can_pause_and_stop_active_sync(client):
 
 
 @pytest.mark.django_db
-def test_manual_sync_start_does_not_take_over_paused_automation_runtime(client):
+def test_manual_sync_start_takes_over_paused_automation_runtime(client):
     login_processing_admin(client)
     sync_state = get_sync_state()
     sync_state.remote_pages = [
@@ -1081,18 +1075,21 @@ def test_manual_sync_start_does_not_take_over_paused_automation_runtime(client):
     response = client.post("/api/processing/sync/start/", content_type="application/json")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sync"]["status"] == "paused"
-    assert payload["sync"]["runMode"] == "catalog_automation"
-    assert payload["sync"]["message"].startswith("Sync progress saved.")
-    assert "Catalog now has 1 book record." in payload["sync"]["message"]
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "manual"
+    assert payload["sync"]["message"] == "Continuing catalog sync from the saved endpoint."
     assert payload["sync"]["fetchedCount"] == 1
     assert payload["sync"]["pageIndex"] == 1
     assert payload["sync"]["progress"]["savedData"]["fetchedCount"] == 1
     assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 1
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "idle"
+    assert BookRecord.objects.filter(pk="shared-page-2").exists()
+    assert not BookCreationRequest.objects.exists()
 
 
 @pytest.mark.django_db
-def test_catalog_automation_run_does_not_take_over_paused_manual_runtime(client):
+def test_catalog_automation_run_takes_over_paused_manual_runtime(client):
     login_processing_admin(client)
 
     response = client.post(
@@ -1126,13 +1123,250 @@ def test_catalog_automation_run_does_not_take_over_paused_manual_runtime(client)
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sync"]["status"] == "paused"
-    assert payload["sync"]["runMode"] == "manual"
-    assert payload["sync"]["message"].startswith("Sync progress saved.")
-    assert "Catalog now has 1 book record." in payload["sync"]["message"]
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+    assert payload["sync"]["message"] == "Continuing automated catalog sync from the saved endpoint."
     assert payload["sync"]["fetchedCount"] == 1
     assert payload["sync"]["pageIndex"] == 1
-    assert not BookCreationRequest.objects.exists()
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "idle"
+    assert BookCreationRequest.objects.exists()
+
+
+@pytest.mark.django_db
+def test_catalog_automation_request_creation_phase_can_pause_and_resume(client, monkeypatch):
+    login_processing_admin(client)
+    monkeypatch.setattr(
+        "apps.processing.services.CATALOG_REQUEST_CREATION_BATCH_SIZE",
+        1,
+    )
+    BookRecord.objects.create(
+        id="phase-request-a",
+        name="Phase Request A",
+        url="https://example.test/books/phase-request-a",
+        category="Reference",
+        writer="Writer One",
+        publisher="Press",
+    )
+    BookRecord.objects.create(
+        id="phase-request-b",
+        name="Phase Request B",
+        url="https://example.test/books/phase-request-b",
+        category="Reference",
+        writer="Writer Two",
+        publisher="Press",
+    )
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [[record_payload("phase-request-c")], []]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["message"] == "Creating book requests from the synced catalog records."
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "pausing"
+    assert payload["sync"]["message"] == "Pausing automated request creation after the current batch finishes."
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+    assert payload["sync"]["progress"]["requestCreation"]["createdCount"] == 1
+
+    response = client.post(
+        "/api/processing/sync/resume/",
+        {"runMode": "catalog_automation"},
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["message"] == "Resuming automated request creation from saved progress."
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 2
+    assert payload["sync"]["progress"]["requestCreation"]["createdCount"] == 2
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "idle"
+    assert BookCreationRequest.objects.filter(book_record_id="phase-request-a", state="initial").exists()
+    assert BookCreationRequest.objects.filter(book_record_id="phase-request-b", state="initial").exists()
+    assert BookCreationRequest.objects.filter(book_record_id="phase-request-c", state="initial").exists()
+    assert payload["automation"]["catalog"]["statusMessage"] == "Created 3 requests."
+
+
+@pytest.mark.django_db
+def test_manual_takeover_preserves_paused_automation_request_creation_progress(client, monkeypatch):
+    login_processing_admin(client)
+    monkeypatch.setattr(
+        "apps.processing.services.CATALOG_REQUEST_CREATION_BATCH_SIZE",
+        1,
+    )
+    BookRecord.objects.create(
+        id="carry-existing",
+        name="Carry Existing",
+        url="https://example.test/books/carry-existing",
+        category="Reference",
+        writer="Writer One",
+        publisher="Press",
+    )
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [[record_payload("carry-new")], []]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["phase"] == "request_creation"
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+
+    response = client.post("/api/processing/sync/start/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "manual"
+    assert payload["sync"]["message"] == "Continuing catalog sync from the saved endpoint."
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+    assert BookCreationRequest.objects.count() == 1
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["message"] == "Resuming automated request creation from saved progress."
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "idle"
+    assert BookCreationRequest.objects.filter(book_record_id="carry-existing", state="initial").exists()
+    assert BookCreationRequest.objects.filter(book_record_id="carry-new", state="initial").exists()
+
+
+@pytest.mark.django_db
+def test_manual_takeover_invalidates_stale_request_creation_cursor_but_keeps_checkpoint(
+    client,
+    monkeypatch,
+):
+    login_processing_admin(client)
+    monkeypatch.setattr(
+        "apps.processing.services.CATALOG_REQUEST_CREATION_BATCH_SIZE",
+        1,
+    )
+    BookRecord.objects.create(
+        id="stale-existing",
+        name="Stale Existing",
+        url="https://example.test/books/stale-existing",
+        category="Reference",
+        writer="Writer One",
+        publisher="Press",
+    )
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [[record_payload("stale-page-1")], []]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["phase"] == "request_creation"
+
+    response = client.post("/api/processing/sync/pause/", content_type="application/json")
+    assert response.status_code == 200
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [
+        [record_payload("stale-page-1")],
+        [record_payload("stale-page-2")],
+        [],
+    ]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+
+    response = client.post("/api/processing/sync/start/", content_type="application/json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["runMode"] == "manual"
+    assert payload["sync"]["message"] == "Continuing catalog sync from the saved endpoint."
+    assert payload["sync"]["pageIndex"] == 1
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["progress"]["savedData"]["nextPageIndex"] == 2
+    assert payload["sync"]["progress"]["savedData"]["fetchedCount"] == 2
+    assert "requestCreation" not in payload["sync"]["progress"]
+
+    response = client.post(
+        "/api/processing/automation/catalog/run/",
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "sync"
+    assert payload["sync"]["message"] == "Continuing automated catalog sync from the saved endpoint."
+    assert payload["sync"]["pageIndex"] == 2
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 0
+    assert payload["sync"]["progress"]["requestCreation"]["createdCount"] == 0
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+    assert payload["sync"]["progress"]["requestCreation"]["createdCount"] == 0
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 2
+    assert payload["sync"]["progress"]["requestCreation"]["createdCount"] == 1
+
+    payload = advance_processing_sync(client).json()
+    assert payload["sync"]["status"] == "idle"
+    assert BookCreationRequest.objects.filter(book_record_id="stale-existing", state="initial").exists()
+    assert BookCreationRequest.objects.filter(book_record_id="stale-page-1", state="initial").exists()
+    assert BookCreationRequest.objects.filter(book_record_id="stale-page-2", state="initial").exists()
+    assert BookCreationRequest.objects.count() == 3
+    assert payload["automation"]["catalog"]["statusMessage"] == "Created 2 requests."
 
 
 @pytest.mark.django_db
@@ -1518,8 +1752,15 @@ def test_catalog_automation_ignores_incomplete_remote_pages_shape(client):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
     assert BookRecord.objects.filter(pk=str(entry.id)).exists()
+
+    response = client.post("/api/processing/sync/advance/", content_type="application/json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync"]["status"] == "idle"
     assert BookCreationRequest.objects.filter(
         book_record_id=str(entry.id),
         state="initial",
@@ -2597,8 +2838,7 @@ def test_automation_and_incomplete_resolution_are_persisted(client):
     assert payload["sync"]["status"] == "syncing"
     assert payload["sync"]["runMode"] == "catalog_automation"
 
-    response = client.post("/api/processing/sync/advance/", content_type="application/json")
-    assert response.status_code == 200
+    response = advance_processing_sync(client, count=2)
     assert BookCreationRequest.objects.filter(book_record_id="auto-new", state="initial").exists()
     assert not BookCreationRequest.objects.filter(book_record_id="auto-created", state="initial").exists()
 

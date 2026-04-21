@@ -185,6 +185,34 @@
   order: 0;
 }
 
+.access-users-table-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas: "filter sort";
+  align-items: stretch;
+}
+
+.access-users-table-controls .access-users-filter-field {
+  grid-area: filter;
+}
+
+.access-users-table-controls .access-users-sort-field {
+  grid-area: sort;
+}
+
+.access-users-table-controls .catalog-toolbar-field {
+  display: grid;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.access-users-table-controls .catalog-toolbar-select {
+  min-width: 0;
+  width: 100%;
+  flex: none;
+}
+
 .catalog-toolbar-secondary--catalog-card {
   grid-template-columns: minmax(180px, 1fr) 120px;
   grid-template-areas:
@@ -231,6 +259,7 @@
   align-items: center;
   min-height: 40px;
   align-self: start;
+  margin-left: 10px;
 }
 
 .catalog-page-header--property-layout .catalog-search-row--property-compact {
@@ -240,6 +269,10 @@
 
 .catalog-page-header--property-layout .catalog-search-actions {
   align-self: center;
+}
+
+.catalog-page-header--property-layout .catalog-result-count {
+  margin-right: 10px;
 }
 
 .catalog-page-controls-row {

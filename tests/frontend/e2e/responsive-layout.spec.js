@@ -92,7 +92,7 @@ async function mockCatalogBooksApi(page, total = 24, options = {}) {
   });
 }
 
-async function mockAccessApi(page) {
+async function mockAccessApi(page, totalUsers = 2) {
   const users = [
     {
       id: 1,
@@ -106,25 +106,47 @@ async function mockAccessApi(page) {
       grant_count: 0,
       can_resend_setup_email: false,
     },
-    {
-      id: 77,
-      email: "pending-user@example.com",
-      full_name: "Pending User",
-      is_active: true,
+    ...Array.from({ length: Math.max(totalUsers - 1, 1) }, (_, index) => ({
+      id: 77 + index,
+      email: `pending-user-${index + 1}@example.com`,
+      full_name: `Pending User ${index + 1}`,
+      is_active: index % 4 !== 0,
       is_superuser: false,
-      totp_required: true,
-      totp_enabled: false,
-      global_scopes: ["read:durable", "metadata:edit"],
-      grant_count: 2,
-      can_resend_setup_email: true,
-    },
-  ];
+      totp_required: index % 2 === 0,
+      totp_enabled: index % 2 !== 0,
+      global_scopes:
+        index % 3 === 0
+          ? ["read:durable", "metadata:edit"]
+          : ["read:durable"],
+      grant_count: (index % 3) + 1,
+      can_resend_setup_email: index % 2 === 0,
+    })),
+  ].slice(0, totalUsers);
+
+  function managedUsersPayload(requestUrl) {
+    const url = new URL(requestUrl);
+    const offset = Number(url.searchParams.get("offset") || 0);
+    const limit = Number(url.searchParams.get("limit") || 60);
+    const rows = users.slice(offset, offset + limit);
+    const nextOffset = offset + rows.length;
+
+    return {
+      rows,
+      pagination: {
+        offset,
+        limit,
+        totalCount: users.length,
+        hasMore: nextOffset < users.length,
+        nextOffset,
+      },
+    };
+  }
 
   await page.route("**/api/auth/users/**", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(users),
+      body: JSON.stringify(managedUsersPayload(route.request().url())),
     });
   });
   await page.route("**/api/access/grants/**", async (route) => {
@@ -139,6 +161,7 @@ async function mockAccessApi(page) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
+        users: [],
         books: [],
         categories: [],
         writers: [],
@@ -265,6 +288,78 @@ async function mockManualBooksApi(page, total = 8) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(suggestionPayloads.editors),
+    });
+  });
+}
+
+async function mockPropertyPagesApi(page) {
+  const categories = Array.from({ length: 6 }, (_, index) => ({
+    id: `category-${index + 1}`,
+    catalog_code: `CAT-${String(index + 1).padStart(3, "0")}`,
+    name: `Category ${index + 1}`,
+    book_count: 20 - index,
+    digital_book_count: 15 - index,
+    manual_book_count: 5,
+    created_at: `2026-04-${String(index + 1).padStart(2, "0")}T08:00:00Z`,
+  }));
+  const series = Array.from({ length: 6 }, (_, index) => ({
+    id: `series-${index + 1}`,
+    name: `Series ${index + 1}`,
+    book_count: 18 - index,
+    digital_book_count: 14 - index,
+    manual_book_count: 4,
+    created_at: `2026-04-${String(index + 7).padStart(2, "0")}T08:00:00Z`,
+  }));
+  const contributors = Array.from({ length: 6 }, (_, index) => ({
+    id: `contributor-${index + 1}`,
+    catalog_code: `WRT-${String(index + 1).padStart(3, "0")}`,
+    name: `Contributor ${index + 1}`,
+    book_count: 16 - index,
+    digital_book_count: 12 - index,
+    manual_book_count: 4,
+    created_at: `2026-04-${String(index + 13).padStart(2, "0")}T08:00:00Z`,
+  }));
+
+  await page.route("**/api/catalog/categories/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(categories),
+    });
+  });
+  await page.route("**/api/catalog/series/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(series),
+    });
+  });
+  await page.route("**/api/catalog/writers/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(contributors),
+    });
+  });
+  await page.route("**/api/catalog/translators/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(contributors),
+    });
+  });
+  await page.route("**/api/catalog/compilers/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(contributors),
+    });
+  });
+  await page.route("**/api/catalog/editors/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(contributors),
     });
   });
 }
@@ -442,7 +537,173 @@ async function getGridColumnCount(page, selector) {
   });
 }
 
-async function expectTableCardMode(page, selector) {
+async function expectFirstBookCoverToFillCardWidth(page) {
+  const metrics = await page.locator(".book-card").first().evaluate((card) => {
+    const art = card.querySelector(".book-card-art");
+    const cover = card.querySelector(".book-card-cover");
+    const cardStyle = getComputedStyle(card);
+    const cardBox = card.getBoundingClientRect();
+    const artBox = art.getBoundingClientRect();
+    const coverBox = cover.getBoundingClientRect();
+    const paddingLeft = Number.parseFloat(cardStyle.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(cardStyle.paddingRight) || 0;
+
+    return {
+      artWidthGap: Math.round(
+        cardBox.width - paddingLeft - paddingRight - artBox.width,
+      ),
+      coverWidthGap: Math.round(artBox.width - coverBox.width),
+    };
+  });
+
+  expect(metrics.artWidthGap).toBeLessThanOrEqual(2);
+  expect(metrics.coverWidthGap).toBeLessThanOrEqual(1);
+}
+
+async function getMobileNavPanelMetrics(page) {
+  return page.locator("#app-mobile-nav").evaluate((panel) => {
+    const panelBox = panel.getBoundingClientRect();
+    return {
+      bottomGap: Math.round(window.innerHeight - panelBox.bottom),
+      height: Math.round(panelBox.height),
+      viewportHeight: window.innerHeight,
+    };
+  });
+}
+
+async function expectAccessUsersShellScrollable(page) {
+  const metrics = await page
+    .locator(".access-users-table-shell")
+    .evaluate((shell) => ({
+      overflowY: getComputedStyle(shell).overflowY,
+      scrollable: shell.scrollHeight > shell.clientHeight,
+    }));
+
+  expect(["auto", "scroll"]).toContain(metrics.overflowY);
+  expect(metrics.scrollable).toBe(true);
+}
+
+async function expectAccessUsersHeaderLayout(page, { mobile = false } = {}) {
+  const metrics = await page
+    .getByTestId("access-users-section")
+    .evaluate((section) => {
+      const toolbar = section.querySelector(".access-users-toolbar");
+      const title = toolbar.querySelector("h2").getBoundingClientRect();
+      const search = toolbar
+        .querySelector(".access-users-search-field")
+        .getBoundingClientRect();
+      const count = toolbar
+        .querySelector(".access-users-result-count")
+        .getBoundingClientRect();
+      const filter = toolbar
+        .querySelector(".access-users-filter-field")
+        .getBoundingClientRect();
+      const sort = toolbar
+        .querySelector(".access-users-sort-field")
+        .getBoundingClientRect();
+      const filterSelect = toolbar.querySelector(".access-users-filter-field select");
+      const sortSelect = toolbar.querySelector(".access-users-sort-field select");
+
+      return {
+        countRightGap: Math.round(toolbar.getBoundingClientRect().right - count.right),
+        searchAfterTitleGap: Math.round(search.left - title.right),
+        searchBeforeCountGap: Math.round(count.left - search.right),
+        toolbarLabelCount: toolbar.querySelectorAll(".catalog-toolbar-inline-label").length,
+        filterFirstOptionDisabled:
+          filterSelect?.options?.[0]?.disabled === true &&
+          filterSelect?.options?.[0]?.text === "Filter",
+        sortFirstOptionDisabled:
+          sortSelect?.options?.[0]?.disabled === true &&
+          sortSelect?.options?.[0]?.text === "Sort",
+        sameTopLine:
+          search.top < title.bottom &&
+          count.top < title.bottom &&
+          title.top < search.bottom,
+        filterSharesTitleRow:
+          filter.top < title.bottom && title.top < filter.bottom,
+        filterBelowTitle: filter.top >= title.bottom - 1,
+        sortSharesFilterRow:
+          Math.abs(sort.top - filter.top) <= 1 ||
+          (sort.top < filter.bottom && filter.top < sort.bottom),
+      };
+    });
+
+  expect(metrics.sameTopLine).toBe(true);
+  expect(metrics.countRightGap).toBeLessThanOrEqual(1);
+  expect(metrics.toolbarLabelCount).toBe(0);
+  expect(metrics.filterFirstOptionDisabled).toBe(true);
+  expect(metrics.sortFirstOptionDisabled).toBe(true);
+  if (mobile) {
+    expect(metrics.searchAfterTitleGap).toBeGreaterThanOrEqual(6);
+    expect(metrics.searchBeforeCountGap).toBeGreaterThanOrEqual(6);
+    expect(metrics.filterBelowTitle).toBe(true);
+    expect(metrics.sortSharesFilterRow).toBe(true);
+  } else {
+    expect(metrics.searchAfterTitleGap).toBeGreaterThanOrEqual(8);
+    expect(metrics.searchBeforeCountGap).toBeGreaterThanOrEqual(8);
+    expect(metrics.filterSharesTitleRow).toBe(true);
+    expect(metrics.sortSharesFilterRow).toBe(true);
+  }
+}
+
+async function expectMobileProcessingCardShellToPeekNextCard(page, cardTestId) {
+  const metrics = await page.getByTestId(cardTestId).evaluate((card) => {
+    const shell = card.querySelector(".processing-table-shell");
+    const rows = [...card.querySelectorAll(".processing-table tbody tr")];
+    const firstRow = rows[0];
+    const secondRow = rows[1];
+    const shellBox = shell.getBoundingClientRect();
+    const firstRowBox = firstRow.getBoundingClientRect();
+    const secondRowBox = secondRow.getBoundingClientRect();
+    const shellStyle = getComputedStyle(shell);
+
+    return {
+      overflowY: shellStyle.overflowY,
+      scrollable: shell.scrollHeight > shell.clientHeight,
+      firstRowFullyVisible:
+        firstRowBox.top >= shellBox.top - 1 &&
+        firstRowBox.bottom <= shellBox.bottom + 1,
+      secondRowStartsVisible: secondRowBox.top < shellBox.bottom - 8,
+      secondRowClipped: secondRowBox.bottom > shellBox.bottom + 8,
+    };
+  });
+
+  expect(["auto", "scroll"]).toContain(metrics.overflowY);
+  expect(metrics.scrollable).toBe(true);
+  expect(metrics.firstRowFullyVisible).toBe(true);
+  expect(metrics.secondRowStartsVisible).toBe(true);
+  expect(metrics.secondRowClipped).toBe(true);
+}
+
+async function expectProcessingInlineFilterCountLayout(page, cardTestId) {
+  const metrics = await page.getByTestId(cardTestId).evaluate((card) => {
+    const title = card.querySelector(".processing-card-head-meta h2").getBoundingClientRect();
+    const tools = card.querySelector(".processing-card-head-inline-tools");
+    const filter = tools.querySelector(".catalog-filter-toggle").getBoundingClientRect();
+    const count = tools
+      .querySelector(".processing-card-title-count")
+      .getBoundingClientRect();
+
+    return {
+      titleLeftOfFilter: title.left < filter.left,
+      titleSharesRowWithFilter:
+        title.top < filter.bottom && filter.top < title.bottom,
+      filterLeftOfCount: filter.left < count.left,
+      sameRow: filter.top < count.bottom && count.top < filter.bottom,
+    };
+  });
+
+  expect(metrics.sameRow).toBe(true);
+  expect(metrics.titleLeftOfFilter).toBe(true);
+  expect(metrics.titleSharesRowWithFilter).toBe(true);
+  expect(metrics.filterLeftOfCount).toBe(true);
+}
+
+async function expectTableCardMode(
+  page,
+  selector,
+  { cellDisplay = "grid" } = {},
+) {
   const state = await page.locator(selector).evaluate((table) => {
     const thead = table.querySelector("thead");
     const firstRow = table.querySelector("tbody tr");
@@ -457,8 +718,26 @@ async function expectTableCardMode(page, selector) {
 
   expect(state.theadDisplay).toBe("none");
   expect(state.rowDisplay).toBe("block");
-  expect(state.cellDisplay).toBe("grid");
+  if (Array.isArray(cellDisplay)) {
+    expect(cellDisplay).toContain(state.cellDisplay);
+  } else {
+    expect(state.cellDisplay).toBe(cellDisplay);
+  }
   expect(state.firstLabel).not.toBe("");
+}
+
+async function expectMobileTableCellToFillCard(page, selector, cellSelector) {
+  const state = await page.locator(selector).evaluate((table, nextCellSelector) => {
+    const row = table.querySelector("tbody tr");
+    const cell = table.querySelector(nextCellSelector);
+
+    return {
+      cellWidth: cell ? Math.round(cell.getBoundingClientRect().width) : 0,
+      rowWidth: row ? Math.round(row.getBoundingClientRect().width) : 0,
+    };
+  }, cellSelector);
+
+  expect(state.rowWidth - state.cellWidth).toBeLessThanOrEqual(2);
 }
 
 async function expectDesktopTableMode(page, selector) {
@@ -544,7 +823,7 @@ test.describe("Responsive layout regression coverage", () => {
     await mockCatalogBooksApi(page, 24, {
       savedFilters: [{ id: 1, name: "Recently reviewed books" }],
     });
-    await mockAccessApi(page);
+    await mockAccessApi(page, 24);
     await mockProcessingApi(page);
     await mockProfileApi(page);
 
@@ -569,6 +848,8 @@ test.describe("Responsive layout regression coverage", () => {
       page.getByRole("heading", { name: "Users & Access", exact: true }),
     ).toBeVisible();
     await expectDesktopTableMode(page, ".access-users-table");
+    await expectAccessUsersHeaderLayout(page);
+    await expectAccessUsersShellScrollable(page);
     expect(await getGridColumnCount(page, ".access-user-editor-primary-row")).toBeGreaterThan(
       1,
     );
@@ -656,6 +937,37 @@ test.describe("Responsive layout regression coverage", () => {
     await expect(page.locator("#app-mobile-nav")).toBeVisible();
     await expect(page.getByRole("button", { name: "Processing" })).toBeVisible();
     expect(await getGridColumnCount(page, ".book-grid")).toBe(1);
+    await expectFirstBookCoverToFillCardWidth(page);
+
+    await page.goto("/created-books");
+
+    await expect(
+      page.getByRole("heading", { name: "My Books", exact: true }),
+    ).toBeVisible();
+    expect(await getGridColumnCount(page, ".book-grid")).toBe(1);
+    await expectFirstBookCoverToFillCardWidth(page);
+    await assertNoPageOverflow(page);
+  });
+
+  test("phone mobile drawer collapses to content when processing links are unavailable", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockAuthenticatedSession(page, {
+      is_staff: false,
+      is_superuser: false,
+      capabilities: [],
+    });
+    await mockCatalogBooksApi(page);
+
+    await page.goto("/home");
+
+    await page.getByTestId("mobile-nav-trigger").click();
+    await expect(page.locator("#app-mobile-nav")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Processing" })).toHaveCount(0);
+    const panelMetrics = await getMobileNavPanelMetrics(page);
+    expect(panelMetrics.height).toBeLessThan(panelMetrics.viewportHeight - 120);
+    expect(panelMetrics.bottomGap).toBeGreaterThanOrEqual(40);
     await assertNoPageOverflow(page);
   });
 
@@ -743,12 +1055,56 @@ test.describe("Responsive layout regression coverage", () => {
     await assertNoPageOverflow(page);
   });
 
+  test("phone book property pages render mobile table items like the books page", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockAuthenticatedSession(page);
+    await mockPropertyPagesApi(page);
+
+    await page.goto("/categories");
+    await expect(
+      page.getByRole("heading", { name: "Categories", exact: true }),
+    ).toBeVisible();
+    await expectTableCardMode(page, ".property-table");
+    await expectMobileTableCellToFillCard(
+      page,
+      ".property-table",
+      'tbody td[data-label="Name"]',
+    );
+    await assertNoPageOverflow(page);
+
+    await page.goto("/series");
+    await expect(
+      page.getByRole("heading", { name: "Series", exact: true }),
+    ).toBeVisible();
+    await expectTableCardMode(page, ".property-table");
+    await expectMobileTableCellToFillCard(
+      page,
+      ".property-table",
+      'tbody td[data-label="Series"]',
+    );
+    await assertNoPageOverflow(page);
+
+    await page.goto("/writers");
+    await expect(
+      page.getByRole("heading", { name: "Writers", exact: true }),
+    ).toBeVisible();
+    await expectTableCardMode(page, ".property-table");
+    await expectMobileTableCellToFillCard(
+      page,
+      ".property-table",
+      'tbody td[data-label="Name"]',
+    );
+    await assertNoPageOverflow(page);
+  });
+
   test("phone access page stacks form fields and cardifies the users table", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await mockAuthenticatedSession(page);
-    await mockAccessApi(page);
+    await mockAccessApi(page, 24);
 
     await page.goto("/access");
 
@@ -757,6 +1113,8 @@ test.describe("Responsive layout regression coverage", () => {
     ).toBeVisible();
     await expect(page.getByTestId("access-user-form")).toBeVisible();
     expect(await getGridColumnCount(page, ".access-user-editor-primary-row")).toBe(1);
+    await expectAccessUsersHeaderLayout(page, { mobile: true });
+    await expectAccessUsersShellScrollable(page);
     await expectTableCardMode(page, ".access-users-table");
     await assertNoPageOverflow(page);
   });
@@ -764,6 +1122,23 @@ test.describe("Responsive layout regression coverage", () => {
   test("phone processing catalog page reflows summary cards and renders dense rows as mobile cards", async ({
     page,
   }) => {
+    async function getAutomationHeaderLayout(testId) {
+      return page.getByTestId(testId).evaluate((card) => {
+        const header = card.querySelector(".processing-card-head--settings");
+        const title = header
+          .querySelector(".processing-card-head-meta h2")
+          .getBoundingClientRect();
+        const controls = header
+          .querySelector(".processing-card-head-controls")
+          .getBoundingClientRect();
+
+        return {
+          sameRow:
+            controls.top < title.bottom && controls.bottom > title.top,
+        };
+      });
+    }
+
     await page.setViewportSize({ width: 390, height: 844 });
     await mockAuthenticatedSession(page);
     await mockCatalogBooksApi(page, 0);
@@ -799,6 +1174,7 @@ test.describe("Responsive layout regression coverage", () => {
             actionsBox.width - actionButtonBox.width,
           ),
           actionRightGap: Math.round(actionsBox.right - actionButtonBox.right),
+          actionStartsBelowFilter: actionButtonBox.top >= filterBox.bottom - 1,
           countRightGap: Math.round(titleRow.right - countBox.right),
           countCenterDelta: Math.round(
             Math.abs(
@@ -806,9 +1182,6 @@ test.describe("Responsive layout regression coverage", () => {
                 countBox.height / 2 -
                 (titleRow.top + titleRow.height / 2),
             ),
-          ),
-          filterActionTopDelta: Math.round(
-            Math.abs(filterBox.top - actionButtonBox.top),
           ),
           filterGap: getComputedStyle(filterButton).columnGap,
           filterWidth: Math.round(filterBox.width),
@@ -821,10 +1194,64 @@ test.describe("Responsive layout regression coverage", () => {
     expect(processingCardLayout.filterWidth).toBeLessThan(
       processingCardLayout.actionWidth,
     );
-    expect(processingCardLayout.filterActionTopDelta).toBeLessThanOrEqual(1);
+    expect(processingCardLayout.actionStartsBelowFilter).toBe(true);
     expect(processingCardLayout.actionFillsActions).toBeLessThanOrEqual(1);
     expect(processingCardLayout.actionRightGap).toBeLessThanOrEqual(1);
-    await expectTableCardMode(page, ".processing-table");
+    const automationHeaderLayout = await getAutomationHeaderLayout(
+      "catalog-automation-card",
+    );
+    expect(automationHeaderLayout.sameRow).toBe(true);
+    await expectTableCardMode(page, ".processing-table", {
+      cellDisplay: ["grid", "inline-flex"],
+    });
+    const processingCellLayout = await page
+      .getByTestId("catalog-records-table")
+      .evaluate((table) => {
+        const row = table.querySelector("tbody tr");
+        const nameCell = table.querySelector("tbody td.processing-col-name");
+        const selectCell = table.querySelector("tbody td.processing-col-select");
+        const nameCellStyle = getComputedStyle(nameCell);
+        const selectCellStyle = getComputedStyle(selectCell);
+        const rowBox = row.getBoundingClientRect();
+        const nameCellBox = nameCell.getBoundingClientRect();
+
+        return {
+          cellDisplay: nameCellStyle.display,
+          gridTemplateColumns: nameCellStyle.gridTemplateColumns,
+          rowCellWidthDelta: Math.round(rowBox.width - nameCellBox.width),
+          selectCellDisplay: selectCellStyle.display,
+        };
+      });
+    expect(processingCellLayout.cellDisplay).toBe("grid");
+    expect(processingCellLayout.gridTemplateColumns).not.toBe("none");
+    expect(processingCellLayout.rowCellWidthDelta).toBeLessThanOrEqual(2);
+    expect(processingCellLayout.selectCellDisplay).toBe("inline-flex");
+    await expectMobileProcessingCardShellToPeekNextCard(
+      page,
+      "catalog-records-card",
+    );
+    await assertNoPageOverflow(page);
+
+    await page.goto("/processing-incomplete-check");
+    await expect(
+      page.getByRole("heading", {
+        name: "Incomplete",
+        exact: true,
+        level: 1,
+      }),
+    ).toBeVisible();
+    await expectProcessingInlineFilterCountLayout(
+      page,
+      "incomplete-records-card",
+    );
+    await expectProcessingInlineFilterCountLayout(
+      page,
+      "incomplete-completed-card",
+    );
+    const incompleteAutomationHeaderLayout = await getAutomationHeaderLayout(
+      "incomplete-automation-card",
+    );
+    expect(incompleteAutomationHeaderLayout.sameRow).toBe(true);
     await assertNoPageOverflow(page);
   });
 

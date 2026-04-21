@@ -101,6 +101,7 @@ export default function AppShell({ children }) {
   const visibleProcessingItems = processingItems.filter(
     (item) => !item.capabilityRequired || canManageProcessing,
   );
+  const hasProcessingNav = visibleProcessingItems.length > 0;
   const navigation = authenticated ? authenticatedNavigation(user) : [];
   const isBookPropertiesActive = isBookPropertiesRoute(location.pathname);
   const isProcessingPropertiesActive = isProcessingRoute(location.pathname);
@@ -295,15 +296,17 @@ export default function AppShell({ children }) {
                 onToggle={() => setPropertiesOpen((current) => !current)}
                 onItemClick={() => setPropertiesOpen(false)}
               />
-              <NavDropdown
-                menuRef={processingMenuRef}
-                active={isProcessingPropertiesActive}
-                open={processingOpen}
-                label="Processing"
-                items={visibleProcessingItems}
-                onToggle={() => setProcessingOpen((current) => !current)}
-                onItemClick={() => setProcessingOpen(false)}
-              />
+              {hasProcessingNav ? (
+                <NavDropdown
+                  menuRef={processingMenuRef}
+                  active={isProcessingPropertiesActive}
+                  open={processingOpen}
+                  label="Processing"
+                  items={visibleProcessingItems}
+                  onToggle={() => setProcessingOpen((current) => !current)}
+                  onItemClick={() => setProcessingOpen(false)}
+                />
+              ) : null}
             </nav>
           ) : null}
           {!useMinimalTopbar ? (
@@ -435,43 +438,45 @@ export default function AppShell({ children }) {
               </div>
             </div>
 
-            <div className="mobile-nav-section">
-              <button
-                type="button"
-                className={`mobile-nav-group-toggle${
-                  isProcessingPropertiesActive ? " is-active" : ""
-                }${mobileProcessingOpen ? " is-open" : ""}`}
-                onClick={() =>
-                  setMobileProcessingOpen((current) => !current)
-                }
-                aria-expanded={mobileProcessingOpen}
-              >
-                <span>Processing</span>
-                <span className="mobile-nav-group-caret" aria-hidden="true">
-                  <ChevronIcon open={mobileProcessingOpen} />
-                </span>
-              </button>
-              <div
-                className={`mobile-nav-group-panel${
-                  mobileProcessingOpen ? " is-open" : ""
-                }`}
-              >
-                {visibleProcessingItems.map((item) => (
-                  <NavLink
-                    key={`processing-${item.to}`}
-                    to={item.to}
-                    className={({ isActive }) =>
-                      isActive
-                        ? "mobile-nav-sub-link is-active"
-                        : "mobile-nav-sub-link"
-                    }
-                    onClick={() => setMobileNavOpen(false)}
-                  >
-                    {item.label}
-                  </NavLink>
-                ))}
+            {hasProcessingNav ? (
+              <div className="mobile-nav-section">
+                <button
+                  type="button"
+                  className={`mobile-nav-group-toggle${
+                    isProcessingPropertiesActive ? " is-active" : ""
+                  }${mobileProcessingOpen ? " is-open" : ""}`}
+                  onClick={() =>
+                    setMobileProcessingOpen((current) => !current)
+                  }
+                  aria-expanded={mobileProcessingOpen}
+                >
+                  <span>Processing</span>
+                  <span className="mobile-nav-group-caret" aria-hidden="true">
+                    <ChevronIcon open={mobileProcessingOpen} />
+                  </span>
+                </button>
+                <div
+                  className={`mobile-nav-group-panel${
+                    mobileProcessingOpen ? " is-open" : ""
+                  }`}
+                >
+                  {visibleProcessingItems.map((item) => (
+                    <NavLink
+                      key={`processing-${item.to}`}
+                      to={item.to}
+                      className={({ isActive }) =>
+                        isActive
+                          ? "mobile-nav-sub-link is-active"
+                          : "mobile-nav-sub-link"
+                      }
+                      onClick={() => setMobileNavOpen(false)}
+                    >
+                      {item.label}
+                    </NavLink>
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : null}
 
             <div className="mobile-nav-session">
               <NavLink

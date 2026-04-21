@@ -62,8 +62,8 @@
 .processing-catalog-records-card
   .processing-card-head-inline-tools
   .catalog-result-count {
-  min-width: 88px;
-  padding: 0 18px;
+  min-width: 54px;
+  padding: 0 12px;
 }
 
 .processing-bulk-bar {

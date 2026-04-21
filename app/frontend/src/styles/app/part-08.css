@@ -261,55 +261,66 @@
 
 .access-users-toolbar {
   display: grid;
+  grid-template-columns:
+    auto
+    minmax(0, 1fr)
+    minmax(160px, 0.6fr)
+    minmax(160px, 0.6fr)
+    auto;
+  grid-template-areas: "title search filter sort count";
+  align-items: center;
   gap: 10px;
   margin: 10px 0 12px;
 }
 
-.access-users-header {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas:
-    "title top"
-    "controls controls";
-  align-items: center;
-  gap: 8px 14px;
-  margin-bottom: 12px;
+.access-users-card {
+  gap: 14px;
 }
 
-.access-users-header > h2 {
+.access-users-header {
+  display: grid;
+  gap: 0;
+  margin-bottom: 0;
+}
+
+.access-users-header-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.access-users-header-row > h2 {
+  margin: 0;
+}
+
+.access-users-toolbar-title {
   grid-area: title;
   margin: 0;
 }
 
-.access-users-header-row {
-  grid-area: top;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
+.access-users-toolbar-search {
+  grid-area: search;
+}
+
+.access-users-toolbar-count {
+  grid-area: count;
+  justify-self: end;
+}
+
+.access-users-toolbar .catalog-toolbar-field {
   min-width: 0;
-}
-
-.access-users-header-row .catalog-toolbar-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.access-users-header-row .catalog-toolbar-field-sort {
-  min-width: 210px;
-}
-
-.access-users-header-row .catalog-toolbar-field .fact-label {
-  white-space: nowrap;
+  width: 100%;
+  margin: 0;
 }
 
 .access-users-search-field {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1 1 560px;
+  width: 100%;
+  min-width: 0;
   height: 34px;
   padding-left: 40px;
   padding-right: 12px;
@@ -323,4 +334,12 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.74),
     0 14px 28px rgba(12, 47, 36, 0.08);
+}
+
+.access-users-filter-field {
+  grid-area: filter;
+}
+
+.access-users-sort-field {
+  grid-area: sort;
 }

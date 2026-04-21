@@ -1,8 +1,5 @@
 import { useRef, useState } from "react";
 import { authApi } from "../../../api/client";
-import {
-  PROPERTY_TABLE_ROW_OPTIONS,
-} from "../../../components/PropertyTableControls";
 import { createInitialUserForm } from "../constants";
 import { useManagedUserList } from "./useManagedUserList";
 import {
@@ -16,9 +13,8 @@ import { isValidEmail, normalizeEmail } from "../../../utils/email";
 export function useAccessUsers({
   allAccountScopeValues,
   applyActiveTab,
-  currentUserId,
+  enabled = true,
   loadAdminData,
-  managedUsers,
   scopeLabelMap,
   toast,
 }) {
@@ -32,23 +28,23 @@ export function useAccessUsers({
   const userEditorRef = useRef(null);
   const isEditingUser = Boolean(editingUserId);
   const {
-    filteredManagedUsers,
-    pagedManagedUsers,
-    setUsersPage,
-    setUsersRowsPerPage,
+    hasMoreManagedUsers,
+    loadingMoreUsers,
+    loadingUsers,
+    observeUsersLoadTrigger,
+    refreshUsers,
+    refreshingUsers,
+    tableShellRef,
+    totalManagedUsers,
     updateUsersSearch,
     clearUsersSearch,
     updateUsersSort,
     updateUsersStatus,
     userListFilters,
-    usersHasNext,
-    usersHasPrevious,
-    usersPage,
-    usersPageCount,
-    usersRowsPerPage,
+    usersError,
+    visibleManagedUsers,
   } = useManagedUserList({
-    managedUsers,
-    scopeLabelMap,
+    enabled,
   });
 
   function resetUserForm() {
@@ -196,7 +192,10 @@ export function useAccessUsers({
         );
       }
       resetUserForm();
-      await loadAdminData();
+      await Promise.all([
+        loadAdminData(),
+        refreshUsers(),
+      ]);
     } catch (error) {
       toast.error(
         formatApiError(error, {
@@ -228,7 +227,10 @@ export function useAccessUsers({
       }
       setPendingDeleteUser(null);
       toast.success("User deleted.");
-      await loadAdminData();
+      await Promise.all([
+        loadAdminData(),
+        refreshUsers(),
+      ]);
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -245,7 +247,10 @@ export function useAccessUsers({
       setResendingSetupUserId(entry.id);
       await authApi.resendUserSetupEmail(entry.id);
       toast.success("Setup email sent.");
-      await loadAdminData();
+      await Promise.all([
+        loadAdminData(),
+        refreshUsers(),
+      ]);
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -260,13 +265,16 @@ export function useAccessUsers({
     copyPasswordValue,
     deletingUserId,
     editingUserId,
-    filteredManagedUsers,
     getAccountAccessLabels: (entry) =>
       getAccountAccessLabels(entry, scopeLabelMap),
+    hasMoreManagedUsers,
     isEditingUser,
-    pagedManagedUsers,
+    loadingMoreUsers,
+    loadingUsers,
+    observeUsersLoadTrigger,
     pendingDeleteUser,
-    PROPERTY_TABLE_ROW_OPTIONS,
+    refreshUsers,
+    refreshingUsers,
     requestDeleteUser,
     resendSetupEmail,
     resetUserForm,
@@ -275,13 +283,13 @@ export function useAccessUsers({
     setPendingDeleteUser,
     setShowCreateUserPassword,
     setUserForm,
-    setUsersPage,
-    setUsersRowsPerPage,
     showCreateUserPassword,
     startEditing,
     submitUser,
     submittingUser,
     suggestPassword,
+    tableShellRef,
+    totalManagedUsers,
     toggleUserScope,
     updateUsersSearch,
     updateUsersSort,
@@ -289,10 +297,7 @@ export function useAccessUsers({
     userEditorRef,
     userForm,
     userListFilters,
-    usersHasNext,
-    usersHasPrevious,
-    usersPage,
-    usersPageCount,
-    usersRowsPerPage,
+    usersError,
+    visibleManagedUsers,
   };
 }

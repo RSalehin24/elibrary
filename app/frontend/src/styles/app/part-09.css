@@ -55,27 +55,33 @@
   line-height: 1;
 }
 
-.access-users-table-controls {
-  grid-template-columns: minmax(170px, 1fr) 154px minmax(0, 1fr);
-  align-items: center;
-  padding: 0;
-  grid-area: controls;
+.access-users-table-shell {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  max-height: var(--processing-list-card-height, 724px);
 }
 
-.access-users-table-controls .catalog-toolbar-field-rows {
-  min-width: 154px;
+.access-users-table {
+  min-width: 980px;
 }
 
-.access-users-header-row .catalog-toolbar-select {
-  min-height: 34px;
-  padding: 0 30px 0 10px;
-  font-size: 0.82rem;
-  border-radius: 11px;
-  background: transparent;
+.access-users-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(244, 249, 246, 0.94);
 }
 
-.access-users-table-controls .catalog-toolbar-select {
+.access-users-filter-field,
+.access-users-sort-field {
+  min-width: 0;
+  width: 100%;
+}
+
+.access-users-toolbar .catalog-toolbar-select {
   min-height: 36px;
+  width: 100%;
   padding: 0 32px 0 12px;
   font-size: 0.84rem;
   border-radius: 12px;
@@ -237,7 +243,7 @@
 }
 
 .processing-list-card {
-  --processing-list-card-height: 560px;
+  --processing-list-card-height: 724px;
   max-height: var(--processing-list-card-height);
   overflow: hidden;
   gap: 8px;
@@ -255,16 +261,10 @@
   min-height: 0;
 }
 
-.processing-catalog-card {
-  --processing-list-card-height: 724px;
-}
-
-.processing-catalog-height-card {
-  --processing-list-card-height: 724px;
-}
-
+.processing-catalog-card,
+.processing-catalog-height-card,
 .processing-secondary-height-card {
-  --processing-list-card-height: 640px;
+  --processing-list-card-height: 724px;
 }
 
 .processing-summary-card {
@@ -331,6 +331,10 @@
   min-width: 0;
 }
 
+.processing-inline-count-card .processing-card-title-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .processing-card-head-meta h2 {
   display: inline-flex;
   align-items: center;
@@ -388,6 +392,22 @@
   gap: 8px;
   min-width: 0;
   flex-wrap: nowrap;
+}
+
+.processing-inline-count-card .processing-card-head-inline-tools {
+  justify-content: flex-start;
+}
+
+.processing-inline-count-card
+  .processing-card-head-inline-tools
+  .catalog-filter-toggle {
+  min-width: 0;
+}
+
+.processing-inline-count-card
+  .processing-card-head-inline-tools
+  .processing-card-title-count {
+  min-width: 54px;
 }
 
 .processing-card-head-actions {

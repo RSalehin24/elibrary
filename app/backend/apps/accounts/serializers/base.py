@@ -71,6 +71,8 @@ class ManagedUserSerializer(UserSerializer):
         fields = UserSerializer.Meta.fields + ["grant_count", "global_scopes", "can_resend_setup_email"]
 
     def get_grant_count(self, obj):
+        if hasattr(obj, "grant_count_value"):
+            return obj.grant_count_value
         return obj.permission_grants.count()
 
 

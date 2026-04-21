@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, authApi } from "../../../api/client";
+import { apiFetch } from "../../../api/client";
 import { initialReferences } from "../constants";
 
-export function useAccessAdminData({ isSuperAdmin, userId, toast }) {
+export function useAccessAdminData({ activeTab, isSuperAdmin, userId, toast }) {
   const [grantRecords, setGrantRecords] = useState([]);
   const [references, setReferences] = useState(initialReferences);
   const [managedUsers, setManagedUsers] = useState([]);
@@ -19,13 +19,18 @@ export function useAccessAdminData({ isSuperAdmin, userId, toast }) {
 
     try {
       setLoadingAdminData(true);
-      const [userPayload, nextGrantRecords, referencePayload] =
-        await Promise.all([
-          authApi.users(),
-          apiFetch("/access/grants/"),
-          apiFetch("/access/references/"),
-        ]);
-      setManagedUsers(userPayload);
+      const [referencePayload, nextGrantRecords] =
+        activeTab === "access"
+          ? await Promise.all([
+              apiFetch("/access/references/?view=access"),
+              apiFetch("/access/grants/"),
+            ])
+          : [
+              await apiFetch("/access/references/?view=users"),
+              [],
+            ];
+
+      setManagedUsers(referencePayload.users || []);
       setGrantRecords(nextGrantRecords);
       setReferences({
         books: referencePayload.books || [],
@@ -43,7 +48,7 @@ export function useAccessAdminData({ isSuperAdmin, userId, toast }) {
 
   useEffect(() => {
     void loadAdminData();
-  }, [isSuperAdmin, userId]);
+  }, [activeTab, isSuperAdmin, userId]);
 
   const accountScopes = references.account_scopes || [];
   const scopedScopes = references.scoped_scopes || [];

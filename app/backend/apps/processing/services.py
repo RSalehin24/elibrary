@@ -78,6 +78,9 @@ SYNC_TRIGGER_SOURCE_BUTTON = "button"
 SYNC_TRIGGER_SOURCE_SCHEDULER = "scheduler"
 PROCESSING_SYNC_KEY_CATALOG = "catalog"
 PROCESSING_SYNC_KEY_INCOMPLETE = "incomplete"
+CATALOG_SYNC_PHASE = "sync"
+CATALOG_REQUEST_CREATION_PHASE = "request_creation"
+CATALOG_REQUEST_CREATION_BATCH_SIZE = 50
 INCOMPLETE_CATEGORY_KEYWORDS = (
     "incomplete",
     "unfinished",
@@ -204,6 +207,98 @@ def sync_trigger_source(state):
         or saved_data.get("triggerSource")
         or SYNC_TRIGGER_SOURCE_BUTTON
     )
+
+
+def sync_progress_payload(state):
+    return state.progress if isinstance(state.progress, dict) else {}
+
+
+def sync_saved_data(state):
+    saved_data = sync_progress_payload(state).get("savedData")
+    return saved_data if isinstance(saved_data, dict) else {}
+
+
+def sync_phase(state):
+    return str(sync_progress_payload(state).get("phase") or CATALOG_SYNC_PHASE)
+
+
+def catalog_request_creation_progress(state):
+    request_creation = sync_progress_payload(state).get("requestCreation")
+    return request_creation if isinstance(request_creation, dict) else None
+
+
+def catalog_sync_checkpoint_token(
+    session_id,
+    *,
+    next_page_index=0,
+    fetched_count=0,
+    live_fetch=False,
+):
+    return (
+        f"{session_id}:{1 if live_fetch else 0}:"
+        f"{int(next_page_index)}:{int(fetched_count)}"
+    )
+
+
+def current_catalog_sync_checkpoint_token(state):
+    saved_data = sync_saved_data(state)
+    session_id = str(saved_data.get("sessionId") or "").strip()
+    if not session_id:
+        return ""
+    return str(saved_data.get("checkpointToken") or "").strip() or catalog_sync_checkpoint_token(
+        session_id,
+        next_page_index=saved_data.get("nextPageIndex") or 0,
+        fetched_count=saved_data.get("fetchedCount") or 0,
+        live_fetch=bool(saved_data.get("liveFetch")),
+    )
+
+
+def catalog_shared_runtime(run_mode):
+    return run_mode in {
+        SYNC_RUN_MODE_MANUAL,
+        SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    }
+
+
+def request_creation_base_checkpoint_token(request_creation):
+    if not isinstance(request_creation, dict):
+        return ""
+    return str(request_creation.get("baseCheckpointToken") or "").strip()
+
+
+def request_creation_matches_checkpoint(request_creation, checkpoint_token):
+    return bool(checkpoint_token) and request_creation_base_checkpoint_token(
+        request_creation
+    ) == str(checkpoint_token).strip()
+
+
+def preserve_catalog_request_creation_progress(request_creation, checkpoint_token):
+    if request_creation_matches_checkpoint(request_creation, checkpoint_token):
+        return request_creation
+    return None
+
+
+def initial_catalog_request_creation_progress(state):
+    return {
+        "baseCheckpointToken": current_catalog_sync_checkpoint_token(state),
+        "lastRecordId": "",
+        "processedCount": 0,
+        "createdCount": 0,
+        "unsupportedCount": 0,
+    }
+
+
+def catalog_request_creation_can_resume(state):
+    request_creation = catalog_request_creation_progress(state)
+    return request_creation_matches_checkpoint(
+        request_creation,
+        current_catalog_sync_checkpoint_token(state),
+    )
+
+
+def catalog_saved_checkpoint_available(state):
+    saved_data = sync_saved_data(state)
+    return state.singleton_key == PROCESSING_SYNC_KEY_CATALOG and bool(saved_data)
 
 
 def sync_key_for_run_mode(run_mode):
@@ -444,8 +539,7 @@ def can_process_record_url(url):
 
 
 def sync_uses_live_fetch(state):
-    progress = state.progress if isinstance(state.progress, dict) else {}
-    saved_data = progress.get("savedData") if isinstance(progress.get("savedData"), dict) else {}
+    saved_data = sync_saved_data(state)
     return bool(saved_data.get("liveFetch"))
 
 
@@ -494,10 +588,14 @@ def build_sync_progress(
     saved_at=None,
     live_fetch=False,
     trigger_source=SYNC_TRIGGER_SOURCE_BUTTON,
+    session_id="",
+    request_creation=None,
 ):
+    session_id = str(session_id or "").strip()
     payload = {
         "runMode": run_mode,
         "triggerSource": trigger_source,
+        "phase": CATALOG_SYNC_PHASE,
         "checkpoint": f"page-{next_page_index}",
         "savedData": {
             "runMode": run_mode,
@@ -506,11 +604,90 @@ def build_sync_progress(
             "nextPageIndex": next_page_index,
         },
     }
+    if session_id:
+        payload["savedData"]["sessionId"] = session_id
+        payload["savedData"]["checkpointToken"] = catalog_sync_checkpoint_token(
+            session_id,
+            next_page_index=next_page_index,
+            fetched_count=fetched_count,
+            live_fetch=live_fetch,
+        )
     if live_fetch:
         payload["savedData"]["liveFetch"] = True
+    if session_id:
+        request_creation = preserve_catalog_request_creation_progress(
+            request_creation,
+            payload["savedData"]["checkpointToken"],
+        )
+    if request_creation:
+        payload["requestCreation"] = request_creation
     if saved_at:
         payload["savedAt"] = saved_at
     return payload
+
+
+def build_catalog_request_creation_progress(
+    state,
+    *,
+    request_creation,
+    run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    trigger_source=SYNC_TRIGGER_SOURCE_BUTTON,
+    saved_at=None,
+):
+    payload = {
+        "runMode": run_mode,
+        "triggerSource": trigger_source,
+        "phase": CATALOG_REQUEST_CREATION_PHASE,
+        "checkpoint": (
+            f"request-{request_creation.get('lastRecordId') or request_creation.get('processedCount', 0)}"
+        ),
+        "savedData": {
+            **sync_saved_data(state),
+            "runMode": run_mode,
+            "triggerSource": trigger_source,
+        },
+        "requestCreation": request_creation,
+    }
+    if saved_at:
+        payload["savedAt"] = saved_at
+    return payload
+
+
+def catalog_sync_resume_message(run_mode):
+    if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
+        return "Continuing automated catalog sync from the saved endpoint."
+    return "Continuing catalog sync from the saved endpoint."
+
+
+def catalog_request_creation_start_message():
+    return "Creating book requests from the synced catalog records."
+
+
+def catalog_request_creation_resume_message():
+    return "Resuming automated request creation from saved progress."
+
+
+def catalog_request_creation_pause_request_message():
+    return "Pausing automated request creation after the current batch finishes."
+
+
+def catalog_request_creation_pause_message(request_creation):
+    processed_count = int(request_creation.get("processedCount") or 0)
+    label = "record" if processed_count == 1 else "records"
+    return (
+        f"Saved request creation progress after scanning {processed_count} {label}."
+    )
+
+
+def catalog_request_creation_progress_message(request_creation):
+    processed_count = int(request_creation.get("processedCount") or 0)
+    created_count = int(request_creation.get("createdCount") or 0)
+    return (
+        f"Scanned {processed_count} catalog "
+        f"{'record' if processed_count == 1 else 'records'}; "
+        f"created {created_count} "
+        f"{'request' if created_count == 1 else 'requests'} so far."
+    )
 
 
 def update_automation_run_status(run_mode, message, *, last_run_at=None):
@@ -568,7 +745,17 @@ def sync_is_active_or_paused(state):
 
 
 def sync_owner_conflicts(state, run_mode):
-    return sync_is_active_or_paused(state) and sync_run_mode(state) != run_mode
+    if state.status in SYNC_ACTIVE_STATUSES:
+        return sync_run_mode(state) != run_mode
+    if state.status != ProcessingSyncStatus.PAUSED:
+        return False
+    if (
+        state.singleton_key == PROCESSING_SYNC_KEY_CATALOG
+        and catalog_shared_runtime(sync_run_mode(state))
+        and catalog_shared_runtime(run_mode)
+    ):
+        return False
+    return sync_run_mode(state) != run_mode
 
 
 def serialize_sync_state(state, *, include_remote_pages=True):
@@ -576,6 +763,7 @@ def serialize_sync_state(state, *, include_remote_pages=True):
     payload = {
         "status": state.status,
         "progress": progress,
+        "phase": sync_phase(state),
         "fetchedCount": state.fetched_count,
         "skippedCount": state.skipped_count,
         "updatedCount": state.updated_count,
@@ -1203,6 +1391,7 @@ def start_sync(
 ):
     sync_key = sync_key or sync_key_for_run_mode(run_mode)
     live_fetch = False
+    session_id = ""
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         live_fetch = remote_pages is None and should_use_live_incomplete_fetch()
         if remote_pages is None:
@@ -1214,6 +1403,7 @@ def start_sync(
         live_fetch = should_use_live_catalog_fetch(remote_pages, run_mode)
         if not live_fetch and not remote_pages and SourceCatalogEntry.objects.exists():
             remote_pages = source_catalog_remote_pages()
+        session_id = str(uuid4())
 
     state = get_sync_state(sync_key)
     state.remote_pages = remote_pages
@@ -1222,6 +1412,7 @@ def start_sync(
         run_mode,
         live_fetch=live_fetch,
         trigger_source=trigger_source,
+        session_id=session_id,
     )
     state.page_index = 0
     state.fetched_count = 0
@@ -1247,14 +1438,31 @@ def pause_sync(sync_key=None):
     if state.status == ProcessingSyncStatus.SYNCING:
         run_mode = sync_run_mode(state)
         state.status = ProcessingSyncStatus.PAUSING
-        state.progress = build_sync_progress(
-            run_mode,
-            next_page_index=state.page_index,
-            fetched_count=state.fetched_count,
-            live_fetch=sync_uses_live_fetch(state),
-            trigger_source=sync_trigger_source(state),
-        )
-        state.message = sync_pause_message(run_mode)
+        if (
+            state.singleton_key == PROCESSING_SYNC_KEY_CATALOG
+            and sync_phase(state) == CATALOG_REQUEST_CREATION_PHASE
+        ):
+            state.progress = build_catalog_request_creation_progress(
+                state,
+                request_creation=(
+                    catalog_request_creation_progress(state)
+                    or initial_catalog_request_creation_progress(state)
+                ),
+                run_mode=run_mode,
+                trigger_source=sync_trigger_source(state),
+            )
+            state.message = catalog_request_creation_pause_request_message()
+        else:
+            state.progress = build_sync_progress(
+                run_mode,
+                next_page_index=state.page_index,
+                fetched_count=state.fetched_count,
+                live_fetch=sync_uses_live_fetch(state),
+                trigger_source=sync_trigger_source(state),
+                session_id=sync_saved_data(state).get("sessionId") or "",
+                request_creation=catalog_request_creation_progress(state),
+            )
+            state.message = sync_pause_message(run_mode)
         save_sync_state(
             state,
             update_fields=["status", "progress", "message", "updated_at"],
@@ -1268,12 +1476,61 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
     run_mode = run_mode or sync_run_mode(state)
     live_fetch = sync_uses_live_fetch(state)
     trigger_source = sync_trigger_source(state)
+    saved_data = sync_saved_data(state)
+    request_creation = catalog_request_creation_progress(state)
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         state.remote_pages = [] if live_fetch else incomplete_sync_remote_pages()
         next_page_index = 0
+        fetched_count = int(state.fetched_count or 0)
         resume_message = "Restarting incomplete catalog sync from the beginning."
+    elif sync_key == PROCESSING_SYNC_KEY_CATALOG:
+        checkpoint_token = current_catalog_sync_checkpoint_token(state)
+        next_page_index = int(
+            saved_data.get("nextPageIndex", state.page_index or 0) or 0
+        )
+        fetched_count = int(saved_data.get("fetchedCount", state.fetched_count or 0) or 0)
+        if (
+            run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION
+            and request_creation_matches_checkpoint(request_creation, checkpoint_token)
+        ):
+            state.status = ProcessingSyncStatus.SYNCING
+            state.page_index = next_page_index
+            state.fetched_count = fetched_count
+            state.progress = build_catalog_request_creation_progress(
+                state,
+                request_creation=request_creation,
+                run_mode=run_mode,
+                trigger_source=trigger_source,
+            )
+            state.task_id = ""
+            state.queue_name = ""
+            state.message = catalog_request_creation_resume_message()
+            save_sync_state(
+                state,
+                update_fields=[
+                    "status",
+                    "progress",
+                    "page_index",
+                    "fetched_count",
+                    "task_id",
+                    "queue_name",
+                    "message",
+                    "updated_at",
+                ],
+            )
+            update_automation_run_status(run_mode, state.message)
+            if should_enqueue_processing_work():
+                dispatch_sync_task(state, force=True)
+            elif should_run_processing_jobs_inline():
+                run_processing_sync_until_blocked(
+                    singleton_key=state.singleton_key,
+                    task_id="",
+                )
+            return state
+        resume_message = catalog_sync_resume_message(run_mode)
     else:
         next_page_index = 0
+        fetched_count = int(state.fetched_count or 0)
         resume_message = (
             "Restarting automated catalog sync from the beginning."
             if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION
@@ -1283,11 +1540,14 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
     state.progress = build_sync_progress(
         run_mode,
         next_page_index=next_page_index,
-        fetched_count=state.fetched_count,
+        fetched_count=fetched_count,
         live_fetch=live_fetch,
         trigger_source=trigger_source,
+        session_id=saved_data.get("sessionId") or str(uuid4()),
+        request_creation=request_creation,
     )
     state.page_index = next_page_index
+    state.fetched_count = fetched_count
     state.task_id = ""
     state.queue_name = ""
     state.message = resume_message
@@ -1298,6 +1558,7 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
             "status",
             "progress",
             "page_index",
+            "fetched_count",
             "task_id",
             "queue_name",
             "message",
@@ -1343,9 +1604,9 @@ def stop_sync(sync_key=None):
     return state
 
 
-def finalize_sync(state, *, message=None):
+def finalize_sync(state, *, message=None, progress=None):
     state.status = ProcessingSyncStatus.IDLE
-    state.progress = None
+    state.progress = progress
     state.task_id = ""
     state.queue_name = ""
     state.message = message or (
@@ -1395,29 +1656,70 @@ def fail_sync(state, error):
     return state
 
 
-def complete_catalog_automation(state):
-    created = []
-    unsupported_count = 0
-    for record in BookRecord.objects.order_by("name"):
-        if not can_process_record_url(record.url):
-            unsupported_count += 1
-            logger.warning(
-                "Skipping automation request creation for record %s because its URL is unsupported: %s",
-                record.id,
-                record.url,
-            )
-            continue
-        latest_request = latest_request_for_record(record)
-        if latest_request is None and record.book_creation_state == BookCreationState.NOT_CREATED:
-            processing_request = create_request_for_record(
-                record,
-                origin=SubmissionOrigin.AUTOMATION,
-            )
-            if processing_request is not None:
-                created.append(processing_request)
+def catalog_progress_after_completion(state, *, run_mode, preserve_request_creation=False):
+    request_creation = None
+    if preserve_request_creation:
+        request_creation = preserve_catalog_request_creation_progress(
+            catalog_request_creation_progress(state),
+            current_catalog_sync_checkpoint_token(state),
+        )
+    return build_sync_progress(
+        run_mode,
+        next_page_index=state.page_index,
+        fetched_count=state.fetched_count,
+        live_fetch=sync_uses_live_fetch(state),
+        trigger_source=sync_trigger_source(state),
+        session_id=sync_saved_data(state).get("sessionId") or "",
+        request_creation=request_creation,
+    )
 
+
+def finalize_catalog_sync(state, *, run_mode):
+    progress = catalog_progress_after_completion(
+        state,
+        run_mode=run_mode,
+        preserve_request_creation=(run_mode == SYNC_RUN_MODE_MANUAL),
+    )
+    return finalize_sync(state, progress=progress)
+
+
+def catalog_request_creation_queryset(*, after_record_id=""):
+    queryset = BookRecord.objects.order_by("id")
+    if after_record_id:
+        queryset = queryset.filter(id__gt=after_record_id)
+    return queryset
+
+
+def begin_catalog_request_creation(state):
+    session_id = sync_saved_data(state).get("sessionId") or str(uuid4())
+    state.progress = build_sync_progress(
+        SYNC_RUN_MODE_CATALOG_AUTOMATION,
+        next_page_index=state.page_index,
+        fetched_count=state.fetched_count,
+        live_fetch=sync_uses_live_fetch(state),
+        trigger_source=sync_trigger_source(state),
+        session_id=session_id,
+    )
+    request_creation = initial_catalog_request_creation_progress(state)
+    state.status = ProcessingSyncStatus.SYNCING
+    state.progress = build_catalog_request_creation_progress(
+        state,
+        request_creation=request_creation,
+        trigger_source=sync_trigger_source(state),
+    )
+    state.message = catalog_request_creation_start_message()
+    save_sync_state(state)
+    update_automation_run_status(SYNC_RUN_MODE_CATALOG_AUTOMATION, state.message)
+    return state
+
+
+def complete_catalog_automation(state, *, request_creation):
+    created_count = int(request_creation.get("createdCount") or 0)
+    unsupported_count = int(request_creation.get("unsupportedCount") or 0)
     finished_at = timezone.now()
-    status_message = f"Created {len(created)} {'request' if len(created) == 1 else 'requests'}."
+    status_message = (
+        f"Created {created_count} {'request' if created_count == 1 else 'requests'}."
+    )
     if unsupported_count:
         status_message = (
             f"{status_message} Skipped {unsupported_count} unsupported "
@@ -1434,7 +1736,88 @@ def complete_catalog_automation(state):
             f"Automated catalog sync complete. Updated {state.updated_count}, "
             f"Skipped {state.skipped_count}, Added {state.appended_count}."
         ),
+        progress=catalog_progress_after_completion(
+            state,
+            run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
+        ),
     )
+
+
+def advance_catalog_request_creation_once(state):
+    request_creation = catalog_request_creation_progress(state)
+    if not request_creation_matches_checkpoint(
+        request_creation,
+        current_catalog_sync_checkpoint_token(state),
+    ):
+        request_creation = initial_catalog_request_creation_progress(state)
+    batch = list(
+        catalog_request_creation_queryset(
+            after_record_id=str(request_creation.get("lastRecordId") or "").strip()
+        )[:CATALOG_REQUEST_CREATION_BATCH_SIZE]
+    )
+    if not batch:
+        return complete_catalog_automation(state, request_creation=request_creation)
+
+    created_count = int(request_creation.get("createdCount") or 0)
+    processed_count = int(request_creation.get("processedCount") or 0)
+    unsupported_count = int(request_creation.get("unsupportedCount") or 0)
+    last_record_id = str(request_creation.get("lastRecordId") or "").strip()
+    for record in batch:
+        last_record_id = str(record.id)
+        processed_count += 1
+        if not can_process_record_url(record.url):
+            unsupported_count += 1
+            logger.warning(
+                "Skipping automation request creation for record %s because its URL is unsupported: %s",
+                record.id,
+                record.url,
+            )
+            continue
+        latest_request = latest_request_for_record(record)
+        if latest_request is None and record.book_creation_state == BookCreationState.NOT_CREATED:
+            processing_request = create_request_for_record(
+                record,
+                origin=SubmissionOrigin.AUTOMATION,
+            )
+            if processing_request is not None:
+                created_count += 1
+
+    next_request_creation = {
+        "baseCheckpointToken": current_catalog_sync_checkpoint_token(state),
+        "lastRecordId": last_record_id,
+        "processedCount": processed_count,
+        "createdCount": created_count,
+        "unsupportedCount": unsupported_count,
+    }
+    has_more_records = catalog_request_creation_queryset(
+        after_record_id=last_record_id
+    ).exists()
+    latest_status = persisted_sync_status(state)
+    if latest_status == ProcessingSyncStatus.PAUSING:
+        if not has_more_records:
+            return complete_catalog_automation(state, request_creation=next_request_creation)
+        state.status = ProcessingSyncStatus.PAUSED
+        state.progress = build_catalog_request_creation_progress(
+            state,
+            request_creation=next_request_creation,
+            saved_at=timezone.now().isoformat(),
+            trigger_source=sync_trigger_source(state),
+        )
+        state.message = catalog_request_creation_pause_message(next_request_creation)
+        update_automation_run_status(SYNC_RUN_MODE_CATALOG_AUTOMATION, state.message)
+    elif latest_status != ProcessingSyncStatus.SYNCING:
+        return ProcessingSyncState.objects.get(pk=state.pk)
+    else:
+        if not has_more_records:
+            return complete_catalog_automation(state, request_creation=next_request_creation)
+        state.progress = build_catalog_request_creation_progress(
+            state,
+            request_creation=next_request_creation,
+            trigger_source=sync_trigger_source(state),
+        )
+        state.message = catalog_request_creation_progress_message(next_request_creation)
+    save_sync_state(state)
+    return state
 
 
 def incomplete_automation_pages(page_size=100):
@@ -1656,8 +2039,8 @@ def advance_catalog_sync_once(state, run_mode):
     page = state.remote_pages[state.page_index] if state.page_index < len(state.remote_pages) else []
     if not page:
         if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
-            return complete_catalog_automation(state)
-        return finalize_sync(state)
+            return begin_catalog_request_creation(state)
+        return finalize_catalog_sync(state, run_mode=run_mode)
 
     result = upsert_remote_records(page)
     state.fetched_count += len(page)
@@ -1666,6 +2049,8 @@ def advance_catalog_sync_once(state, run_mode):
     state.appended_count += result["appended_count"]
     state.page_index += 1
     next_page = state.remote_pages[state.page_index] if state.page_index < len(state.remote_pages) else []
+    session_id = sync_saved_data(state).get("sessionId") or ""
+    request_creation = catalog_request_creation_progress(state)
     latest_status = persisted_sync_status(state)
     if latest_status == ProcessingSyncStatus.PAUSING:
         state.status = ProcessingSyncStatus.PAUSED
@@ -1676,6 +2061,8 @@ def advance_catalog_sync_once(state, run_mode):
             saved_at=timezone.now().isoformat(),
             live_fetch=sync_uses_live_fetch(state),
             trigger_source=sync_trigger_source(state),
+            session_id=session_id,
+            request_creation=request_creation,
         )
         state.message = f"Sync progress saved. {catalog_record_total_message()}"
         update_automation_run_status(run_mode, state.message)
@@ -1683,8 +2070,8 @@ def advance_catalog_sync_once(state, run_mode):
         return ProcessingSyncState.objects.get(pk=state.pk)
     elif not next_page:
         if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
-            return complete_catalog_automation(state)
-        return finalize_sync(state)
+            return begin_catalog_request_creation(state)
+        return finalize_catalog_sync(state, run_mode=run_mode)
     else:
         state.progress = build_sync_progress(
             run_mode,
@@ -1692,10 +2079,18 @@ def advance_catalog_sync_once(state, run_mode):
             fetched_count=state.fetched_count,
             live_fetch=sync_uses_live_fetch(state),
             trigger_source=sync_trigger_source(state),
+            session_id=session_id,
+            request_creation=request_creation,
         )
         state.message = sync_progress_message(run_mode, state.fetched_count)
     save_sync_state(state)
     return state
+
+
+def advance_catalog_processing_once(state, run_mode):
+    if sync_phase(state) == CATALOG_REQUEST_CREATION_PHASE:
+        return advance_catalog_request_creation_once(state)
+    return advance_catalog_sync_once(state, run_mode)
 
 
 def advance_incomplete_sync_once(state):
@@ -1809,6 +2204,8 @@ def run_processing_sync(singleton_key=PROCESSING_SYNC_KEY_CATALOG, task_id=""):
     run_mode = sync_run_mode(state)
     if run_mode == SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
         return advance_incomplete_sync_once(state)
+    if sync_phase(state) == CATALOG_REQUEST_CREATION_PHASE:
+        return advance_catalog_request_creation_once(state)
     if not sync_uses_live_fetch(state):
         return advance_catalog_sync_once(state, run_mode)
 
@@ -1843,7 +2240,7 @@ def run_processing_sync_until_blocked(
                 return state
             if state.status not in SYNC_ACTIVE_STATUSES:
                 return state
-            state = advance_catalog_sync_once(state, run_mode)
+            state = advance_catalog_processing_once(state, run_mode)
             if state.status not in SYNC_ACTIVE_STATUSES:
                 return state
 
@@ -1858,6 +2255,11 @@ def run_processing_sync_until_blocked(
                 return state
             if state.status not in SYNC_ACTIVE_STATUSES:
                 return state
+            if sync_phase(state) == CATALOG_REQUEST_CREATION_PHASE:
+                state = advance_catalog_request_creation_once(state)
+                if state.status not in SYNC_ACTIVE_STATUSES:
+                    return state
+                continue
 
             page_number = state.page_index + 1
             page = fetch_live_catalog_page(resolver, page_number)
@@ -1872,8 +2274,11 @@ def run_processing_sync_until_blocked(
             signature = tuple(item["url"] for item in unique_page[:5])
             if not unique_page or signature in page_signatures:
                 if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION:
-                    return complete_catalog_automation(state)
-                return finalize_sync(state)
+                    state = begin_catalog_request_creation(state)
+                    if state.status not in SYNC_ACTIVE_STATUSES:
+                        return state
+                    continue
+                return finalize_catalog_sync(state, run_mode=run_mode)
 
             page_signatures.add(signature)
             result = upsert_remote_records(unique_page)
@@ -1883,6 +2288,8 @@ def run_processing_sync_until_blocked(
             state.appended_count += result["appended_count"]
             state.page_index += 1
 
+            session_id = sync_saved_data(state).get("sessionId") or ""
+            request_creation = catalog_request_creation_progress(state)
             latest_status = persisted_sync_status(state)
             if latest_status == ProcessingSyncStatus.PAUSING:
                 state.status = ProcessingSyncStatus.PAUSED
@@ -1893,6 +2300,8 @@ def run_processing_sync_until_blocked(
                     saved_at=timezone.now().isoformat(),
                     live_fetch=True,
                     trigger_source=sync_trigger_source(state),
+                    session_id=session_id,
+                    request_creation=request_creation,
                 )
                 state.message = f"Sync progress saved. {catalog_record_total_message()}"
                 save_sync_state(state)
@@ -1907,6 +2316,8 @@ def run_processing_sync_until_blocked(
                 fetched_count=state.fetched_count,
                 live_fetch=True,
                 trigger_source=sync_trigger_source(state),
+                session_id=session_id,
+                request_creation=request_creation,
             )
             state.message = sync_progress_message(run_mode, state.fetched_count)
             save_sync_state(state)
@@ -2733,6 +3144,7 @@ def processing_invalidation_snapshot():
         "catalogSync": {
             "status": catalog_sync.status,
             "runMode": sync_run_mode(catalog_sync),
+            "phase": sync_phase(catalog_sync),
             "message": catalog_sync.message,
             "pageIndex": catalog_sync.page_index,
             "fetchedCount": catalog_sync.fetched_count,
@@ -2743,6 +3155,7 @@ def processing_invalidation_snapshot():
         "incompleteSync": {
             "status": incomplete_sync.status,
             "runMode": sync_run_mode(incomplete_sync),
+            "phase": sync_phase(incomplete_sync),
             "message": incomplete_sync.message,
             "pageIndex": incomplete_sync.page_index,
             "fetchedCount": incomplete_sync.fetched_count,
@@ -3045,7 +3458,10 @@ def run_manual_catalog_sync(
     sync_state = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
     if sync_owner_conflicts(sync_state, SYNC_RUN_MODE_MANUAL):
         return sync_state
-    if sync_state.status == ProcessingSyncStatus.PAUSED:
+    if sync_state.status == ProcessingSyncStatus.PAUSED or (
+        sync_state.status == ProcessingSyncStatus.IDLE
+        and catalog_saved_checkpoint_available(sync_state)
+    ):
         return resume_sync(
             PROCESSING_SYNC_KEY_CATALOG,
             run_mode=SYNC_RUN_MODE_MANUAL,
@@ -3069,7 +3485,10 @@ def run_catalog_automation(*, trigger_source=SYNC_TRIGGER_SOURCE_BUTTON):
                 "Waiting for the catalog runtime to become idle.",
             )
         return sync_state
-    if sync_state.status == ProcessingSyncStatus.PAUSED:
+    if sync_state.status == ProcessingSyncStatus.PAUSED or (
+        sync_state.status == ProcessingSyncStatus.IDLE
+        and catalog_saved_checkpoint_available(sync_state)
+    ):
         return resume_sync(
             PROCESSING_SYNC_KEY_CATALOG,
             run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,

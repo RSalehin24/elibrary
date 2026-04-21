@@ -136,6 +136,7 @@ class ProcessingSyncStateSerializer(serializers.ModelSerializer):
     remotePages = serializers.JSONField(source="remote_pages")
     pageIndex = serializers.IntegerField(source="page_index")
     runMode = serializers.SerializerMethodField()
+    phase = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcessingSyncState
@@ -150,10 +151,15 @@ class ProcessingSyncStateSerializer(serializers.ModelSerializer):
             "remotePages",
             "pageIndex",
             "runMode",
+            "phase",
         ]
 
     def get_runMode(self, obj):
         return sync_run_mode(obj)
+
+    def get_phase(self, obj):
+        progress = obj.progress if isinstance(obj.progress, dict) else {}
+        return str(progress.get("phase") or "sync")
 
 
 class ProcessingAutomationSettingsSerializer(serializers.ModelSerializer):

@@ -15,7 +15,7 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework.test import APIClient
 
-from apps.access.models import PermissionGrant
+from apps.access.models import PermissionGrant, PermissionScope
 from apps.accounts.models import User
 from apps.accounts.serializers.support import (
     PasswordLinkTokenGenerator,
@@ -520,6 +520,92 @@ def test_superadmin_can_create_update_and_delete_managed_users_with_grants_and_t
     deleted = client.delete(f"/api/auth/users/{managed_user.id}/")
     assert deleted.status_code == 204
     assert not User.objects.filter(id=managed_user.id).exists()
+
+
+@pytest.mark.django_db
+def test_managed_users_list_returns_offset_pagination_payload(client):
+    superadmin = User.objects.create_superuser(
+        email="paged-superadmin@example.com",
+        password="strong-password-123",
+    )
+    client.force_login(superadmin)
+
+    for index in range(75):
+        User.objects.create_user(
+            email=f"managed-user-{index:02d}@example.com",
+            password="strong-password-123",
+            full_name=f"Managed User {index:02d}",
+        )
+
+    response = client.get("/api/auth/users/?offset=0&limit=60")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) == 60
+    assert payload["pagination"] == {
+        "offset": 0,
+        "limit": 60,
+        "totalCount": 76,
+        "hasMore": True,
+        "nextOffset": 60,
+    }
+
+
+@pytest.mark.django_db
+def test_managed_users_list_supports_search_filter_and_sort(client):
+    superadmin = User.objects.create_superuser(
+        email="filter-superadmin@example.com",
+        password="strong-password-123",
+    )
+    User.objects.create_user(
+        email="alpha@example.com",
+        password="strong-password-123",
+        full_name="Alpha User",
+        is_active=True,
+    )
+    disabled_user = User.objects.create_user(
+        email="bravo@example.com",
+        password="strong-password-123",
+        full_name="Bravo User",
+        is_active=False,
+    )
+    scoped_user = User.objects.create_user(
+        email="metadata@example.com",
+        password="strong-password-123",
+        full_name="Metadata User",
+        is_active=True,
+        totp_required=True,
+    )
+    PermissionGrant.objects.create(
+        user=scoped_user,
+        scope=PermissionScope.METADATA_EDIT,
+        granted_by=superadmin,
+    )
+    client.force_login(superadmin)
+
+    disabled_response = client.get(
+        "/api/auth/users/?status=disabled&sort=email_desc"
+    )
+    assert disabled_response.status_code == 200
+    assert [row["email"] for row in disabled_response.json()["rows"]] == [
+        "bravo@example.com",
+    ]
+
+    permission_response = client.get(
+        "/api/auth/users/?q=metadata&status=all&sort=email_asc"
+    )
+    assert permission_response.status_code == 200
+    assert [row["email"] for row in permission_response.json()["rows"]] == [
+        "metadata@example.com",
+    ]
+
+    required_response = client.get(
+        "/api/auth/users/?q=required&status=all&sort=name_asc"
+    )
+    assert required_response.status_code == 200
+    assert [row["email"] for row in required_response.json()["rows"]] == [
+        "metadata@example.com",
+    ]
 
 
 @pytest.mark.django_db
