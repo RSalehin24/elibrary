@@ -19,6 +19,13 @@ Targets:
 EOF
 }
 
+generate_target() {
+  local template_file="$1"
+  local target_file="$2"
+  ensure_env_file "${template_file}" "${target_file}"
+  print_info "Prepared ${target_file}"
+}
+
 main() {
   local target_name="${1:-}"
 
@@ -35,7 +42,22 @@ main() {
       ;;
   esac
 
-  exec "${REPO_ROOT}/local/scripts/generate-env.sh" "${target_name}"
+  case "${target_name}" in
+    production)
+      generate_target "${REPO_ROOT}/deploy/env/app.env.example" "${REPO_ROOT}/deploy/env/.production.env"
+      ;;
+    test)
+      generate_target "${REPO_ROOT}/deploy/env/app.env.example" "${REPO_ROOT}/deploy/env/.test.env"
+      ;;
+    host)
+      generate_target "${REPO_ROOT}/deploy/env/host.env.example" "${REPO_ROOT}/deploy/env/.host.env"
+      ;;
+    all)
+      generate_target "${REPO_ROOT}/deploy/env/app.env.example" "${REPO_ROOT}/deploy/env/.production.env"
+      generate_target "${REPO_ROOT}/deploy/env/app.env.example" "${REPO_ROOT}/deploy/env/.test.env"
+      generate_target "${REPO_ROOT}/deploy/env/host.env.example" "${REPO_ROOT}/deploy/env/.host.env"
+      ;;
+  esac
 }
 
 main "$@"

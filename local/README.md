@@ -14,7 +14,7 @@ This folder contains the local Docker development stack, local env templates, ru
 
 - `local/scripts/dev.sh up` : Start the local stack with Docker Compose watch
 - `local/scripts/dev.sh down` : Stop the local stack
-- `local/scripts/generate-env.sh local` : Generate the local env file
+- `local/scripts/generate-env.sh` : Generate the local env file
 - `local/scripts/dev.sh --help` : Show script usage
 
 Every non-help run of `local/scripts/dev.sh` prints the effective super admin email and password used by the local stack.
@@ -26,6 +26,8 @@ Starting local development through either of these entry points runs Docker Comp
 
 - `local/scripts/dev.sh up`
 - `./run_local.sh`
+
+By default, `local/scripts/dev.sh up` and `./run_local.sh` expose the dev ports on your LAN IP so the app is reachable from another device on the same network. Use `LOCALHOST_ONLY=1` if you explicitly want localhost-only access for a session.
 
 The watch rules are defined in `local/compose/docker-compose.yml`. If your Compose CLI shows interactive watch shortcuts while attached, watch is already enabled for the standard local workflow.
 

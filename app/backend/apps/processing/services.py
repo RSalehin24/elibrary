@@ -80,6 +80,16 @@ PROCESSING_SYNC_KEY_CATALOG = "catalog"
 PROCESSING_SYNC_KEY_INCOMPLETE = "incomplete"
 CATALOG_SYNC_PHASE = "sync"
 CATALOG_REQUEST_CREATION_PHASE = "request_creation"
+CATALOG_PHASE_STATUS_NOT_STARTED = "not_started"
+CATALOG_PHASE_STATUS_RUNNING = "running"
+CATALOG_PHASE_STATUS_PAUSED = "paused"
+CATALOG_PHASE_STATUS_COMPLETED = "completed"
+CATALOG_PHASE_STATUSES = {
+    CATALOG_PHASE_STATUS_NOT_STARTED,
+    CATALOG_PHASE_STATUS_RUNNING,
+    CATALOG_PHASE_STATUS_PAUSED,
+    CATALOG_PHASE_STATUS_COMPLETED,
+}
 CATALOG_REQUEST_CREATION_BATCH_SIZE = 50
 INCOMPLETE_CATEGORY_KEYWORDS = (
     "incomplete",
@@ -222,6 +232,58 @@ def sync_phase(state):
     return str(sync_progress_payload(state).get("phase") or CATALOG_SYNC_PHASE)
 
 
+def catalog_phase_statuses(
+    *,
+    sync_status=CATALOG_PHASE_STATUS_NOT_STARTED,
+    request_creation_status=CATALOG_PHASE_STATUS_NOT_STARTED,
+):
+    return {
+        CATALOG_SYNC_PHASE: sync_status,
+        CATALOG_REQUEST_CREATION_PHASE: request_creation_status,
+    }
+
+
+def _explicit_catalog_phase_status(state, phase):
+    phase_statuses = sync_progress_payload(state).get("phaseStatuses")
+    if not isinstance(phase_statuses, dict):
+        return ""
+    status = str(phase_statuses.get(phase) or "").strip()
+    if status in CATALOG_PHASE_STATUSES:
+        return status
+    return ""
+
+
+def catalog_sync_phase_status(state):
+    explicit_status = _explicit_catalog_phase_status(state, CATALOG_SYNC_PHASE)
+    if explicit_status:
+        return explicit_status
+    if state.singleton_key != PROCESSING_SYNC_KEY_CATALOG:
+        return CATALOG_PHASE_STATUS_NOT_STARTED
+    if sync_phase(state) == CATALOG_REQUEST_CREATION_PHASE:
+        return CATALOG_PHASE_STATUS_COMPLETED
+    if state.status == ProcessingSyncStatus.PAUSED:
+        return CATALOG_PHASE_STATUS_PAUSED
+    if state.status in SYNC_ACTIVE_STATUSES:
+        return CATALOG_PHASE_STATUS_RUNNING
+    if sync_saved_data(state):
+        return CATALOG_PHASE_STATUS_COMPLETED
+    return CATALOG_PHASE_STATUS_NOT_STARTED
+
+
+def catalog_request_creation_phase_status(state):
+    explicit_status = _explicit_catalog_phase_status(state, CATALOG_REQUEST_CREATION_PHASE)
+    if explicit_status:
+        return explicit_status
+    if state.singleton_key != PROCESSING_SYNC_KEY_CATALOG:
+        return CATALOG_PHASE_STATUS_NOT_STARTED
+    if sync_phase(state) == CATALOG_REQUEST_CREATION_PHASE:
+        if state.status == ProcessingSyncStatus.PAUSED:
+            return CATALOG_PHASE_STATUS_PAUSED
+        if state.status in SYNC_ACTIVE_STATUSES:
+            return CATALOG_PHASE_STATUS_RUNNING
+    return CATALOG_PHASE_STATUS_NOT_STARTED
+
+
 def catalog_request_creation_progress(state):
     request_creation = sync_progress_payload(state).get("requestCreation")
     return request_creation if isinstance(request_creation, dict) else None
@@ -289,10 +351,15 @@ def initial_catalog_request_creation_progress(state):
 
 
 def catalog_request_creation_can_resume(state):
+    if state.status != ProcessingSyncStatus.PAUSED:
+        return False
     request_creation = catalog_request_creation_progress(state)
-    return request_creation_matches_checkpoint(
-        request_creation,
-        current_catalog_sync_checkpoint_token(state),
+    return (
+        catalog_request_creation_phase_status(state) == CATALOG_PHASE_STATUS_PAUSED
+        and request_creation_matches_checkpoint(
+            request_creation,
+            current_catalog_sync_checkpoint_token(state),
+        )
     )
 
 
@@ -590,6 +657,8 @@ def build_sync_progress(
     trigger_source=SYNC_TRIGGER_SOURCE_BUTTON,
     session_id="",
     request_creation=None,
+    sync_phase_status=CATALOG_PHASE_STATUS_RUNNING,
+    request_creation_phase_status=CATALOG_PHASE_STATUS_NOT_STARTED,
 ):
     session_id = str(session_id or "").strip()
     payload = {
@@ -619,8 +688,15 @@ def build_sync_progress(
             request_creation,
             payload["savedData"]["checkpointToken"],
         )
+    if not request_creation and request_creation_phase_status != CATALOG_PHASE_STATUS_COMPLETED:
+        request_creation_phase_status = CATALOG_PHASE_STATUS_NOT_STARTED
     if request_creation:
         payload["requestCreation"] = request_creation
+    if run_mode != SYNC_RUN_MODE_INCOMPLETE_AUTOMATION:
+        payload["phaseStatuses"] = catalog_phase_statuses(
+            sync_status=sync_phase_status,
+            request_creation_status=request_creation_phase_status,
+        )
     if saved_at:
         payload["savedAt"] = saved_at
     return payload
@@ -633,6 +709,7 @@ def build_catalog_request_creation_progress(
     run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
     trigger_source=SYNC_TRIGGER_SOURCE_BUTTON,
     saved_at=None,
+    request_creation_phase_status=CATALOG_PHASE_STATUS_RUNNING,
 ):
     payload = {
         "runMode": run_mode,
@@ -647,6 +724,10 @@ def build_catalog_request_creation_progress(
             "triggerSource": trigger_source,
         },
         "requestCreation": request_creation,
+        "phaseStatuses": catalog_phase_statuses(
+            sync_status=CATALOG_PHASE_STATUS_COMPLETED,
+            request_creation_status=request_creation_phase_status,
+        ),
     }
     if saved_at:
         payload["savedAt"] = saved_at
@@ -1450,6 +1531,7 @@ def pause_sync(sync_key=None):
                 ),
                 run_mode=run_mode,
                 trigger_source=sync_trigger_source(state),
+                request_creation_phase_status=CATALOG_PHASE_STATUS_RUNNING,
             )
             state.message = catalog_request_creation_pause_request_message()
         else:
@@ -1461,6 +1543,8 @@ def pause_sync(sync_key=None):
                 trigger_source=sync_trigger_source(state),
                 session_id=sync_saved_data(state).get("sessionId") or "",
                 request_creation=catalog_request_creation_progress(state),
+                sync_phase_status=CATALOG_PHASE_STATUS_RUNNING,
+                request_creation_phase_status=catalog_request_creation_phase_status(state),
             )
             state.message = sync_pause_message(run_mode)
         save_sync_state(
@@ -1485,12 +1569,17 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
         resume_message = "Restarting incomplete catalog sync from the beginning."
     elif sync_key == PROCESSING_SYNC_KEY_CATALOG:
         checkpoint_token = current_catalog_sync_checkpoint_token(state)
+        sync_can_resume = (
+            state.status == ProcessingSyncStatus.PAUSED
+            and catalog_sync_phase_status(state) == CATALOG_PHASE_STATUS_PAUSED
+        )
         next_page_index = int(
             saved_data.get("nextPageIndex", state.page_index or 0) or 0
         )
         fetched_count = int(saved_data.get("fetchedCount", state.fetched_count or 0) or 0)
         if (
             run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION
+            and catalog_request_creation_can_resume(state)
             and request_creation_matches_checkpoint(request_creation, checkpoint_token)
         ):
             state.status = ProcessingSyncStatus.SYNCING
@@ -1501,6 +1590,7 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
                 request_creation=request_creation,
                 run_mode=run_mode,
                 trigger_source=trigger_source,
+                request_creation_phase_status=CATALOG_PHASE_STATUS_RUNNING,
             )
             state.task_id = ""
             state.queue_name = ""
@@ -1527,7 +1617,18 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
                     task_id="",
                 )
             return state
-        resume_message = catalog_sync_resume_message(run_mode)
+        if sync_can_resume:
+            resume_message = catalog_sync_resume_message(run_mode)
+        else:
+            next_page_index = 0
+            fetched_count = 0
+            resume_message = (
+                "Restarting automated catalog sync from the beginning."
+                if run_mode == SYNC_RUN_MODE_CATALOG_AUTOMATION
+                else "Restarting catalog sync from the beginning."
+            )
+            request_creation = None
+            saved_data = {}
     else:
         next_page_index = 0
         fetched_count = int(state.fetched_count or 0)
@@ -1545,9 +1646,15 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
         trigger_source=trigger_source,
         session_id=saved_data.get("sessionId") or str(uuid4()),
         request_creation=request_creation,
+        sync_phase_status=CATALOG_PHASE_STATUS_RUNNING,
+        request_creation_phase_status=catalog_request_creation_phase_status(state),
     )
     state.page_index = next_page_index
     state.fetched_count = fetched_count
+    if next_page_index == 0 and fetched_count == 0 and sync_key == PROCESSING_SYNC_KEY_CATALOG:
+        state.skipped_count = 0
+        state.updated_count = 0
+        state.appended_count = 0
     state.task_id = ""
     state.queue_name = ""
     state.message = resume_message
@@ -1559,6 +1666,9 @@ def resume_sync(sync_key=PROCESSING_SYNC_KEY_CATALOG, *, run_mode=None):
             "progress",
             "page_index",
             "fetched_count",
+            "skipped_count",
+            "updated_count",
+            "appended_count",
             "task_id",
             "queue_name",
             "message",
@@ -1656,13 +1766,12 @@ def fail_sync(state, error):
     return state
 
 
-def catalog_progress_after_completion(state, *, run_mode, preserve_request_creation=False):
-    request_creation = None
-    if preserve_request_creation:
-        request_creation = preserve_catalog_request_creation_progress(
-            catalog_request_creation_progress(state),
-            current_catalog_sync_checkpoint_token(state),
-        )
+def catalog_progress_after_completion(
+    state,
+    *,
+    run_mode,
+    request_creation_phase_status=CATALOG_PHASE_STATUS_NOT_STARTED,
+):
     return build_sync_progress(
         run_mode,
         next_page_index=state.page_index,
@@ -1670,7 +1779,8 @@ def catalog_progress_after_completion(state, *, run_mode, preserve_request_creat
         live_fetch=sync_uses_live_fetch(state),
         trigger_source=sync_trigger_source(state),
         session_id=sync_saved_data(state).get("sessionId") or "",
-        request_creation=request_creation,
+        sync_phase_status=CATALOG_PHASE_STATUS_COMPLETED,
+        request_creation_phase_status=request_creation_phase_status,
     )
 
 
@@ -1678,7 +1788,6 @@ def finalize_catalog_sync(state, *, run_mode):
     progress = catalog_progress_after_completion(
         state,
         run_mode=run_mode,
-        preserve_request_creation=(run_mode == SYNC_RUN_MODE_MANUAL),
     )
     return finalize_sync(state, progress=progress)
 
@@ -1699,6 +1808,7 @@ def begin_catalog_request_creation(state):
         live_fetch=sync_uses_live_fetch(state),
         trigger_source=sync_trigger_source(state),
         session_id=session_id,
+        sync_phase_status=CATALOG_PHASE_STATUS_COMPLETED,
     )
     request_creation = initial_catalog_request_creation_progress(state)
     state.status = ProcessingSyncStatus.SYNCING
@@ -1706,6 +1816,7 @@ def begin_catalog_request_creation(state):
         state,
         request_creation=request_creation,
         trigger_source=sync_trigger_source(state),
+        request_creation_phase_status=CATALOG_PHASE_STATUS_RUNNING,
     )
     state.message = catalog_request_creation_start_message()
     save_sync_state(state)
@@ -1739,6 +1850,7 @@ def complete_catalog_automation(state, *, request_creation):
         progress=catalog_progress_after_completion(
             state,
             run_mode=SYNC_RUN_MODE_CATALOG_AUTOMATION,
+            request_creation_phase_status=CATALOG_PHASE_STATUS_COMPLETED,
         ),
     )
 
@@ -1802,6 +1914,7 @@ def advance_catalog_request_creation_once(state):
             request_creation=next_request_creation,
             saved_at=timezone.now().isoformat(),
             trigger_source=sync_trigger_source(state),
+            request_creation_phase_status=CATALOG_PHASE_STATUS_PAUSED,
         )
         state.message = catalog_request_creation_pause_message(next_request_creation)
         update_automation_run_status(SYNC_RUN_MODE_CATALOG_AUTOMATION, state.message)
@@ -1814,6 +1927,7 @@ def advance_catalog_request_creation_once(state):
             state,
             request_creation=next_request_creation,
             trigger_source=sync_trigger_source(state),
+            request_creation_phase_status=CATALOG_PHASE_STATUS_RUNNING,
         )
         state.message = catalog_request_creation_progress_message(next_request_creation)
     save_sync_state(state)
@@ -2063,6 +2177,8 @@ def advance_catalog_sync_once(state, run_mode):
             trigger_source=sync_trigger_source(state),
             session_id=session_id,
             request_creation=request_creation,
+            sync_phase_status=CATALOG_PHASE_STATUS_PAUSED,
+            request_creation_phase_status=catalog_request_creation_phase_status(state),
         )
         state.message = f"Sync progress saved. {catalog_record_total_message()}"
         update_automation_run_status(run_mode, state.message)
@@ -2081,6 +2197,8 @@ def advance_catalog_sync_once(state, run_mode):
             trigger_source=sync_trigger_source(state),
             session_id=session_id,
             request_creation=request_creation,
+            sync_phase_status=CATALOG_PHASE_STATUS_RUNNING,
+            request_creation_phase_status=catalog_request_creation_phase_status(state),
         )
         state.message = sync_progress_message(run_mode, state.fetched_count)
     save_sync_state(state)
@@ -2302,6 +2420,8 @@ def run_processing_sync_until_blocked(
                     trigger_source=sync_trigger_source(state),
                     session_id=session_id,
                     request_creation=request_creation,
+                    sync_phase_status=CATALOG_PHASE_STATUS_PAUSED,
+                    request_creation_phase_status=catalog_request_creation_phase_status(state),
                 )
                 state.message = f"Sync progress saved. {catalog_record_total_message()}"
                 save_sync_state(state)
@@ -2318,6 +2438,8 @@ def run_processing_sync_until_blocked(
                 trigger_source=sync_trigger_source(state),
                 session_id=session_id,
                 request_creation=request_creation,
+                sync_phase_status=CATALOG_PHASE_STATUS_RUNNING,
+                request_creation_phase_status=catalog_request_creation_phase_status(state),
             )
             state.message = sync_progress_message(run_mode, state.fetched_count)
             save_sync_state(state)
@@ -3458,9 +3580,9 @@ def run_manual_catalog_sync(
     sync_state = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
     if sync_owner_conflicts(sync_state, SYNC_RUN_MODE_MANUAL):
         return sync_state
-    if sync_state.status == ProcessingSyncStatus.PAUSED or (
-        sync_state.status == ProcessingSyncStatus.IDLE
-        and catalog_saved_checkpoint_available(sync_state)
+    if (
+        sync_state.status == ProcessingSyncStatus.PAUSED
+        and catalog_sync_phase_status(sync_state) == CATALOG_PHASE_STATUS_PAUSED
     ):
         return resume_sync(
             PROCESSING_SYNC_KEY_CATALOG,
@@ -3485,9 +3607,9 @@ def run_catalog_automation(*, trigger_source=SYNC_TRIGGER_SOURCE_BUTTON):
                 "Waiting for the catalog runtime to become idle.",
             )
         return sync_state
-    if sync_state.status == ProcessingSyncStatus.PAUSED or (
-        sync_state.status == ProcessingSyncStatus.IDLE
-        and catalog_saved_checkpoint_available(sync_state)
+    if catalog_request_creation_can_resume(sync_state) or (
+        sync_state.status == ProcessingSyncStatus.PAUSED
+        and catalog_sync_phase_status(sync_state) == CATALOG_PHASE_STATUS_PAUSED
     ):
         return resume_sync(
             PROCESSING_SYNC_KEY_CATALOG,

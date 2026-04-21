@@ -21,7 +21,7 @@
 Generate the local env file:
 
 ```bash
-local/scripts/generate-env.sh local
+local/scripts/generate-env.sh
 ```
 
 The local stack reads `local/env/.env`. Update values there as needed.
@@ -36,6 +36,26 @@ local/scripts/dev.sh up
 ```
 
 `local/scripts/dev.sh up` is the supported way to start local development with Docker Compose watch enabled. `./run_local.sh` is a thin wrapper around the same command.
+
+By default, the local stack is reachable from another device on the same Wi-Fi when you start it through either entrypoint:
+
+```bash
+local/scripts/dev.sh up
+```
+
+Because `./run_local.sh` is only a wrapper, the same applies there:
+
+```bash
+./run_local.sh
+```
+
+The script detects your Mac's active LAN IP, binds the frontend and backend on `0.0.0.0`, and rewrites the effective frontend/backend base URLs for that session so a phone or tablet can open the same dev stack.
+
+If you explicitly want localhost-only access, use:
+
+```bash
+LOCALHOST_ONLY=1 ./run_local.sh
+```
 
 The script runs the local stack through `docker compose up --build --watch` or `docker-compose up --build --watch`, depending on what is available on your machine. The watch rules live in `local/compose/docker-compose.yml`.
 
@@ -64,6 +84,8 @@ Default URLs:
 
 - Frontend: `http://127.0.0.1:5173`
 - Backend API: `http://127.0.0.1:8000`
+
+When started normally, the script prints LAN URLs such as `http://192.168.0.104:5173` and `http://192.168.0.104:8000`. If autodetection picks the wrong interface, set `RUN_LOCAL_INTERFACE=en0` before the command.
 
 Books, uploads, and static assets are stored only under `app/backend/storage/`.
 

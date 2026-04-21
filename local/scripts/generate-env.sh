@@ -10,56 +10,26 @@ export REPO_ROOT
 usage() {
   cat <<'EOF'
 Usage:
-  local/scripts/generate-env.sh <target>
+  local/scripts/generate-env.sh
 
-Targets:
-  local        -> local/env/.env
-  production   -> deploy/env/.production.env
-  test         -> deploy/env/.test.env
-  host         -> deploy/env/.host.env
-  all          -> generate local, production, test, and host files
+Generate:
+  local/env/.env
 EOF
 }
 
-generate_target() {
-  local template_file="$1"
-  local target_file="$2"
-  ensure_env_file "${template_file}" "${target_file}"
-  print_info "Prepared ${target_file}"
+generate_local_env() {
+  ensure_env_file "${REPO_ROOT}/local/env/app.env.example" "${REPO_ROOT}/local/env/.env"
+  print_info "Prepared ${REPO_ROOT}/local/env/.env"
 }
 
-run_target() {
-  local target_name="${1:?target name is required}"
-
-  case "${target_name}" in
-    local)
-      generate_target "${REPO_ROOT}/local/env/app.env.example" "${REPO_ROOT}/local/env/.env"
-      ;;
-    production)
-      generate_target "${REPO_ROOT}/deploy/env/app.env.example" "${REPO_ROOT}/deploy/env/.production.env"
-      ;;
-    test)
-      generate_target "${REPO_ROOT}/deploy/env/app.env.example" "${REPO_ROOT}/deploy/env/.test.env"
-      ;;
-    host)
-      generate_target "${REPO_ROOT}/deploy/env/host.env.example" "${REPO_ROOT}/deploy/env/.host.env"
-      ;;
-    all)
-      run_target local
-      run_target production
-      run_target test
-      run_target host
-      ;;
-    *)
-      usage
-      die "Unsupported target: ${target_name}"
-      ;;
-  esac
-}
-
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || $# -eq 0 ]]; then
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
 fi
 
-run_target "$1"
+if [[ $# -gt 0 ]]; then
+  usage
+  die "local/scripts/generate-env.sh does not accept targets."
+fi
+
+generate_local_env

@@ -171,7 +171,7 @@ sync_workspace_files() {
       --exclude='tests/backend/__pycache__' \
       --exclude='logs/**/*.log' \
       --exclude='test-artifacts' \
-      --exclude='local/env/.env' \
+      --exclude='local' \
       --exclude='deploy/env/.host.env' \
       --exclude='deploy/env/.production.env' \
       --exclude='deploy/env/.test.env' \

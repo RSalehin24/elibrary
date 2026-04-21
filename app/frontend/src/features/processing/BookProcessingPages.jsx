@@ -30,6 +30,12 @@ const PROCESSING_TABLE_PREFETCH_TRIGGER = 30;
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
+const CATALOG_SYNC_PHASE = "sync";
+const CATALOG_REQUEST_CREATION_PHASE = "request_creation";
+const CATALOG_PHASE_STATUS_NOT_STARTED = "not_started";
+const CATALOG_PHASE_STATUS_RUNNING = "running";
+const CATALOG_PHASE_STATUS_PAUSED = "paused";
+const CATALOG_PHASE_STATUS_COMPLETED = "completed";
 const INCOMPLETE_CATEGORY_KEYWORDS = [
   "incomplete",
   "unfinished",
@@ -80,6 +86,56 @@ function splitSyncMessage(message) {
   }
 
   return [parts[1], parts[2]];
+}
+
+function catalogRecordCountMessage(recordCount) {
+  const total = Number.isFinite(recordCount) ? recordCount : 0;
+  return `Catalog now has ${total} ${total === 1 ? "book record" : "book records"}.`;
+}
+
+function normalizeCatalogCountMessage(message, recordCount) {
+  const trimmed = String(message || "").trim();
+  if (!trimmed || !Number.isFinite(recordCount)) {
+    return trimmed;
+  }
+  return trimmed.replace(
+    /Catalog now has \d+ book records?\./g,
+    catalogRecordCountMessage(recordCount),
+  );
+}
+
+function catalogPhaseStatus(sync, phase) {
+  const explicit = sync?.progress?.phaseStatuses?.[phase];
+  if (explicit) {
+    return explicit;
+  }
+  const syncPhase = sync?.phase || sync?.progress?.phase || CATALOG_SYNC_PHASE;
+  const runtimeStatus = sync?.status || "idle";
+  const savedData = sync?.progress?.savedData;
+  if (phase === CATALOG_SYNC_PHASE) {
+    if (syncPhase === CATALOG_REQUEST_CREATION_PHASE) {
+      return CATALOG_PHASE_STATUS_COMPLETED;
+    }
+    if (runtimeStatus === "paused") {
+      return CATALOG_PHASE_STATUS_PAUSED;
+    }
+    if (runtimeStatus === "syncing" || runtimeStatus === "pausing") {
+      return CATALOG_PHASE_STATUS_RUNNING;
+    }
+    return savedData ? CATALOG_PHASE_STATUS_COMPLETED : CATALOG_PHASE_STATUS_NOT_STARTED;
+  }
+  if (phase === CATALOG_REQUEST_CREATION_PHASE) {
+    if (syncPhase === CATALOG_REQUEST_CREATION_PHASE) {
+      if (runtimeStatus === "paused") {
+        return CATALOG_PHASE_STATUS_PAUSED;
+      }
+      if (runtimeStatus === "syncing" || runtimeStatus === "pausing") {
+        return CATALOG_PHASE_STATUS_RUNNING;
+      }
+    }
+    return CATALOG_PHASE_STATUS_NOT_STARTED;
+  }
+  return CATALOG_PHASE_STATUS_NOT_STARTED;
 }
 
 function requestDetails(request) {
@@ -1562,6 +1618,7 @@ function AutomationPanel({
   title,
   automation = DEFAULT_AUTOMATION_CARD,
   sync = DEFAULT_SYNC_CARD,
+  recordCount,
   loading = false,
   saving = false,
   running = false,
@@ -1591,16 +1648,24 @@ function AutomationPanel({
           runMode,
         };
   const syncPhase = effectiveSync.phase || effectiveSync.progress?.phase || "sync";
-  const savedRequestCreation =
+  const syncPhaseStatus =
+    pageId === "catalog"
+      ? catalogPhaseStatus(effectiveSync, CATALOG_SYNC_PHASE)
+      : CATALOG_PHASE_STATUS_NOT_STARTED;
+  const requestCreationPhaseStatus =
+    pageId === "catalog"
+      ? catalogPhaseStatus(effectiveSync, CATALOG_REQUEST_CREATION_PHASE)
+      : CATALOG_PHASE_STATUS_NOT_STARTED;
+  const canResumeRequestCreation =
     pageId === "catalog" &&
-    effectiveSync.progress?.requestCreation?.baseCheckpointToken &&
-    effectiveSync.progress?.savedData?.checkpointToken &&
-    effectiveSync.progress.requestCreation.baseCheckpointToken ===
-      effectiveSync.progress.savedData.checkpointToken;
+    requestCreationPhaseStatus === CATALOG_PHASE_STATUS_PAUSED;
+  const canResumeSyncPhase =
+    pageId === "catalog"
+      ? syncPhaseStatus === CATALOG_PHASE_STATUS_PAUSED
+      : effectiveSync.status === "paused";
   const isRequestCreationPhase =
     pageId === "catalog" &&
-    (syncPhase === "request_creation" ||
-      (effectiveSync.status === "idle" && Boolean(savedRequestCreation)));
+    (syncPhase === CATALOG_REQUEST_CREATION_PHASE || canResumeRequestCreation);
   const runLabel = isRequestCreationPhase
     ? "automated request creation"
     : pageId === "catalog"
@@ -1609,7 +1674,7 @@ function AutomationPanel({
   const runMessage = isRequestCreationPhase
     ? "Resuming automated request creation from saved progress."
     : pageId === "catalog"
-      ? effectiveSync.status === "paused" || effectiveSync.progress?.savedData
+      ? canResumeSyncPhase
         ? "Continuing automated catalog sync from the saved endpoint."
         : "Automated catalog sync is running."
       : "Incomplete catalog sync is running.";
@@ -1621,7 +1686,9 @@ function AutomationPanel({
   const resumeMessage = isRequestCreationPhase
     ? "Resuming automated request creation from saved progress."
     : pageId === "catalog"
-      ? "Continuing automated catalog sync from the saved endpoint."
+      ? canResumeSyncPhase
+        ? "Continuing automated catalog sync from the saved endpoint."
+        : "Restarting automated catalog sync from the beginning."
       : "Restarting incomplete catalog sync from the beginning.";
   const hasActiveSync =
     effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
@@ -1635,9 +1702,14 @@ function AutomationPanel({
   const isPaused = ownsSync && effectiveSync.status === "paused";
   const busy = saving || running;
   const controlsDisabled = busy || hasActiveSync || blockedByOtherSync;
-  const statusMessage = effectiveSync.status !== "idle"
-    ? effectiveSync.message || ""
-    : automation.statusMessage || "";
+  const rawStatusMessage =
+    effectiveSync.status !== "idle"
+      ? effectiveSync.message || ""
+      : automation.statusMessage || "";
+  const statusMessage =
+    pageId === "catalog"
+      ? normalizeCatalogCountMessage(rawStatusMessage, recordCount)
+      : rawStatusMessage;
   const showFooter = saving || Boolean(statusMessage);
 
   useEffect(() => {
@@ -1728,7 +1800,9 @@ function AutomationPanel({
   const runControl = isPaused
     ? {
         label:
-          pageId === "catalog"
+          pageId === "catalog" && isRequestCreationPhase
+            ? "Resume automated request creation"
+            : pageId === "catalog"
             ? "Resume automated catalog sync"
             : "Resume incomplete catalog sync",
         icon: <PlayIcon />,
@@ -1896,6 +1970,7 @@ function CatalogSyncPanel({
   className = "",
   loading = false,
   sync = DEFAULT_SYNC_CARD,
+  recordCount,
 }) {
   const [pauseRequested, setPauseRequested] = useState(false);
   const [optimisticSync, setOptimisticSync] = useState(null);
@@ -1911,7 +1986,7 @@ function CatalogSyncPanel({
           message: optimisticSync.message,
           runMode: SYNC_RUN_MODE_MANUAL,
         };
-  const syncPhase = effectiveSync.phase || effectiveSync.progress?.phase || "sync";
+  const syncPhaseStatus = catalogPhaseStatus(effectiveSync, CATALOG_SYNC_PHASE);
   const hasActiveSync =
     effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
   const hasPausedSync = effectiveSync.status === "paused";
@@ -1926,7 +2001,8 @@ function CatalogSyncPanel({
   const isPausing =
     manualOwnsActiveSync &&
     (pauseRequested || effectiveSync.status === "pausing");
-  const syncMessageLines = splitSyncMessage(effectiveSync.message);
+  const statusMessage = normalizeCatalogCountMessage(effectiveSync.message, recordCount);
+  const syncMessageLines = splitSyncMessage(statusMessage);
 
   useEffect(() => {
     if (!isSyncing) {
@@ -2036,11 +2112,9 @@ function CatalogSyncPanel({
                 {
                   status: "syncing",
                   message:
-                    effectiveSync.status === "paused" || effectiveSync.progress?.savedData
+                    syncPhaseStatus === CATALOG_PHASE_STATUS_PAUSED
                       ? "Continuing catalog sync from the saved endpoint."
-                      : syncPhase === "request_creation"
-                        ? "Continuing catalog sync from the saved endpoint."
-                        : "Syncing catalog records.",
+                      : "Syncing catalog records.",
                 },
                 () => startCatalogSync(),
               ),
@@ -2176,12 +2250,14 @@ export function CatalogProcessingPage() {
           className="processing-catalog-sync-card"
           loading={!catalogSyncLoaded}
           sync={catalogSync}
+          recordCount={summary.records}
         />
         <AutomationPanel
           pageId="catalog"
           title="Automation"
           automation={catalogAutomation}
           sync={catalogAutomationSync}
+          recordCount={summary.records}
           loading={!catalogAutomationLoaded}
           saving={catalogAutomationSaving}
           running={catalogAutomationRunning}

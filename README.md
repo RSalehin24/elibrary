@@ -27,7 +27,9 @@ Monorepo for the Bangla ebook platform.
 
 ## Key Commands
 
-- `local/scripts/generate-env.sh all`
+- `local/scripts/generate-env.sh`
+- `deploy/scripts/generate-env.sh production`
+- `deploy/scripts/generate-env.sh host`
 - `local/scripts/dev.sh up`
 - `tests/scripts/seed-e2e-data.sh`
 - `tests/scripts/test-all.sh`

@@ -136,7 +136,7 @@ services:
         - action: rebuild
           path: ../../app/backend/requirements-dev.txt
     ports:
-      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+      - "${HOST_BIND_IP:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     healthcheck:
       test:
         [
@@ -308,7 +308,7 @@ services:
         - action: rebuild
           path: ../../app/frontend/package-lock.json
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"
+      - "${HOST_BIND_IP:-127.0.0.1}:${FRONTEND_PORT:-5173}:5173"
     depends_on:
       backend:
         condition: service_healthy
