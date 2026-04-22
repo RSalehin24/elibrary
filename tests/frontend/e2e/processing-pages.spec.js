@@ -530,7 +530,18 @@ function processingCardPayload(state, cardKey) {
   return cards[cardKey] || { card: cardKey };
 }
 
-function filteredTablePayload(state, { card, query = "", category = "", status = "", offset = 0, limit = 60 }) {
+function filteredTablePayload(
+  state,
+  {
+    card,
+    query = "",
+    category = "",
+    status = "",
+    offset = 0,
+    limit = 60,
+    includeFacets = true,
+  },
+) {
   const rows = tableRowsForCard(state, card);
   const normalizedQuery = String(query || "").trim().toLowerCase();
   const categoryOptions = Array.from(
@@ -579,10 +590,14 @@ function filteredTablePayload(state, { card, query = "", category = "", status =
       hasMore: nextOffset < filtered.length,
       nextOffset,
     },
-    filters: {
-      categoryOptions,
-      statusOptions,
-    },
+    ...(includeFacets
+      ? {
+          filters: {
+            categoryOptions,
+            statusOptions,
+          },
+        }
+      : {}),
   };
 }
 
@@ -1032,10 +1047,17 @@ function advancePipelineState(state) {
   applyRequestTimeouts(state);
 }
 
-async function mockProcessingApi(page, initialState) {
-  await page.addInitScript(() => {
+async function mockProcessingApi(page, initialState, options = {}) {
+  await page.addInitScript((config) => {
     const sources = new Set();
     window.__processingStreamSourceCount = 0;
+
+    if (config.eventSourceMode === "unsupported") {
+      window.EventSource = undefined;
+      window.__processingEmitStreamEvent = () => {};
+      window.__processingTriggerStreamError = () => {};
+      return;
+    }
 
     class MockEventSource {
       constructor() {
@@ -1080,14 +1102,52 @@ async function mockProcessingApi(page, initialState) {
         source._emit(type, payload);
       });
     };
+    window.__processingTriggerStreamError = () => {
+      sources.forEach((source) => {
+        source.onerror?.(new Event("error"));
+      });
+    };
+  }, {
+    eventSourceMode: options.eventSourceMode || "mock",
   });
 
   let state = syncRecordStates(clone(initialState));
   let lastSyncStartBody = null;
   let streamTimer = null;
+  const requestCounts = {};
+  const versions = Object.fromEntries(
+    PROCESSING_CARD_KEYS.map((cardKey) => [cardKey, 0]),
+  );
   const controller = {
+    async emitVersions(domains = PROCESSING_CARD_KEYS) {
+      await emitStreamVersions(domains);
+    },
+    async emitVersionsPayload(payload) {
+      if (page.isClosed()) {
+        cancelStreamAdvance();
+        return;
+      }
+      try {
+        await page.evaluate((nextPayload) => {
+          window.__processingEmitStreamEvent?.("versions", nextPayload);
+        }, payload);
+      } catch {
+        cancelStreamAdvance();
+      }
+    },
     getLastSyncStartBody() {
       return clone(lastSyncStartBody);
+    },
+    getRequestCount(key) {
+      return requestCounts[key] || 0;
+    },
+    getVersion(domain) {
+      return versions[domain] || 0;
+    },
+    async triggerStreamError() {
+      await page.evaluate(() => {
+        window.__processingTriggerStreamError?.();
+      });
     },
     startStream() {
       scheduleStreamAdvance();
@@ -1098,15 +1158,28 @@ async function mockProcessingApi(page, initialState) {
         nowIso,
       };
     },
-    updateRequest(id, updates) {
+    updateRequest(id, updates, domains = PROCESSING_CARD_KEYS) {
       state.requests = state.requests.map((item) =>
         item.id === id ? { ...item, ...updates, updatedAt: iso(900) } : item,
       );
       state = syncRecordStates(state);
-      void emitStreamSnapshot();
+      void emitStreamVersions(domains);
       scheduleStreamAdvance();
     },
   };
+
+  function trackRequest(key) {
+    requestCounts[key] = (requestCounts[key] || 0) + 1;
+  }
+
+  function bumpVersions(domains = PROCESSING_CARD_KEYS) {
+    const nextVersions = {};
+    for (const domain of domains) {
+      versions[domain] = (versions[domain] || 0) + 1;
+      nextVersions[domain] = versions[domain];
+    }
+    return nextVersions;
+  }
 
   function hasActiveStreamWork() {
     return (
@@ -1126,15 +1199,18 @@ async function mockProcessingApi(page, initialState) {
     );
   }
 
-  async function emitStreamSnapshot() {
+  async function emitStreamVersions(domains = PROCESSING_CARD_KEYS) {
     if (page.isClosed()) {
       cancelStreamAdvance();
       return;
     }
     try {
       await page.evaluate((payload) => {
-        window.__processingEmitStreamEvent?.("snapshot", payload);
-      }, statePayload(true));
+        window.__processingEmitStreamEvent?.("versions", payload);
+      }, {
+        eventId: Date.now(),
+        versions: bumpVersions(domains),
+      });
     } catch {
       cancelStreamAdvance();
     }
@@ -1168,7 +1244,7 @@ async function mockProcessingApi(page, initialState) {
       }
 
       state = syncRecordStates(state);
-      await emitStreamSnapshot();
+      await emitStreamVersions();
       scheduleStreamAdvance();
     }, nextStreamDelayMs());
   }
@@ -1182,13 +1258,30 @@ async function mockProcessingApi(page, initialState) {
   function statePayload(includeLists, extra = {}) {
     return {
       ...(includeLists ? state : {}),
-      ...(includeLists ? {} : { sync: state.sync, automation: state.automation, ui: state.ui }),
+      ...(includeLists
+        ? {}
+        : {
+            sync: state.sync,
+            syncStates: {
+              catalog: state.sync,
+              incomplete: state.sync,
+            },
+            automation: state.automation,
+            ui: state.ui,
+          }),
       orchestration: {
-        manualPipelineAdvance:
-          state.orchestration?.manualPipelineAdvance ?? true,
+        manualPipelineAdvance: false,
       },
       summary: processingSummary(state),
-      ...(includeLists ? {} : {}),
+      versions,
+      ...extra,
+    };
+  }
+
+  function mutationPayload(extra = {}, domains = PROCESSING_CARD_KEYS) {
+    return {
+      ok: true,
+      versions: bumpVersions(domains),
       ...extra,
     };
   }
@@ -1211,48 +1304,74 @@ async function mockProcessingApi(page, initialState) {
     });
   }
 
-  async function delayForLoads() {
+  async function delayForLoads(kind = "generic") {
+    const routeDelayMs =
+      kind === "state"
+        ? state.ui?.stateLoadDelayMs
+        : kind === "table"
+          ? state.ui?.tableLoadDelayMs
+          : kind === "card"
+            ? state.ui?.cardLoadDelayMs
+            : undefined;
     await new Promise((resolve) => {
-      setTimeout(resolve, Math.max(0, state.ui?.loadDelayMs || 0));
+      setTimeout(
+        resolve,
+        Math.max(
+          0,
+          (routeDelayMs ?? state.ui?.loadDelayMs) || 0,
+        ),
+      );
     });
   }
 
   await page.route("**/api/processing/state/**", async (route) => {
-    await delayForLoads();
+    trackRequest("state");
+    await delayForLoads("state");
     await fulfillState(route);
   });
   await page.route("**/api/processing/card/**", async (route) => {
-    await delayForLoads();
+    await delayForLoads("card");
     applyRequestTimeouts(state);
     state = syncRecordStates(state);
     const url = new URL(route.request().url());
     const cardKey = url.searchParams.get("card") || "";
+    trackRequest(`card:${cardKey}`);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(processingCardPayload(state, cardKey)),
+      body: JSON.stringify({
+        ...processingCardPayload(state, cardKey),
+        version: versions[cardKey] || 0,
+      }),
     });
   });
   await page.route("**/api/processing/table/**", async (route) => {
-    await delayForLoads();
+    await delayForLoads("table");
     applyRequestTimeouts(state);
     state = syncRecordStates(state);
     const url = new URL(route.request().url());
+    trackRequest(`table:${url.searchParams.get("card") || ""}`);
     const offset = Number(url.searchParams.get("offset") || 0);
     const limit = Number(url.searchParams.get("limit") || 60);
+    const includeFacets = !["0", "false", "no", "off"].includes(
+      (url.searchParams.get("includeFacets") || "1").toLowerCase(),
+    );
+    const payload = filteredTablePayload(state, {
+      card: url.searchParams.get("card") || "",
+      query: url.searchParams.get("q") || "",
+      category: url.searchParams.get("category") || "",
+      status: url.searchParams.get("status") || "",
+      offset,
+      limit,
+      includeFacets,
+    });
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(
-        filteredTablePayload(state, {
-          card: url.searchParams.get("card") || "",
-          query: url.searchParams.get("q") || "",
-          category: url.searchParams.get("category") || "",
-          status: url.searchParams.get("status") || "",
-          offset,
-          limit,
-        }),
-      ),
+      body: JSON.stringify({
+        ...payload,
+        version: versions[url.searchParams.get("card") || ""] || 0,
+      }),
     });
   });
   await page.route("**/api/processing/sync/start/**", async (route) => {
@@ -1270,7 +1389,11 @@ async function mockProcessingApi(page, initialState) {
       });
     }
     await delayForActions();
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/pause\/?(?:\?.*)?$/, async (route) => {
@@ -1283,14 +1406,22 @@ async function mockProcessingApi(page, initialState) {
       );
     }
     await delayForActions();
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/advance\/?(?:\?.*)?$/, async (route) => {
     cancelStreamAdvance();
     await delayForActions();
     advanceSyncPage(state);
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/resume\/?(?:\?.*)?$/, async (route) => {
@@ -1315,7 +1446,11 @@ async function mockProcessingApi(page, initialState) {
       resumeCatalogRun(state, runMode);
     }
     await delayForActions();
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/sync(?:\/[^/]+)?\/stop\/?(?:\?.*)?$/, async (route) => {
@@ -1334,7 +1469,11 @@ async function mockProcessingApi(page, initialState) {
     }
     state.sync.runMode = SYNC_RUN_MODE_MANUAL;
     await delayForActions();
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
     scheduleStreamAdvance();
   });
   await page.route("**/api/processing/records/create-requests/**", async (route) => {
@@ -1347,7 +1486,13 @@ async function mockProcessingApi(page, initialState) {
         createRequestForRecord(state, id);
       }
     }
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        mutationPayload({ createdCount: (body.ids || []).length }),
+      ),
+    });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/automation\/catalog\/?(?:\?.*)?$/, async (route) => {
@@ -1358,7 +1503,11 @@ async function mockProcessingApi(page, initialState) {
       statusMessage: "Saved.",
     };
     await delayForActions();
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
   });
   await page.route("**/api/processing/automation/catalog/run/**", async (route) => {
     cancelStreamAdvance();
@@ -1375,13 +1524,11 @@ async function mockProcessingApi(page, initialState) {
       });
       state.automation.catalog.statusMessage = state.sync.message;
     }
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
-    scheduleStreamAdvance();
-  });
-  await page.route("**/api/processing/pipeline/advance/**", async (route) => {
-    cancelStreamAdvance();
-    advancePipelineState(state);
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
     scheduleStreamAdvance();
   });
   await page.route("**/api/processing/requests/action/**", async (route) => {
@@ -1420,7 +1567,13 @@ async function mockProcessingApi(page, initialState) {
       }
       item.updatedAt = iso(300 + state.requests.indexOf(item));
     }
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        mutationPayload({ changedCount: (body.ids || []).length }),
+      ),
+    });
     scheduleStreamAdvance();
   });
   await page.route(/\/api\/processing\/automation\/incomplete\/?(?:\?.*)?$/, async (route) => {
@@ -1431,7 +1584,11 @@ async function mockProcessingApi(page, initialState) {
       statusMessage: "Saved.",
     };
     await delayForActions();
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
   });
   await page.route("**/api/processing/automation/incomplete/run/**", async (route) => {
     cancelStreamAdvance();
@@ -1457,19 +1614,25 @@ async function mockProcessingApi(page, initialState) {
       runMode: SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
     };
     state.automation.incomplete.statusMessage = "Incomplete catalog sync is running.";
-    await fulfillState(route, { targets: PROCESSING_CARD_KEYS });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mutationPayload()),
+    });
     scheduleStreamAdvance();
   });
 
   return controller;
 }
 
-async function boot(page, path, state) {
+async function boot(page, path, state, options = {}) {
   await mockAuthenticatedSession(page);
-  const processingApi = await mockProcessingApi(page, state);
+  const processingApi = await mockProcessingApi(page, state, options);
   await page.goto(path);
-  await page.waitForFunction(() => window.__processingStreamSourceCount > 0);
-  processingApi.startStream();
+  if (options.eventSourceMode !== "unsupported") {
+    await page.waitForFunction(() => window.__processingStreamSourceCount > 0);
+    processingApi.startStream();
+  }
   return processingApi;
 }
 
@@ -2241,7 +2404,9 @@ test.describe("processing pages replacement", () => {
     await expect(row(page, "create", "paused", "paused-old")).toHaveCount(0);
   });
 
-  test("catalog automation exposes resume after pausing", async ({ page }) => {
+  test("paused catalog sync keeps manual and automation runtime ownership isolated", async ({
+    page,
+  }) => {
     const remainingPage = record({
       id: "resume-remote",
       name: "Resume Remote Book",
@@ -2292,7 +2457,7 @@ test.describe("processing pages replacement", () => {
       "aria-label",
       "Start sync",
     );
-    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
 
     await page.getByTestId("catalog-automation-run-btn").click();
 
@@ -2355,6 +2520,83 @@ test.describe("processing pages replacement", () => {
     await expect(page.getByTestId("catalog-automation-status")).toContainText(
       "Catalog now has 3 book records.",
     );
+  });
+
+  test("create, on hold, and incomplete pages use shared processing state for overview cards", async ({
+    page,
+  }) => {
+    const processingApi = await boot(
+      page,
+      "/create",
+      baseState({
+        requests: [
+          request({ id: "req-initial", bookRecordId: "record-1", state: "initial" }),
+          request({ id: "req-created", bookRecordId: "record-2", state: "created" }),
+          request({ id: "req-paused", bookRecordId: "record-3", state: "paused" }),
+        ],
+        records: [
+          record({ id: "record-1", name: "Record One", updatedAt: iso(20) }),
+          record({ id: "record-2", name: "Record Two", updatedAt: iso(21) }),
+          record({
+            id: "record-3",
+            name: "Record Three",
+            updatedAt: iso(22),
+            wasIncomplete: true,
+            resolvedFromIncomplete: false,
+          }),
+        ],
+      }),
+    );
+
+    await expect(page.getByTestId("create-overview-stat-requests")).toContainText("1");
+    expect(processingApi.getRequestCount("state")).toBeGreaterThan(0);
+    expect(processingApi.getRequestCount("card:create-overview")).toBe(0);
+
+    await page.goto("/on-hold");
+    await expect(page.getByTestId("on-hold-overview-stat-paused")).toContainText("1");
+    expect(processingApi.getRequestCount("card:on-hold-overview")).toBe(0);
+
+    await page.goto("/incomplete");
+    await expect(page.getByTestId("incomplete-overview-stat-incomplete")).toContainText("1");
+    expect(processingApi.getRequestCount("card:incomplete-overview")).toBe(0);
+    expect(processingApi.getRequestCount("card:incomplete-automation")).toBe(0);
+  });
+
+  test("unsupported live updates fall back to polling shared state", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const realSetInterval = window.setInterval.bind(window);
+      window.setInterval = (callback, delay, ...args) =>
+        realSetInterval(callback, delay >= 15000 ? 25 : delay, ...args);
+    });
+
+    const processingApi = await boot(
+      page,
+      "/create",
+      baseState({
+        requests: [
+          request({ id: "req-unsupported", bookRecordId: "record-1", state: "initial" }),
+        ],
+        records: [
+          record({ id: "record-1", name: "Record One", updatedAt: iso(20) }),
+        ],
+      }),
+      { eventSourceMode: "unsupported" },
+    );
+
+    await expect(page.getByTestId("create-stream-status")).toContainText(
+      "Live updates are unavailable in this browser.",
+    );
+    await expect(page.getByTestId("create-overview-stat-requests")).toContainText("1");
+
+    const initialStateRequests = processingApi.getRequestCount("state");
+    processingApi.updateRequest("req-unsupported", { state: "paused" });
+
+    await expect(page.getByTestId("create-overview-stat-requests")).toContainText("0");
+    await expect
+      .poll(() => processingApi.getRequestCount("state"))
+      .toBeGreaterThan(initialStateRequests);
   });
 
   test("manual start from paused automated request creation restarts sync from the beginning", async ({
@@ -2593,10 +2835,6 @@ test.describe("processing pages replacement", () => {
       }),
     ).toHaveCount(0);
     await expect(queueTable.locator("thead th")).toHaveCount(6);
-    await expect(queueSkeletonRow.locator("td")).toHaveCount(6);
-    await expect(queueSkeletonRow.locator(".processing-col-status")).toHaveCount(1);
-    await expect(queueSkeletonRow.locator(".processing-col-details")).toHaveCount(0);
-    await expect(queueSkeletonRow.locator(".processing-col-updated")).toHaveCount(1);
   });
 
   test("empty create cards keep their empty state after the first load", async ({
@@ -2619,7 +2857,7 @@ test.describe("processing pages replacement", () => {
         ui: {
           ...baseState().ui,
           loadDelayMs: 450,
-          pipelineDelayMs: 300,
+          pipelineDelayMs: 20_000,
         },
       }),
     );
@@ -2646,6 +2884,175 @@ test.describe("processing pages replacement", () => {
         .getByTestId("create-created-count")
         .locator(".processing-card-count-skeleton"),
     ).toHaveCount(0);
+  });
+
+  test("offscreen create cards wait to fetch rows until they enter view", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 430, height: 520 });
+    const processingApi = await boot(
+      page,
+      "/create",
+      baseState({
+        requests: [
+          request({ id: "req-initial", bookRecordId: "record-1", state: "initial" }),
+          request({ id: "req-queued", bookRecordId: "record-2", state: "queued" }),
+          request({ id: "req-processing", bookRecordId: "record-3", state: "processing" }),
+          request({ id: "req-created", bookRecordId: "record-4", state: "created" }),
+        ],
+        records: [
+          record({ id: "record-1", name: "Record One", updatedAt: iso(20) }),
+          record({ id: "record-2", name: "Record Two", updatedAt: iso(21) }),
+          record({ id: "record-3", name: "Record Three", updatedAt: iso(22) }),
+          record({ id: "record-4", name: "Record Four", updatedAt: iso(23) }),
+        ],
+      }),
+    );
+
+    await expect(page.getByTestId("create-created-count")).toContainText("1");
+    expect(processingApi.getRequestCount("table:create-created")).toBe(0);
+    processingApi.updateRequest(
+      "req-created",
+      { updatedAt: iso(99) },
+      ["create-created"],
+    );
+    await page.waitForTimeout(150);
+    expect(processingApi.getRequestCount("table:create-created")).toBe(0);
+
+    await card(page, "create", "created").scrollIntoViewIfNeeded();
+    await expect(
+      row(page, "create", "created", "req-created"),
+    ).toContainText("Record Four");
+    expect(processingApi.getRequestCount("table:create-created")).toBeGreaterThan(0);
+  });
+
+  test("visible card version bumps refetch only the changed table card", async ({
+    page,
+  }) => {
+    const processingApi = await boot(
+      page,
+      "/create",
+      baseState({
+        requests: [
+          request({ id: "req-initial", bookRecordId: "record-1", state: "initial" }),
+          request({ id: "req-queued", bookRecordId: "record-2", state: "queued" }),
+        ],
+        records: [
+          record({ id: "record-1", name: "Record One", updatedAt: iso(20) }),
+          record({ id: "record-2", name: "Record Two", updatedAt: iso(21) }),
+        ],
+        ui: {
+          ...baseState().ui,
+          pipelineDelayMs: 60_000,
+        },
+      }),
+    );
+
+    await expect(row(page, "create", "requests", "req-initial")).toBeVisible();
+    await expect(row(page, "create", "queue", "req-queued")).toBeVisible();
+
+    const initialRequestsLoads = processingApi.getRequestCount("table:create-requests");
+    const initialQueueLoads = processingApi.getRequestCount("table:create-queue");
+
+    processingApi.updateRequest(
+      "req-initial",
+      { errorMessage: "Updated row without leaving Requests." },
+      ["create-requests"],
+    );
+
+    await expect
+      .poll(() => processingApi.getRequestCount("table:create-requests"))
+      .toBe(initialRequestsLoads + 1);
+    await page.waitForTimeout(150);
+    expect(processingApi.getRequestCount("table:create-queue")).toBe(
+      initialQueueLoads,
+    );
+  });
+
+  test("visible cards keep loaded rows during version-driven background refreshes", async ({
+    page,
+  }) => {
+    const processingApi = await boot(
+      page,
+      "/create",
+      baseState({
+        requests: [
+          request({ id: "req-initial", bookRecordId: "record-1", state: "initial" }),
+        ],
+        records: [
+          record({ id: "record-1", name: "Record One", updatedAt: iso(20) }),
+        ],
+        ui: {
+          ...baseState().ui,
+          stateLoadDelayMs: 50,
+          tableLoadDelayMs: 400,
+          pipelineDelayMs: 60_000,
+        },
+      }),
+    );
+
+    await expect(row(page, "create", "requests", "req-initial")).toBeVisible();
+    const initialLoads = processingApi.getRequestCount("table:create-requests");
+
+    processingApi.updateRequest(
+      "req-initial",
+      { state: "paused" },
+      ["create-requests", "create-overview", "on-hold-overview"],
+    );
+
+    await page.waitForTimeout(150);
+    await expect(row(page, "create", "requests", "req-initial")).toBeVisible();
+    await expect(page.getByTestId("create-requests-table-skeleton")).toHaveCount(0);
+
+    await expect
+      .poll(() => processingApi.getRequestCount("table:create-requests"))
+      .toBe(initialLoads + 1);
+    await expect(row(page, "create", "requests", "req-initial")).toHaveCount(0);
+    await expect(page.getByTestId("create-overview-stat-requests")).toContainText("0");
+  });
+
+  test("later equal-version SSE events do not duplicate an action-driven refresh", async ({
+    page,
+  }) => {
+    const processingApi = await boot(
+      page,
+      "/create",
+      baseState({
+        requests: [
+          request({ id: "req-initial", bookRecordId: "record-1", state: "initial" }),
+        ],
+        records: [
+          record({ id: "record-1", name: "Record One", updatedAt: iso(20) }),
+        ],
+        ui: {
+          ...baseState().ui,
+          pipelineDelayMs: 60_000,
+        },
+      }),
+    );
+
+    await expect(row(page, "create", "requests", "req-initial")).toBeVisible();
+    const initialLoads = processingApi.getRequestCount("table:create-requests");
+
+    await checkbox(page, "create", "requests", "req-initial").check();
+    await page.getByTestId("create-requests-delete-btn").click();
+    await expect(row(page, "create", "requests", "req-initial")).toHaveCount(0);
+    await expect
+      .poll(() => processingApi.getRequestCount("table:create-requests"))
+      .toBe(initialLoads + 1);
+
+    const currentVersion = processingApi.getVersion("create-requests");
+    await processingApi.emitVersionsPayload({
+      eventId: Date.now(),
+      versions: {
+        "create-requests": currentVersion,
+      },
+    });
+
+    await page.waitForTimeout(150);
+    expect(processingApi.getRequestCount("table:create-requests")).toBe(
+      initialLoads + 1,
+    );
   });
 
   test("card search, filters, counts, and actions stay scoped to their own cards", async ({

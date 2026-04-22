@@ -27,6 +27,7 @@ const SEARCH_PLACEHOLDER =
   "Search name, URL, category, writer, translator, or publisher";
 const PROCESSING_TABLE_BATCH_SIZE = 60;
 const PROCESSING_TABLE_PREFETCH_TRIGGER = 30;
+const PROCESSING_CARD_VISIBILITY_ROOT_MARGIN = "300px 0px";
 const SYNC_RUN_MODE_MANUAL = "manual";
 const SYNC_RUN_MODE_CATALOG_AUTOMATION = "catalog_automation";
 const SYNC_RUN_MODE_INCOMPLETE_AUTOMATION = "incomplete_automation";
@@ -91,6 +92,16 @@ function splitSyncMessage(message) {
 function catalogRecordCountMessage(recordCount) {
   const total = Number.isFinite(recordCount) ? recordCount : 0;
   return `Catalog now has ${total} ${total === 1 ? "book record" : "book records"}.`;
+}
+
+function processingStreamStatusMessage(streamMode) {
+  if (streamMode === "reconnecting") {
+    return "Live updates reconnecting. Refresh checks continue every 15 seconds.";
+  }
+  if (streamMode === "unsupported") {
+    return "Live updates are unavailable in this browser.";
+  }
+  return "";
 }
 
 function normalizeCatalogCountMessage(message, recordCount) {
@@ -323,12 +334,23 @@ function AutomationFieldSkeleton({ testId, label, controlClassName = "" }) {
 }
 
 function PageFrame({ pageId, title, children }) {
+  const { streamMode } = useBookProcessing();
+  const streamStatusMessage = processingStreamStatusMessage(streamMode);
+
   return (
     <div className="processing-page page-stack" data-testid={`${pageId}-page`}>
       <section className="detail-card processing-page-header">
         <div className="panel-header">
           <div>
             <h1>{title}</h1>
+            {streamStatusMessage ? (
+              <p
+                className="processing-table-muted"
+                data-testid={`${pageId}-stream-status`}
+              >
+                {streamStatusMessage}
+              </p>
+            ) : null}
           </div>
         </div>
       </section>
@@ -406,6 +428,11 @@ function ContributorsCell({ row }) {
 }
 
 function processingCardFromState(cardKey, statePayload) {
+  const sharedCard = statePayload?.cards?.[cardKey];
+  if (sharedCard) {
+    return sharedCard;
+  }
+
   const summary = statePayload?.summary || {};
   const syncStates = statePayload?.syncStates || {};
   const catalogSync = syncStates.catalog || statePayload?.sync || null;
@@ -446,6 +473,30 @@ function processingCardFromState(cardKey, statePayload) {
   };
 
   return cards[cardKey] || null;
+}
+
+function processingCardCountFromState(cardKey, statePayload) {
+  const summary = statePayload?.summary || {};
+  const catalogSummary = summary.catalog || {};
+  const createSummary = summary.create || {};
+  const onHoldSummary = summary.onHold || {};
+  const incompleteSummary = summary.incomplete || {};
+
+  const counts = {
+    "catalog-records": catalogSummary.records,
+    "create-requests": createSummary.requests,
+    "create-queue": createSummary.queue,
+    "create-processing": createSummary.processing,
+    "create-created": createSummary.created,
+    "on-hold-paused": onHoldSummary.paused,
+    "on-hold-failed": onHoldSummary.failed,
+    "on-hold-duplicate": onHoldSummary.duplicate,
+    "on-hold-deleted": onHoldSummary.deleted,
+    "incomplete-records": incompleteSummary.incomplete,
+    "incomplete-completed": incompleteSummary.resolved,
+  };
+
+  return Number.isFinite(counts[cardKey]) ? counts[cardKey] : null;
 }
 
 function normalizeSortValue(value) {
@@ -711,11 +762,12 @@ function processingCardPath(cardKey) {
   return `/processing/card/?${search.toString()}`;
 }
 
-function processingTablePath(cardKey, filters, offset, limit) {
+function processingTablePath(cardKey, filters, offset, limit, includeFacets = true) {
   const search = new URLSearchParams({
     card: cardKey,
     offset: String(offset),
     limit: String(limit),
+    includeFacets: includeFacets ? "1" : "0",
   });
   if (filters.q) {
     search.set("q", filters.q);
@@ -730,9 +782,19 @@ function processingTablePath(cardKey, filters, offset, limit) {
 }
 
 function useProcessingCardData({ cardKey, enabled }) {
-  const { getCardRefreshToken } = useBookProcessing();
-  const refreshToken = getCardRefreshToken(cardKey);
+  const {
+    getDomainVersion,
+    isSharedProcessingCard,
+    processingState,
+    processingStateLoaded,
+    processingStateInitialLoading,
+    processingStateRefreshing,
+    processingStateError,
+  } = useBookProcessing();
+  const usesSharedState = enabled && isSharedProcessingCard(cardKey);
+  const latestKnownVersion = getDomainVersion(cardKey);
   const requestIdRef = useRef(0);
+  const loadedVersionRef = useRef(latestKnownVersion);
   const [cardState, setCardState] = useState({
     data: null,
     loadedOnce: false,
@@ -740,9 +802,16 @@ function useProcessingCardData({ cardKey, enabled }) {
     refreshing: false,
     error: "",
   });
+  const sharedCardData = useMemo(
+    () =>
+      usesSharedState
+        ? processingCardFromState(cardKey, processingState)
+        : null,
+    [cardKey, processingState, usesSharedState],
+  );
 
   const loadCard = useCallback(() => {
-    if (!enabled) {
+    if (!enabled || usesSharedState) {
       setCardState({
         data: null,
         loadedOnce: false,
@@ -789,15 +858,19 @@ function useProcessingCardData({ cardKey, enabled }) {
         }));
         return null;
       });
-  }, [cardKey, enabled]);
+  }, [cardKey, enabled, usesSharedState]);
 
   useEffect(() => {
+    if (usesSharedState) {
+      return undefined;
+    }
     loadCard();
     return undefined;
-  }, [loadCard, refreshToken]);
+  }, [loadCard, usesSharedState]);
 
   useEffect(() => {
     if (
+      usesSharedState ||
       !enabled ||
       !["syncing", "pausing"].includes(cardState.data?.sync?.status || "")
     ) {
@@ -810,7 +883,30 @@ function useProcessingCardData({ cardKey, enabled }) {
     return () => {
       window.clearInterval(timerId);
     };
-  }, [cardState.data?.sync?.status, enabled, loadCard]);
+  }, [cardState.data?.sync?.status, enabled, loadCard, usesSharedState]);
+
+  useEffect(() => {
+    if (usesSharedState || !enabled || !cardState.loadedOnce) {
+      loadedVersionRef.current = latestKnownVersion;
+      return undefined;
+    }
+    if (latestKnownVersion <= loadedVersionRef.current) {
+      return undefined;
+    }
+    loadedVersionRef.current = latestKnownVersion;
+    loadCard();
+    return undefined;
+  }, [cardState.loadedOnce, enabled, latestKnownVersion, loadCard, usesSharedState]);
+
+  if (usesSharedState) {
+    return {
+      data: sharedCardData,
+      loadedOnce: enabled ? processingStateLoaded : false,
+      initialLoading: Boolean(enabled && processingStateInitialLoading),
+      refreshing: Boolean(enabled && processingStateRefreshing),
+      error: enabled ? processingStateError : "",
+    };
+  }
 
   return {
     data: cardState.data,
@@ -922,19 +1018,32 @@ function TableSkeletonRows({
 }
 
 function useProcessingTableData({ cardKey, filters, enabled }) {
-  const { getCardRefreshToken } = useBookProcessing();
+  const { getDomainVersion, processingState, processingStateLoaded } =
+    useBookProcessing();
+  const visibilityObserverRef = useRef(null);
+  const fetchInFlightRequestIdRef = useRef(0);
+  const [visibilityNode, setVisibilityNode] = useState(null);
   const tableShellRef = useRef(null);
   const observerRef = useRef(null);
   const loadMoreTimerRef = useRef(null);
   const requestIdRef = useRef(0);
-  const refreshToken = getCardRefreshToken(cardKey);
-  const lastRefreshTokenRef = useRef(refreshToken);
+  const latestKnownVersion = getDomainVersion(cardKey);
+  const filtersActive = Boolean(filters.q || filters.category || filters.status);
+  const sharedCount = filtersActive
+    ? null
+    : processingCardCountFromState(cardKey, processingState);
+  const filterSignature = `${filters.q}::${filters.category}::${filters.status}`;
+  const [isVisible, setIsVisible] = useState(
+    typeof window === "undefined" || typeof IntersectionObserver === "undefined",
+  );
   const [tableState, setTableState] = useState({
     rows: [],
     totalCount: 0,
     categoryOptions: [],
     statusOptions: [],
     hasMore: false,
+    latestKnownVersion,
+    loadedVersion: 0,
     loadedOnce: false,
     initialLoading: false,
     refreshing: false,
@@ -943,34 +1052,53 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const fetchTable = useCallback(
-    async ({ offset = 0, limit = PROCESSING_TABLE_BATCH_SIZE, append = false }) => {
+    async ({
+      offset = 0,
+      limit = PROCESSING_TABLE_BATCH_SIZE,
+      append = false,
+      includeFacets = true,
+      hardReload = false,
+    }) => {
       if (!enabled) {
         return null;
       }
 
       const requestId = requestIdRef.current + 1;
       requestIdRef.current = requestId;
+      fetchInFlightRequestIdRef.current = requestId;
       setTableState((current) => ({
         ...current,
-        initialLoading: !current.loadedOnce && !append,
-        refreshing: current.loadedOnce && !append,
+        latestKnownVersion: Math.max(current.latestKnownVersion, latestKnownVersion),
+        loadedOnce: append ? current.loadedOnce : hardReload ? false : current.loadedOnce,
+        initialLoading:
+          !append && (!current.loadedOnce || hardReload),
+        refreshing:
+          !append && current.loadedOnce && !hardReload,
         error: "",
       }));
 
       try {
         const payload = await apiFetch(
-          processingTablePath(cardKey, filters, offset, limit),
+          processingTablePath(cardKey, filters, offset, limit, includeFacets),
           { cache: "no-store" },
         );
         if (requestIdRef.current !== requestId) {
           return payload;
         }
+        const loadedVersion = Number(payload?.version || latestKnownVersion || 0);
         setTableState((current) => ({
           rows: append ? [...current.rows, ...(payload.rows || [])] : payload.rows || [],
-          totalCount: payload?.pagination?.totalCount || 0,
-          categoryOptions: payload?.filters?.categoryOptions || [],
-          statusOptions: payload?.filters?.statusOptions || [],
+          totalCount:
+            payload?.pagination?.totalCount ??
+            payload?.totalCount ??
+            current.totalCount,
+          categoryOptions:
+            payload?.filters?.categoryOptions || current.categoryOptions,
+          statusOptions:
+            payload?.filters?.statusOptions || current.statusOptions,
           hasMore: Boolean(payload?.pagination?.hasMore),
+          latestKnownVersion: Math.max(current.latestKnownVersion, loadedVersion),
+          loadedVersion,
           loadedOnce: true,
           initialLoading: false,
           refreshing: false,
@@ -983,19 +1111,27 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
         }
         setTableState((current) => ({
           ...current,
-          loadedOnce: true,
           initialLoading: false,
           refreshing: false,
           error: loadError.message || "Unable to load processing table.",
         }));
         return null;
+      } finally {
+        if (fetchInFlightRequestIdRef.current === requestId) {
+          fetchInFlightRequestIdRef.current = 0;
+        }
       }
     },
-    [cardKey, enabled, filters],
+    [cardKey, enabled, filters, latestKnownVersion],
   );
 
   const loadMore = useCallback(() => {
-    if (!enabled || !tableState.hasMore || loadingMore) {
+    if (
+      !enabled ||
+      !tableState.hasMore ||
+      loadingMore ||
+      fetchInFlightRequestIdRef.current
+    ) {
       return;
     }
     setLoadingMore(true);
@@ -1004,6 +1140,7 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
         offset: tableState.rows.length,
         limit: PROCESSING_TABLE_BATCH_SIZE,
         append: true,
+        includeFacets: false,
       }).finally(() => setLoadingMore(false));
       return;
     }
@@ -1015,6 +1152,7 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
         offset: tableState.rows.length,
         limit: PROCESSING_TABLE_BATCH_SIZE,
         append: true,
+        includeFacets: false,
       }).finally(() => setLoadingMore(false));
       loadMoreTimerRef.current = null;
     }, 120);
@@ -1032,7 +1170,8 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
         !enabled ||
         !tableState.loadedOnce ||
         loadingMore ||
-        !tableState.hasMore
+        !tableState.hasMore ||
+        fetchInFlightRequestIdRef.current
       ) {
         return;
       }
@@ -1052,6 +1191,7 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
     },
     [
       enabled,
+      fetchInFlightRequestIdRef,
       loadingMore,
       loadMore,
       tableState.hasMore,
@@ -1060,11 +1200,50 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
   );
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") {
+      setIsVisible(true);
+      return undefined;
+    }
+
+    if (visibilityObserverRef.current) {
+      visibilityObserverRef.current.disconnect();
+      visibilityObserverRef.current = null;
+    }
+
+    if (!visibilityNode || !enabled) {
+      return undefined;
+    }
+
+    visibilityObserverRef.current = new IntersectionObserver(
+      (entries) => {
+        if (entries.length) {
+          setIsVisible(entries.some((entry) => entry.isIntersecting));
+        }
+      },
+      {
+        root: null,
+        rootMargin: PROCESSING_CARD_VISIBILITY_ROOT_MARGIN,
+        threshold: 0.1,
+      },
+    );
+    visibilityObserverRef.current.observe(visibilityNode);
+
+    return () => {
+      if (visibilityObserverRef.current) {
+        visibilityObserverRef.current.disconnect();
+        visibilityObserverRef.current = null;
+      }
+    };
+  }, [enabled, visibilityNode]);
+
+  useEffect(() => {
     setLoadingMore(false);
     if (typeof window !== "undefined" && loadMoreTimerRef.current) {
       window.clearTimeout(loadMoreTimerRef.current);
       loadMoreTimerRef.current = null;
     }
+    requestIdRef.current += 1;
+    fetchInFlightRequestIdRef.current = 0;
     if (!enabled) {
       setTableState({
         rows: [],
@@ -1072,6 +1251,8 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
         categoryOptions: [],
         statusOptions: [],
         hasMore: false,
+        latestKnownVersion,
+        loadedVersion: 0,
         loadedOnce: false,
         initialLoading: false,
         refreshing: false,
@@ -1079,25 +1260,102 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
       });
       return undefined;
     }
-    fetchTable({ offset: 0, limit: PROCESSING_TABLE_BATCH_SIZE });
+    setTableState((current) => ({
+      ...current,
+      rows: [],
+      totalCount: 0,
+      categoryOptions: [],
+      statusOptions: [],
+      hasMore: false,
+      latestKnownVersion,
+      loadedVersion: 0,
+      loadedOnce: false,
+      initialLoading: false,
+      refreshing: false,
+      error: "",
+    }));
     return undefined;
-  }, [cardKey, enabled, fetchTable, filters.category, filters.q, filters.status]);
+  }, [cardKey, enabled, filterSignature]);
 
   useEffect(() => {
-    if (!enabled || !tableState.loadedOnce) {
-      lastRefreshTokenRef.current = refreshToken;
+    if (!enabled) {
       return undefined;
     }
-    if (lastRefreshTokenRef.current === refreshToken) {
+    setTableState((current) => ({
+      ...current,
+      latestKnownVersion: Math.max(current.latestKnownVersion, latestKnownVersion),
+    }));
+    if (
+      !tableState.loadedOnce &&
+      !filtersActive &&
+      processingStateLoaded &&
+      sharedCount === 0
+    ) {
+      setTableState((current) => ({
+        ...current,
+        rows: [],
+        totalCount: 0,
+        categoryOptions: [],
+        statusOptions: [],
+        hasMore: false,
+        latestKnownVersion: Math.max(current.latestKnownVersion, latestKnownVersion),
+        loadedVersion: latestKnownVersion,
+        loadedOnce: true,
+        initialLoading: false,
+        refreshing: false,
+        error: "",
+      }));
       return undefined;
     }
-    lastRefreshTokenRef.current = refreshToken;
+    if (!tableState.loadedOnce) {
+      if (!filtersActive && !processingStateLoaded) {
+        return undefined;
+      }
+      if (!isVisible) {
+        return undefined;
+      }
+      if (fetchInFlightRequestIdRef.current) {
+        return undefined;
+      }
+      fetchTable({
+        offset: 0,
+        limit: PROCESSING_TABLE_BATCH_SIZE,
+        includeFacets: true,
+        hardReload: false,
+      });
+      return undefined;
+    }
+    if (!isVisible) {
+      return undefined;
+    }
+    if (latestKnownVersion <= tableState.loadedVersion) {
+      return undefined;
+    }
+    if (fetchInFlightRequestIdRef.current) {
+      return undefined;
+    }
     fetchTable({
       offset: 0,
-      limit: Math.max(PROCESSING_TABLE_BATCH_SIZE, tableState.rows.length || 0),
+      limit:
+        tableState.rows.length > 0
+          ? tableState.rows.length
+          : PROCESSING_TABLE_BATCH_SIZE,
+      includeFacets: false,
+      hardReload: false,
     });
     return undefined;
-  }, [cardKey, enabled, fetchTable, refreshToken, tableState.loadedOnce, tableState.rows.length]);
+  }, [
+    enabled,
+    fetchTable,
+    filtersActive,
+    isVisible,
+    latestKnownVersion,
+    processingStateLoaded,
+    sharedCount,
+    tableState.loadedOnce,
+    tableState.loadedVersion,
+    tableState.rows.length,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -1106,6 +1364,9 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
       }
       if (observerRef.current) {
         observerRef.current.disconnect();
+      }
+      if (visibilityObserverRef.current) {
+        visibilityObserverRef.current.disconnect();
       }
     };
   }, []);
@@ -1122,6 +1383,7 @@ function useProcessingTableData({ cardKey, filters, enabled }) {
     refreshing: Boolean(enabled && tableState.refreshing),
     error: enabled ? tableState.error : "",
     loadMore,
+    setCardVisibilityNode: setVisibilityNode,
     tableShellRef,
     observeLoadTrigger,
   };
@@ -1152,7 +1414,7 @@ function ProcessingDataCard({
     status: "",
   });
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const { canLoadProcessingState } = useBookProcessing();
+  const { canLoadProcessingState, processingState } = useBookProcessing();
   const showSelectionColumn = actions.length > 0 && !readOnly;
   const splitBookColumn = bookColumnMode === "split";
   const showActionColumn = typeof renderRowAction === "function";
@@ -1175,6 +1437,7 @@ function ProcessingDataCard({
     loadingMore,
     refreshing,
     error: tableError,
+    setCardVisibilityNode,
     tableShellRef,
     observeLoadTrigger,
   } = useProcessingTableData({
@@ -1218,15 +1481,24 @@ function ProcessingDataCard({
     () => countActiveFilters(filters, filterFields, defaultFilters),
     [defaultFilters, filterFields, filters],
   );
+  const sharedCount = useMemo(
+    () =>
+      !filters.q && !filters.category && !filters.status
+        ? processingCardCountFromState(cardKey, processingState)
+        : null,
+    [cardKey, filters.category, filters.q, filters.status, processingState],
+  );
   const visibleRows = rows;
   const visibleColumnCount =
     (showSelectionColumn ? 1 : 0) +
     (splitBookColumn ? 6 : 5) +
     (showDetailsColumn ? 1 : 0) +
     (showActionColumn ? 1 : 0);
-  const showInitialTableSkeleton = initialLoading && !loadedOnce;
-  const showRefreshSkeletonRows =
-    (loadingMore || refreshing) && visibleRows.length > 0;
+  const showInitialTableSkeleton =
+    initialLoading || (!loadedOnce && Number(sharedCount) > 0);
+  const showRefreshSkeletonRows = loadingMore && visibleRows.length > 0;
+  const countValue =
+    loadedOnce || sharedCount === null ? totalCount : sharedCount;
 
   useEffect(() => {
     const visibleIds = new Set(visibleRows.map((row) => row.id));
@@ -1294,19 +1566,20 @@ function ProcessingDataCard({
   const countBadge = (
     <span
       className="catalog-result-count processing-card-title-count"
-      aria-label={`${totalCount} results`}
+      aria-label={`${countValue} results`}
       data-testid={`${pageId}-${cardId}-count`}
     >
-      {showInitialTableSkeleton ? (
+      {showInitialTableSkeleton && sharedCount === null ? (
         <ProcessingCountSkeleton />
       ) : (
-        totalCount
+        countValue
       )}
     </span>
   );
 
   return (
     <section
+      ref={setCardVisibilityNode}
       className={`detail-card processing-card processing-list-card processing-replacement-card${
         fullSpan ? " processing-card-span-full" : ""
       }${className ? ` ${className}` : ""}`}
@@ -1405,7 +1678,7 @@ function ProcessingDataCard({
       <div
         ref={tableShellRef}
         className="processing-table-shell processing-table-shell--mobile-cards"
-        aria-busy={initialLoading || loadingMore || refreshing}
+        aria-busy={initialLoading || loadingMore}
       >
         <table
           className="simple-table processing-table table-mobile-cards"
@@ -1618,6 +1891,8 @@ function AutomationPanel({
   title,
   automation = DEFAULT_AUTOMATION_CARD,
   sync = DEFAULT_SYNC_CARD,
+  blockedByExternalRuntime = false,
+  onOptimisticSyncChange = null,
   recordCount,
   loading = false,
   saving = false,
@@ -1695,13 +1970,14 @@ function AutomationPanel({
   const hasOwnedSync = effectiveSync.status !== "idle";
   const ownsSync =
     hasOwnedSync && effectiveSync.runMode === runMode;
-  const blockedByOtherSync =
-    hasActiveSync && effectiveSync.runMode !== runMode;
+  const blockedByOtherRuntime =
+    hasOwnedSync && effectiveSync.runMode !== runMode;
   const isRunning = ownsSync;
   const isPausing = ownsSync && effectiveSync.status === "pausing";
   const isPaused = ownsSync && effectiveSync.status === "paused";
   const busy = saving || running;
-  const controlsDisabled = busy || hasActiveSync || blockedByOtherSync;
+  const controlsDisabled =
+    busy || hasActiveSync || blockedByOtherRuntime || blockedByExternalRuntime;
   const rawStatusMessage =
     effectiveSync.status !== "idle"
       ? effectiveSync.message || ""
@@ -1725,6 +2001,17 @@ function AutomationPanel({
       setOptimisticSync(null);
     }
   }, [sync.status, sync.runMode]);
+
+  useEffect(() => {
+    onOptimisticSyncChange?.(
+      optimisticSync
+        ? {
+            ...optimisticSync,
+            runMode,
+          }
+        : null,
+    );
+  }, [onOptimisticSyncChange, optimisticSync, runMode]);
 
   useEffect(() => {
     if (!optimisticSync || sync.status !== "idle" || typeof window === "undefined") {
@@ -1836,7 +2123,7 @@ function AutomationPanel({
           label: `Run ${runLabel}`,
           icon: <PlayIcon />,
           state: "idle",
-          disabled: busy || blockedByOtherSync,
+          disabled: busy || blockedByOtherRuntime || blockedByExternalRuntime,
           onClick: () =>
             runWithOptimisticState(
               {
@@ -1971,6 +2258,8 @@ function CatalogSyncPanel({
   loading = false,
   sync = DEFAULT_SYNC_CARD,
   recordCount,
+  blockedByExternalRuntime = false,
+  onOptimisticSyncChange = null,
 }) {
   const [pauseRequested, setPauseRequested] = useState(false);
   const [optimisticSync, setOptimisticSync] = useState(null);
@@ -1987,6 +2276,7 @@ function CatalogSyncPanel({
           runMode: SYNC_RUN_MODE_MANUAL,
         };
   const syncPhaseStatus = catalogPhaseStatus(effectiveSync, CATALOG_SYNC_PHASE);
+  const syncPhase = effectiveSync.phase || effectiveSync.progress?.phase || CATALOG_SYNC_PHASE;
   const hasActiveSync =
     effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
   const hasPausedSync = effectiveSync.status === "paused";
@@ -1994,9 +2284,14 @@ function CatalogSyncPanel({
     hasPausedSync && effectiveSync.runMode === SYNC_RUN_MODE_MANUAL;
   const manualOwnsActiveSync =
     hasActiveSync && effectiveSync.runMode === SYNC_RUN_MODE_MANUAL;
-  const otherModeOwnsSync =
-    hasActiveSync &&
-    effectiveSync.runMode !== SYNC_RUN_MODE_MANUAL;
+  const automationPausedRequestCreation =
+    hasPausedSync &&
+    effectiveSync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION &&
+    syncPhase === CATALOG_REQUEST_CREATION_PHASE;
+  const otherModeOwnsRuntime =
+    effectiveSync.status !== "idle" &&
+    effectiveSync.runMode !== SYNC_RUN_MODE_MANUAL &&
+    !automationPausedRequestCreation;
   const isSyncing = manualOwnsActiveSync;
   const isPausing =
     manualOwnsActiveSync &&
@@ -2015,6 +2310,17 @@ function CatalogSyncPanel({
       setOptimisticSync(null);
     }
   }, [sync.status, sync.runMode]);
+
+  useEffect(() => {
+    onOptimisticSyncChange?.(
+      optimisticSync
+        ? {
+            ...optimisticSync,
+            runMode: SYNC_RUN_MODE_MANUAL,
+          }
+        : null,
+    );
+  }, [onOptimisticSyncChange, optimisticSync]);
 
   useEffect(() => {
     if (!optimisticSync || sync.status !== "idle" || typeof window === "undefined") {
@@ -2106,7 +2412,8 @@ function CatalogSyncPanel({
             label: "Start sync",
             icon: <PlayIcon />,
             state: "idle",
-            disabled: syncBusy || otherModeOwnsSync,
+            disabled:
+              syncBusy || otherModeOwnsRuntime || blockedByExternalRuntime,
             onClick: () =>
               runWithOptimisticSync(
                 {
@@ -2212,6 +2519,7 @@ export function CatalogProcessingPage() {
     cardKey: "catalog-automation",
     enabled: canLoadProcessingState,
   });
+  const [optimisticCatalogRuntime, setOptimisticCatalogRuntime] = useState(null);
   const catalogAutomationSaving = Boolean(busyCards["catalog-automation-save"]);
   const catalogAutomationRunning = Boolean(busyCards["catalog-automation-run"]);
   const summary = catalogOverviewCard?.summary || {};
@@ -2219,6 +2527,32 @@ export function CatalogProcessingPage() {
   const catalogAutomation = catalogAutomationCard?.automation || DEFAULT_AUTOMATION_CARD;
   const catalogAutomationSync =
     catalogAutomationCard?.sync || DEFAULT_SYNC_CARD;
+  const effectiveCatalogSync =
+    catalogSync.status !== "idle" || !optimisticCatalogRuntime
+      ? catalogSync
+      : {
+          ...catalogSync,
+          status: optimisticCatalogRuntime.status,
+          message: optimisticCatalogRuntime.message,
+          runMode: optimisticCatalogRuntime.runMode || SYNC_RUN_MODE_MANUAL,
+        };
+  const catalogRuntimePhase =
+    effectiveCatalogSync.phase ||
+    effectiveCatalogSync.progress?.phase ||
+    CATALOG_SYNC_PHASE;
+  const automationPausedRequestCreation =
+    effectiveCatalogSync.status === "paused" &&
+    effectiveCatalogSync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION &&
+    catalogRuntimePhase === CATALOG_REQUEST_CREATION_PHASE;
+  const catalogRuntimeBlocksModeSwitch =
+    effectiveCatalogSync.status !== "idle" &&
+    !automationPausedRequestCreation;
+  const manualRuntimeOwnsCatalog =
+    catalogRuntimeBlocksModeSwitch &&
+    effectiveCatalogSync.runMode === SYNC_RUN_MODE_MANUAL;
+  const automationRuntimeOwnsCatalog =
+    catalogRuntimeBlocksModeSwitch &&
+    effectiveCatalogSync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION;
 
   return (
     <PageFrame pageId="catalog" title="Catalog">
@@ -2251,12 +2585,16 @@ export function CatalogProcessingPage() {
           loading={!catalogSyncLoaded}
           sync={catalogSync}
           recordCount={summary.records}
+          blockedByExternalRuntime={automationRuntimeOwnsCatalog}
+          onOptimisticSyncChange={setOptimisticCatalogRuntime}
         />
         <AutomationPanel
           pageId="catalog"
           title="Automation"
           automation={catalogAutomation}
           sync={catalogAutomationSync}
+          blockedByExternalRuntime={manualRuntimeOwnsCatalog}
+          onOptimisticSyncChange={setOptimisticCatalogRuntime}
           recordCount={summary.records}
           loading={!catalogAutomationLoaded}
           saving={catalogAutomationSaving}

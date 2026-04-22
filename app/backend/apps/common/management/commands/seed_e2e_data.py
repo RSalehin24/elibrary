@@ -104,19 +104,19 @@ SUBMISSION_TITLES = (
 
 CATALOG_ENTRIES = (
     {
-        "title": "E2E Alpha Catalog Book",
+        "title": "000 E2E Alpha Catalog Book",
         "source_url": f"{E2E_SOURCE_PREFIX}alpha-catalog-book/",
         "author_line": DEFAULT_WRITER,
         "category": DEFAULT_CATEGORY,
     },
     {
-        "title": "E2E Beta Catalog Book",
+        "title": "001 E2E Beta Catalog Book",
         "source_url": f"{E2E_SOURCE_PREFIX}beta-catalog-book/",
         "author_line": DEFAULT_WRITER,
         "category": DEFAULT_CATEGORY,
     },
     {
-        "title": "E2E Incomplete Catalog Book",
+        "title": "002 E2E Incomplete Catalog Book",
         "source_url": f"{E2E_SOURCE_PREFIX}incomplete-catalog-book/",
         "author_line": DEFAULT_WRITER,
         "category": INCOMPLETE_CATEGORY,
@@ -175,6 +175,17 @@ class Command(BaseCommand):
                 "SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD must be set before seeding E2E data."
             )
 
+        from apps.processing.models import (
+            BookCreationRequest,
+            BookCreationRequestState,
+            BookRecord,
+        )
+        from apps.processing.services import (
+            rebuild_processing_ui_state,
+            reset_processing_data,
+            sync_record_state,
+        )
+
         call_command("seed_superadmin")
         admin = User.objects.filter(email=settings.SUPER_ADMIN_EMAIL).first()
         if admin is None:
@@ -182,6 +193,7 @@ class Command(BaseCommand):
 
         # Reset throttle/session cache so repeated live-browser runs start cleanly.
         cache.clear()
+        reset_processing_data(revoke_tasks=True, purge_queue=True)
 
         with transaction.atomic():
             self.cleanup_existing_records()
@@ -191,6 +203,14 @@ class Command(BaseCommand):
             self.create_reader_state(admin, books["detail"])
             self.create_submissions(admin, books)
             self.create_catalog_state(admin)
+            self.create_processing_state(
+                BookRecord=BookRecord,
+                BookCreationRequest=BookCreationRequest,
+                BookCreationRequestState=BookCreationRequestState,
+                sync_record_state=sync_record_state,
+            )
+
+        rebuild_processing_ui_state()
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -717,3 +737,36 @@ class Command(BaseCommand):
             last_error="Seeded scheduled automation failure.",
             summary=SCHEDULED_RUN_FAILED_SUMMARY,
         )
+
+    def create_processing_state(
+        self,
+        *,
+        BookRecord,
+        BookCreationRequest,
+        BookCreationRequestState,
+        sync_record_state,
+    ):
+        created_record, _ = BookRecord.objects.update_or_create(
+            url=seed_source_url("seeded-created-flow-record"),
+            defaults={
+                "name": "000 E2E Seeded Created Flow Record",
+                "category": DEFAULT_CATEGORY,
+                "writer": DEFAULT_WRITER,
+                "translator": "",
+                "composer": "",
+                "publisher": "",
+                "linked_book": None,
+                "was_incomplete": False,
+                "resolved_from_incomplete": False,
+                "will_resolve_to_category": "",
+                "is_duplicate": False,
+                "duplicate_of_record": None,
+                "source_catalog_entry": None,
+            },
+        )
+        BookCreationRequest.objects.create(
+            book_record=created_record,
+            state=BookCreationRequestState.CREATED,
+            origin=SubmissionOrigin.CURATION,
+        )
+        sync_record_state(created_record)

@@ -13,8 +13,16 @@ app.conf.beat_schedule = {
         "task": "apps.ingestion.tasks.run_catalog_automation_schedule_task",
         "schedule": crontab(),
     },
+    "run-processing-runtime-tick": {
+        "task": "apps.processing.tasks.run_processing_runtime_tick_task",
+        "schedule": 15.0,
+    },
     "run-processing-automation-scheduler": {
         "task": "apps.processing.tasks.run_due_processing_automations_task",
+        "schedule": crontab(),
+    },
+    "run-processing-maintenance-scheduler": {
+        "task": "apps.processing.tasks.run_processing_maintenance_task",
         "schedule": crontab(),
     },
     "recover-stale-processing-jobs": {

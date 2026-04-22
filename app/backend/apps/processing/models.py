@@ -200,6 +200,28 @@ class ProcessingAutomationSettings(TimeStampedModel):
         ordering = ["kind"]
 
 
+class ProcessingUiDomainVersion(TimeStampedModel):
+    domain = models.CharField(max_length=120, unique=True)
+    version = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        ordering = ["domain"]
+
+    def __str__(self):
+        return f"{self.domain}@{self.version}"
+
+
+class ProcessingUiProjection(TimeStampedModel):
+    key = models.CharField(max_length=120, unique=True)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["key"]
+
+    def __str__(self):
+        return self.key
+
+
 __all__ = [
     "BookCreationRequest",
     "BookCreationRequestState",
@@ -207,6 +229,8 @@ __all__ = [
     "BookRecord",
     "ProcessingAutomationKind",
     "ProcessingAutomationSettings",
+    "ProcessingUiDomainVersion",
+    "ProcessingUiProjection",
     "ProcessingSyncState",
     "ProcessingSyncStatus",
 ]

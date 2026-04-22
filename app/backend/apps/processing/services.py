@@ -1,9 +1,10 @@
 import json
-import hashlib
 import logging
 import os
 import sys
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import timedelta, time as time_type
 from time import monotonic
 from types import SimpleNamespace
@@ -13,7 +14,6 @@ from uuid import uuid4
 from bs4 import BeautifulSoup
 from config.celery import app as celery_app
 from django.conf import settings
-from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.db.models import (
     Case,
@@ -31,6 +31,7 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
+from kombu import Queue
 from redis import Redis
 from redis.exceptions import RedisError
 
@@ -54,6 +55,8 @@ from .models import (
     BookRecord,
     ProcessingAutomationKind,
     ProcessingAutomationSettings,
+    ProcessingUiDomainVersion,
+    ProcessingUiProjection,
     ProcessingSyncState,
     ProcessingSyncStatus,
 )
@@ -126,8 +129,6 @@ DEFAULT_AUTOMATION_TIME = time_type(3, 0)
 LEGACY_AUTOMATION_STATUS_MESSAGE = "Not configured."
 PROCESSING_TASK_QUEUE = "processing"
 PROCESSING_WORKER_CACHE_SECONDS = 2
-PROCESSING_PUSH_TICK_LOCK_KEY = "processing:push-tick"
-PROCESSING_PUSH_TICK_LOCK_SECONDS = 1
 PROCESSING_DISPATCH_REQUESTED_AT_KEY = "_dispatchRequestedAt"
 PROCESSING_DISPATCH_TASK_ID_KEY = "_dispatchTaskId"
 PROCESSING_SYNC_CHECKPOINT_KEY_PREFIX = "processing:sync-checkpoint"
@@ -140,6 +141,9 @@ PROCESSING_CARD_CREATE_OVERVIEW = "create-overview"
 PROCESSING_CARD_ON_HOLD_OVERVIEW = "on-hold-overview"
 PROCESSING_CARD_INCOMPLETE_OVERVIEW = "incomplete-overview"
 PROCESSING_CARD_INCOMPLETE_AUTOMATION = "incomplete-automation"
+PROCESSING_CARD_CATALOG_RECORDS = "catalog-records"
+PROCESSING_CARD_INCOMPLETE_RECORDS = "incomplete-records"
+PROCESSING_CARD_INCOMPLETE_COMPLETED = "incomplete-completed"
 
 PROCESSING_REQUEST_CARD_STATES = {
     "create-requests": {BookCreationRequestState.INITIAL},
@@ -152,34 +156,102 @@ PROCESSING_REQUEST_CARD_STATES = {
     "on-hold-deleted": {BookCreationRequestState.DELETED},
 }
 
-PROCESSING_REQUEST_DATA_TARGETS = [
+PROCESSING_SHARED_CARD_KEYS = {
     PROCESSING_CARD_CATALOG_OVERVIEW,
+    PROCESSING_CARD_CATALOG_SYNC,
+    PROCESSING_CARD_CATALOG_AUTOMATION,
     PROCESSING_CARD_CREATE_OVERVIEW,
     PROCESSING_CARD_ON_HOLD_OVERVIEW,
-    "catalog-records",
+    PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+    PROCESSING_CARD_INCOMPLETE_AUTOMATION,
+}
+PROCESSING_SHARED_PROJECTION_DEPENDENCIES = {
+    PROCESSING_CARD_CATALOG_OVERVIEW: {PROCESSING_CARD_CATALOG_OVERVIEW},
+    PROCESSING_CARD_CATALOG_SYNC: {
+        PROCESSING_CARD_CATALOG_SYNC,
+        PROCESSING_CARD_CATALOG_AUTOMATION,
+    },
+    PROCESSING_CARD_CATALOG_AUTOMATION: {PROCESSING_CARD_CATALOG_AUTOMATION},
+    PROCESSING_CARD_CREATE_OVERVIEW: {PROCESSING_CARD_CREATE_OVERVIEW},
+    PROCESSING_CARD_ON_HOLD_OVERVIEW: {PROCESSING_CARD_ON_HOLD_OVERVIEW},
+    PROCESSING_CARD_INCOMPLETE_OVERVIEW: {PROCESSING_CARD_INCOMPLETE_OVERVIEW},
+    PROCESSING_CARD_INCOMPLETE_AUTOMATION: {PROCESSING_CARD_INCOMPLETE_AUTOMATION},
+}
+PROCESSING_TABLE_CARD_KEYS = {
+    PROCESSING_CARD_CATALOG_RECORDS,
+    PROCESSING_CARD_INCOMPLETE_RECORDS,
+    PROCESSING_CARD_INCOMPLETE_COMPLETED,
+    *PROCESSING_REQUEST_CARD_STATES.keys(),
+}
+PROCESSING_CARD_KEYS = [
+    PROCESSING_CARD_CATALOG_OVERVIEW,
+    PROCESSING_CARD_CATALOG_SYNC,
+    PROCESSING_CARD_CATALOG_AUTOMATION,
+    PROCESSING_CARD_CATALOG_RECORDS,
+    PROCESSING_CARD_CREATE_OVERVIEW,
     "create-requests",
     "create-queue",
     "create-processing",
     "create-created",
+    PROCESSING_CARD_ON_HOLD_OVERVIEW,
     "on-hold-paused",
     "on-hold-failed",
     "on-hold-duplicate",
     "on-hold-deleted",
-]
-PROCESSING_RECORD_DATA_TARGETS = [
-    PROCESSING_CARD_CATALOG_OVERVIEW,
-    "catalog-records",
-]
-PROCESSING_INCOMPLETE_DATA_TARGETS = [
     PROCESSING_CARD_INCOMPLETE_OVERVIEW,
-    "incomplete-records",
-    "incomplete-completed",
+    PROCESSING_CARD_INCOMPLETE_AUTOMATION,
+    PROCESSING_CARD_INCOMPLETE_RECORDS,
+    PROCESSING_CARD_INCOMPLETE_COMPLETED,
 ]
+PROCESSING_PAGE_DOMAINS = {
+    PROCESSING_SYNC_KEY_CATALOG: {
+        PROCESSING_CARD_CATALOG_OVERVIEW,
+        PROCESSING_CARD_CATALOG_SYNC,
+        PROCESSING_CARD_CATALOG_AUTOMATION,
+        PROCESSING_CARD_CATALOG_RECORDS,
+    },
+    "create": {
+        PROCESSING_CARD_CREATE_OVERVIEW,
+        "create-requests",
+        "create-queue",
+        "create-processing",
+        "create-created",
+    },
+    "on-hold": {
+        PROCESSING_CARD_ON_HOLD_OVERVIEW,
+        "on-hold-paused",
+        "on-hold-failed",
+        "on-hold-duplicate",
+        "on-hold-deleted",
+    },
+    PROCESSING_SYNC_KEY_INCOMPLETE: {
+        PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+        PROCESSING_CARD_INCOMPLETE_AUTOMATION,
+        PROCESSING_CARD_INCOMPLETE_RECORDS,
+        PROCESSING_CARD_INCOMPLETE_COMPLETED,
+    },
+}
+PROCESSING_STATE_REQUEST_GROUP = {
+    BookCreationRequestState.INITIAL,
+    BookCreationRequestState.QUEUED,
+    BookCreationRequestState.PROCESSING,
+    BookCreationRequestState.CREATED,
+}
+PROCESSING_STATE_ON_HOLD_GROUP = {
+    BookCreationRequestState.PAUSED,
+    BookCreationRequestState.FAILED,
+    BookCreationRequestState.DUPLICATE,
+    BookCreationRequestState.DELETED,
+}
 
 PROCESSING_WORKER_AVAILABILITY = {
     "checked_at": 0.0,
     "available": None,
 }
+PROCESSING_UI_VERSION_COLLECTOR = ContextVar(
+    "processing_ui_version_collector",
+    default=None,
+)
 PROCESSING_CHECKPOINT_REDIS = {
     "url": "",
     "client": None,
@@ -389,15 +461,6 @@ def sync_state_task_payload(state):
         "run_mode": sync_run_mode(state),
     }
 
-
-def snapshot_fingerprint(values):
-    digest = hashlib.sha256()
-    for value in values:
-        digest.update(str(value).encode("utf-8"))
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
 def processing_sync_checkpoint_key(sync_key):
     return f"{PROCESSING_SYNC_CHECKPOINT_KEY_PREFIX}:{sync_key}"
 
@@ -528,12 +591,13 @@ def sync_checkpoint_progress(state):
 
 
 def save_sync_state(state, *, update_fields=None):
-    if update_fields is None:
+    if state.pk is None or update_fields is None:
         state.save()
     else:
         unique_fields = list(dict.fromkeys(update_fields))
         state.save(update_fields=unique_fields)
     sync_checkpoint_progress(state)
+    publish_processing_ui_domains(processing_domains_for_sync_state(state))
     return state
 
 
@@ -784,16 +848,21 @@ def update_automation_run_status(run_mode, message, *, last_run_at=None):
     if last_run_at is not None:
         automation_settings.last_run_at = last_run_at
         update_fields.append("last_run_at")
-    automation_settings.save(update_fields=update_fields)
+    if automation_settings.pk is None:
+        automation_settings.save()
+    else:
+        automation_settings.save(update_fields=update_fields)
+    publish_processing_ui_domains(processing_domains_for_automation(automation_settings.kind))
     return automation_settings
 
 
 def get_sync_state(sync_key=PROCESSING_SYNC_KEY_CATALOG):
-    state, _ = ProcessingSyncState.objects.get_or_create(
-        singleton_key=sync_key,
-        defaults={"message": "Ready to sync."},
-    )
-    sync_checkpoint_progress(state)
+    state = ProcessingSyncState.objects.filter(singleton_key=sync_key).first()
+    if state is None:
+        state = ProcessingSyncState(
+            singleton_key=sync_key,
+            message="Ready to sync.",
+        )
     return state
 
 
@@ -840,7 +909,7 @@ def sync_owner_conflicts(state, run_mode):
 
 
 def serialize_sync_state(state, *, include_remote_pages=True):
-    progress = sync_checkpoint_progress(state)
+    progress = state.progress if isinstance(state.progress, dict) else None
     payload = {
         "status": state.status,
         "progress": progress,
@@ -885,8 +954,7 @@ def persisted_sync_status(state):
     )
     return latest_status or state.status
 
-
-def normalize_automation_settings(automation_settings):
+def normalize_automation_settings(automation_settings, *, persist=False):
     update_fields = []
 
     if not automation_settings.saved:
@@ -901,24 +969,699 @@ def normalize_automation_settings(automation_settings):
         automation_settings.status_message = ""
         update_fields.append("status_message")
 
-    if update_fields:
+    if update_fields and persist and automation_settings.pk:
         automation_settings.save(update_fields=[*update_fields, "updated_at"])
 
     return automation_settings
 
 
 def get_automation_settings(kind):
-    automation_settings, _ = ProcessingAutomationSettings.objects.get_or_create(
-        kind=kind,
-        defaults={
-            "enabled": False,
-            "interval": DEFAULT_AUTOMATION_INTERVAL,
-            "time": DEFAULT_AUTOMATION_TIME,
-            "status_message": "",
-        },
-    )
+    automation_settings = ProcessingAutomationSettings.objects.filter(kind=kind).first()
+    if automation_settings is None:
+        automation_settings = ProcessingAutomationSettings(
+            kind=kind,
+            enabled=False,
+            interval=DEFAULT_AUTOMATION_INTERVAL,
+            time=DEFAULT_AUTOMATION_TIME,
+            saved=False,
+            status_message="",
+        )
     return normalize_automation_settings(automation_settings)
 
+
+def processing_request_card_for_state(state):
+    for card_id, states in PROCESSING_REQUEST_CARD_STATES.items():
+        if state in states:
+            return card_id
+    return None
+
+
+def processing_overview_card_for_state(state):
+    if state in PROCESSING_STATE_REQUEST_GROUP:
+        return PROCESSING_CARD_CREATE_OVERVIEW
+    if state in PROCESSING_STATE_ON_HOLD_GROUP:
+        return PROCESSING_CARD_ON_HOLD_OVERVIEW
+    return None
+
+
+def processing_record_is_incomplete(record_or_snapshot):
+    if record_or_snapshot is None:
+        return False
+    if isinstance(record_or_snapshot, dict):
+        category = record_or_snapshot.get("category")
+        was_incomplete = bool(record_or_snapshot.get("was_incomplete"))
+    else:
+        category = getattr(record_or_snapshot, "category", "")
+        was_incomplete = bool(getattr(record_or_snapshot, "was_incomplete", False))
+    return was_incomplete or category_is_incomplete(category)
+
+
+def processing_record_snapshot(record):
+    if record is None:
+        return None
+    return {
+        "id": str(record.id),
+        "category": record.category,
+        "was_incomplete": bool(record.was_incomplete),
+        "resolved_from_incomplete": bool(record.resolved_from_incomplete),
+        "book_creation_state": record.book_creation_state,
+        "linked_book_id": str(record.linked_book_id) if record.linked_book_id else "",
+        "is_duplicate": bool(record.is_duplicate),
+        "duplicate_of_record_id": (
+            str(record.duplicate_of_record_id) if record.duplicate_of_record_id else ""
+        ),
+    }
+
+
+def processing_request_snapshot(processing_request):
+    if processing_request is None:
+        return None
+    return {
+        "id": str(processing_request.id),
+        "state": processing_request.state,
+        "book_record_id": str(processing_request.book_record_id),
+        "linked_book_id": (
+            str(processing_request.linked_book_id)
+            if processing_request.linked_book_id
+            else ""
+        ),
+        "duplicate_of_request_id": (
+            str(processing_request.duplicate_of_request_id)
+            if processing_request.duplicate_of_request_id
+            else ""
+        ),
+        "duplicate_of_record_id": (
+            str(processing_request.duplicate_of_record_id)
+            if processing_request.duplicate_of_record_id
+            else ""
+        ),
+        "duplicate_confirmed": bool(processing_request.duplicate_confirmed),
+        "is_resumed": bool(processing_request.is_resumed),
+        "is_confirmed_not_duplicate": bool(processing_request.is_confirmed_not_duplicate),
+    }
+
+
+def default_sync_state_payload(scope):
+    return {
+        "status": ProcessingSyncStatus.IDLE,
+        "progress": None,
+        "phase": CATALOG_SYNC_PHASE,
+        "fetchedCount": 0,
+        "skippedCount": 0,
+        "updatedCount": 0,
+        "appendedCount": 0,
+        "message": "Ready to sync.",
+        "pageIndex": 0,
+        "runMode": SYNC_RUN_MODE_MANUAL,
+        "triggerSource": SYNC_TRIGGER_SOURCE_BUTTON,
+        "scope": scope,
+        "workerManaged": False,
+        "remotePages": [],
+    }
+
+
+def default_automation_payload(kind):
+    return {
+        "kind": kind,
+        "enabled": False,
+        "interval": DEFAULT_AUTOMATION_INTERVAL,
+        "time": DEFAULT_AUTOMATION_TIME.strftime("%H:%M"),
+        "saved": False,
+        "lastRunAt": None,
+        "statusMessage": "",
+    }
+
+
+def default_processing_summary_payload():
+    return {
+        "catalog": {
+            "records": 0,
+            "notCreated": 0,
+            "active": 0,
+            "created": 0,
+            "onHold": 0,
+        },
+        "create": {
+            "requests": 0,
+            "queue": 0,
+            "processing": 0,
+            "created": 0,
+        },
+        "onHold": {
+            "paused": 0,
+            "failed": 0,
+            "duplicate": 0,
+            "deleted": 0,
+        },
+        "incomplete": {
+            "incomplete": 0,
+            "resolved": 0,
+        },
+        "notifications": {
+            "activeRequests": 0,
+            "createdCount": 0,
+            "failedCount": 0,
+            "duplicateCount": 0,
+            "latestFailedMessage": "",
+        },
+    }
+
+
+def default_processing_shared_projection_payload(key):
+    summary = default_processing_summary_payload()
+    shared_payloads = {
+        PROCESSING_CARD_CATALOG_OVERVIEW: {
+            "card": PROCESSING_CARD_CATALOG_OVERVIEW,
+            "summary": summary["catalog"],
+            "notifications": summary["notifications"],
+        },
+        PROCESSING_CARD_CATALOG_SYNC: {
+            "card": PROCESSING_CARD_CATALOG_SYNC,
+            "sync": default_sync_state_payload(PROCESSING_SYNC_KEY_CATALOG),
+        },
+        PROCESSING_CARD_CATALOG_AUTOMATION: {
+            "card": PROCESSING_CARD_CATALOG_AUTOMATION,
+            "sync": default_sync_state_payload(PROCESSING_SYNC_KEY_CATALOG),
+            "automation": default_automation_payload(ProcessingAutomationKind.CATALOG),
+        },
+        PROCESSING_CARD_CREATE_OVERVIEW: {
+            "card": PROCESSING_CARD_CREATE_OVERVIEW,
+            "summary": summary["create"],
+        },
+        PROCESSING_CARD_ON_HOLD_OVERVIEW: {
+            "card": PROCESSING_CARD_ON_HOLD_OVERVIEW,
+            "summary": summary["onHold"],
+        },
+        PROCESSING_CARD_INCOMPLETE_OVERVIEW: {
+            "card": PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+            "summary": summary["incomplete"],
+        },
+        PROCESSING_CARD_INCOMPLETE_AUTOMATION: {
+            "card": PROCESSING_CARD_INCOMPLETE_AUTOMATION,
+            "sync": default_sync_state_payload(PROCESSING_SYNC_KEY_INCOMPLETE),
+            "automation": default_automation_payload(ProcessingAutomationKind.INCOMPLETE),
+        },
+    }
+    return shared_payloads.get(key, {})
+
+
+def processing_sync_payload_has_activity(payload, *, scope):
+    if not isinstance(payload, dict):
+        return False
+
+    default_payload = default_sync_state_payload(scope)
+    if payload.get("status") != default_payload["status"]:
+        return True
+    if payload.get("message") != default_payload["message"]:
+        return True
+    if payload.get("runMode") != default_payload["runMode"]:
+        return True
+    if payload.get("triggerSource") != default_payload["triggerSource"]:
+        return True
+    if payload.get("progress") is not None:
+        return True
+    for field_name in (
+        "fetchedCount",
+        "skippedCount",
+        "updatedCount",
+        "appendedCount",
+        "pageIndex",
+    ):
+        if int(payload.get(field_name) or 0):
+            return True
+    return bool(payload.get("workerManaged"))
+
+
+def processing_shared_projection_payloads(*, keys=None):
+    requested_keys = [
+        key
+        for key in (keys or PROCESSING_SHARED_CARD_KEYS)
+        if key in PROCESSING_SHARED_CARD_KEYS
+    ]
+    if not requested_keys:
+        return {}
+
+    requested_key_set = set(requested_keys)
+    payloads = {}
+
+    if requested_key_set & {
+        PROCESSING_CARD_CATALOG_OVERVIEW,
+        PROCESSING_CARD_CREATE_OVERVIEW,
+        PROCESSING_CARD_ON_HOLD_OVERVIEW,
+        PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+    }:
+        summary = processing_summary_payload()
+        if PROCESSING_CARD_CATALOG_OVERVIEW in requested_key_set:
+            payloads[PROCESSING_CARD_CATALOG_OVERVIEW] = {
+                "card": PROCESSING_CARD_CATALOG_OVERVIEW,
+                "summary": summary["catalog"],
+                "notifications": summary["notifications"],
+            }
+        if PROCESSING_CARD_CREATE_OVERVIEW in requested_key_set:
+            payloads[PROCESSING_CARD_CREATE_OVERVIEW] = {
+                "card": PROCESSING_CARD_CREATE_OVERVIEW,
+                "summary": summary["create"],
+            }
+        if PROCESSING_CARD_ON_HOLD_OVERVIEW in requested_key_set:
+            payloads[PROCESSING_CARD_ON_HOLD_OVERVIEW] = {
+                "card": PROCESSING_CARD_ON_HOLD_OVERVIEW,
+                "summary": summary["onHold"],
+            }
+        if PROCESSING_CARD_INCOMPLETE_OVERVIEW in requested_key_set:
+            payloads[PROCESSING_CARD_INCOMPLETE_OVERVIEW] = {
+                "card": PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+                "summary": summary["incomplete"],
+            }
+
+    if requested_key_set & {
+        PROCESSING_CARD_CATALOG_SYNC,
+        PROCESSING_CARD_CATALOG_AUTOMATION,
+    }:
+        catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
+        catalog_sync_payload = (
+            serialize_sync_state(catalog_sync, include_remote_pages=False)
+            if catalog_sync.pk
+            else default_sync_state_payload(PROCESSING_SYNC_KEY_CATALOG)
+        )
+        if PROCESSING_CARD_CATALOG_SYNC in requested_key_set:
+            payloads[PROCESSING_CARD_CATALOG_SYNC] = {
+                "card": PROCESSING_CARD_CATALOG_SYNC,
+                "sync": catalog_sync_payload,
+            }
+        if PROCESSING_CARD_CATALOG_AUTOMATION in requested_key_set:
+            catalog_automation = get_automation_settings(ProcessingAutomationKind.CATALOG)
+            catalog_automation_payload = (
+                serialize_automation_settings(catalog_automation)
+                if catalog_automation.pk
+                else default_automation_payload(ProcessingAutomationKind.CATALOG)
+            )
+            payloads[PROCESSING_CARD_CATALOG_AUTOMATION] = {
+                "card": PROCESSING_CARD_CATALOG_AUTOMATION,
+                "sync": catalog_sync_payload,
+                "automation": catalog_automation_payload,
+            }
+
+    if PROCESSING_CARD_INCOMPLETE_AUTOMATION in requested_key_set:
+        incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
+        incomplete_automation = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
+        incomplete_sync_payload = (
+            serialize_sync_state(incomplete_sync, include_remote_pages=False)
+            if incomplete_sync.pk
+            else default_sync_state_payload(PROCESSING_SYNC_KEY_INCOMPLETE)
+        )
+        incomplete_automation_payload = (
+            serialize_automation_settings(incomplete_automation)
+            if incomplete_automation.pk
+            else default_automation_payload(ProcessingAutomationKind.INCOMPLETE)
+        )
+        payloads[PROCESSING_CARD_INCOMPLETE_AUTOMATION] = {
+            "card": PROCESSING_CARD_INCOMPLETE_AUTOMATION,
+            "sync": incomplete_sync_payload,
+            "automation": incomplete_automation_payload,
+        }
+
+    return payloads
+
+
+def ensure_processing_ui_rows():
+    for domain in PROCESSING_CARD_KEYS:
+        ProcessingUiDomainVersion.objects.get_or_create(
+            domain=domain,
+            defaults={"version": 0},
+        )
+    shared_payloads = processing_shared_projection_payloads(
+        keys=PROCESSING_SHARED_CARD_KEYS
+    )
+    for key in PROCESSING_SHARED_CARD_KEYS:
+        ProcessingUiProjection.objects.get_or_create(
+            key=key,
+            defaults={"payload": shared_payloads[key]},
+        )
+
+
+def rebuild_processing_ui_state(*, keys=None):
+    ensure_processing_ui_rows()
+    target_keys = keys or PROCESSING_SHARED_CARD_KEYS
+    shared_payloads = processing_shared_projection_payloads(keys=target_keys)
+    for key in target_keys:
+        if key not in PROCESSING_SHARED_CARD_KEYS:
+            continue
+        ProcessingUiProjection.objects.update_or_create(
+            key=key,
+            defaults={"payload": shared_payloads[key]},
+        )
+
+
+def processing_ui_versions_map(domains=None):
+    target_domains = PROCESSING_CARD_KEYS if domains is None else list(domains)
+    versions = {domain: 0 for domain in target_domains}
+    for row in ProcessingUiDomainVersion.objects.filter(domain__in=target_domains):
+        versions[row.domain] = int(row.version)
+    return versions
+
+
+def processing_ui_versions_diff(previous_versions, *, domains=None):
+    current_versions = processing_ui_versions_map(domains=domains)
+    changed_versions = {
+        domain: version
+        for domain, version in current_versions.items()
+        if int(version) > int(previous_versions.get(domain, 0))
+    }
+    return changed_versions, current_versions
+
+
+def processing_ui_shared_projection_rows(*, keys=None):
+    requested_keys = [
+        key
+        for key in (keys or PROCESSING_SHARED_CARD_KEYS)
+        if key in PROCESSING_SHARED_CARD_KEYS
+    ]
+    projection_rows = {
+        row.key: row
+        for row in ProcessingUiProjection.objects.filter(key__in=requested_keys)
+    }
+    return {key: projection_rows.get(key) for key in requested_keys}
+
+
+def processing_ui_shared_projection_payload(key):
+    projection = processing_ui_shared_projection_rows(keys=[key]).get(key)
+    if projection is not None:
+        return projection.payload or {}
+    return default_processing_shared_projection_payload(key)
+
+
+@contextmanager
+def collect_processing_ui_version_updates():
+    collector = PROCESSING_UI_VERSION_COLLECTOR.get()
+    if collector is not None:
+        yield collector
+        return
+
+    collector = {}
+    token = PROCESSING_UI_VERSION_COLLECTOR.set(collector)
+    try:
+        yield collector
+    finally:
+        PROCESSING_UI_VERSION_COLLECTOR.reset(token)
+
+
+def _merge_processing_ui_versions(collector, versions):
+    if collector is None:
+        return collector
+    for domain, version in (versions or {}).items():
+        normalized_version = int(version or 0)
+        if normalized_version <= int(collector.get(domain, 0)):
+            continue
+        collector[domain] = normalized_version
+    return collector
+
+
+def _plan_processing_ui_versions(collector, domains):
+    if collector is None or not domains:
+        return collector
+
+    current_versions = processing_ui_versions_map(domains=domains)
+    for domain in domains:
+        collector[domain] = max(
+            int(current_versions.get(domain, 0)),
+            int(collector.get(domain, 0)),
+        ) + 1
+    return collector
+
+
+def _bump_processing_ui_domains(domains):
+    next_versions = {}
+    for domain in domains:
+        version_row, _ = ProcessingUiDomainVersion.objects.select_for_update().get_or_create(
+            domain=domain,
+            defaults={"version": 0},
+        )
+        version_row.version = int(version_row.version) + 1
+        version_row.save(update_fields=["version", "updated_at"])
+        next_versions[domain] = int(version_row.version)
+    return next_versions
+
+
+def processing_shared_projection_keys_for_domains(domains):
+    projection_keys = set()
+    for domain in domains or []:
+        projection_keys.update(
+            PROCESSING_SHARED_PROJECTION_DEPENDENCIES.get(domain, set())
+        )
+    return sorted(projection_keys)
+
+
+def publish_processing_ui_domains(domains):
+    normalized_domains = [
+        domain for domain in dict.fromkeys(domains or []) if domain in PROCESSING_CARD_KEYS
+    ]
+    if not normalized_domains:
+        return
+
+    projection_keys = processing_shared_projection_keys_for_domains(normalized_domains)
+    collector = PROCESSING_UI_VERSION_COLLECTOR.get()
+    _plan_processing_ui_versions(collector, normalized_domains)
+
+    def commit():
+        if projection_keys:
+            rebuild_processing_ui_state(keys=projection_keys)
+        with transaction.atomic():
+            next_versions = _bump_processing_ui_domains(normalized_domains)
+        _merge_processing_ui_versions(collector, next_versions)
+
+    transaction.on_commit(commit)
+
+
+def processing_domains_for_request_change(
+    before_state,
+    after_state,
+    *,
+    record=None,
+):
+    domains = {
+        PROCESSING_CARD_CATALOG_OVERVIEW,
+        PROCESSING_CARD_CATALOG_RECORDS,
+    }
+
+    before_card = processing_request_card_for_state(before_state)
+    after_card = processing_request_card_for_state(after_state)
+    if before_card:
+        domains.add(before_card)
+    if after_card:
+        domains.add(after_card)
+
+    before_overview = processing_overview_card_for_state(before_state)
+    after_overview = processing_overview_card_for_state(after_state)
+    if before_overview:
+        domains.add(before_overview)
+    if after_overview:
+        domains.add(after_overview)
+
+    if record is not None:
+        if processing_record_is_incomplete(record):
+            domains.update(
+                {
+                    PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+                    PROCESSING_CARD_INCOMPLETE_RECORDS,
+                }
+            )
+        if record.was_incomplete and record.resolved_from_incomplete:
+            domains.update(
+                {
+                    PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+                    PROCESSING_CARD_INCOMPLETE_COMPLETED,
+                }
+            )
+
+    return domains
+
+
+def processing_domains_for_record_change(
+    before_snapshot,
+    after_snapshot,
+    *,
+    current_request_state=None,
+):
+    domains = {
+        PROCESSING_CARD_CATALOG_OVERVIEW,
+        PROCESSING_CARD_CATALOG_RECORDS,
+    }
+    if current_request_state:
+        current_card = processing_request_card_for_state(current_request_state)
+        if current_card:
+            domains.add(current_card)
+
+    if processing_record_is_incomplete(before_snapshot) or processing_record_is_incomplete(
+        after_snapshot
+    ):
+        domains.update(
+            {
+                PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+                PROCESSING_CARD_INCOMPLETE_RECORDS,
+            }
+        )
+
+    after_resolved = bool(after_snapshot and after_snapshot.get("resolved_from_incomplete"))
+    before_resolved = bool(
+        before_snapshot and before_snapshot.get("resolved_from_incomplete")
+    )
+    if after_resolved or before_resolved:
+        domains.update(
+            {
+                PROCESSING_CARD_INCOMPLETE_OVERVIEW,
+                PROCESSING_CARD_INCOMPLETE_COMPLETED,
+            }
+        )
+
+    return domains
+
+
+def processing_domains_for_sync_state(state):
+    sync_key = (
+        state.singleton_key
+        if isinstance(state, ProcessingSyncState)
+        else str(state or "").strip().lower()
+    )
+    if sync_key == PROCESSING_SYNC_KEY_INCOMPLETE:
+        return {PROCESSING_CARD_INCOMPLETE_AUTOMATION}
+    return {PROCESSING_CARD_CATALOG_SYNC}
+
+
+def processing_domains_for_automation(kind):
+    if kind == ProcessingAutomationKind.INCOMPLETE:
+        return {PROCESSING_CARD_INCOMPLETE_AUTOMATION}
+    return {PROCESSING_CARD_CATALOG_AUTOMATION}
+
+
+def processing_state_payload(*, include_lists=True):
+    projection_rows = processing_ui_shared_projection_rows(keys=PROCESSING_SHARED_CARD_KEYS)
+    versions = processing_ui_versions_map()
+    shared_cards = {
+        key: (
+            (projection_rows.get(key).payload or {})
+            if projection_rows.get(key) is not None
+            else default_processing_shared_projection_payload(key)
+        )
+        for key in PROCESSING_SHARED_CARD_KEYS
+    }
+    summary = {
+        "catalog": shared_cards[PROCESSING_CARD_CATALOG_OVERVIEW].get("summary", {}),
+        "notifications": shared_cards[PROCESSING_CARD_CATALOG_OVERVIEW].get(
+            "notifications",
+            {},
+        ),
+        "create": shared_cards[PROCESSING_CARD_CREATE_OVERVIEW].get("summary", {}),
+        "onHold": shared_cards[PROCESSING_CARD_ON_HOLD_OVERVIEW].get("summary", {}),
+        "incomplete": shared_cards[PROCESSING_CARD_INCOMPLETE_OVERVIEW].get(
+            "summary",
+            {},
+        ),
+    }
+    automation = {
+        "catalog": shared_cards[PROCESSING_CARD_CATALOG_AUTOMATION].get(
+            "automation",
+            default_automation_payload(ProcessingAutomationKind.CATALOG),
+        ),
+        "incomplete": shared_cards[PROCESSING_CARD_INCOMPLETE_AUTOMATION].get(
+            "automation",
+            default_automation_payload(ProcessingAutomationKind.INCOMPLETE),
+        ),
+    }
+    sync_states = {
+        "catalog": shared_cards[PROCESSING_CARD_CATALOG_SYNC].get(
+            "sync",
+            default_sync_state_payload(PROCESSING_SYNC_KEY_CATALOG),
+        ),
+        "incomplete": shared_cards[PROCESSING_CARD_INCOMPLETE_AUTOMATION].get(
+            "sync",
+            default_sync_state_payload(PROCESSING_SYNC_KEY_INCOMPLETE),
+        ),
+    }
+
+    catalog_sync_updated_at = getattr(
+        projection_rows.get(PROCESSING_CARD_CATALOG_SYNC),
+        "updated_at",
+        None,
+    )
+    incomplete_sync_updated_at = getattr(
+        projection_rows.get(PROCESSING_CARD_INCOMPLETE_AUTOMATION),
+        "updated_at",
+        None,
+    )
+    catalog_sync_version = int(versions.get(PROCESSING_CARD_CATALOG_SYNC, 0))
+    incomplete_sync_version = int(
+        versions.get(PROCESSING_CARD_INCOMPLETE_AUTOMATION, 0)
+    )
+    catalog_sync_has_activity = processing_sync_payload_has_activity(
+        sync_states["catalog"],
+        scope=PROCESSING_SYNC_KEY_CATALOG,
+    )
+    incomplete_sync_has_activity = processing_sync_payload_has_activity(
+        sync_states["incomplete"],
+        scope=PROCESSING_SYNC_KEY_INCOMPLETE,
+    )
+    if sync_is_active_or_paused(SimpleNamespace(**sync_states["incomplete"])):
+        primary_sync_payload = sync_states["incomplete"]
+    elif sync_is_active_or_paused(SimpleNamespace(**sync_states["catalog"])):
+        primary_sync_payload = sync_states["catalog"]
+    elif incomplete_sync_has_activity and not catalog_sync_has_activity:
+        primary_sync_payload = sync_states["incomplete"]
+    elif catalog_sync_has_activity and not incomplete_sync_has_activity:
+        primary_sync_payload = sync_states["catalog"]
+    elif incomplete_sync_version > catalog_sync_version:
+        primary_sync_payload = sync_states["incomplete"]
+    elif catalog_sync_version > incomplete_sync_version:
+        primary_sync_payload = sync_states["catalog"]
+    else:
+        if incomplete_sync_updated_at and (
+            not catalog_sync_updated_at
+            or incomplete_sync_updated_at >= catalog_sync_updated_at
+        ):
+            primary_sync_payload = sync_states["incomplete"]
+        else:
+            primary_sync_payload = sync_states["catalog"]
+    payload = {
+        "summary": summary,
+        "sync": primary_sync_payload,
+        "syncStates": sync_states,
+        "orchestration": {
+            "manualPipelineAdvance": False,
+        },
+        "automation": automation,
+        "cards": shared_cards,
+        "versions": versions,
+    }
+    if include_lists:
+        payload["records"] = serialized_processing_records()
+        payload["requests"] = serialized_processing_requests()
+    return payload
+
+
+def serialized_processing_records():
+    from .serializers import BookRecordSerializer
+
+    return BookRecordSerializer(
+        BookRecord.objects.select_related("linked_book")
+        .prefetch_related("creation_requests")
+        .order_by("name", "id"),
+        many=True,
+    ).data
+
+
+def serialized_processing_requests():
+    from .serializers import BookCreationRequestSerializer
+
+    return BookCreationRequestSerializer(
+        BookCreationRequest.objects.select_related(
+            "book_record",
+            "linked_book",
+            "book_record__linked_book",
+        ).order_by(
+            "-updated_at",
+            "-created_at",
+        ),
+        many=True,
+    ).data
 
 def processing_request_prefetch():
     return Prefetch(
@@ -1061,6 +1804,7 @@ def upsert_remote_records(records):
     skipped_count = 0
     updated_count = 0
     appended_count = 0
+    published_domains = set()
 
     for raw_record in records:
         data = normalize_remote_record(raw_record)
@@ -1099,13 +1843,21 @@ def upsert_remote_records(records):
             .order_by("id")
             .first()
         )
+        before_snapshot = processing_record_snapshot(record)
         if record is None:
             preferred_id = data["id"] or None
             create_kwargs = dict(defaults)
             if preferred_id and not BookRecord.objects.filter(pk=preferred_id).exists():
                 create_kwargs["id"] = preferred_id
             try:
-                BookRecord.objects.create(**create_kwargs)
+                record = BookRecord.objects.create(**create_kwargs)
+                sync_record_state(record)
+                published_domains.update(
+                    processing_domains_for_record_change(
+                        None,
+                        processing_record_snapshot(record),
+                    )
+                )
                 appended_count += 1
                 continue
             except IntegrityError:
@@ -1132,7 +1884,17 @@ def upsert_remote_records(records):
             skipped_count += 1
 
         sync_record_state(record)
+        after_snapshot = processing_record_snapshot(record)
+        if before_snapshot != after_snapshot:
+            published_domains.update(
+                processing_domains_for_record_change(
+                    before_snapshot,
+                    after_snapshot,
+                )
+            )
 
+    if published_domains:
+        publish_processing_ui_domains(published_domains)
     return {
         "skipped_count": skipped_count,
         "updated_count": updated_count,
@@ -2009,9 +2771,11 @@ def preferred_incomplete_resolution_category(record):
 
 def resolve_incomplete_records(record_ids):
     resolved = []
+    published_domains = set()
     for record in BookRecord.objects.filter(pk__in=record_ids):
         if not (record.was_incomplete or category_is_incomplete(record.category)):
             continue
+        before_snapshot = processing_record_snapshot(record)
         record.category = preferred_incomplete_resolution_category(record)
         record.was_incomplete = True
         record.resolved_from_incomplete = True
@@ -2019,10 +2783,18 @@ def resolve_incomplete_records(record_ids):
         record.save()
         latest_request = latest_request_for_record(record)
         if latest_request:
+            previous_state = latest_request.state
             latest_request.state = BookCreationRequestState.CREATED
             latest_request.error_message = ""
             latest_request.progress = None
             latest_request.save()
+            published_domains.update(
+                processing_domains_for_request_change(
+                    previous_state,
+                    BookCreationRequestState.CREATED,
+                    record=record,
+                )
+            )
         else:
             BookCreationRequest.objects.create(
                 id=next_request_id(request_id_for_record(record)),
@@ -2030,7 +2802,23 @@ def resolve_incomplete_records(record_ids):
                 state=BookCreationRequestState.CREATED,
                 origin=SubmissionOrigin.AUTOMATION,
             )
+            published_domains.update(
+                processing_domains_for_request_change(
+                    None,
+                    BookCreationRequestState.CREATED,
+                    record=record,
+                )
+            )
+        published_domains.update(
+            processing_domains_for_record_change(
+                before_snapshot,
+                processing_record_snapshot(record),
+                current_request_state=BookCreationRequestState.CREATED,
+            )
+        )
         resolved.append(record)
+    if published_domains:
+        publish_processing_ui_domains(published_domains)
     return resolved
 
 
@@ -2558,6 +3346,63 @@ def queue_processing_request(processing_request):
     return _reload_processing_request(processing_request.id)
 
 
+def collect_processing_task_ids():
+    task_ids = {
+        str(task_id).strip()
+        for task_id in ProcessingSyncState.objects.exclude(task_id="").values_list(
+            "task_id",
+            flat=True,
+        )
+        if str(task_id).strip()
+    }
+    for progress in BookCreationRequest.objects.exclude(progress__isnull=True).values_list(
+        "progress",
+        flat=True,
+    ):
+        if not isinstance(progress, dict):
+            continue
+        task_id = str(progress.get(PROCESSING_DISPATCH_TASK_ID_KEY) or "").strip()
+        if task_id:
+            task_ids.add(task_id)
+    return task_ids
+
+
+def revoke_processing_task_ids(task_ids, *, terminate=False):
+    revoked = set()
+    for task_id in task_ids or []:
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            continue
+        try:
+            celery_app.control.revoke(normalized_task_id, terminate=terminate)
+        except Exception:
+            logger.warning(
+                "Failed to revoke processing task %s.",
+                normalized_task_id,
+                exc_info=True,
+            )
+            continue
+        revoked.add(normalized_task_id)
+    return revoked
+
+
+def purge_processing_task_queue():
+    try:
+        with celery_app.connection_or_acquire() as connection:
+            queue = Queue(
+                PROCESSING_TASK_QUEUE,
+                routing_key=PROCESSING_TASK_QUEUE,
+            ).bind(connection.default_channel)
+            return int(queue.purge() or 0)
+    except Exception:
+        logger.warning(
+            "Failed to purge processing task queue %s.",
+            PROCESSING_TASK_QUEUE,
+            exc_info=True,
+        )
+        return 0
+
+
 def processing_state_label(state):
     try:
         return BookCreationState(state).label
@@ -2770,9 +3615,14 @@ def build_processing_record_table_payload(
     offset=0,
     limit=PROCESSING_TABLE_DEFAULT_LIMIT,
     selectable=True,
+    include_facets=True,
 ):
-    category_options = distinct_nonempty_values(queryset, "category")
-    status_options = distinct_nonempty_values(queryset, "processing_status")
+    category_options = (
+        distinct_nonempty_values(queryset, "category") if include_facets else None
+    )
+    status_options = (
+        distinct_nonempty_values(queryset, "processing_status") if include_facets else None
+    )
 
     filtered_queryset = queryset
     if query:
@@ -2805,10 +3655,16 @@ def build_processing_record_table_payload(
         "rows": rows,
         "pagination": pagination,
         "hasMore": pagination["hasMore"],
-        "filters": {
-            "categoryOptions": category_options,
-            "statusOptions": status_options,
-        },
+        **(
+            {
+                "filters": {
+                    "categoryOptions": category_options,
+                    "statusOptions": status_options,
+                }
+            }
+            if include_facets
+            else {}
+        ),
     }
 
 
@@ -2820,9 +3676,16 @@ def build_processing_request_table_payload(
     status="",
     offset=0,
     limit=PROCESSING_TABLE_DEFAULT_LIMIT,
+    include_facets=True,
 ):
-    category_options = distinct_nonempty_values(queryset, "book_record__category")
-    status_options = distinct_nonempty_values(queryset, "state")
+    category_options = (
+        distinct_nonempty_values(queryset, "book_record__category")
+        if include_facets
+        else None
+    )
+    status_options = (
+        distinct_nonempty_values(queryset, "state") if include_facets else None
+    )
 
     filtered_queryset = queryset
     if query:
@@ -2849,10 +3712,16 @@ def build_processing_request_table_payload(
         "rows": rows,
         "pagination": pagination,
         "hasMore": pagination["hasMore"],
-        "filters": {
-            "categoryOptions": category_options,
-            "statusOptions": status_options,
-        },
+        **(
+            {
+                "filters": {
+                    "categoryOptions": category_options,
+                    "statusOptions": status_options,
+                }
+            }
+            if include_facets
+            else {}
+        ),
     }
 
 
@@ -2939,7 +3808,16 @@ PROCESSING_TABLE_BUILDERS = {
 }
 
 
-def processing_table_payload(card, *, query="", category="", status="", offset=0, limit=PROCESSING_TABLE_DEFAULT_LIMIT):
+def processing_table_payload(
+    card,
+    *,
+    query="",
+    category="",
+    status="",
+    offset=0,
+    limit=PROCESSING_TABLE_DEFAULT_LIMIT,
+    include_facets=True,
+):
     offset_value = max(0, int(offset or 0))
     limit_value = max(
         1,
@@ -2948,7 +3826,7 @@ def processing_table_payload(card, *, query="", category="", status="", offset=0
     query_value = str(query or "").strip()
 
     if card == "catalog-records":
-        return build_processing_record_table_payload(
+        payload = build_processing_record_table_payload(
             order_catalog_records_queryset(
                 annotate_record_processing_status(
                     BookRecord.objects.select_related("linked_book")
@@ -2960,10 +3838,13 @@ def processing_table_payload(card, *, query="", category="", status="", offset=0
             status=status,
             offset=offset_value,
             limit=limit_value,
+            include_facets=include_facets,
         )
+        payload["version"] = processing_ui_versions_map(domains=[card]).get(card, 0)
+        return payload
 
     if card == "incomplete-records":
-        return build_processing_record_table_payload(
+        payload = build_processing_record_table_payload(
             annotate_record_processing_status(
                 BookRecord.objects.select_related("linked_book")
                 .prefetch_related(processing_request_prefetch())
@@ -2977,10 +3858,13 @@ def processing_table_payload(card, *, query="", category="", status="", offset=0
             offset=offset_value,
             limit=limit_value,
             selectable=False,
+            include_facets=include_facets,
         )
+        payload["version"] = processing_ui_versions_map(domains=[card]).get(card, 0)
+        return payload
 
     if card == "incomplete-completed":
-        return build_processing_request_table_payload(
+        payload = build_processing_request_table_payload(
             BookCreationRequest.objects.filter(state=BookCreationRequestState.CREATED)
             .filter(
                 book_record__was_incomplete=True,
@@ -2993,10 +3877,13 @@ def processing_table_payload(card, *, query="", category="", status="", offset=0
             status=status,
             offset=offset_value,
             limit=limit_value,
+            include_facets=include_facets,
         )
+        payload["version"] = processing_ui_versions_map(domains=[card]).get(card, 0)
+        return payload
 
     if card in PROCESSING_REQUEST_CARD_STATES:
-        return build_processing_request_table_payload(
+        payload = build_processing_request_table_payload(
             BookCreationRequest.objects.filter(state__in=PROCESSING_REQUEST_CARD_STATES[card])
             .select_related("book_record", "linked_book", "book_record__linked_book")
             .order_by("-updated_at", "-created_at", "id"),
@@ -3005,7 +3892,10 @@ def processing_table_payload(card, *, query="", category="", status="", offset=0
             status=status,
             offset=offset_value,
             limit=limit_value,
+            include_facets=include_facets,
         )
+        payload["version"] = processing_ui_versions_map(domains=[card]).get(card, 0)
+        return payload
 
     raise KeyError(card)
 
@@ -3096,357 +3986,13 @@ def processing_summary_payload():
 
 
 def processing_card_payload(card):
-    summary = processing_summary_payload()
-    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
-    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
-    catalog_automation = get_automation_settings(ProcessingAutomationKind.CATALOG)
-    incomplete_automation = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
-
-    cards = {
-        PROCESSING_CARD_CATALOG_OVERVIEW: {
-            "card": PROCESSING_CARD_CATALOG_OVERVIEW,
-            "summary": summary["catalog"],
-        },
-        PROCESSING_CARD_CATALOG_SYNC: {
-            "card": PROCESSING_CARD_CATALOG_SYNC,
-            "sync": serialize_sync_state(catalog_sync, include_remote_pages=False),
-        },
-        PROCESSING_CARD_CATALOG_AUTOMATION: {
-            "card": PROCESSING_CARD_CATALOG_AUTOMATION,
-            "sync": serialize_sync_state(catalog_sync, include_remote_pages=False),
-            "automation": serialize_automation_settings(catalog_automation),
-        },
-        PROCESSING_CARD_CREATE_OVERVIEW: {
-            "card": PROCESSING_CARD_CREATE_OVERVIEW,
-            "summary": summary["create"],
-        },
-        PROCESSING_CARD_ON_HOLD_OVERVIEW: {
-            "card": PROCESSING_CARD_ON_HOLD_OVERVIEW,
-            "summary": summary["onHold"],
-        },
-        PROCESSING_CARD_INCOMPLETE_OVERVIEW: {
-            "card": PROCESSING_CARD_INCOMPLETE_OVERVIEW,
-            "summary": summary["incomplete"],
-        },
-        PROCESSING_CARD_INCOMPLETE_AUTOMATION: {
-            "card": PROCESSING_CARD_INCOMPLETE_AUTOMATION,
-            "sync": serialize_sync_state(incomplete_sync, include_remote_pages=False),
-            "automation": serialize_automation_settings(incomplete_automation),
-        },
-    }
-    if card not in cards:
+    if card not in PROCESSING_SHARED_CARD_KEYS:
         raise KeyError(card)
-    return cards[card]
-
-
-def processing_incomplete_invalidation_snapshot():
-    incomplete_counts = processing_incomplete_counts()
-    incomplete_record_filter = Q(was_incomplete=True) | incomplete_category_query()
-    latest_incomplete_record_updated_at = (
-        BookRecord.objects.filter(incomplete_record_filter).aggregate(
-            latest=Max("updated_at")
-        )["latest"]
-    )
-    completed_incomplete_requests = BookCreationRequest.objects.filter(
-        state=BookCreationRequestState.CREATED,
-        book_record__was_incomplete=True,
-        book_record__resolved_from_incomplete=True,
-    )
-    latest_incomplete_completed_request = completed_incomplete_requests.aggregate(
-        latest=Max("updated_at")
-    )["latest"]
-
+    payload = processing_ui_shared_projection_payload(card)
     return {
-        "current": {
-            "counts": incomplete_counts,
-            "latestRecordUpdatedAt": (
-                latest_incomplete_record_updated_at.isoformat()
-                if latest_incomplete_record_updated_at
-                else None
-            ),
-        },
-        "updated": {
-            "count": completed_incomplete_requests.count(),
-            "latestUpdatedAt": (
-                latest_incomplete_completed_request.isoformat()
-                if latest_incomplete_completed_request
-                else None
-            ),
-        },
+        **payload,
+        "version": processing_ui_versions_map(domains=[card]).get(card, 0),
     }
-
-
-def processing_catalog_record_lock_snapshot():
-    queryset = (
-        BookRecord.objects.select_related("linked_book")
-        .prefetch_related(processing_request_prefetch())
-        .order_by("id")
-    )
-    selectable_ids = []
-    blocked_ids = []
-    for record in queryset:
-        target_ids = selectable_ids if record_is_selectable(record) else blocked_ids
-        target_ids.append(str(record.id))
-
-    return {
-        "selectableCount": len(selectable_ids),
-        "blockedCount": len(blocked_ids),
-        "selectableFingerprint": snapshot_fingerprint(selectable_ids),
-        "blockedFingerprint": snapshot_fingerprint(blocked_ids),
-    }
-
-
-def processing_incomplete_completed_snapshot():
-    queryset = BookCreationRequest.objects.filter(
-        state=BookCreationRequestState.CREATED,
-        book_record__was_incomplete=True,
-        book_record__resolved_from_incomplete=True,
-    ).order_by("id")
-    latest_updated_at = queryset.aggregate(latest=Max("updated_at"))["latest"]
-    ids = list(queryset.values_list("id", flat=True))
-    return {
-        "count": len(ids),
-        "latestUpdatedAt": latest_updated_at.isoformat() if latest_updated_at else None,
-        "idsFingerprint": snapshot_fingerprint(ids),
-    }
-
-
-def processing_request_state_snapshot():
-    snapshot = {}
-    for state in BookCreationRequestState.values:
-        queryset = BookCreationRequest.objects.filter(state=state).order_by("id")
-        latest_updated_at = queryset.aggregate(latest=Max("updated_at"))["latest"]
-        ids = list(queryset.values_list("id", flat=True))
-        snapshot[state] = {
-            "count": len(ids),
-            "latestUpdatedAt": latest_updated_at.isoformat() if latest_updated_at else None,
-            "idsFingerprint": snapshot_fingerprint(ids),
-        }
-    return snapshot
-
-
-def processing_invalidation_snapshot():
-    request_counts = processing_request_counts()
-    summary = processing_summary_payload()
-    request_state_snapshot = processing_request_state_snapshot()
-    latest_record_updated_at = BookRecord.objects.aggregate(
-        latest=Max("updated_at")
-    )["latest"]
-    latest_request_updated_at = BookCreationRequest.objects.aggregate(
-        latest=Max("updated_at")
-    )["latest"]
-    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
-    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
-    catalog_automation = get_automation_settings(ProcessingAutomationKind.CATALOG)
-    incomplete_automation = get_automation_settings(ProcessingAutomationKind.INCOMPLETE)
-
-    return {
-        "summary": summary,
-        "requests": {
-            "counts": request_counts,
-            "states": request_state_snapshot,
-            "latestUpdatedAt": (
-                latest_request_updated_at.isoformat()
-                if latest_request_updated_at
-                else None
-            ),
-        },
-        "records": {
-            "total": BookRecord.objects.count(),
-            "notCreated": BookRecord.objects.filter(
-                book_creation_state=BookCreationState.NOT_CREATED
-            ).count(),
-            "latestUpdatedAt": (
-                latest_record_updated_at.isoformat() if latest_record_updated_at else None
-            ),
-        },
-        "incompleteData": processing_incomplete_invalidation_snapshot(),
-        "catalogRecordLocks": processing_catalog_record_lock_snapshot(),
-        "incompleteCompleted": processing_incomplete_completed_snapshot(),
-        "catalogSync": {
-            "status": catalog_sync.status,
-            "runMode": sync_run_mode(catalog_sync),
-            "phase": sync_phase(catalog_sync),
-            "message": catalog_sync.message,
-            "pageIndex": catalog_sync.page_index,
-            "fetchedCount": catalog_sync.fetched_count,
-            "updatedCount": catalog_sync.updated_count,
-            "appendedCount": catalog_sync.appended_count,
-            "updatedAt": catalog_sync.updated_at.isoformat(),
-        },
-        "incompleteSync": {
-            "status": incomplete_sync.status,
-            "runMode": sync_run_mode(incomplete_sync),
-            "phase": sync_phase(incomplete_sync),
-            "message": incomplete_sync.message,
-            "pageIndex": incomplete_sync.page_index,
-            "fetchedCount": incomplete_sync.fetched_count,
-            "updatedCount": incomplete_sync.updated_count,
-            "appendedCount": incomplete_sync.appended_count,
-            "updatedAt": incomplete_sync.updated_at.isoformat(),
-        },
-        "catalogAutomation": {
-            "enabled": catalog_automation.enabled,
-            "interval": catalog_automation.interval,
-            "time": catalog_automation.time.strftime("%H:%M"),
-            "saved": catalog_automation.saved,
-            "lastRunAt": (
-                catalog_automation.last_run_at.isoformat()
-                if catalog_automation.last_run_at
-                else None
-            ),
-            "statusMessage": catalog_automation.status_message,
-            "updatedAt": catalog_automation.updated_at.isoformat(),
-        },
-        "incompleteAutomation": {
-            "enabled": incomplete_automation.enabled,
-            "interval": incomplete_automation.interval,
-            "time": incomplete_automation.time.strftime("%H:%M"),
-            "saved": incomplete_automation.saved,
-            "lastRunAt": (
-                incomplete_automation.last_run_at.isoformat()
-                if incomplete_automation.last_run_at
-                else None
-            ),
-            "statusMessage": incomplete_automation.status_message,
-            "updatedAt": incomplete_automation.updated_at.isoformat(),
-        },
-    }
-
-
-def sync_snapshot_committed_data(previous_sync, next_sync):
-    return any(
-        previous_sync.get(key) != next_sync.get(key)
-        for key in ("pageIndex", "fetchedCount", "updatedCount", "appendedCount")
-    )
-
-
-def sync_snapshot_completed(previous_sync, next_sync):
-    if previous_sync.get("status") not in {"syncing", "pausing", "paused"}:
-        return False
-    if next_sync.get("status") != ProcessingSyncStatus.IDLE:
-        return False
-    return "complete" in str(next_sync.get("message") or "").casefold()
-
-
-def processing_invalidation_targets(previous_snapshot, next_snapshot):
-    targets = []
-
-    previous_summary = previous_snapshot.get("summary", {})
-    next_summary = next_snapshot.get("summary", {})
-    if previous_summary.get("catalog") != next_summary.get("catalog"):
-        targets.append(PROCESSING_CARD_CATALOG_OVERVIEW)
-    if previous_summary.get("create") != next_summary.get("create"):
-        targets.append(PROCESSING_CARD_CREATE_OVERVIEW)
-    if previous_summary.get("onHold") != next_summary.get("onHold"):
-        targets.append(PROCESSING_CARD_ON_HOLD_OVERVIEW)
-    if previous_summary.get("incomplete") != next_summary.get("incomplete"):
-        targets.append(PROCESSING_CARD_INCOMPLETE_OVERVIEW)
-
-    previous_request_states = previous_snapshot.get("requests", {}).get("states", {})
-    next_request_states = next_snapshot.get("requests", {}).get("states", {})
-    for card_id, states in PROCESSING_REQUEST_CARD_STATES.items():
-        state_changed = any(
-            previous_request_states.get(state) != next_request_states.get(state)
-            for state in states
-        )
-        if state_changed:
-            targets.append(card_id)
-
-    previous_catalog_sync = previous_snapshot.get("catalogSync", {})
-    next_catalog_sync = next_snapshot.get("catalogSync", {})
-    catalog_sync_changed = previous_catalog_sync != next_catalog_sync
-    if catalog_sync_changed and (
-        sync_snapshot_committed_data(previous_catalog_sync, next_catalog_sync)
-        or sync_snapshot_completed(previous_catalog_sync, next_catalog_sync)
-    ):
-        targets.append("catalog-records")
-    if previous_snapshot.get("catalogRecordLocks") != next_snapshot.get("catalogRecordLocks"):
-        targets.append("catalog-records")
-
-    previous_incomplete_sync = previous_snapshot.get("incompleteSync", {})
-    next_incomplete_sync = next_snapshot.get("incompleteSync", {})
-    incomplete_sync_changed = previous_incomplete_sync != next_incomplete_sync
-    if incomplete_sync_changed and (
-        sync_snapshot_committed_data(previous_incomplete_sync, next_incomplete_sync)
-        or sync_snapshot_completed(previous_incomplete_sync, next_incomplete_sync)
-    ):
-        targets.append("incomplete-records")
-    if previous_snapshot.get("incompleteData") != next_snapshot.get("incompleteData"):
-        targets.append("incomplete-records")
-    if previous_snapshot.get("incompleteCompleted") != next_snapshot.get("incompleteCompleted"):
-        targets.append("incomplete-completed")
-    if catalog_sync_changed:
-        targets.extend(
-            [
-                PROCESSING_CARD_CATALOG_SYNC,
-                PROCESSING_CARD_CATALOG_AUTOMATION,
-            ]
-        )
-    if previous_snapshot.get("catalogAutomation") != next_snapshot.get(
-        "catalogAutomation"
-    ):
-        targets.append(PROCESSING_CARD_CATALOG_AUTOMATION)
-    if incomplete_sync_changed:
-        targets.append(PROCESSING_CARD_INCOMPLETE_AUTOMATION)
-    if previous_snapshot.get("incompleteAutomation") != next_snapshot.get(
-        "incompleteAutomation"
-    ):
-        targets.append(PROCESSING_CARD_INCOMPLETE_AUTOMATION)
-    return list(dict.fromkeys(targets))
-
-
-def processing_has_active_work():
-    catalog_sync = get_sync_state(PROCESSING_SYNC_KEY_CATALOG)
-    incomplete_sync = get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE)
-    has_active_sync = any(
-        sync_state.status in SYNC_ACTIVE_STATUSES
-        for sync_state in (catalog_sync, incomplete_sync)
-    )
-    has_active_requests = BookCreationRequest.objects.filter(
-        state__in=ACTIVE_STATES
-    ).exists()
-    return has_active_sync or has_active_requests
-
-
-def advance_processing_push_tick():
-    if not cache.add(
-        PROCESSING_PUSH_TICK_LOCK_KEY,
-        timezone.now().isoformat(),
-        timeout=PROCESSING_PUSH_TICK_LOCK_SECONDS,
-    ):
-        return processing_has_active_work()
-
-    mark_stale_processing_requests()
-    refresh_processing_state()
-
-    active_sync_scopes = [
-        scope
-        for scope, sync_state in (
-            (PROCESSING_SYNC_KEY_CATALOG, get_sync_state(PROCESSING_SYNC_KEY_CATALOG)),
-            (
-                PROCESSING_SYNC_KEY_INCOMPLETE,
-                get_sync_state(PROCESSING_SYNC_KEY_INCOMPLETE),
-            ),
-        )
-        if sync_state.status in SYNC_ACTIVE_STATUSES
-    ]
-    has_active_requests = BookCreationRequest.objects.filter(
-        state__in=ACTIVE_STATES
-    ).exists()
-
-    can_manually_drive_work = (
-        should_run_processing_jobs_inline()
-        or should_manually_advance_processing_work()
-    )
-    if can_manually_drive_work and active_sync_scopes:
-        for scope in active_sync_scopes:
-            advance_sync_once(scope)
-    elif can_manually_drive_work and has_active_requests:
-        advance_pipeline_once()
-
-    return bool(active_sync_scopes or has_active_requests)
-
 
 def create_request_for_record(record, state=BookCreationRequestState.INITIAL, origin=SubmissionOrigin.CURATION):
     if (
@@ -3466,6 +4012,15 @@ def create_request_for_record(record, state=BookCreationRequestState.INITIAL, or
         origin=origin,
     )
     sync_record_state(record)
+    domains = processing_domains_for_request_change(None, state, record=record)
+    if origin == SubmissionOrigin.AUTOMATION:
+        domains.update(
+            {
+                PROCESSING_CARD_CATALOG_AUTOMATION,
+                PROCESSING_CARD_CREATE_OVERVIEW,
+            }
+        )
+    publish_processing_ui_domains(domains)
     if state == BookCreationRequestState.INITIAL:
         processing_request = queue_processing_request(processing_request)
     return processing_request
@@ -3496,6 +4051,7 @@ def update_automation_settings(kind, payload):
     automation_settings.saved = True
     automation_settings.status_message = "Saved."
     automation_settings.save()
+    publish_processing_ui_domains(processing_domains_for_automation(kind))
     return automation_settings
 
 
@@ -3647,29 +4203,37 @@ def run_incomplete_automation(*, trigger_source=SYNC_TRIGGER_SOURCE_BUTTON):
     )
 
 
-@transaction.atomic
-def reset_processing_data():
-    BookCreationRequest.objects.all().delete()
-    BookRecord.objects.update(
-        book_creation_state=BookCreationState.NOT_CREATED,
-        linked_book=None,
-        is_duplicate=False,
-        duplicate_of_record=None,
-    )
-    ProcessingSyncState.objects.all().update(
-        status=ProcessingSyncStatus.IDLE,
-        progress=None,
-        remote_pages=[],
-        page_index=0,
-        fetched_count=0,
-        skipped_count=0,
-        updated_count=0,
-        appended_count=0,
-        message="Ready to sync.",
-        task_id="",
-        queue_name="",
-        last_error="",
-    )
+def reset_processing_data(*, revoke_tasks=False, purge_queue=False):
+    task_ids = collect_processing_task_ids() if revoke_tasks else set()
+    if task_ids:
+        revoke_processing_task_ids(task_ids)
+
+    with transaction.atomic():
+        BookCreationRequest.objects.all().delete()
+        BookRecord.objects.update(
+            book_creation_state=BookCreationState.NOT_CREATED,
+            linked_book=None,
+            is_duplicate=False,
+            duplicate_of_record=None,
+        )
+        ProcessingSyncState.objects.all().update(
+            status=ProcessingSyncStatus.IDLE,
+            progress=None,
+            remote_pages=[],
+            page_index=0,
+            fetched_count=0,
+            skipped_count=0,
+            updated_count=0,
+            appended_count=0,
+            message="Ready to sync.",
+            task_id="",
+            queue_name="",
+            last_error="",
+        )
+        publish_processing_ui_domains(PROCESSING_CARD_KEYS)
+
+    if purge_queue:
+        purge_processing_task_queue()
 
 
 PROCESSING_SOURCE_METADATA_CHECKPOINT = "source-metadata"
@@ -3728,6 +4292,7 @@ def _update_record_from_source_metadata(record, metadata):
     if not isinstance(metadata, dict):
         return record
 
+    before_snapshot = processing_record_snapshot(record)
     source_entry = upsert_source_catalog_entry(metadata)
     raw_data = metadata.get("raw_data") if isinstance(metadata.get("raw_data"), dict) else {}
     desired_values = {
@@ -3748,6 +4313,17 @@ def _update_record_from_source_metadata(record, metadata):
         for field_name in update_fields:
             setattr(record, field_name, desired_values[field_name])
         record.save(update_fields=[*update_fields, "updated_at"])
+        publish_processing_ui_domains(
+            processing_domains_for_record_change(
+                before_snapshot,
+                processing_record_snapshot(record),
+                current_request_state=(
+                    latest_request_for_record(record).state
+                    if latest_request_for_record(record)
+                    else None
+                ),
+            )
+        )
     return record
 
 
@@ -3768,6 +4344,13 @@ def _save_paused_processing_progress(request_id, checkpoint, saved_data):
     processing_request.error_message = ""
     processing_request.save(update_fields=["progress", "error_message", "updated_at"])
     sync_record_state(processing_request.book_record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            BookCreationRequestState.PAUSED,
+            BookCreationRequestState.PAUSED,
+            record=processing_request.book_record,
+        )
+    )
     return processing_request
 
 
@@ -3792,6 +4375,8 @@ def _duplicate_targets(existing_book, processing_request):
 
 def _mark_request_duplicate(processing_request, existing_book):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
+    record_before = processing_record_snapshot(processing_request.book_record)
     target_request, target_record = _duplicate_targets(existing_book, processing_request)
     processing_request.state = BookCreationRequestState.DUPLICATE
     processing_request.linked_book = existing_book
@@ -3815,6 +4400,18 @@ def _mark_request_duplicate(processing_request, existing_book):
     record.duplicate_of_record = target_record
     record.save(update_fields=["linked_book", "is_duplicate", "duplicate_of_record", "updated_at"])
     sync_record_state(record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.DUPLICATE,
+            record=record,
+        )
+        | processing_domains_for_record_change(
+            record_before,
+            processing_record_snapshot(record),
+            current_request_state=BookCreationRequestState.DUPLICATE,
+        )
+    )
     return processing_request
 
 
@@ -3845,6 +4442,8 @@ def _persist_processing_book(processing_request, normalized_url, scraped_data):
 
 def _finalize_processing_request(processing_request, book, scraped_data):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
+    record_before = processing_record_snapshot(processing_request.book_record)
     if processing_request.state == BookCreationRequestState.DELETED:
         if book.deleted_at is None:
             book.soft_delete()
@@ -3882,6 +4481,18 @@ def _finalize_processing_request(processing_request, book, scraped_data):
     if record_update_fields:
         record.save(update_fields=[*record_update_fields, "updated_at"])
     sync_record_state(record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.CREATED,
+            record=record,
+        )
+        | processing_domains_for_record_change(
+            record_before,
+            processing_record_snapshot(record),
+            current_request_state=BookCreationRequestState.CREATED,
+        )
+    )
     return processing_request
 
 
@@ -4000,6 +4611,7 @@ def _process_request_once(processing_request):
 
 def _fail_processing_request(processing_request, error):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
     if processing_request.state in {
         BookCreationRequestState.DELETED,
         BookCreationRequestState.PAUSED,
@@ -4011,6 +4623,13 @@ def _fail_processing_request(processing_request, error):
     processing_request.error_message = str(error)
     processing_request.save(update_fields=["state", "error_message", "updated_at"])
     sync_record_state(processing_request.book_record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.FAILED,
+            record=processing_request.book_record,
+        )
+    )
     return processing_request
 
 
@@ -4058,6 +4677,13 @@ def _transition_request_state(request_id, from_state, to_state):
                 update_fields.append("progress")
         processing_request.save(update_fields=update_fields)
         sync_record_state(processing_request.book_record)
+        publish_processing_ui_domains(
+            processing_domains_for_request_change(
+                from_state,
+                to_state,
+                record=processing_request.book_record,
+            )
+        )
         return processing_request
 
 
@@ -4081,14 +4707,9 @@ def kickoff_request_processing(request_id, actor=None):
     return processing_request
 
 
-def refresh_processing_state():
-    repair_self_linked_duplicate_requests()
-    for record in BookRecord.objects.order_by("name", "id"):
-        sync_record_state(record)
-
-
 def repair_self_linked_duplicate_requests():
     repaired = []
+    published_domains = set()
     queryset = (
         BookCreationRequest.objects.filter(
             state=BookCreationRequestState.DUPLICATE,
@@ -4102,6 +4723,8 @@ def repair_self_linked_duplicate_requests():
     )
 
     for processing_request in queryset:
+        previous_state = processing_request.state
+        record_before = processing_record_snapshot(processing_request.book_record)
         current_book = processing_linked_book(
             processing_request.book_record,
             processing_request,
@@ -4139,7 +4762,21 @@ def repair_self_linked_duplicate_requests():
 
         sync_record_state(record)
         repaired.append(processing_request)
+        published_domains.update(
+            processing_domains_for_request_change(
+                previous_state,
+                BookCreationRequestState.CREATED,
+                record=record,
+            )
+            | processing_domains_for_record_change(
+                record_before,
+                processing_record_snapshot(record),
+                current_request_state=BookCreationRequestState.CREATED,
+            )
+        )
 
+    if published_domains:
+        publish_processing_ui_domains(published_domains)
     return repaired
 
 
@@ -4153,18 +4790,44 @@ def mark_stale_processing_requests():
     )
     recovered = []
     for processing_request in stale_requests:
-        processing_request.state = BookCreationRequestState.QUEUED
-        processing_request.error_message = ""
-        processing_request.save(update_fields=["state", "error_message", "updated_at"])
-        sync_record_state(processing_request.book_record)
-        recovered.append(processing_request)
+        recovered_request = _transition_request_state(
+            processing_request.id,
+            BookCreationRequestState.PROCESSING,
+            BookCreationRequestState.QUEUED,
+        )
+        recovered_request.error_message = ""
+        recovered_request.save(update_fields=["error_message", "updated_at"])
+        recovered.append(recovered_request)
         queue_processing_request(processing_request)
-    repair_self_linked_duplicate_requests()
     return recovered
+
+
+def run_processing_maintenance():
+    recovered = mark_stale_processing_requests()
+    repaired = repair_self_linked_duplicate_requests()
+    return {
+        "recoveredCount": len(recovered),
+        "repairedCount": len(repaired),
+    }
+
+
+def run_processing_runtime_tick():
+    sync_results = {}
+    for sync_key in (PROCESSING_SYNC_KEY_CATALOG, PROCESSING_SYNC_KEY_INCOMPLETE):
+        state = get_sync_state(sync_key)
+        if state.status in SYNC_ACTIVE_STATUSES:
+            sync_results[sync_key] = sync_state_task_payload(
+                advance_sync_once(sync_key)
+            )
+    return {
+        "sync": sync_results,
+        "advancedCount": advance_pipeline_once(),
+    }
 
 
 def apply_delete_action(processing_request, *, delete_book=False):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
     if delete_book and processing_request.linked_book and processing_request.linked_book.deleted_at is None:
         processing_request.linked_book.soft_delete()
 
@@ -4173,11 +4836,19 @@ def apply_delete_action(processing_request, *, delete_book=False):
     processing_request.error_message = ""
     processing_request.save(update_fields=["state", "progress", "error_message", "updated_at"])
     sync_record_state(processing_request.book_record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.DELETED,
+            record=processing_request.book_record,
+        )
+    )
     return processing_request
 
 
 def apply_pause_action(processing_request):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
     saved_data = _request_saved_data(processing_request)
     processing_request.state = BookCreationRequestState.PAUSED
     processing_request.progress = _build_processing_progress(
@@ -4187,22 +4858,39 @@ def apply_pause_action(processing_request):
     processing_request.error_message = ""
     processing_request.save(update_fields=["state", "progress", "error_message", "updated_at"])
     sync_record_state(processing_request.book_record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.PAUSED,
+            record=processing_request.book_record,
+        )
+    )
     return processing_request
 
 
 def apply_resume_action(processing_request, *, actor=None):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
     processing_request.state = BookCreationRequestState.INITIAL
     processing_request.is_resumed = True
     processing_request.error_message = ""
     processing_request.save(update_fields=["state", "is_resumed", "error_message", "updated_at"])
     sync_record_state(processing_request.book_record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.INITIAL,
+            record=processing_request.book_record,
+        )
+    )
     queue_processing_request(processing_request)
     return processing_request
 
 
 def apply_retry_action(processing_request, *, actor=None):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
+    record_before = processing_record_snapshot(processing_request.book_record)
     processing_request.state = BookCreationRequestState.INITIAL
     processing_request.error_message = ""
     processing_request.progress = None
@@ -4222,12 +4910,26 @@ def apply_retry_action(processing_request, *, actor=None):
         record.duplicate_of_record = None
         record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
     sync_record_state(record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.INITIAL,
+            record=record,
+        )
+        | processing_domains_for_record_change(
+            record_before,
+            processing_record_snapshot(record),
+            current_request_state=BookCreationRequestState.INITIAL,
+        )
+    )
     queue_processing_request(processing_request)
     return processing_request
 
 
 def apply_new_action(processing_request, *, actor=None):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
+    record_before = processing_record_snapshot(processing_request.book_record)
     processing_request.state = BookCreationRequestState.INITIAL
     processing_request.is_confirmed_not_duplicate = True
     processing_request.duplicate_confirmed = False
@@ -4257,12 +4959,25 @@ def apply_new_action(processing_request, *, actor=None):
         update_fields=["linked_book", "is_duplicate", "duplicate_of_record", "updated_at"]
     )
     sync_record_state(record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.INITIAL,
+            record=record,
+        )
+        | processing_domains_for_record_change(
+            record_before,
+            processing_record_snapshot(record),
+            current_request_state=BookCreationRequestState.INITIAL,
+        )
+    )
     queue_processing_request(processing_request)
     return processing_request
 
 
 def apply_confirm_duplicate_action(processing_request):
     processing_request = _reload_processing_request(processing_request.id)
+    record_before = processing_record_snapshot(processing_request.book_record)
     target_request = processing_request.duplicate_of_request
     if processing_request.duplicate_of_record_id and not target_request:
         target_request = (
@@ -4293,11 +5008,25 @@ def apply_confirm_duplicate_action(processing_request):
             update_fields=["is_duplicate", "duplicate_of_record", "updated_at"]
         )
     sync_record_state(processing_request.book_record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            BookCreationRequestState.DUPLICATE,
+            BookCreationRequestState.DUPLICATE,
+            record=processing_request.book_record,
+        )
+        | processing_domains_for_record_change(
+            record_before,
+            processing_record_snapshot(processing_request.book_record),
+            current_request_state=BookCreationRequestState.DUPLICATE,
+        )
+    )
     return processing_request
 
 
 def apply_recreate_action(processing_request, *, actor=None):
     processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
+    record_before = processing_record_snapshot(processing_request.book_record)
     processing_request.state = BookCreationRequestState.INITIAL
     processing_request.progress = None
     processing_request.error_message = ""
@@ -4317,6 +5046,18 @@ def apply_recreate_action(processing_request, *, actor=None):
         record.duplicate_of_record = None
         record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
     sync_record_state(record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.INITIAL,
+            record=record,
+        )
+        | processing_domains_for_record_change(
+            record_before,
+            processing_record_snapshot(record),
+            current_request_state=BookCreationRequestState.INITIAL,
+        )
+    )
     queue_processing_request(processing_request)
     return processing_request
 
@@ -4377,7 +5118,7 @@ def advance_pipeline_once():
         advanced += 1
 
     if advanced == 0:
-        refresh_processing_state()
+        repair_self_linked_duplicate_requests()
     return advanced
 
 

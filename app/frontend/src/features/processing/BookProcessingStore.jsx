@@ -14,12 +14,12 @@ import { useToast } from "../../hooks/useToast";
 import { hasCapability } from "../../utils/capabilities";
 
 const ProcessingPagesContext = createContext(null);
-const PROCESSING_ROUTE_PATHS = new Set([
-  "/catalog",
-  "/create",
-  "/on-hold",
-  "/incomplete",
-]);
+const PROCESSING_ROUTE_PAGES = {
+  "/catalog": "catalog",
+  "/create": "create",
+  "/on-hold": "on-hold",
+  "/incomplete": "incomplete",
+};
 const PROCESSING_SYNC_SCOPE_CATALOG = "catalog";
 const PROCESSING_SYNC_SCOPE_INCOMPLETE = "incomplete";
 const PROCESSING_CARD_KEYS = [
@@ -42,6 +42,15 @@ const PROCESSING_CARD_KEYS = [
   "incomplete-records",
   "incomplete-completed",
 ];
+const SHARED_PROCESSING_CARD_KEYS = new Set([
+  "catalog-overview",
+  "catalog-sync",
+  "catalog-automation",
+  "create-overview",
+  "on-hold-overview",
+  "incomplete-overview",
+  "incomplete-automation",
+]);
 
 function countLabel(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
@@ -77,11 +86,19 @@ function processingPath(path) {
   return path.includes("?") ? `${path}&includeLists=0` : `${path}?includeLists=0`;
 }
 
-function normalizeTargets(targets) {
-  if (Array.isArray(targets) && targets.length > 0) {
-    return Array.from(new Set(targets.filter(Boolean)));
-  }
-  return [...PROCESSING_CARD_KEYS];
+function processingPageForPathname(pathname) {
+  return PROCESSING_ROUTE_PAGES[pathname] || "";
+}
+
+function normalizeVersionValue(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function versionSignature(versions, domains) {
+  return domains
+    .map((domain) => `${domain}:${normalizeVersionValue(versions?.[domain])}`)
+    .join("|");
 }
 
 function notifyRequestAction(toast, action, changedCount, options = {}) {
@@ -154,39 +171,268 @@ function notifyRequestAction(toast, action, changedCount, options = {}) {
 export function BookProcessingProvider({ children }) {
   const [busyCards, setBusyCards] = useState({});
   const [streamMode, setStreamMode] = useState("idle");
-  const [cardRefreshTokens, setCardRefreshTokens] = useState({});
+  const [domainVersions, setDomainVersions] = useState({});
+  const [processingStateStatus, setProcessingStateStatus] = useState({
+    data: null,
+    loadedOnce: false,
+    initialLoading: false,
+    refreshing: false,
+    error: "",
+  });
   const eventSourceRef = useRef(null);
+  const loadProcessingStateRef = useRef(() => Promise.resolve(null));
+  const processingStateLoadPromiseRef = useRef(null);
+  const processingStateReloadQueuedRef = useRef(false);
+  const processingStateRequestIdRef = useRef(0);
+  const processingStateAppliedRequestIdRef = useRef(0);
+  const processingStateAppliedSharedSignatureRef = useRef("");
+  const lastLoadedProcessingPageRef = useRef("");
   const location = useLocation();
   const { authenticated, loading, user } = useSession();
   const toast = useToast();
   const canLoadProcessingState =
     authenticated && !loading && hasCapability(user, "processing:manage");
-  const onProcessingPage = PROCESSING_ROUTE_PATHS.has(location.pathname);
+  const processingPage = processingPageForPathname(location.pathname);
+  const onProcessingPage = Boolean(processingPage);
+  const sharedProcessingCardKeys = useMemo(
+    () => [...SHARED_PROCESSING_CARD_KEYS],
+    [],
+  );
+  const sharedVersionSignature = useMemo(
+    () => versionSignature(domainVersions, sharedProcessingCardKeys),
+    [domainVersions, sharedProcessingCardKeys],
+  );
+  const sharedVersionSignatureRef = useRef(sharedVersionSignature);
+  const domainVersionsRef = useRef(domainVersions);
 
-  const invalidateProcessingTargets = useCallback((targets) => {
-    const nextTargets = normalizeTargets(targets);
-    setCardRefreshTokens((current) => {
-      const next = { ...current };
-      nextTargets.forEach((target) => {
-        next[target] = (next[target] || 0) + 1;
+  useEffect(() => {
+    sharedVersionSignatureRef.current = sharedVersionSignature;
+  }, [sharedVersionSignature]);
+
+  useEffect(() => {
+    domainVersionsRef.current = domainVersions;
+  }, [domainVersions]);
+
+  const applyProcessingVersions = useCallback((incomingVersions) => {
+    if (!incomingVersions || typeof incomingVersions !== "object") {
+      return {
+        changed: false,
+        sharedChanged: false,
+      };
+    }
+
+    let changed = false;
+    let sharedChanged = false;
+    const currentVersions = domainVersionsRef.current || {};
+    const nextVersions = { ...currentVersions };
+    Object.entries(incomingVersions).forEach(([domain, rawValue]) => {
+      if (!PROCESSING_CARD_KEYS.includes(domain)) {
+        return;
+      }
+      const nextValue = normalizeVersionValue(rawValue);
+      if (nextValue <= normalizeVersionValue(nextVersions[domain])) {
+        return;
+      }
+      nextVersions[domain] = nextValue;
+      changed = true;
+      if (SHARED_PROCESSING_CARD_KEYS.has(domain)) {
+        sharedChanged = true;
+      }
+    });
+    if (!changed) {
+      return {
+        changed: false,
+        sharedChanged: false,
+      };
+    }
+
+    domainVersionsRef.current = nextVersions;
+    setDomainVersions((current) => {
+      let next = current;
+      Object.entries(incomingVersions).forEach(([domain, rawValue]) => {
+        if (!PROCESSING_CARD_KEYS.includes(domain)) {
+          return;
+        }
+        const nextValue = normalizeVersionValue(rawValue);
+        if (nextValue <= normalizeVersionValue(current[domain])) {
+          return;
+        }
+        if (next === current) {
+          next = { ...current };
+        }
+        next[domain] = nextValue;
+        changed = true;
       });
       return next;
     });
+    return {
+      changed,
+      sharedChanged,
+    };
   }, []);
 
-  const getCardRefreshToken = useCallback(
-    (cardKey) => cardRefreshTokens[cardKey] || 0,
-    [cardRefreshTokens],
+  const getDomainVersion = useCallback(
+    (cardKey) => normalizeVersionValue(domainVersions[cardKey]),
+    [domainVersions],
   );
+
+  const loadProcessingState = useCallback(() => {
+    if (!onProcessingPage || !canLoadProcessingState) {
+      return Promise.resolve(null);
+    }
+
+    if (processingStateLoadPromiseRef.current) {
+      processingStateReloadQueuedRef.current = true;
+      return processingStateLoadPromiseRef.current;
+    }
+
+    let disposed = false;
+    const requestId = processingStateRequestIdRef.current + 1;
+    processingStateRequestIdRef.current = requestId;
+    setProcessingStateStatus((current) => ({
+      ...current,
+      initialLoading: !current.loadedOnce,
+      refreshing: current.loadedOnce,
+      error: "",
+    }));
+
+    const request = apiFetch(processingPath("/processing/state/"), {
+      cache: "no-store",
+    })
+      .then((payload) => {
+        if (
+          disposed ||
+          requestId < processingStateAppliedRequestIdRef.current
+        ) {
+          return payload;
+        }
+        processingStateAppliedRequestIdRef.current = requestId;
+        applyProcessingVersions(payload?.versions || {});
+        processingStateAppliedSharedSignatureRef.current = versionSignature(
+          payload?.versions || {},
+          sharedProcessingCardKeys,
+        );
+        sharedVersionSignatureRef.current =
+          processingStateAppliedSharedSignatureRef.current;
+        setProcessingStateStatus({
+          data: payload,
+          loadedOnce: true,
+          initialLoading: false,
+          refreshing: false,
+          error: "",
+        });
+        return payload;
+      })
+      .catch((loadError) => {
+        if (
+          disposed ||
+          requestId < processingStateAppliedRequestIdRef.current
+        ) {
+          return null;
+        }
+        setProcessingStateStatus((current) => ({
+          ...current,
+          loadedOnce: true,
+          initialLoading: false,
+          refreshing: false,
+          error: loadError.message || "Unable to load processing state.",
+        }));
+        return null;
+      })
+      .finally(() => {
+        disposed = true;
+        if (processingStateLoadPromiseRef.current === request) {
+          processingStateLoadPromiseRef.current = null;
+        }
+        const shouldReload =
+          processingStateReloadQueuedRef.current ||
+          sharedVersionSignatureRef.current !==
+            processingStateAppliedSharedSignatureRef.current;
+        processingStateReloadQueuedRef.current = false;
+        if (shouldReload && onProcessingPage && canLoadProcessingState) {
+          void loadProcessingStateRef.current?.();
+        }
+      });
+    processingStateLoadPromiseRef.current = request;
+    return request;
+  }, [
+    applyProcessingVersions,
+    canLoadProcessingState,
+    onProcessingPage,
+    sharedProcessingCardKeys,
+  ]);
+
+  useEffect(() => {
+    loadProcessingStateRef.current = loadProcessingState;
+  }, [loadProcessingState]);
+
+  const queueProcessingStateReload = useCallback(() => {
+    if (!onProcessingPage || !canLoadProcessingState) {
+      return;
+    }
+    processingStateReloadQueuedRef.current = true;
+    if (!processingStateLoadPromiseRef.current) {
+      void loadProcessingStateRef.current?.();
+    }
+  }, [canLoadProcessingState, onProcessingPage]);
 
   useEffect(() => {
     if (canLoadProcessingState) {
       return undefined;
     }
-    setCardRefreshTokens({});
+    setDomainVersions({});
+    setProcessingStateStatus({
+      data: null,
+      loadedOnce: false,
+      initialLoading: false,
+      refreshing: false,
+      error: "",
+    });
+    processingStateLoadPromiseRef.current = null;
+    processingStateReloadQueuedRef.current = false;
+    processingStateAppliedRequestIdRef.current = 0;
+    processingStateAppliedSharedSignatureRef.current = "";
+    lastLoadedProcessingPageRef.current = "";
     setStreamMode("idle");
     return undefined;
   }, [canLoadProcessingState]);
+
+  useEffect(() => {
+    if (!onProcessingPage || !canLoadProcessingState) {
+      setProcessingStateStatus({
+        data: null,
+        loadedOnce: false,
+        initialLoading: false,
+        refreshing: false,
+        error: "",
+      });
+      processingStateLoadPromiseRef.current = null;
+      processingStateReloadQueuedRef.current = false;
+      processingStateAppliedRequestIdRef.current = 0;
+      processingStateAppliedSharedSignatureRef.current = "";
+      lastLoadedProcessingPageRef.current = "";
+      return undefined;
+    }
+    const pageChanged = lastLoadedProcessingPageRef.current !== processingPage;
+    if (pageChanged) {
+      lastLoadedProcessingPageRef.current = processingPage;
+    }
+    if (
+      pageChanged ||
+      !processingStateStatus.loadedOnce ||
+      sharedVersionSignature !== processingStateAppliedSharedSignatureRef.current
+    ) {
+      loadProcessingState();
+    }
+    return undefined;
+  }, [
+    canLoadProcessingState,
+    loadProcessingState,
+    onProcessingPage,
+    processingPage,
+    processingStateStatus.loadedOnce,
+    sharedVersionSignature,
+  ]);
 
   const runCardAction = useCallback(
     async (cardId, request, options = {}) => {
@@ -196,9 +442,10 @@ export function BookProcessingProvider({ children }) {
       }));
       try {
         const payload = await request();
-        invalidateProcessingTargets(
-          payload?.targets || options.invalidateTargets || [cardId],
-        );
+        const versionUpdate = applyProcessingVersions(payload?.versions || {});
+        if (versionUpdate.sharedChanged) {
+          queueProcessingStateReload();
+        }
         if (typeof options.onSuccess === "function") {
           options.onSuccess(payload, toast);
         }
@@ -225,7 +472,7 @@ export function BookProcessingProvider({ children }) {
         });
       }
     },
-    [invalidateProcessingTargets, toast],
+    [applyProcessingVersions, queueProcessingStateReload, toast],
   );
 
   useEffect(() => {
@@ -249,7 +496,7 @@ export function BookProcessingProvider({ children }) {
 
     let disposed = false;
     const nextSource = new EventSource(
-      resolveApiUrl("/processing/stream/?includeLists=0"),
+      resolveApiUrl(`/processing/stream/?page=${encodeURIComponent(processingPage)}`),
       {
         withCredentials: true,
       },
@@ -263,10 +510,11 @@ export function BookProcessingProvider({ children }) {
       }
       try {
         const payload = JSON.parse(event.data || "{}");
-        invalidateProcessingTargets(payload.targets);
-      } catch {
-        invalidateProcessingTargets(PROCESSING_CARD_KEYS);
-      }
+        const versionUpdate = applyProcessingVersions(payload.versions || {});
+        if (versionUpdate.sharedChanged) {
+          queueProcessingStateReload();
+        }
+      } catch {}
     };
 
     nextSource.addEventListener("connected", () => {
@@ -275,9 +523,7 @@ export function BookProcessingProvider({ children }) {
       }
       setStreamMode("connected");
     });
-    nextSource.addEventListener("invalidation", handlePayload);
-    nextSource.addEventListener("state", handlePayload);
-    nextSource.addEventListener("snapshot", handlePayload);
+    nextSource.addEventListener("versions", handlePayload);
     nextSource.onerror = () => {
       if (disposed || eventSourceRef.current !== nextSource) {
         return;
@@ -293,7 +539,32 @@ export function BookProcessingProvider({ children }) {
       }
       setStreamMode("idle");
     };
-  }, [canLoadProcessingState, invalidateProcessingTargets, onProcessingPage]);
+  }, [
+    applyProcessingVersions,
+    canLoadProcessingState,
+    onProcessingPage,
+    processingPage,
+    queueProcessingStateReload,
+  ]);
+
+  useEffect(() => {
+    if (
+      !onProcessingPage ||
+      !canLoadProcessingState ||
+      !["reconnecting", "unsupported"].includes(streamMode) ||
+      typeof window === "undefined"
+    ) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadProcessingState();
+    }, 15000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [canLoadProcessingState, loadProcessingState, onProcessingPage, streamMode]);
 
   const startCatalogSync = useCallback(
     (remotePages) =>
@@ -681,9 +952,15 @@ export function BookProcessingProvider({ children }) {
     () => ({
       busyCards,
       canLoadProcessingState,
+      isSharedProcessingCard: (cardKey) =>
+        SHARED_PROCESSING_CARD_KEYS.has(cardKey),
+      processingState: processingStateStatus.data,
+      processingStateLoaded: processingStateStatus.loadedOnce,
+      processingStateInitialLoading: processingStateStatus.initialLoading,
+      processingStateRefreshing: processingStateStatus.refreshing,
+      processingStateError: processingStateStatus.error,
       streamMode,
-      getCardRefreshToken,
-      invalidateProcessingTargets,
+      getDomainVersion,
       startCatalogSync,
       pauseCatalogSync,
       resumeCatalogSync,
@@ -715,8 +992,7 @@ export function BookProcessingProvider({ children }) {
       createAgainRequests,
       createRequestsForRecords,
       deleteRequests,
-      getCardRefreshToken,
-      invalidateProcessingTargets,
+      getDomainVersion,
       markDuplicateRequestsAsNew,
       pauseCatalogAutomation,
       pauseCatalogSync,
@@ -736,6 +1012,11 @@ export function BookProcessingProvider({ children }) {
       stopCatalogAutomation,
       stopCatalogSync,
       stopIncompleteAutomation,
+      processingStateStatus.data,
+      processingStateStatus.error,
+      processingStateStatus.initialLoading,
+      processingStateStatus.loadedOnce,
+      processingStateStatus.refreshing,
       streamMode,
     ],
   );

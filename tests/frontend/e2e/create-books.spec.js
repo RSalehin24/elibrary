@@ -33,6 +33,26 @@ async function mockAuthenticatedSession(page) {
 
 async function mockCreateProcessingApi(page) {
   const timestamp = nowIso();
+  const versions = {
+    "catalog-overview": 0,
+    "catalog-sync": 0,
+    "catalog-automation": 0,
+    "catalog-records": 0,
+    "create-overview": 0,
+    "create-requests": 0,
+    "create-queue": 0,
+    "create-processing": 0,
+    "create-created": 0,
+    "on-hold-overview": 0,
+    "on-hold-paused": 0,
+    "on-hold-failed": 0,
+    "on-hold-duplicate": 0,
+    "on-hold-deleted": 0,
+    "incomplete-overview": 0,
+    "incomplete-automation": 0,
+    "incomplete-records": 0,
+    "incomplete-completed": 0,
+  };
   const state = {
     records: [
       {
@@ -102,16 +122,121 @@ async function mockCreateProcessingApi(page) {
     },
   };
 
+  await page.addInitScript(() => {
+    class MockEventSource {
+      constructor() {
+        this.listeners = new Map();
+        setTimeout(() => {
+          const listeners = this.listeners.get("connected") || [];
+          const event = { data: JSON.stringify({}) };
+          listeners.forEach((listener) => listener(event));
+        }, 0);
+      }
+
+      addEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        listeners.push(listener);
+        this.listeners.set(type, listeners);
+      }
+
+      removeEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        this.listeners.set(
+          type,
+          listeners.filter((candidate) => candidate !== listener),
+        );
+      }
+
+      close() {}
+    }
+
+    window.EventSource = MockEventSource;
+  });
+
   async function fulfillState(route) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(state),
+      body: JSON.stringify({
+        summary: {
+          catalog: {
+            records: 1,
+            notCreated: 0,
+            active: 1,
+            created: 0,
+            onHold: 0,
+          },
+          notifications: {
+            pipelineActive: true,
+            activeSync: false,
+            hasActiveWork: true,
+          },
+          create: {
+            requests: 1,
+            queue: 0,
+            processing: 0,
+            created: 0,
+          },
+          onHold: {
+            paused: 0,
+            failed: 0,
+            duplicate: 0,
+            deleted: 0,
+          },
+          incomplete: {
+            incomplete: 0,
+            completed: 0,
+          },
+        },
+        sync: state.sync,
+        syncStates: {
+          catalog: state.sync,
+          incomplete: state.sync,
+        },
+        automation: state.automation,
+        versions,
+      }),
     });
   }
 
-  await page.route("**/api/processing/state/", fulfillState);
-  await page.route("**/api/processing/pipeline/advance/", fulfillState);
+  await page.route("**/api/processing/state/**", fulfillState);
+  await page.route("**/api/processing/table/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        card: "create-requests",
+        version: versions["create-requests"],
+        rows: [
+          {
+            id: "create-page-request",
+            title: "Create Page Request",
+            url: "https://example.test/create-page-request",
+            displayUrl: "https://example.test/create-page-request",
+            category: "Regression",
+            writer: "Create Writer",
+            translator: "",
+            composer: "",
+            publisher: "Create Press",
+            status: "initial",
+            updatedAt: timestamp,
+            linkedBookSlug: null,
+            selectable: false,
+          },
+        ],
+        pagination: {
+          offset: 0,
+          limit: 60,
+          totalCount: 1,
+          hasMore: false,
+        },
+        filters: {
+          categoryOptions: ["Regression"],
+          statusOptions: ["initial"],
+        },
+      }),
+    });
+  });
 }
 
 test.describe("Create processing page", () => {

@@ -5,6 +5,8 @@ from .models import (
     BookRecord,
     ProcessingAutomationSettings,
     ProcessingSyncState,
+    ProcessingUiDomainVersion,
+    ProcessingUiProjection,
 )
 
 
@@ -96,4 +98,18 @@ class ProcessingAutomationSettingsAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_filter = ("kind", "enabled", "saved")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ProcessingUiDomainVersion)
+class ProcessingUiDomainVersionAdmin(admin.ModelAdmin):
+    list_display = ("domain", "version", "updated_at")
+    search_fields = ("domain",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ProcessingUiProjection)
+class ProcessingUiProjectionAdmin(admin.ModelAdmin):
+    list_display = ("key", "updated_at")
+    search_fields = ("key",)
     readonly_fields = ("created_at", "updated_at")

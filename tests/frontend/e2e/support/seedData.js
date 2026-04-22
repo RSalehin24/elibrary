@@ -57,8 +57,8 @@ export const seedData = {
     duplicateReview: "E2E Duplicate Review Submission",
   },
   catalogEntries: {
-    alpha: "E2E Alpha Catalog Book",
-    beta: "E2E Beta Catalog Book",
+    alpha: "000 E2E Alpha Catalog Book",
+    beta: "001 E2E Beta Catalog Book",
   },
   processing: {
     failedLogMessage: "Seeded failed job log entry.",

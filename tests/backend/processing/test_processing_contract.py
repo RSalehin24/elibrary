@@ -11,6 +11,8 @@ from apps.processing.models import (
     BookRecord,
     ProcessingAutomationSettings,
     ProcessingSyncState,
+    ProcessingUiDomainVersion,
+    ProcessingUiProjection,
 )
 from config.celery import app as celery_app
 
@@ -56,6 +58,12 @@ def test_processing_models_match_expected_contract():
     assert choice_values(BookRecord._meta.get_field("book_creation_state")) == set(BookCreationState.values)
     assert choice_values(BookCreationRequest._meta.get_field("state")) == set(
         BookCreationRequestState.values
+    )
+    assert {"domain", "version", "created_at", "updated_at"}.issubset(
+        model_field_names(ProcessingUiDomainVersion)
+    )
+    assert {"key", "payload", "created_at", "updated_at"}.issubset(
+        model_field_names(ProcessingUiProjection)
     )
 
 
@@ -137,6 +145,18 @@ def test_processing_models_are_registered_in_admin_with_core_fields():
             "saved",
             "last_run_at",
             "status_message",
+            "created_at",
+            "updated_at",
+        },
+        ProcessingUiDomainVersion: {
+            "domain",
+            "version",
+            "created_at",
+            "updated_at",
+        },
+        ProcessingUiProjection: {
+            "key",
+            "payload",
             "created_at",
             "updated_at",
         },
