@@ -3675,13 +3675,13 @@ def complete_incomplete_automation(state, *, resolved_count=0):
     finished_at = timezone.now()
     update_automation_run_status(
         SYNC_RUN_MODE_INCOMPLETE_AUTOMATION,
-        f"Resolved {resolved_count} {'book' if resolved_count == 1 else 'books'}.",
+        f"Updated {resolved_count} {'book' if resolved_count == 1 else 'books'}.",
         last_run_at=finished_at,
     )
     return finalize_sync(
         state,
         message=(
-            f"Incomplete catalog sync complete. Resolved {resolved_count} "
+            f"Incomplete catalog sync complete. Updated {resolved_count} "
             f"{'book' if resolved_count == 1 else 'books'}."
         ),
     )

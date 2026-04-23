@@ -2970,7 +2970,7 @@ def test_incomplete_automation_can_pause_resume_and_complete(client):
         "/api/processing/sync/advance/",
     )
     assert payload["sync"]["status"] == "idle"
-    assert payload["sync"]["message"] == "Incomplete catalog sync complete. Resolved 2 books."
+    assert payload["sync"]["message"] == "Incomplete catalog sync complete. Updated 2 books."
     assert BookRecord.objects.get(pk="resume-incomplete-b").resolved_from_incomplete is True
 
 
@@ -3081,7 +3081,7 @@ def test_incomplete_automation_live_sync_fetches_incrementally_and_resolves_stal
         "/api/processing/sync/advance/",
     )
     assert payload["sync"]["status"] == "idle"
-    assert payload["sync"]["message"] == "Incomplete catalog sync complete. Resolved 1 book."
+    assert payload["sync"]["message"] == "Incomplete catalog sync complete. Updated 1 book."
     assert page_calls == [1, 2]
     stale_record = BookRecord.objects.get(pk="stale-incomplete-live")
     assert stale_record.resolved_from_incomplete is True

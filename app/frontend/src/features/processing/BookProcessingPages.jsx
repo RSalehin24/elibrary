@@ -3234,7 +3234,7 @@ export function IncompleteProcessingPage() {
           cardId="completed"
           cardKey="incomplete-completed"
           title="Updated"
-          description="Records resolved by incomplete automation."
+          description="Records updated by incomplete automation."
           className="processing-inline-count-card processing-incomplete-completed-card"
           busy={Boolean(busyCards["incomplete-completed"])}
           countPlacement="inline-tools"

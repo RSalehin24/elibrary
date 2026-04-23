@@ -1183,7 +1183,7 @@ function completeIncompleteAutomation(state) {
   state.sync.status = "idle";
   state.sync.progress = null;
   state.sync.runMode = SYNC_RUN_MODE_MANUAL;
-  state.sync.message = `Incomplete catalog sync complete. Resolved ${resolvedCount} ${resolvedCount === 1 ? "book" : "books"}.`;
+  state.sync.message = `Incomplete catalog sync complete. Updated ${resolvedCount} ${resolvedCount === 1 ? "book" : "books"}.`;
 }
 
 function catalogRecordCountMessage(state) {
@@ -3130,7 +3130,7 @@ test.describe("processing pages replacement", () => {
       baseState({
         sync: {
           ...baseState().sync,
-          message: "Incomplete catalog sync complete. Resolved 1 book.",
+          message: "Incomplete catalog sync complete. Updated 1 book.",
           remotePages: [["stale-incomplete-record"], []],
         },
         ui: {
