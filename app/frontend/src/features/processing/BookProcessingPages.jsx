@@ -35,8 +35,11 @@ const CATALOG_SYNC_PHASE = "sync";
 const CATALOG_REQUEST_CREATION_PHASE = "request_creation";
 const CATALOG_PHASE_STATUS_NOT_STARTED = "not_started";
 const CATALOG_PHASE_STATUS_RUNNING = "running";
+const CATALOG_PHASE_STATUS_PAUSING = "pausing";
 const CATALOG_PHASE_STATUS_PAUSED = "paused";
 const CATALOG_PHASE_STATUS_COMPLETED = "completed";
+const OPTIMISTIC_SYNC_MIN_MS = 2_000;
+const OPTIMISTIC_SYNC_MAX_MS = 4_000;
 const INCOMPLETE_CATEGORY_KEYWORDS = [
   "incomplete",
   "unfinished",
@@ -115,13 +118,45 @@ function normalizeCatalogCountMessage(message, recordCount) {
   );
 }
 
-function catalogPhaseStatus(sync, phase) {
-  const explicit = sync?.progress?.phaseStatuses?.[phase];
+function catalogRuntimePhase(sync) {
+  return sync?.phase || sync?.progress?.phase || CATALOG_SYNC_PHASE;
+}
+
+function catalogPhaseState(sync, phase) {
+  const explicit =
+    sync?.progress?.phaseStates &&
+    typeof sync.progress.phaseStates[phase] === "object"
+      ? sync.progress.phaseStates[phase]
+      : null;
   if (explicit) {
     return explicit;
   }
-  const syncPhase = sync?.phase || sync?.progress?.phase || CATALOG_SYNC_PHASE;
+  return null;
+}
+
+function catalogPhaseStatus(sync, phase) {
+  const explicitState = catalogPhaseState(sync, phase);
+  if (explicitState?.status) {
+    return explicitState.status;
+  }
+  const syncPhase = catalogRuntimePhase(sync);
   const runtimeStatus = sync?.status || "idle";
+  const explicit = sync?.progress?.phaseStatuses?.[phase];
+  if (explicit) {
+    if (phase === syncPhase) {
+      if (runtimeStatus === "pausing" && explicit === CATALOG_PHASE_STATUS_RUNNING) {
+        return CATALOG_PHASE_STATUS_PAUSING;
+      }
+      if (
+        runtimeStatus === "paused" &&
+        (explicit === CATALOG_PHASE_STATUS_RUNNING ||
+          explicit === CATALOG_PHASE_STATUS_PAUSING)
+      ) {
+        return CATALOG_PHASE_STATUS_PAUSED;
+      }
+    }
+    return explicit;
+  }
   const savedData = sync?.progress?.savedData;
   if (phase === CATALOG_SYNC_PHASE) {
     if (syncPhase === CATALOG_REQUEST_CREATION_PHASE) {
@@ -130,7 +165,10 @@ function catalogPhaseStatus(sync, phase) {
     if (runtimeStatus === "paused") {
       return CATALOG_PHASE_STATUS_PAUSED;
     }
-    if (runtimeStatus === "syncing" || runtimeStatus === "pausing") {
+    if (runtimeStatus === "pausing") {
+      return CATALOG_PHASE_STATUS_PAUSING;
+    }
+    if (runtimeStatus === "syncing") {
       return CATALOG_PHASE_STATUS_RUNNING;
     }
     return savedData ? CATALOG_PHASE_STATUS_COMPLETED : CATALOG_PHASE_STATUS_NOT_STARTED;
@@ -140,13 +178,57 @@ function catalogPhaseStatus(sync, phase) {
       if (runtimeStatus === "paused") {
         return CATALOG_PHASE_STATUS_PAUSED;
       }
-      if (runtimeStatus === "syncing" || runtimeStatus === "pausing") {
+      if (runtimeStatus === "pausing") {
+        return CATALOG_PHASE_STATUS_PAUSING;
+      }
+      if (runtimeStatus === "syncing") {
         return CATALOG_PHASE_STATUS_RUNNING;
       }
     }
     return CATALOG_PHASE_STATUS_NOT_STARTED;
   }
   return CATALOG_PHASE_STATUS_NOT_STARTED;
+}
+
+function catalogPhaseIsActive(status) {
+  return (
+    status === CATALOG_PHASE_STATUS_RUNNING ||
+    status === CATALOG_PHASE_STATUS_PAUSING
+  );
+}
+
+function catalogPhaseOwner(sync, phase) {
+  const explicitState = catalogPhaseState(sync, phase);
+  if (explicitState?.owner) {
+    return explicitState.owner;
+  }
+  const status = catalogPhaseStatus(sync, phase);
+  if (status === CATALOG_PHASE_STATUS_NOT_STARTED) {
+    return "";
+  }
+  if (phase === CATALOG_REQUEST_CREATION_PHASE) {
+    return SYNC_RUN_MODE_CATALOG_AUTOMATION;
+  }
+  const savedDataRunMode = sync?.progress?.savedData?.runMode;
+  return savedDataRunMode || sync?.runMode || "";
+}
+
+function catalogActivePhase(sync) {
+  const requestCreationStatus = catalogPhaseStatus(
+    sync,
+    CATALOG_REQUEST_CREATION_PHASE,
+  );
+  if (catalogPhaseIsActive(requestCreationStatus)) {
+    return CATALOG_REQUEST_CREATION_PHASE;
+  }
+  const syncStatus = catalogPhaseStatus(sync, CATALOG_SYNC_PHASE);
+  if (catalogPhaseIsActive(syncStatus)) {
+    return CATALOG_SYNC_PHASE;
+  }
+  const runtimeStatus = sync?.status || "idle";
+  return runtimeStatus === "syncing" || runtimeStatus === "pausing"
+    ? catalogRuntimePhase(sync)
+    : "";
 }
 
 function requestDetails(request) {
@@ -1909,47 +1991,101 @@ function AutomationPanel({
     time: automation.time,
   });
   const [optimisticSync, setOptimisticSync] = useState(null);
+  const [pendingNonCatalogSync, setPendingNonCatalogSync] = useState(null);
   const runMode =
     pageId === "catalog"
       ? SYNC_RUN_MODE_CATALOG_AUTOMATION
       : SYNC_RUN_MODE_INCOMPLETE_AUTOMATION;
-  const effectiveSync =
-    sync.status !== "idle" || !optimisticSync
-      ? sync
+  const effectiveSync = optimisticSync
+    ? {
+        ...sync,
+        status: optimisticSync.status,
+        message: optimisticSync.message,
+        runMode,
+        phase: optimisticSync.phase,
+      }
+    : sync;
+  const displaySync =
+    pageId === "catalog" || !pendingNonCatalogSync
+      ? effectiveSync
       : {
-          ...sync,
-          status: optimisticSync.status,
-          message: optimisticSync.message,
+          ...effectiveSync,
+          status: pendingNonCatalogSync.status,
+          message: pendingNonCatalogSync.message,
           runMode,
+          phase: pendingNonCatalogSync.phase,
         };
-  const syncPhase = effectiveSync.phase || effectiveSync.progress?.phase || "sync";
   const syncPhaseStatus =
     pageId === "catalog"
-      ? catalogPhaseStatus(effectiveSync, CATALOG_SYNC_PHASE)
+      ? catalogPhaseStatus(displaySync, CATALOG_SYNC_PHASE)
       : CATALOG_PHASE_STATUS_NOT_STARTED;
   const requestCreationPhaseStatus =
     pageId === "catalog"
-      ? catalogPhaseStatus(effectiveSync, CATALOG_REQUEST_CREATION_PHASE)
+      ? catalogPhaseStatus(displaySync, CATALOG_REQUEST_CREATION_PHASE)
       : CATALOG_PHASE_STATUS_NOT_STARTED;
+  const activePhase =
+    pageId === "catalog" ? catalogActivePhase(displaySync) : "";
+  const activePhaseOwner =
+    pageId === "catalog" && activePhase
+      ? catalogPhaseOwner(displaySync, activePhase)
+      : displaySync.runMode;
+  const activePhaseStatus =
+    pageId === "catalog" && activePhase
+      ? catalogPhaseStatus(displaySync, activePhase)
+      : "";
+  const hasActiveSync = Boolean(activePhase) && catalogPhaseIsActive(activePhaseStatus);
+  const runningCurrentPhase = hasActiveSync && activePhaseOwner === runMode;
+  const blockedByOtherRuntime =
+    pageId === "catalog"
+      ? hasActiveSync && activePhaseOwner !== runMode
+      : displaySync.status !== "idle" && displaySync.runMode !== runMode;
   const canResumeRequestCreation =
     pageId === "catalog" &&
     requestCreationPhaseStatus === CATALOG_PHASE_STATUS_PAUSED;
   const canResumeSyncPhase =
     pageId === "catalog"
       ? syncPhaseStatus === CATALOG_PHASE_STATUS_PAUSED
-      : effectiveSync.status === "paused";
-  const isRequestCreationPhase =
+      : displaySync.status === "paused";
+  const pausedActionPhase =
+    pageId === "catalog"
+      ? canResumeRequestCreation
+        ? CATALOG_REQUEST_CREATION_PHASE
+        : canResumeSyncPhase
+          ? CATALOG_SYNC_PHASE
+          : ""
+      : displaySync.status === "paused"
+        ? CATALOG_SYNC_PHASE
+        : "";
+  const startsRequestCreationDirectly =
     pageId === "catalog" &&
-    (syncPhase === CATALOG_REQUEST_CREATION_PHASE || canResumeRequestCreation);
-  const runLabel = isRequestCreationPhase
+    !canResumeRequestCreation &&
+    !canResumeSyncPhase &&
+    syncPhaseStatus === CATALOG_PHASE_STATUS_COMPLETED &&
+    requestCreationPhaseStatus === CATALOG_PHASE_STATUS_NOT_STARTED;
+  const actionPhase =
+    pageId === "catalog"
+      ? runningCurrentPhase && activePhase
+        ? activePhase
+        : pausedActionPhase || (startsRequestCreationDirectly
+          ? CATALOG_REQUEST_CREATION_PHASE
+          : CATALOG_SYNC_PHASE)
+      : CATALOG_SYNC_PHASE;
+  const isRequestCreationPhase =
+    pageId === "catalog" && actionPhase === CATALOG_REQUEST_CREATION_PHASE;
+  const runLabel =
+    isRequestCreationPhase && !startsRequestCreationDirectly
     ? "automated request creation"
     : pageId === "catalog"
       ? "automated catalog sync"
       : "incomplete catalog sync";
   const runMessage = isRequestCreationPhase
-    ? "Resuming automated request creation from saved progress."
+    ? startsRequestCreationDirectly
+      ? "Creating book requests from the synced catalog records."
+      : "Resuming automated request creation from saved progress."
     : pageId === "catalog"
-      ? canResumeSyncPhase
+      ? startsRequestCreationDirectly
+        ? "Creating book requests from the synced catalog records."
+        : canResumeSyncPhase
         ? "Continuing automated catalog sync from the saved endpoint."
         : "Automated catalog sync is running."
       : "Incomplete catalog sync is running.";
@@ -1965,22 +2101,27 @@ function AutomationPanel({
         ? "Continuing automated catalog sync from the saved endpoint."
         : "Restarting automated catalog sync from the beginning."
       : "Restarting incomplete catalog sync from the beginning.";
-  const hasActiveSync =
-    effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
-  const hasOwnedSync = effectiveSync.status !== "idle";
-  const ownsSync =
-    hasOwnedSync && effectiveSync.runMode === runMode;
-  const blockedByOtherRuntime =
-    hasOwnedSync && effectiveSync.runMode !== runMode;
-  const isRunning = ownsSync;
-  const isPausing = ownsSync && effectiveSync.status === "pausing";
-  const isPaused = ownsSync && effectiveSync.status === "paused";
+  const isRunning =
+    pageId === "catalog"
+      ? runningCurrentPhase
+      : displaySync.runMode === runMode &&
+        (displaySync.status === "syncing" || displaySync.status === "pausing");
+  const isPausing =
+    pageId === "catalog"
+      ? runningCurrentPhase &&
+        (activePhaseStatus === CATALOG_PHASE_STATUS_PAUSING ||
+          displaySync.status === "pausing")
+      : displaySync.runMode === runMode && displaySync.status === "pausing";
+  const isPaused =
+    pageId === "catalog"
+      ? !runningCurrentPhase && Boolean(pausedActionPhase)
+      : displaySync.status === "paused" && displaySync.runMode === runMode;
   const busy = saving || running;
   const controlsDisabled =
-    busy || hasActiveSync || blockedByOtherRuntime || blockedByExternalRuntime;
+    busy || blockedByOtherRuntime || blockedByExternalRuntime;
   const rawStatusMessage =
-    effectiveSync.status !== "idle"
-      ? effectiveSync.message || ""
+    displaySync.status !== "idle"
+      ? displaySync.message || ""
       : automation.statusMessage || "";
   const statusMessage =
     pageId === "catalog"
@@ -1997,10 +2138,27 @@ function AutomationPanel({
   }, [automation.enabled, automation.interval, automation.time]);
 
   useEffect(() => {
-    if (sync.status !== "idle") {
-      setOptimisticSync(null);
+    if (!optimisticSync) {
+      return undefined;
     }
-  }, [sync.status, sync.runMode]);
+    if (
+      sync.status === optimisticSync.status &&
+      catalogRuntimePhase(sync) === (optimisticSync.phase || CATALOG_SYNC_PHASE)
+    ) {
+      const elapsed = Date.now() - Number(optimisticSync.startedAt || 0);
+      if (elapsed >= OPTIMISTIC_SYNC_MIN_MS) {
+        setOptimisticSync(null);
+        return undefined;
+      }
+      const timerId = window.setTimeout(() => {
+        setOptimisticSync(null);
+      }, OPTIMISTIC_SYNC_MIN_MS - elapsed);
+      return () => {
+        window.clearTimeout(timerId);
+      };
+    }
+    return undefined;
+  }, [optimisticSync, sync.status, sync.phase, sync.progress?.phase]);
 
   useEffect(() => {
     onOptimisticSyncChange?.(
@@ -2014,21 +2172,48 @@ function AutomationPanel({
   }, [onOptimisticSyncChange, optimisticSync, runMode]);
 
   useEffect(() => {
-    if (!optimisticSync || sync.status !== "idle" || typeof window === "undefined") {
+    if (
+      pageId === "catalog" ||
+      !pendingNonCatalogSync ||
+      typeof window === "undefined"
+    ) {
+      return undefined;
+    }
+    const elapsed = Date.now() - Number(pendingNonCatalogSync.startedAt || 0);
+    const timerId = window.setTimeout(() => {
+      setPendingNonCatalogSync(null);
+    }, Math.max(OPTIMISTIC_SYNC_MIN_MS - elapsed, 0));
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [pageId, pendingNonCatalogSync]);
+
+  useEffect(() => {
+    if (!optimisticSync || typeof window === "undefined") {
       return undefined;
     }
     const timerId = window.setTimeout(() => {
       setOptimisticSync(null);
-    }, 4000);
+    }, OPTIMISTIC_SYNC_MAX_MS);
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [optimisticSync, sync.status]);
+  }, [optimisticSync]);
 
   async function runWithOptimisticState(nextOptimisticSync, action) {
-    setOptimisticSync(nextOptimisticSync);
+    if (pageId !== "catalog") {
+      setPendingNonCatalogSync({
+        ...nextOptimisticSync,
+        startedAt: Date.now(),
+      });
+    }
+    setOptimisticSync({
+      ...nextOptimisticSync,
+      startedAt: Date.now(),
+    });
     const result = await action?.();
     if (!result) {
+      setPendingNonCatalogSync(null);
       setOptimisticSync(null);
     }
     return result;
@@ -2094,12 +2279,13 @@ function AutomationPanel({
             : "Resume incomplete catalog sync",
         icon: <PlayIcon />,
         state: "paused",
-        disabled: busy,
+        disabled: controlsDisabled,
         onClick: () =>
           runWithOptimisticState(
             {
               status: "syncing",
               message: resumeMessage,
+              phase: actionPhase,
             },
             onResume,
           ),
@@ -2112,12 +2298,13 @@ function AutomationPanel({
           disabled: busy || isPausing,
           onClick: () =>
             runWithOptimisticState(
-              {
-                status: "pausing",
-                message: pauseMessage,
-              },
-              onPause,
-            ),
+            {
+              status: "pausing",
+              message: pauseMessage,
+              phase: actionPhase,
+            },
+            onPause,
+          ),
         }
       : {
           label: `Run ${runLabel}`,
@@ -2126,13 +2313,14 @@ function AutomationPanel({
           disabled: busy || blockedByOtherRuntime || blockedByExternalRuntime,
           onClick: () =>
             runWithOptimisticState(
-              {
-                status: "syncing",
-                message: runMessage,
-              },
-              onRun,
-            ),
-        };
+            {
+              status: "syncing",
+              message: runMessage,
+              phase: actionPhase,
+            },
+            onRun,
+          ),
+      };
 
   return (
     <section
@@ -2266,36 +2454,36 @@ function CatalogSyncPanel({
   const { busyCards, startCatalogSync, pauseCatalogSync, resumeCatalogSync } =
     useBookProcessing();
   const syncBusy = Boolean(busyCards["catalog-sync"]);
-  const effectiveSync =
-    sync.status !== "idle" || !optimisticSync
-      ? sync
-      : {
-          ...sync,
-          status: optimisticSync.status,
-          message: optimisticSync.message,
-          runMode: SYNC_RUN_MODE_MANUAL,
-        };
+  const effectiveSync = optimisticSync
+    ? {
+        ...sync,
+        status: optimisticSync.status,
+        message: optimisticSync.message,
+        runMode: SYNC_RUN_MODE_MANUAL,
+        phase: optimisticSync.phase,
+      }
+    : sync;
   const syncPhaseStatus = catalogPhaseStatus(effectiveSync, CATALOG_SYNC_PHASE);
-  const syncPhase = effectiveSync.phase || effectiveSync.progress?.phase || CATALOG_SYNC_PHASE;
-  const hasActiveSync =
-    effectiveSync.status === "syncing" || effectiveSync.status === "pausing";
-  const hasPausedSync = effectiveSync.status === "paused";
-  const manualIsPaused =
-    hasPausedSync && effectiveSync.runMode === SYNC_RUN_MODE_MANUAL;
+  const activePhase = catalogActivePhase(effectiveSync);
+  const activePhaseOwner = activePhase
+    ? catalogPhaseOwner(effectiveSync, activePhase)
+    : "";
+  const syncPhaseIsActive = activePhase === CATALOG_SYNC_PHASE;
+  const requestCreationIsActive = activePhase === CATALOG_REQUEST_CREATION_PHASE;
+  const canResumeSync = syncPhaseStatus === CATALOG_PHASE_STATUS_PAUSED;
   const manualOwnsActiveSync =
-    hasActiveSync && effectiveSync.runMode === SYNC_RUN_MODE_MANUAL;
-  const automationPausedRequestCreation =
-    hasPausedSync &&
-    effectiveSync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION &&
-    syncPhase === CATALOG_REQUEST_CREATION_PHASE;
+    syncPhaseIsActive && activePhaseOwner === SYNC_RUN_MODE_MANUAL;
   const otherModeOwnsRuntime =
-    effectiveSync.status !== "idle" &&
-    effectiveSync.runMode !== SYNC_RUN_MODE_MANUAL &&
-    !automationPausedRequestCreation;
+    requestCreationIsActive ||
+    (syncPhaseIsActive && activePhaseOwner !== SYNC_RUN_MODE_MANUAL);
   const isSyncing = manualOwnsActiveSync;
   const isPausing =
     manualOwnsActiveSync &&
-    (pauseRequested || effectiveSync.status === "pausing");
+    (
+      pauseRequested ||
+      syncPhaseStatus === CATALOG_PHASE_STATUS_PAUSING ||
+      effectiveSync.status === "pausing"
+    );
   const statusMessage = normalizeCatalogCountMessage(effectiveSync.message, recordCount);
   const syncMessageLines = splitSyncMessage(statusMessage);
 
@@ -2306,10 +2494,27 @@ function CatalogSyncPanel({
   }, [isSyncing]);
 
   useEffect(() => {
-    if (sync.status !== "idle") {
-      setOptimisticSync(null);
+    if (!optimisticSync) {
+      return undefined;
     }
-  }, [sync.status, sync.runMode]);
+    if (
+      sync.status === optimisticSync.status &&
+      catalogRuntimePhase(sync) === (optimisticSync.phase || CATALOG_SYNC_PHASE)
+    ) {
+      const elapsed = Date.now() - Number(optimisticSync.startedAt || 0);
+      if (elapsed >= OPTIMISTIC_SYNC_MIN_MS) {
+        setOptimisticSync(null);
+        return undefined;
+      }
+      const timerId = window.setTimeout(() => {
+        setOptimisticSync(null);
+      }, OPTIMISTIC_SYNC_MIN_MS - elapsed);
+      return () => {
+        window.clearTimeout(timerId);
+      };
+    }
+    return undefined;
+  }, [optimisticSync, sync.status, sync.phase, sync.progress?.phase]);
 
   useEffect(() => {
     onOptimisticSyncChange?.(
@@ -2323,17 +2528,17 @@ function CatalogSyncPanel({
   }, [onOptimisticSyncChange, optimisticSync]);
 
   useEffect(() => {
-    if (!optimisticSync || sync.status !== "idle" || typeof window === "undefined") {
+    if (!optimisticSync || typeof window === "undefined") {
       return undefined;
     }
 
     const timerId = window.setTimeout(() => {
       setOptimisticSync(null);
-    }, 4000);
+    }, OPTIMISTIC_SYNC_MAX_MS);
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [optimisticSync, sync.status]);
+  }, [optimisticSync]);
 
   if (loading) {
     return (
@@ -2369,11 +2574,25 @@ function CatalogSyncPanel({
 
   async function handlePauseSync() {
     setPauseRequested(true);
-    await pauseCatalogSync();
+    const result = await runWithOptimisticSync(
+      {
+        status: "pausing",
+        message: "Pausing after the current page finishes.",
+        phase: CATALOG_SYNC_PHASE,
+      },
+      pauseCatalogSync,
+    );
+    if (!result) {
+      setPauseRequested(false);
+    }
+    return result;
   }
 
   async function runWithOptimisticSync(nextOptimisticSync, action) {
-    setOptimisticSync(nextOptimisticSync);
+    setOptimisticSync({
+      ...nextOptimisticSync,
+      startedAt: Date.now(),
+    });
     const result = await action?.();
     if (!result) {
       setOptimisticSync(null);
@@ -2382,18 +2601,20 @@ function CatalogSyncPanel({
   }
 
   const control =
-    manualIsPaused
+    canResumeSync
       ? {
           testId: "catalog-sync-resume-btn",
           label: "Resume sync",
           icon: <PlayIcon />,
           state: "paused",
-          disabled: syncBusy,
+          disabled:
+            syncBusy || otherModeOwnsRuntime || blockedByExternalRuntime,
           onClick: () =>
             runWithOptimisticSync(
               {
                 status: "syncing",
                 message: "Continuing catalog sync from the saved endpoint.",
+                phase: CATALOG_SYNC_PHASE,
               },
               resumeCatalogSync,
             ),
@@ -2418,10 +2639,8 @@ function CatalogSyncPanel({
               runWithOptimisticSync(
                 {
                   status: "syncing",
-                  message:
-                    syncPhaseStatus === CATALOG_PHASE_STATUS_PAUSED
-                      ? "Continuing catalog sync from the saved endpoint."
-                      : "Syncing catalog records.",
+                  message: "Syncing catalog records.",
+                  phase: CATALOG_SYNC_PHASE,
                 },
                 () => startCatalogSync(),
               ),
@@ -2525,34 +2744,30 @@ export function CatalogProcessingPage() {
   const summary = catalogOverviewCard?.summary || {};
   const catalogSync = catalogSyncCard?.sync || DEFAULT_SYNC_CARD;
   const catalogAutomation = catalogAutomationCard?.automation || DEFAULT_AUTOMATION_CARD;
-  const catalogAutomationSync =
-    catalogAutomationCard?.sync || DEFAULT_SYNC_CARD;
-  const effectiveCatalogSync =
-    catalogSync.status !== "idle" || !optimisticCatalogRuntime
-      ? catalogSync
-      : {
-          ...catalogSync,
-          status: optimisticCatalogRuntime.status,
-          message: optimisticCatalogRuntime.message,
-          runMode: optimisticCatalogRuntime.runMode || SYNC_RUN_MODE_MANUAL,
-        };
-  const catalogRuntimePhase =
-    effectiveCatalogSync.phase ||
-    effectiveCatalogSync.progress?.phase ||
-    CATALOG_SYNC_PHASE;
-  const automationPausedRequestCreation =
-    effectiveCatalogSync.status === "paused" &&
-    effectiveCatalogSync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION &&
-    catalogRuntimePhase === CATALOG_REQUEST_CREATION_PHASE;
+  const effectiveCatalogSync = optimisticCatalogRuntime
+    ? {
+        ...catalogSync,
+        status: optimisticCatalogRuntime.status,
+        message: optimisticCatalogRuntime.message,
+        runMode: optimisticCatalogRuntime.runMode || SYNC_RUN_MODE_MANUAL,
+        phase: optimisticCatalogRuntime.phase,
+      }
+    : catalogSync;
+  const catalogRuntimePhase = catalogActivePhase(effectiveCatalogSync);
+  const catalogRuntimeOwner = catalogRuntimePhase
+    ? catalogPhaseOwner(effectiveCatalogSync, catalogRuntimePhase)
+    : "";
   const catalogRuntimeBlocksModeSwitch =
-    effectiveCatalogSync.status !== "idle" &&
-    !automationPausedRequestCreation;
+    Boolean(catalogRuntimePhase) &&
+    catalogPhaseIsActive(
+      catalogPhaseStatus(effectiveCatalogSync, catalogRuntimePhase),
+    );
   const manualRuntimeOwnsCatalog =
     catalogRuntimeBlocksModeSwitch &&
-    effectiveCatalogSync.runMode === SYNC_RUN_MODE_MANUAL;
+    catalogRuntimeOwner === SYNC_RUN_MODE_MANUAL;
   const automationRuntimeOwnsCatalog =
     catalogRuntimeBlocksModeSwitch &&
-    effectiveCatalogSync.runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION;
+    catalogRuntimeOwner === SYNC_RUN_MODE_CATALOG_AUTOMATION;
 
   return (
     <PageFrame pageId="catalog" title="Catalog">
@@ -2583,7 +2798,7 @@ export function CatalogProcessingPage() {
         <CatalogSyncPanel
           className="processing-catalog-sync-card"
           loading={!catalogSyncLoaded}
-          sync={catalogSync}
+          sync={effectiveCatalogSync}
           recordCount={summary.records}
           blockedByExternalRuntime={automationRuntimeOwnsCatalog}
           onOptimisticSyncChange={setOptimisticCatalogRuntime}
@@ -2592,7 +2807,7 @@ export function CatalogProcessingPage() {
           pageId="catalog"
           title="Automation"
           automation={catalogAutomation}
-          sync={catalogAutomationSync}
+          sync={effectiveCatalogSync}
           blockedByExternalRuntime={manualRuntimeOwnsCatalog}
           onOptimisticSyncChange={setOptimisticCatalogRuntime}
           recordCount={summary.records}

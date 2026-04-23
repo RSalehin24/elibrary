@@ -163,6 +163,611 @@ class FakeProcessingCheckpointRedis:
         return 1
 
 
+def set_catalog_runtime_state(
+    sync_state,
+    *,
+    sync_status,
+    request_creation_status,
+    top_status=None,
+    sync_owner="manual",
+    request_creation_owner="catalog_automation",
+    next_page_index=0,
+    fetched_count=0,
+    session_id="catalog-matrix-session",
+    request_creation=None,
+):
+    checkpoint_token = processing_services.catalog_sync_checkpoint_token(
+        session_id,
+        next_page_index=next_page_index,
+        fetched_count=fetched_count,
+    )
+    sync_phase_state = processing_services._catalog_phase_state(
+        processing_services.CATALOG_SYNC_PHASE,
+        status=sync_status,
+        owner=sync_owner if sync_status != "not_started" else "",
+        trigger_source=processing_services.SYNC_TRIGGER_SOURCE_BUTTON,
+        checkpoint=f"page-{next_page_index}" if sync_status != "not_started" else "",
+        saved_data=(
+            {
+                "runMode": sync_owner,
+                "triggerSource": processing_services.SYNC_TRIGGER_SOURCE_BUTTON,
+                "sessionId": session_id,
+                "checkpointToken": checkpoint_token,
+                "nextPageIndex": next_page_index,
+                "fetchedCount": fetched_count,
+            }
+            if sync_status != "not_started"
+            else {}
+        ),
+    )
+    request_creation_payload = request_creation
+    if request_creation_payload is None and request_creation_status != "not_started":
+        request_creation_payload = {
+            "baseCheckpointToken": checkpoint_token,
+            "lastRecordId": "matrix-record-1",
+            "processedCount": 1,
+            "createdCount": 1,
+            "unsupportedCount": 0,
+        }
+    request_creation_phase_state = processing_services._catalog_phase_state(
+        processing_services.CATALOG_REQUEST_CREATION_PHASE,
+        status=request_creation_status,
+        owner=request_creation_owner if request_creation_status != "not_started" else "",
+        trigger_source=processing_services.SYNC_TRIGGER_SOURCE_BUTTON,
+        checkpoint=(
+            f"request-{request_creation_payload.get('lastRecordId') or request_creation_payload.get('processedCount', 0)}"
+            if request_creation_payload
+            else ""
+        ),
+        request_creation=request_creation_payload,
+        base_sync_checkpoint_token=checkpoint_token if request_creation_payload else "",
+    )
+    phase_states = {
+        processing_services.CATALOG_SYNC_PHASE: sync_phase_state,
+        processing_services.CATALOG_REQUEST_CREATION_PHASE: request_creation_phase_state,
+    }
+    sync_state.status = top_status or processing_services.catalog_runtime_status(phase_states)
+    sync_state.progress = processing_services.build_catalog_progress_payload(phase_states)
+    sync_state.page_index = next_page_index
+    sync_state.fetched_count = fetched_count
+    sync_state.save(
+        update_fields=[
+            "status",
+            "progress",
+            "page_index",
+            "fetched_count",
+            "updated_at",
+        ]
+    )
+    return sync_state
+
+
+def catalog_matrix_request_creation_payload(
+    *,
+    session_id="catalog-matrix-session",
+    next_page_index=1,
+    fetched_count=1,
+    last_record_id="matrix-record-1",
+    processed_count=1,
+    created_count=1,
+    unsupported_count=0,
+):
+    return {
+        "baseCheckpointToken": processing_services.catalog_sync_checkpoint_token(
+            session_id,
+            next_page_index=next_page_index,
+            fetched_count=fetched_count,
+        ),
+        "lastRecordId": last_record_id,
+        "processedCount": processed_count,
+        "createdCount": created_count,
+        "unsupportedCount": unsupported_count,
+    }
+
+
+def assert_catalog_matrix_payload(
+    payload,
+    *,
+    status,
+    phase,
+    run_mode,
+    sync_status,
+    request_creation_status,
+    sync_owner=None,
+    request_creation_owner=None,
+    request_creation=None,
+):
+    compatibility_status = (
+        lambda value: "running" if value == "pausing" else value
+    )
+    assert payload["sync"]["status"] == status
+    assert payload["sync"]["phase"] == phase
+    assert payload["sync"]["runMode"] == run_mode
+    assert (
+        payload["sync"]["progress"]["phaseStatuses"]["sync"]
+        == compatibility_status(sync_status)
+    )
+    assert (
+        payload["sync"]["progress"]["phaseStatuses"]["request_creation"]
+        == compatibility_status(request_creation_status)
+    )
+    assert payload["sync"]["progress"]["phaseStates"]["sync"]["status"] == sync_status
+    assert (
+        payload["sync"]["progress"]["phaseStates"]["request_creation"]["status"]
+        == request_creation_status
+    )
+    if sync_owner is not None:
+        assert payload["sync"]["progress"]["phaseStates"]["sync"]["owner"] == sync_owner
+    if request_creation_owner is not None:
+        assert (
+            payload["sync"]["progress"]["phaseStates"]["request_creation"]["owner"]
+            == request_creation_owner
+        )
+    if request_creation is None:
+        assert "requestCreation" not in payload["sync"]["progress"]
+    else:
+        assert payload["sync"]["progress"]["requestCreation"] == request_creation
+
+
+CATALOG_MANUAL_MATRIX_CASES = [
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "not_started",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.IDLE,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/start/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "sync_owner": "manual",
+                "request_creation": None,
+            },
+        },
+        id="manual-not_started-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.SYNCING,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/catalog/pause/"},
+            "expected": {
+                "status": "pausing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "pausing",
+                "request_creation_status": "not_started",
+                "sync_owner": "manual",
+                "request_creation": None,
+            },
+        },
+        id="manual-running-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "pausing",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.PAUSING,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/start/"},
+            "expected": {
+                "status": "pausing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "pausing",
+                "request_creation_status": "not_started",
+                "sync_owner": "manual",
+                "request_creation": None,
+            },
+        },
+        id="manual-pausing-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "paused",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.PAUSED,
+                "sync_owner": "manual",
+            },
+            "action": {
+                "path": "/api/processing/sync/catalog/resume/",
+                "body": {"runMode": "manual"},
+            },
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "sync_owner": "manual",
+                "request_creation": None,
+            },
+        },
+        id="manual-paused-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.IDLE,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/start/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "sync_owner": "manual",
+                "request_creation": None,
+            },
+        },
+        id="manual-completed-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "running",
+                "top_status": ProcessingSyncStatus.SYNCING,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/start/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "request_creation",
+                "run_mode": "catalog_automation",
+                "sync_status": "completed",
+                "request_creation_status": "running",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="manual-completed-running",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "pausing",
+                "top_status": ProcessingSyncStatus.PAUSING,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/start/"},
+            "expected": {
+                "status": "pausing",
+                "phase": "request_creation",
+                "run_mode": "catalog_automation",
+                "sync_status": "completed",
+                "request_creation_status": "pausing",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="manual-completed-pausing",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "paused",
+                "top_status": ProcessingSyncStatus.PAUSED,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/start/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "running",
+                "request_creation_status": "paused",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="manual-completed-paused",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "completed",
+                "top_status": ProcessingSyncStatus.IDLE,
+                "sync_owner": "manual",
+                "request_creation": {},
+            },
+            "action": {"path": "/api/processing/sync/start/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "sync_owner": "manual",
+                "request_creation": None,
+            },
+        },
+        id="manual-completed-completed",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "paused",
+                "request_creation_status": "paused",
+                "top_status": ProcessingSyncStatus.PAUSED,
+                "sync_owner": "manual",
+            },
+            "action": {
+                "path": "/api/processing/sync/catalog/resume/",
+                "body": {"runMode": "manual"},
+            },
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "manual",
+                "sync_status": "running",
+                "request_creation_status": "paused",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="manual-paused-paused",
+    ),
+]
+
+
+CATALOG_AUTOMATION_MATRIX_CASES = [
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "not_started",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.IDLE,
+                "sync_owner": "catalog_automation",
+            },
+            "action": {"path": "/api/processing/automation/catalog/run/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "catalog_automation",
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "sync_owner": "catalog_automation",
+                "request_creation": None,
+            },
+        },
+        id="automation-not_started-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.SYNCING,
+                "sync_owner": "catalog_automation",
+            },
+            "action": {"path": "/api/processing/sync/catalog/pause/"},
+            "expected": {
+                "status": "pausing",
+                "phase": "sync",
+                "run_mode": "catalog_automation",
+                "sync_status": "pausing",
+                "request_creation_status": "not_started",
+                "sync_owner": "catalog_automation",
+                "request_creation": None,
+            },
+        },
+        id="automation-running-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "pausing",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.PAUSING,
+                "sync_owner": "catalog_automation",
+            },
+            "action": {"path": "/api/processing/automation/catalog/run/"},
+            "expected": {
+                "status": "pausing",
+                "phase": "sync",
+                "run_mode": "catalog_automation",
+                "sync_status": "pausing",
+                "request_creation_status": "not_started",
+                "sync_owner": "catalog_automation",
+                "request_creation": None,
+            },
+        },
+        id="automation-pausing-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "paused",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.PAUSED,
+                "sync_owner": "catalog_automation",
+            },
+            "action": {
+                "path": "/api/processing/sync/catalog/resume/",
+                "body": {"runMode": "catalog_automation"},
+            },
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "catalog_automation",
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "sync_owner": "catalog_automation",
+                "request_creation": None,
+            },
+        },
+        id="automation-paused-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "not_started",
+                "top_status": ProcessingSyncStatus.IDLE,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/automation/catalog/run/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "request_creation",
+                "run_mode": "catalog_automation",
+                "sync_status": "completed",
+                "request_creation_status": "running",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": {
+                    **catalog_matrix_request_creation_payload(),
+                    "lastRecordId": "",
+                    "processedCount": 0,
+                    "createdCount": 0,
+                },
+            },
+        },
+        id="automation-completed-not_started",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "running",
+                "top_status": ProcessingSyncStatus.SYNCING,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/sync/catalog/pause/"},
+            "expected": {
+                "status": "pausing",
+                "phase": "request_creation",
+                "run_mode": "catalog_automation",
+                "sync_status": "completed",
+                "request_creation_status": "pausing",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="automation-completed-running",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "pausing",
+                "top_status": ProcessingSyncStatus.PAUSING,
+                "sync_owner": "manual",
+            },
+            "action": {"path": "/api/processing/automation/catalog/run/"},
+            "expected": {
+                "status": "pausing",
+                "phase": "request_creation",
+                "run_mode": "catalog_automation",
+                "sync_status": "completed",
+                "request_creation_status": "pausing",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="automation-completed-pausing",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "paused",
+                "top_status": ProcessingSyncStatus.PAUSED,
+                "sync_owner": "manual",
+            },
+            "action": {
+                "path": "/api/processing/sync/catalog/resume/",
+                "body": {"runMode": "catalog_automation"},
+            },
+            "expected": {
+                "status": "syncing",
+                "phase": "request_creation",
+                "run_mode": "catalog_automation",
+                "sync_status": "completed",
+                "request_creation_status": "running",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="automation-completed-paused",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "completed",
+                "request_creation_status": "completed",
+                "top_status": ProcessingSyncStatus.IDLE,
+                "sync_owner": "manual",
+                "request_creation": {},
+            },
+            "action": {"path": "/api/processing/automation/catalog/run/"},
+            "expected": {
+                "status": "syncing",
+                "phase": "sync",
+                "run_mode": "catalog_automation",
+                "sync_status": "running",
+                "request_creation_status": "not_started",
+                "sync_owner": "catalog_automation",
+                "request_creation": None,
+            },
+        },
+        id="automation-completed-completed",
+    ),
+    pytest.param(
+        {
+            "initial": {
+                "sync_status": "paused",
+                "request_creation_status": "paused",
+                "top_status": ProcessingSyncStatus.PAUSED,
+                "sync_owner": "manual",
+            },
+            "action": {
+                "path": "/api/processing/sync/catalog/resume/",
+                "body": {"runMode": "catalog_automation"},
+            },
+            "expected": {
+                "status": "syncing",
+                "phase": "request_creation",
+                "run_mode": "catalog_automation",
+                "sync_status": "paused",
+                "request_creation_status": "running",
+                "sync_owner": "manual",
+                "request_creation_owner": "catalog_automation",
+                "request_creation": catalog_matrix_request_creation_payload(),
+            },
+        },
+        id="automation-paused-paused",
+    ),
+]
+
+
 def test_parse_incomplete_catalog_page_reads_entry_title_links():
     soup = processing_services.BeautifulSoup(
         """
@@ -1619,7 +2224,7 @@ def test_catalog_automation_request_creation_phase_can_pause_and_resume(client, 
 
 
 @pytest.mark.django_db
-def test_manual_start_from_paused_automation_request_creation_restarts_sync_from_beginning(
+def test_manual_start_from_paused_automation_request_creation_preserves_phase_two_checkpoint(
     client,
     monkeypatch,
 ):
@@ -1667,14 +2272,19 @@ def test_manual_start_from_paused_automation_request_creation_restarts_sync_from
     assert payload["sync"]["pageIndex"] == 0
     assert payload["sync"]["fetchedCount"] == 0
     assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "running"
-    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "not_started"
-    assert "requestCreation" not in payload["sync"]["progress"]
+    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "paused"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+    assert (
+        payload["sync"]["progress"]["phaseStates"]["request_creation"]["status"]
+        == "paused"
+    )
 
     payload = advance_processing_sync(client)
-    assert payload["sync"]["status"] == "idle"
+    assert payload["sync"]["status"] == "paused"
+    assert payload["sync"]["message"].startswith("Sync complete.")
     assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "completed"
-    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "not_started"
-    assert "requestCreation" not in payload["sync"]["progress"]
+    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "paused"
+    assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
     assert BookCreationRequest.objects.count() == 1
 
     _mutation, payload = post_processing_mutation(
@@ -1682,13 +2292,14 @@ def test_manual_start_from_paused_automation_request_creation_restarts_sync_from
         "/api/processing/automation/catalog/run/",
     )
     assert payload["sync"]["status"] == "syncing"
-    assert payload["sync"]["phase"] == "sync"
-    assert payload["sync"]["pageIndex"] == 0
-    assert payload["sync"]["message"] == "Automated catalog sync is running."
-
-    payload = advance_processing_sync(client)
-    assert payload["sync"]["status"] == "syncing"
     assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["message"] == "Resuming automated request creation from saved progress."
+    assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "completed"
+    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "running"
+
+    payload = advance_processing_sync(client, count=2)
+    assert payload["sync"]["status"] == "idle"
+    assert BookCreationRequest.objects.count() == 2
 
 
 @pytest.mark.django_db
@@ -1729,6 +2340,471 @@ def test_catalog_automation_rerun_after_completion_starts_from_beginning(client)
     assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "running"
     assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "not_started"
     assert "requestCreation" not in payload["sync"]["progress"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("case", CATALOG_MANUAL_MATRIX_CASES)
+def test_catalog_manual_matrix_rows(client, case):
+    login_processing_admin(client)
+    sync_state = get_sync_state()
+    set_catalog_runtime_state(
+        sync_state,
+        sync_status=case["initial"]["sync_status"],
+        request_creation_status=case["initial"]["request_creation_status"],
+        top_status=case["initial"]["top_status"],
+        sync_owner=case["initial"]["sync_owner"],
+        request_creation_owner=case["initial"].get(
+            "request_creation_owner",
+            "catalog_automation",
+        ),
+        next_page_index=case["initial"].get("next_page_index", 1),
+        fetched_count=case["initial"].get("fetched_count", 1),
+        request_creation=case["initial"].get("request_creation"),
+    )
+
+    _mutation, payload = post_processing_mutation(
+        client,
+        case["action"]["path"],
+        case["action"].get("body"),
+    )
+
+    assert_catalog_matrix_payload(payload, **case["expected"])
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("case", CATALOG_AUTOMATION_MATRIX_CASES)
+def test_catalog_automation_matrix_rows(client, case):
+    login_processing_admin(client)
+    sync_state = get_sync_state()
+    set_catalog_runtime_state(
+        sync_state,
+        sync_status=case["initial"]["sync_status"],
+        request_creation_status=case["initial"]["request_creation_status"],
+        top_status=case["initial"]["top_status"],
+        sync_owner=case["initial"]["sync_owner"],
+        request_creation_owner=case["initial"].get(
+            "request_creation_owner",
+            "catalog_automation",
+        ),
+        next_page_index=case["initial"].get("next_page_index", 1),
+        fetched_count=case["initial"].get("fetched_count", 1),
+        request_creation=case["initial"].get("request_creation"),
+    )
+
+    _mutation, payload = post_processing_mutation(
+        client,
+        case["action"]["path"],
+        case["action"].get("body"),
+    )
+
+    assert_catalog_matrix_payload(payload, **case["expected"])
+
+
+@pytest.mark.django_db
+def test_catalog_phase_one_pause_request_preserves_paused_phase_two_checkpoint(client):
+    login_processing_admin(client)
+    sync_state = get_sync_state()
+    paused_request_creation = catalog_matrix_request_creation_payload(
+        next_page_index=3,
+        fetched_count=42,
+        last_record_id="matrix-running-paused",
+        processed_count=7,
+        created_count=5,
+    )
+    set_catalog_runtime_state(
+        sync_state,
+        sync_status="running",
+        request_creation_status="paused",
+        top_status=ProcessingSyncStatus.SYNCING,
+        sync_owner="manual",
+        next_page_index=3,
+        fetched_count=42,
+        request_creation=paused_request_creation,
+    )
+
+    _mutation, payload = post_processing_mutation(
+        client,
+        "/api/processing/sync/catalog/pause/",
+    )
+
+    assert_catalog_matrix_payload(
+        payload,
+        status="pausing",
+        phase="sync",
+        run_mode="manual",
+        sync_status="pausing",
+        request_creation_status="paused",
+        sync_owner="manual",
+        request_creation_owner="catalog_automation",
+        request_creation=paused_request_creation,
+    )
+    assert (
+        payload["sync"]["progress"]["phaseStates"]["request_creation"][
+            "baseSyncCheckpointToken"
+        ]
+        == paused_request_creation["baseCheckpointToken"]
+    )
+
+
+@pytest.mark.django_db
+def test_catalog_phase_states_preserve_pausing_phase_one_and_paused_phase_two_checkpoints():
+    sync_state = get_sync_state()
+    paused_request_creation = catalog_matrix_request_creation_payload(
+        next_page_index=4,
+        fetched_count=12,
+        last_record_id="matrix-pausing-paused",
+        processed_count=3,
+        created_count=2,
+    )
+    set_catalog_runtime_state(
+        sync_state,
+        sync_status="pausing",
+        request_creation_status="paused",
+        top_status=ProcessingSyncStatus.PAUSING,
+        sync_owner="manual",
+        next_page_index=4,
+        fetched_count=12,
+        request_creation=paused_request_creation,
+    )
+
+    payload = processing_services.serialize_sync_state(
+        sync_state,
+        include_remote_pages=False,
+    )
+
+    assert payload["status"] == "pausing"
+    assert payload["progress"]["phaseStatuses"]["sync"] == "running"
+    assert payload["progress"]["phaseStatuses"]["request_creation"] == "paused"
+    assert payload["progress"]["phaseStates"]["sync"]["status"] == "pausing"
+    assert payload["progress"]["phaseStates"]["sync"]["savedData"]["checkpointToken"] == (
+        processing_services.catalog_sync_checkpoint_token(
+            "catalog-matrix-session",
+            next_page_index=4,
+            fetched_count=12,
+        )
+    )
+    assert payload["progress"]["phaseStates"]["request_creation"]["status"] == "paused"
+    assert payload["progress"]["phaseStates"]["request_creation"][
+        "baseSyncCheckpointToken"
+    ] == paused_request_creation["baseCheckpointToken"]
+    assert payload["progress"]["requestCreation"] == paused_request_creation
+
+
+@pytest.mark.django_db
+def test_catalog_automation_run_starts_request_creation_from_completed_sync_checkpoint(client):
+    login_processing_admin(client)
+    BookRecord.objects.create(
+        id="matrix-phase-two-a",
+        name="Matrix Phase Two A",
+        url="https://example.test/books/matrix-phase-two-a",
+        category="Reference",
+        writer="Writer One",
+        publisher="Press",
+    )
+    sync_state = get_sync_state()
+    set_catalog_runtime_state(
+        sync_state,
+        sync_status="completed",
+        request_creation_status="not_started",
+        sync_owner="manual",
+        next_page_index=1,
+        fetched_count=1,
+    )
+
+    _mutation, payload = post_processing_mutation(
+        client,
+        "/api/processing/automation/catalog/run/",
+    )
+
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["message"] == "Creating book requests from the synced catalog records."
+    assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "completed"
+    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "running"
+    assert payload["sync"]["progress"]["phaseStates"]["request_creation"][
+        "baseSyncCheckpointToken"
+    ] == payload["sync"]["progress"]["requestCreation"]["baseCheckpointToken"]
+
+
+@pytest.mark.django_db
+def test_manual_and_automation_can_resume_different_paused_catalog_phases(client):
+    login_processing_admin(client)
+    sync_state = get_sync_state()
+    sync_state.remote_pages = [
+        [record_payload("matrix-paused-phase-1", name="Matrix Paused Phase 1")],
+        [],
+    ]
+    sync_state.save(update_fields=["remote_pages", "updated_at"])
+    paused_request_creation = {
+        "baseCheckpointToken": processing_services.catalog_sync_checkpoint_token(
+            "catalog-matrix-session",
+            next_page_index=1,
+            fetched_count=1,
+        ),
+        "lastRecordId": "matrix-record-1",
+        "processedCount": 1,
+        "createdCount": 1,
+        "unsupportedCount": 0,
+    }
+    set_catalog_runtime_state(
+        sync_state,
+        sync_status="paused",
+        request_creation_status="paused",
+        sync_owner="manual",
+        request_creation=paused_request_creation,
+        next_page_index=1,
+        fetched_count=1,
+    )
+
+    _mutation, payload = post_processing_mutation(
+        client,
+        "/api/processing/sync/start/",
+    )
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "sync"
+    assert payload["sync"]["runMode"] == "manual"
+    assert payload["sync"]["message"] == "Continuing catalog sync from the saved endpoint."
+    assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "running"
+    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "paused"
+    assert payload["sync"]["progress"]["requestCreation"] == paused_request_creation
+
+    set_catalog_runtime_state(
+        sync_state,
+        sync_status="paused",
+        request_creation_status="paused",
+        sync_owner="manual",
+        request_creation=paused_request_creation,
+        next_page_index=1,
+        fetched_count=1,
+    )
+    _mutation, payload = post_processing_mutation(
+        client,
+        "/api/processing/automation/catalog/run/",
+    )
+    assert payload["sync"]["status"] == "syncing"
+    assert payload["sync"]["phase"] == "request_creation"
+    assert payload["sync"]["runMode"] == "catalog_automation"
+    assert payload["sync"]["message"] == "Resuming automated request creation from saved progress."
+    assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "paused"
+    assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "running"
+
+
+@pytest.mark.django_db
+def test_processing_sync_serialization_normalizes_legacy_catalog_progress_into_phase_states():
+    sync_state = get_sync_state()
+    sync_state.status = ProcessingSyncStatus.PAUSED
+    sync_state.progress = {
+        "runMode": "catalog_automation",
+        "triggerSource": "button",
+        "phase": "request_creation",
+        "checkpoint": "request-1",
+        "savedAt": timezone.now().isoformat(),
+        "savedData": {
+            "runMode": "catalog_automation",
+            "triggerSource": "button",
+            "sessionId": "legacy-catalog-session",
+            "checkpointToken": "legacy-catalog-session:0:1:1",
+            "nextPageIndex": 1,
+            "fetchedCount": 1,
+        },
+        "requestCreation": {
+            "baseCheckpointToken": "legacy-catalog-session:0:1:1",
+            "lastRecordId": "legacy-record-1",
+            "processedCount": 1,
+            "createdCount": 1,
+            "unsupportedCount": 0,
+        },
+    }
+    sync_state.page_index = 1
+    sync_state.fetched_count = 1
+    sync_state.save(
+        update_fields=[
+            "status",
+            "progress",
+            "page_index",
+            "fetched_count",
+            "updated_at",
+        ]
+    )
+
+    payload = processing_services.serialize_sync_state(sync_state, include_remote_pages=False)
+
+    assert payload["progress"]["phaseStatuses"]["sync"] == "completed"
+    assert payload["progress"]["phaseStatuses"]["request_creation"] == "paused"
+    assert payload["progress"]["phaseStates"]["sync"]["status"] == "completed"
+    assert payload["progress"]["phaseStates"]["request_creation"]["status"] == "paused"
+    assert payload["progress"]["phaseStates"]["request_creation"][
+        "baseSyncCheckpointToken"
+    ] == "legacy-catalog-session:0:1:1"
+
+
+@pytest.mark.django_db
+def test_processing_sync_serialization_normalizes_legacy_catalog_pausing_progress():
+    sync_state = get_sync_state()
+    saved_at = timezone.now().isoformat()
+    sync_state.status = ProcessingSyncStatus.PAUSING
+    sync_state.progress = {
+        "runMode": "manual",
+        "triggerSource": "button",
+        "phase": "sync",
+        "checkpoint": "page-2",
+        "savedData": {
+            "runMode": "manual",
+            "triggerSource": "button",
+            "sessionId": "legacy-catalog-pausing",
+            "checkpointToken": "legacy-catalog-pausing:0:2:8",
+            "nextPageIndex": 2,
+            "fetchedCount": 8,
+        },
+        "phaseStatuses": {
+            "sync": "running",
+            "request_creation": "paused",
+        },
+        "requestCreation": {
+            "baseCheckpointToken": "legacy-catalog-pausing:0:1:4",
+            "lastRecordId": "legacy-paused-request",
+            "processedCount": 4,
+            "createdCount": 2,
+            "unsupportedCount": 0,
+        },
+        "savedAt": saved_at,
+    }
+    sync_state.page_index = 2
+    sync_state.fetched_count = 8
+    sync_state.save(
+        update_fields=[
+            "status",
+            "progress",
+            "page_index",
+            "fetched_count",
+            "updated_at",
+        ]
+    )
+
+    payload = processing_services.serialize_sync_state(sync_state, include_remote_pages=False)
+
+    assert payload["status"] == "pausing"
+    assert payload["progress"]["phaseStatuses"]["sync"] == "running"
+    assert payload["progress"]["phaseStatuses"]["request_creation"] == "paused"
+    assert payload["progress"]["phaseStates"]["sync"]["status"] == "pausing"
+    assert payload["progress"]["phaseStates"]["sync"]["savedAt"] == saved_at
+    assert payload["progress"]["phaseStates"]["request_creation"]["status"] == "paused"
+    assert payload["progress"]["phaseStates"]["request_creation"][
+        "baseSyncCheckpointToken"
+    ] == "legacy-catalog-pausing:0:1:4"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("progress_phase", "expected_sync_status", "expected_request_creation_status"),
+    [
+        (
+            "sync",
+            "running",
+            "paused",
+        ),
+        (
+            "request_creation",
+            "completed",
+            "running",
+        ),
+    ],
+)
+def test_processing_sync_serialization_normalizes_dual_active_catalog_phase_states(
+    progress_phase,
+    expected_sync_status,
+    expected_request_creation_status,
+):
+    sync_state = get_sync_state()
+    session_id = "dual-active-session"
+    checkpoint_token = processing_services.catalog_sync_checkpoint_token(
+        session_id,
+        next_page_index=2,
+        fetched_count=8,
+    )
+    request_creation = {
+        "baseCheckpointToken": checkpoint_token,
+        "lastRecordId": "dual-active-record",
+        "processedCount": 3,
+        "createdCount": 2,
+        "unsupportedCount": 0,
+    }
+    sync_state.status = ProcessingSyncStatus.SYNCING
+    sync_state.progress = {
+        "runMode": "catalog_automation",
+        "triggerSource": "button",
+        "phase": progress_phase,
+        "phaseStatuses": {
+            "sync": "running",
+            "request_creation": "running",
+        },
+        "phaseStates": {
+            "sync": processing_services._catalog_phase_state(
+                processing_services.CATALOG_SYNC_PHASE,
+                status="running",
+                owner="manual",
+                trigger_source=processing_services.SYNC_TRIGGER_SOURCE_BUTTON,
+                checkpoint="page-2",
+                saved_data={
+                    "runMode": "manual",
+                    "triggerSource": "button",
+                    "sessionId": session_id,
+                    "checkpointToken": checkpoint_token,
+                    "nextPageIndex": 2,
+                    "fetchedCount": 8,
+                },
+            ),
+            "request_creation": processing_services._catalog_phase_state(
+                processing_services.CATALOG_REQUEST_CREATION_PHASE,
+                status="running",
+                owner="catalog_automation",
+                trigger_source=processing_services.SYNC_TRIGGER_SOURCE_BUTTON,
+                checkpoint="request-dual-active-record",
+                request_creation=request_creation,
+                base_sync_checkpoint_token=checkpoint_token,
+            ),
+        },
+        "savedData": {
+            "runMode": "manual",
+            "triggerSource": "button",
+            "sessionId": session_id,
+            "checkpointToken": checkpoint_token,
+            "nextPageIndex": 2,
+            "fetchedCount": 8,
+        },
+        "requestCreation": request_creation,
+    }
+    sync_state.page_index = 2
+    sync_state.fetched_count = 8
+    sync_state.save(
+        update_fields=[
+            "status",
+            "progress",
+            "page_index",
+            "fetched_count",
+            "updated_at",
+        ]
+    )
+
+    payload = processing_services.serialize_sync_state(sync_state, include_remote_pages=False)
+
+    assert payload["progress"]["phaseStates"]["sync"]["status"] == expected_sync_status
+    assert (
+        payload["progress"]["phaseStates"]["request_creation"]["status"]
+        == expected_request_creation_status
+    )
+    assert (
+        payload["progress"]["phaseStatuses"]["sync"]
+        == ("running" if expected_sync_status == "pausing" else expected_sync_status)
+    )
+    assert (
+        payload["progress"]["phaseStatuses"]["request_creation"]
+        == (
+            "running"
+            if expected_request_creation_status == "pausing"
+            else expected_request_creation_status
+        )
+    )
 
 
 @pytest.mark.django_db

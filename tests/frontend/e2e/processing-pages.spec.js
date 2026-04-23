@@ -8,6 +8,7 @@ const CATALOG_SYNC_PHASE = "sync";
 const CATALOG_REQUEST_CREATION_PHASE = "request_creation";
 const CATALOG_PHASE_STATUS_NOT_STARTED = "not_started";
 const CATALOG_PHASE_STATUS_RUNNING = "running";
+const CATALOG_PHASE_STATUS_PAUSING = "pausing";
 const CATALOG_PHASE_STATUS_PAUSED = "paused";
 const CATALOG_PHASE_STATUS_COMPLETED = "completed";
 const PROCESSING_CARD_KEYS = [
@@ -634,6 +635,23 @@ function preserveCatalogRequestCreation(state, checkpointToken) {
   return null;
 }
 
+function requestCreationBaseCheckpointToken(requestCreation) {
+  return String(requestCreation?.baseCheckpointToken || "").trim();
+}
+
+function catalogRequestCreationBaseToken(state) {
+  const requestCreationPhaseState = explicitCatalogPhaseState(
+    state,
+    CATALOG_REQUEST_CREATION_PHASE,
+  );
+  const requestCreation =
+    requestCreationPhaseState?.requestCreation || state.sync.progress?.requestCreation;
+  return (
+    String(requestCreationPhaseState?.baseSyncCheckpointToken || "").trim() ||
+    requestCreationBaseCheckpointToken(requestCreation)
+  );
+}
+
 function catalogSavedCheckpointAvailable(state) {
   return Object.keys(catalogSyncSavedData(state)).length > 0;
 }
@@ -642,19 +660,172 @@ function catalogPhaseStatuses(
   syncStatus = CATALOG_PHASE_STATUS_NOT_STARTED,
   requestCreationStatus = CATALOG_PHASE_STATUS_NOT_STARTED,
 ) {
+  const summarize = (status) =>
+    status === CATALOG_PHASE_STATUS_PAUSING
+      ? CATALOG_PHASE_STATUS_RUNNING
+      : status;
   return {
-    [CATALOG_SYNC_PHASE]: syncStatus,
-    [CATALOG_REQUEST_CREATION_PHASE]: requestCreationStatus,
+    [CATALOG_SYNC_PHASE]: summarize(syncStatus),
+    [CATALOG_REQUEST_CREATION_PHASE]: summarize(requestCreationStatus),
   };
 }
 
+function catalogPhaseIsActive(status) {
+  return (
+    status === CATALOG_PHASE_STATUS_RUNNING ||
+    status === CATALOG_PHASE_STATUS_PAUSING
+  );
+}
+
+function explicitCatalogPhaseState(state, phase) {
+  const phaseStates = state.sync.progress?.phaseStates;
+  if (phaseStates && typeof phaseStates[phase] === "object") {
+    return phaseStates[phase];
+  }
+  return null;
+}
+
+function pausedLegacyRequestCreationPhaseState(state) {
+  if (catalogRequestCreationPhaseStatus(state) !== CATALOG_PHASE_STATUS_PAUSED) {
+    return null;
+  }
+  const requestCreation = state.sync.progress?.requestCreation;
+  if (!requestCreation) {
+    return null;
+  }
+  return {
+    status: CATALOG_PHASE_STATUS_PAUSED,
+    owner: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    triggerSource: "button",
+    checkpoint: `request-${requestCreation.lastRecordId || requestCreation.processedCount || 0}`,
+    ...(state.sync.phase === CATALOG_REQUEST_CREATION_PHASE && state.sync.progress?.savedAt
+      ? { savedAt: state.sync.progress.savedAt }
+      : {}),
+    requestCreation,
+    baseSyncCheckpointToken:
+      requestCreation.baseCheckpointToken || catalogSyncCheckpointToken(state),
+  };
+}
+
+function catalogSummaryPhase(syncStatus, requestCreationStatus, runtimeStatus = "idle") {
+  if (
+    catalogPhaseIsActive(requestCreationStatus) &&
+    ["syncing", "pausing"].includes(runtimeStatus)
+  ) {
+    return CATALOG_REQUEST_CREATION_PHASE;
+  }
+  if (
+    (catalogPhaseIsActive(syncStatus) || syncStatus === CATALOG_PHASE_STATUS_PAUSED) &&
+    ["syncing", "pausing"].includes(runtimeStatus)
+  ) {
+    return CATALOG_SYNC_PHASE;
+  }
+  if (syncStatus === CATALOG_PHASE_STATUS_PAUSED) {
+    return CATALOG_SYNC_PHASE;
+  }
+  if (requestCreationStatus === CATALOG_PHASE_STATUS_PAUSED) {
+    return CATALOG_REQUEST_CREATION_PHASE;
+  }
+  return CATALOG_SYNC_PHASE;
+}
+
+function applyCatalogProgress(
+  state,
+  {
+    syncStatus,
+    syncOwner,
+    syncSavedData,
+    syncSavedAt = null,
+    requestCreationStatus,
+    requestCreationOwner = SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    requestCreation = null,
+    requestCreationSavedAt = null,
+  },
+) {
+  const normalizedSyncSavedData =
+    syncStatus === CATALOG_PHASE_STATUS_NOT_STARTED ? null : syncSavedData;
+  const requestCreationBaseToken =
+    requestCreation?.baseCheckpointToken ||
+    state.sync.progress?.phaseStates?.[CATALOG_REQUEST_CREATION_PHASE]?.baseSyncCheckpointToken ||
+    normalizedSyncSavedData?.checkpointToken ||
+    "";
+  const phaseStates = {
+    [CATALOG_SYNC_PHASE]: {
+      status: syncStatus,
+      owner: syncStatus === CATALOG_PHASE_STATUS_NOT_STARTED ? "" : syncOwner,
+      triggerSource: "button",
+      ...(syncStatus === CATALOG_PHASE_STATUS_NOT_STARTED
+        ? {}
+        : {
+            checkpoint: `page-${normalizedSyncSavedData?.nextPageIndex || state.sync.pageIndex || 0}`,
+            ...(syncSavedAt ? { savedAt: syncSavedAt } : {}),
+            savedData: normalizedSyncSavedData,
+          }),
+    },
+    [CATALOG_REQUEST_CREATION_PHASE]: {
+      status: requestCreationStatus,
+      owner:
+        requestCreationStatus === CATALOG_PHASE_STATUS_NOT_STARTED
+          ? ""
+          : requestCreationOwner,
+      triggerSource: "button",
+      ...(requestCreationStatus === CATALOG_PHASE_STATUS_NOT_STARTED
+        ? {}
+        : {
+            checkpoint: `request-${requestCreation?.lastRecordId || requestCreation?.processedCount || 0}`,
+            ...(requestCreationSavedAt ? { savedAt: requestCreationSavedAt } : {}),
+            ...(requestCreation ? { requestCreation } : {}),
+            ...(requestCreationBaseToken
+              ? { baseSyncCheckpointToken: requestCreationBaseToken }
+              : {}),
+          }),
+    },
+  };
+  const phase = catalogSummaryPhase(
+    syncStatus,
+    requestCreationStatus,
+    state.sync.status,
+  );
+  const summaryPhaseState = phaseStates[phase];
+  state.sync.progress = {
+    runMode: summaryPhaseState.owner || syncOwner || state.sync.runMode || SYNC_RUN_MODE_MANUAL,
+    phase,
+    phaseStatuses: catalogPhaseStatuses(syncStatus, requestCreationStatus),
+    phaseStates,
+    ...(summaryPhaseState.checkpoint ? { checkpoint: summaryPhaseState.checkpoint } : {}),
+    ...(summaryPhaseState.savedAt ? { savedAt: summaryPhaseState.savedAt } : {}),
+    ...(normalizedSyncSavedData ? { savedData: normalizedSyncSavedData } : {}),
+    ...(requestCreation ? { requestCreation } : {}),
+  };
+  state.sync.phase = phase;
+}
+
 function explicitCatalogPhaseStatus(state, phase) {
+  const explicitState = explicitCatalogPhaseState(state, phase);
+  if (explicitState?.status) {
+    return explicitState.status;
+  }
   return state.sync.progress?.phaseStatuses?.[phase] || "";
 }
 
 function catalogSyncPhaseStatus(state) {
   const explicit = explicitCatalogPhaseStatus(state, CATALOG_SYNC_PHASE);
   if (explicit) {
+    if (
+      (state.sync.phase || state.sync.progress?.phase) === CATALOG_SYNC_PHASE &&
+      state.sync.status === "pausing" &&
+      explicit === CATALOG_PHASE_STATUS_RUNNING
+    ) {
+      return CATALOG_PHASE_STATUS_PAUSING;
+    }
+    if (
+      (state.sync.phase || state.sync.progress?.phase) === CATALOG_SYNC_PHASE &&
+      state.sync.status === "paused" &&
+      (explicit === CATALOG_PHASE_STATUS_RUNNING ||
+        explicit === CATALOG_PHASE_STATUS_PAUSING)
+    ) {
+      return CATALOG_PHASE_STATUS_PAUSED;
+    }
     return explicit;
   }
   if ((state.sync.phase || state.sync.progress?.phase) === CATALOG_REQUEST_CREATION_PHASE) {
@@ -663,7 +834,10 @@ function catalogSyncPhaseStatus(state) {
   if (state.sync.status === "paused") {
     return CATALOG_PHASE_STATUS_PAUSED;
   }
-  if (["syncing", "pausing"].includes(state.sync.status)) {
+  if (state.sync.status === "pausing") {
+    return CATALOG_PHASE_STATUS_PAUSING;
+  }
+  if (state.sync.status === "syncing") {
     return CATALOG_PHASE_STATUS_RUNNING;
   }
   return catalogSavedCheckpointAvailable(state)
@@ -674,13 +848,31 @@ function catalogSyncPhaseStatus(state) {
 function catalogRequestCreationPhaseStatus(state) {
   const explicit = explicitCatalogPhaseStatus(state, CATALOG_REQUEST_CREATION_PHASE);
   if (explicit) {
+    if (
+      (state.sync.phase || state.sync.progress?.phase) === CATALOG_REQUEST_CREATION_PHASE &&
+      state.sync.status === "pausing" &&
+      explicit === CATALOG_PHASE_STATUS_RUNNING
+    ) {
+      return CATALOG_PHASE_STATUS_PAUSING;
+    }
+    if (
+      (state.sync.phase || state.sync.progress?.phase) === CATALOG_REQUEST_CREATION_PHASE &&
+      state.sync.status === "paused" &&
+      (explicit === CATALOG_PHASE_STATUS_RUNNING ||
+        explicit === CATALOG_PHASE_STATUS_PAUSING)
+    ) {
+      return CATALOG_PHASE_STATUS_PAUSED;
+    }
     return explicit;
   }
   if ((state.sync.phase || state.sync.progress?.phase) === CATALOG_REQUEST_CREATION_PHASE) {
     if (state.sync.status === "paused") {
       return CATALOG_PHASE_STATUS_PAUSED;
     }
-    if (["syncing", "pausing"].includes(state.sync.status)) {
+    if (state.sync.status === "pausing") {
+      return CATALOG_PHASE_STATUS_PAUSING;
+    }
+    if (state.sync.status === "syncing") {
       return CATALOG_PHASE_STATUS_RUNNING;
     }
   }
@@ -688,16 +880,19 @@ function catalogRequestCreationPhaseStatus(state) {
 }
 
 function catalogRequestCreationCanResume(state) {
-  const requestCreation = state.sync.progress?.requestCreation;
+  const requestCreation =
+    explicitCatalogPhaseState(state, CATALOG_REQUEST_CREATION_PHASE)?.requestCreation ||
+    state.sync.progress?.requestCreation;
+  const checkpointToken = catalogRequestCreationBaseToken(state);
   return (
     state.sync.status === "paused" &&
     catalogRequestCreationPhaseStatus(state) === CATALOG_PHASE_STATUS_PAUSED &&
-    requestCreation?.baseCheckpointToken === catalogSyncCheckpointToken(state)
+    requestCreationBaseCheckpointToken(requestCreation) === checkpointToken
   );
 }
 
-function nextCatalogSessionId(state) {
-  if (state.sync.progress?.savedData?.sessionId) {
+function nextCatalogSessionId(state, { reuseCurrent = true } = {}) {
+  if (reuseCurrent && state.sync.progress?.savedData?.sessionId) {
     return state.sync.progress.savedData.sessionId;
   }
   state.ui = {
@@ -713,39 +908,65 @@ function buildCatalogSyncProgress(
   {
     savedAt = null,
     syncPhaseStatus = CATALOG_PHASE_STATUS_RUNNING,
-    requestCreationPhaseStatus = CATALOG_PHASE_STATUS_NOT_STARTED,
+    requestCreationPhaseState = null,
+    sessionId = null,
   } = {},
 ) {
   const savedData = {
     runMode,
     fetchedCount: state.sync.fetchedCount,
     nextPageIndex: state.sync.pageIndex,
-    sessionId: nextCatalogSessionId(state),
+    sessionId: sessionId || nextCatalogSessionId(state),
   };
   savedData.checkpointToken = `${savedData.sessionId}:0:${savedData.nextPageIndex}:${savedData.fetchedCount}`;
-  const progress = {
-    runMode,
-    phase: CATALOG_SYNC_PHASE,
-    checkpoint: `page-${state.sync.pageIndex}`,
-    savedData,
-    phaseStatuses: catalogPhaseStatuses(syncPhaseStatus, requestCreationPhaseStatus),
-  };
-  if (savedAt) {
-    progress.savedAt = savedAt;
-  }
-  state.sync.progress = progress;
-  state.sync.phase = CATALOG_SYNC_PHASE;
-  return progress;
+  const preservedRequestCreationPhaseState =
+    requestCreationPhaseState ||
+    explicitCatalogPhaseState(state, CATALOG_REQUEST_CREATION_PHASE) ||
+    pausedLegacyRequestCreationPhaseState(state);
+  const requestCreationStatus =
+    preservedRequestCreationPhaseState?.status === CATALOG_PHASE_STATUS_PAUSED
+      ? CATALOG_PHASE_STATUS_PAUSED
+      : CATALOG_PHASE_STATUS_NOT_STARTED;
+  const requestCreation =
+    requestCreationStatus === CATALOG_PHASE_STATUS_PAUSED
+      ? preservedRequestCreationPhaseState.requestCreation
+      : null;
+  applyCatalogProgress(state, {
+    syncStatus: syncPhaseStatus,
+    syncOwner: runMode,
+    syncSavedData: savedData,
+    syncSavedAt: savedAt,
+    requestCreationStatus,
+    requestCreation,
+    requestCreationOwner:
+      preservedRequestCreationPhaseState?.owner || SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    requestCreationSavedAt: preservedRequestCreationPhaseState?.savedAt || null,
+  });
+  return state.sync.progress;
 }
 
 function currentCatalogRequestCreation(state) {
   const savedData = catalogSyncSavedData(state);
-  const requestCreation = state.sync.progress?.requestCreation;
-  if (requestCreation?.baseCheckpointToken === catalogSyncCheckpointToken(state)) {
+  const requestCreationPhaseState = explicitCatalogPhaseState(
+    state,
+    CATALOG_REQUEST_CREATION_PHASE,
+  );
+  const requestCreation =
+    requestCreationPhaseState?.requestCreation ||
+    state.sync.progress?.requestCreation;
+  const checkpointToken = catalogRequestCreationBaseToken(state);
+  if (
+    checkpointToken &&
+    requestCreationBaseCheckpointToken(requestCreation) === checkpointToken
+  ) {
     return requestCreation;
   }
   return {
-    baseCheckpointToken: savedData.checkpointToken || "",
+    baseCheckpointToken:
+      checkpointToken ||
+      requestCreationBaseCheckpointToken(requestCreation) ||
+      savedData.checkpointToken ||
+      catalogSyncCheckpointToken(state),
     lastRecordId: "",
     processedCount: 0,
     createdCount: 0,
@@ -753,38 +974,68 @@ function currentCatalogRequestCreation(state) {
   };
 }
 
-function buildCatalogRequestCreationProgress(state, requestCreation, { savedAt = null } = {}) {
-  state.sync.progress = {
-    runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
-    phase: CATALOG_REQUEST_CREATION_PHASE,
-    checkpoint: `request-${requestCreation.lastRecordId || requestCreation.processedCount}`,
-    savedData: {
+function buildCatalogRequestCreationProgress(
+  state,
+  requestCreation,
+  {
+    savedAt = null,
+    syncPhaseState = null,
+    requestCreationPhaseStatus = savedAt
+      ? CATALOG_PHASE_STATUS_PAUSED
+      : CATALOG_PHASE_STATUS_RUNNING,
+  } = {},
+) {
+  const currentSyncPhaseState =
+    syncPhaseState || explicitCatalogPhaseState(state, CATALOG_SYNC_PHASE);
+  const syncSavedData =
+    currentSyncPhaseState?.savedData || {
       ...catalogSyncSavedData(state),
-      runMode: SYNC_RUN_MODE_CATALOG_AUTOMATION,
-    },
+      runMode:
+        currentSyncPhaseState?.owner ||
+        state.sync.runMode ||
+        SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    };
+  applyCatalogProgress(state, {
+    syncStatus:
+      currentSyncPhaseState?.status || CATALOG_PHASE_STATUS_COMPLETED,
+    syncOwner:
+      currentSyncPhaseState?.owner ||
+      state.sync.runMode ||
+      SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    syncSavedData,
+    requestCreationStatus: requestCreationPhaseStatus,
+    requestCreationOwner: SYNC_RUN_MODE_CATALOG_AUTOMATION,
     requestCreation,
-    phaseStatuses: catalogPhaseStatuses(
-      CATALOG_PHASE_STATUS_COMPLETED,
-      savedAt ? CATALOG_PHASE_STATUS_PAUSED : CATALOG_PHASE_STATUS_RUNNING,
-    ),
-  };
-  if (savedAt) {
-    state.sync.progress.savedAt = savedAt;
-  }
-  state.sync.phase = CATALOG_REQUEST_CREATION_PHASE;
+    requestCreationSavedAt: savedAt,
+  });
   return state.sync.progress;
 }
 
 function completeCatalogAutomation(state, requestCreation = currentCatalogRequestCreation(state)) {
   state.automation.catalog.statusMessage = `Created ${requestCreation.createdCount} requests.`;
-  state.sync.status = "idle";
-  state.sync.phase = CATALOG_SYNC_PHASE;
-  state.sync.runMode = SYNC_RUN_MODE_CATALOG_AUTOMATION;
-  buildCatalogSyncProgress(state, SYNC_RUN_MODE_CATALOG_AUTOMATION, {
-    syncPhaseStatus: CATALOG_PHASE_STATUS_COMPLETED,
-    requestCreationPhaseStatus: CATALOG_PHASE_STATUS_COMPLETED,
+  const currentSyncPhaseState = explicitCatalogPhaseState(state, CATALOG_SYNC_PHASE);
+  const syncStatus =
+    currentSyncPhaseState?.status === CATALOG_PHASE_STATUS_PAUSED
+      ? CATALOG_PHASE_STATUS_PAUSED
+      : CATALOG_PHASE_STATUS_COMPLETED;
+  state.sync.status = syncStatus === CATALOG_PHASE_STATUS_PAUSED ? "paused" : "idle";
+  applyCatalogProgress(state, {
+    syncStatus,
+    syncOwner:
+      currentSyncPhaseState?.owner ||
+      state.sync.runMode ||
+      SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    syncSavedData:
+      currentSyncPhaseState?.savedData || catalogSyncSavedData(state),
+    requestCreationStatus: CATALOG_PHASE_STATUS_COMPLETED,
+    requestCreationOwner: SYNC_RUN_MODE_CATALOG_AUTOMATION,
   });
-  delete state.sync.progress.requestCreation;
+  state.sync.runMode =
+    state.sync.progress.phase === CATALOG_REQUEST_CREATION_PHASE
+      ? SYNC_RUN_MODE_CATALOG_AUTOMATION
+      : currentSyncPhaseState?.owner ||
+        state.sync.runMode ||
+        SYNC_RUN_MODE_CATALOG_AUTOMATION;
   state.sync.message = `Automated catalog sync complete. Updated ${state.sync.updatedCount}, Skipped ${state.sync.skippedCount}, Added ${state.sync.appendedCount}.`;
 }
 
@@ -814,17 +1065,65 @@ function startFreshCatalogRun(state, runMode, { remotePages } = {}) {
     runMode,
     phase: CATALOG_SYNC_PHASE,
   };
-  buildCatalogSyncProgress(state, runMode);
+  buildCatalogSyncProgress(state, runMode, {
+    sessionId: nextCatalogSessionId(state, { reuseCurrent: false }),
+  });
   state.sync.message =
     runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION
       ? "Automated catalog sync is running."
       : "Syncing catalog records.";
 }
 
+function beginCatalogRequestCreation(state) {
+  const currentSyncPhaseState = explicitCatalogPhaseState(state, CATALOG_SYNC_PHASE);
+  const syncSavedData =
+    currentSyncPhaseState?.savedData || {
+      ...catalogSyncSavedData(state),
+      runMode:
+        currentSyncPhaseState?.owner ||
+        state.sync.runMode ||
+        SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    };
+  const syncPhaseState = {
+    ...currentSyncPhaseState,
+    status:
+      currentSyncPhaseState?.status === CATALOG_PHASE_STATUS_PAUSED
+        ? CATALOG_PHASE_STATUS_PAUSED
+        : CATALOG_PHASE_STATUS_COMPLETED,
+    owner:
+      currentSyncPhaseState?.owner ||
+      state.sync.runMode ||
+      SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    savedData: syncSavedData,
+  };
+  state.sync.status = "syncing";
+  state.sync.runMode = SYNC_RUN_MODE_CATALOG_AUTOMATION;
+  buildCatalogRequestCreationProgress(state, {
+    baseCheckpointToken:
+      syncPhaseState.savedData?.checkpointToken || catalogSyncCheckpointToken(state),
+    lastRecordId: "",
+    processedCount: 0,
+    createdCount: 0,
+    unsupportedCount: 0,
+  }, {
+    syncPhaseState,
+  });
+  state.sync.message = "Creating book requests from the synced catalog records.";
+  state.automation.catalog.statusMessage = state.sync.message;
+}
+
 function resumeCatalogRun(state, runMode) {
+  const syncPhaseState = explicitCatalogPhaseState(state, CATALOG_SYNC_PHASE);
+  const requestCreationPhaseState = explicitCatalogPhaseState(
+    state,
+    CATALOG_REQUEST_CREATION_PHASE,
+  );
   const savedData = catalogSyncSavedData(state);
   const nextPageIndex = savedData.nextPageIndex || 0;
   const fetchedCount = savedData.fetchedCount || 0;
+  const shouldResumeRequestCreation =
+    runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION &&
+    catalogRequestCreationCanResume(state);
 
   state.sync = {
     ...state.sync,
@@ -835,20 +1134,21 @@ function resumeCatalogRun(state, runMode) {
     phase: CATALOG_SYNC_PHASE,
   };
 
-  if (
-    runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION &&
-    catalogRequestCreationCanResume(state)
-  ) {
+  if (shouldResumeRequestCreation) {
+    state.sync.runMode = SYNC_RUN_MODE_CATALOG_AUTOMATION;
     buildCatalogRequestCreationProgress(
       state,
       currentCatalogRequestCreation(state),
+      { syncPhaseState },
     );
     state.sync.message = "Resuming automated request creation from saved progress.";
     state.automation.catalog.statusMessage = state.sync.message;
     return;
   }
 
-  buildCatalogSyncProgress(state, runMode);
+  buildCatalogSyncProgress(state, runMode, {
+    requestCreationPhaseState,
+  });
   state.sync.message =
     runMode === SYNC_RUN_MODE_CATALOG_AUTOMATION
       ? "Continuing automated catalog sync from the saved endpoint."
@@ -949,6 +1249,7 @@ function advanceSyncPage(state) {
       state.sync.status = "paused";
       buildCatalogRequestCreationProgress(state, nextRequestCreation, {
         savedAt: iso(99),
+        syncPhaseState: explicitCatalogPhaseState(state, CATALOG_SYNC_PHASE),
       });
       state.sync.message = `Saved request creation progress after scanning ${nextRequestCreation.processedCount} ${nextRequestCreation.processedCount === 1 ? "record" : "records"}.`;
       return;
@@ -968,16 +1269,7 @@ function advanceSyncPage(state) {
       buildCatalogSyncProgress(state, SYNC_RUN_MODE_CATALOG_AUTOMATION, {
         syncPhaseStatus: CATALOG_PHASE_STATUS_COMPLETED,
       });
-      const requestCreation = {
-        baseCheckpointToken: catalogSyncCheckpointToken(state),
-        lastRecordId: "",
-        processedCount: 0,
-        createdCount: 0,
-        unsupportedCount: 0,
-      };
-      state.sync.status = "syncing";
-      buildCatalogRequestCreationProgress(state, requestCreation);
-      state.sync.message = "Creating book requests from the synced catalog records.";
+      beginCatalogRequestCreation(state);
       return;
     }
     finalizeSync(state);
@@ -989,7 +1281,14 @@ function advanceSyncPage(state) {
   const nextPage = state.sync.remotePages[state.sync.pageIndex] || [];
   if (state.sync.status === "pausing") {
     state.sync.status = "paused";
-    buildCatalogSyncProgress(state, state.sync.runMode, { savedAt: iso(99) });
+    buildCatalogSyncProgress(state, state.sync.runMode, {
+      savedAt: iso(99),
+      syncPhaseStatus: CATALOG_PHASE_STATUS_PAUSED,
+      requestCreationPhaseState: explicitCatalogPhaseState(
+        state,
+        CATALOG_REQUEST_CREATION_PHASE,
+      ),
+    });
     state.sync.message = `Sync progress saved. ${catalogRecordCountMessage(state)}`;
     return;
   }
@@ -999,22 +1298,19 @@ function advanceSyncPage(state) {
       buildCatalogSyncProgress(state, SYNC_RUN_MODE_CATALOG_AUTOMATION, {
         syncPhaseStatus: CATALOG_PHASE_STATUS_COMPLETED,
       });
-      const requestCreation = {
-        baseCheckpointToken: catalogSyncCheckpointToken(state),
-        lastRecordId: "",
-        processedCount: 0,
-        createdCount: 0,
-        unsupportedCount: 0,
-      };
-      buildCatalogRequestCreationProgress(state, requestCreation);
-      state.sync.message = "Creating book requests from the synced catalog records.";
+      beginCatalogRequestCreation(state);
       return;
     }
     finalizeSync(state);
     return;
   }
 
-  buildCatalogSyncProgress(state, state.sync.runMode);
+  buildCatalogSyncProgress(state, state.sync.runMode, {
+    requestCreationPhaseState: explicitCatalogPhaseState(
+      state,
+      CATALOG_REQUEST_CREATION_PHASE,
+    ),
+  });
   state.sync.message = catalogRecordCountMessage(state);
 }
 
@@ -1400,6 +1696,24 @@ async function mockProcessingApi(page, initialState, options = {}) {
     cancelStreamAdvance();
     if (state.sync.status === "syncing") {
       state.sync.status = "pausing";
+      if ((state.sync.phase || state.sync.progress?.phase) === CATALOG_REQUEST_CREATION_PHASE) {
+        buildCatalogRequestCreationProgress(
+          state,
+          currentCatalogRequestCreation(state),
+          {
+            syncPhaseState: explicitCatalogPhaseState(state, CATALOG_SYNC_PHASE),
+            requestCreationPhaseStatus: CATALOG_PHASE_STATUS_PAUSING,
+          },
+        );
+      } else if (state.sync.runMode !== SYNC_RUN_MODE_INCOMPLETE_AUTOMATION) {
+        buildCatalogSyncProgress(state, state.sync.runMode, {
+          syncPhaseStatus: CATALOG_PHASE_STATUS_PAUSING,
+          requestCreationPhaseState: explicitCatalogPhaseState(
+            state,
+            CATALOG_REQUEST_CREATION_PHASE,
+          ),
+        });
+      }
       state.sync.message = syncPauseMessage(
         state.sync.runMode,
         state.sync.phase || state.sync.progress?.phase || "sync",
@@ -1518,6 +1832,11 @@ async function mockProcessingApi(page, initialState, options = {}) {
         catalogSyncPhaseStatus(state) === CATALOG_PHASE_STATUS_PAUSED)
     ) {
       resumeCatalogRun(state, SYNC_RUN_MODE_CATALOG_AUTOMATION);
+    } else if (
+      catalogSyncPhaseStatus(state) === CATALOG_PHASE_STATUS_COMPLETED &&
+      catalogRequestCreationPhaseStatus(state) === CATALOG_PHASE_STATUS_NOT_STARTED
+    ) {
+      beginCatalogRequestCreation(state);
     } else {
       startFreshCatalogRun(state, SYNC_RUN_MODE_CATALOG_AUTOMATION, {
         remotePages: state.sync.remotePages?.length ? state.sync.remotePages : [[]],
@@ -1643,6 +1962,482 @@ function row(page, pageId, cardId, id) {
 function card(page, pageId, cardId) {
   return page.getByTestId(`${pageId}-${cardId}-card`);
 }
+
+function catalogMatrixRequestCreation({
+  sessionId = "catalog-matrix-session",
+  nextPageIndex = 1,
+  fetchedCount = 1,
+  lastRecordId = "matrix-record-1",
+  processedCount = 1,
+  createdCount = 1,
+  unsupportedCount = 0,
+} = {}) {
+  return {
+    baseCheckpointToken: catalogSyncCheckpointToken({
+      sync: {
+        progress: {
+          savedData: {
+            sessionId,
+            nextPageIndex,
+            fetchedCount,
+          },
+        },
+      },
+    }),
+    lastRecordId,
+    processedCount,
+    createdCount,
+    unsupportedCount,
+  };
+}
+
+function catalogMatrixState({
+  syncStatus,
+  requestCreationStatus,
+  topStatus,
+  syncOwner = SYNC_RUN_MODE_MANUAL,
+  requestCreationOwner = SYNC_RUN_MODE_CATALOG_AUTOMATION,
+  nextPageIndex = 1,
+  fetchedCount = 1,
+  sessionId = "catalog-matrix-session",
+  requestCreation = undefined,
+}) {
+  const defaultRequestCreation =
+    requestCreationStatus === CATALOG_PHASE_STATUS_NOT_STARTED
+      ? null
+      : catalogMatrixRequestCreation({
+          sessionId,
+          nextPageIndex,
+          fetchedCount,
+        });
+  const effectiveRequestCreation =
+    requestCreation === undefined ? defaultRequestCreation : requestCreation;
+  const syncSavedData =
+    syncStatus === CATALOG_PHASE_STATUS_NOT_STARTED
+      ? null
+      : {
+          runMode: syncOwner,
+          triggerSource: "button",
+          sessionId,
+          checkpointToken: `${sessionId}:0:${nextPageIndex}:${fetchedCount}`,
+          nextPageIndex,
+          fetchedCount,
+        };
+  const state = baseState({
+    records: [
+      record({
+        id: "matrix-record-1",
+        name: "Matrix Record 1",
+      }),
+    ],
+    sync: {
+      ...baseState().sync,
+      status: topStatus,
+      runMode: syncOwner,
+      pageIndex: nextPageIndex,
+      fetchedCount,
+      remotePages: [
+        [record({ id: "matrix-page-1", name: "Matrix Page 1" })],
+        [],
+      ],
+    },
+    ui: {
+      ...baseState().ui,
+      actionDelayMs: 80,
+      syncDelayMs: 60_000,
+      pipelineDelayMs: 60_000,
+    },
+  });
+  applyCatalogProgress(state, {
+    syncStatus,
+    syncOwner,
+    syncSavedData,
+    requestCreationStatus,
+    requestCreationOwner,
+    requestCreation: effectiveRequestCreation,
+  });
+  state.sync.status = topStatus;
+  state.sync.runMode = state.sync.progress?.runMode || syncOwner;
+  state.sync.phase = state.sync.progress?.phase || state.sync.phase;
+  return state;
+}
+
+async function expectCatalogManualControl(page, expectation) {
+  const control = page.getByTestId(expectation.testId);
+  await expect(control).toBeVisible();
+  await expect(control).toHaveAttribute("aria-label", expectation.label);
+  await expect(control).toHaveAttribute("data-state", expectation.state);
+  if (expectation.disabled) {
+    await expect(control).toBeDisabled();
+  } else {
+    await expect(control).toBeEnabled();
+  }
+}
+
+async function expectCatalogAutomationControl(page, expectation) {
+  const control = page.getByTestId("catalog-automation-run-btn");
+  await expect(control).toBeVisible();
+  await expect(control).toHaveAttribute("aria-label", expectation.label);
+  await expect(control).toHaveAttribute("data-state", expectation.state);
+  if (expectation.disabled) {
+    await expect(control).toBeDisabled();
+  } else {
+    await expect(control).toBeEnabled();
+  }
+}
+
+const CATALOG_MANUAL_MATRIX_CASES = [
+  {
+    name: "not_started/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "idle",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-pause-btn", label: "Pause sync", state: "syncing", disabled: false },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: false },
+      after: { label: "Run automated catalog sync", state: "idle", disabled: true },
+    },
+    resultMessage: "Syncing catalog records.",
+  },
+  {
+    name: "running/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_RUNNING,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "syncing",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-pause-btn", label: "Pause sync", state: "syncing", disabled: false },
+      after: { testId: "catalog-sync-pause-btn", label: "Pausing sync", state: "pausing", disabled: true },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: true },
+      after: { label: "Run automated catalog sync", state: "idle", disabled: true },
+    },
+    resultMessage: "Pausing after the current page finishes.",
+  },
+  {
+    name: "pausing/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_PAUSING,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "pausing",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-pause-btn", label: "Pausing sync", state: "pausing", disabled: true },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: true },
+    },
+  },
+  {
+    name: "paused/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_PAUSED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "paused",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-resume-btn", label: "Resume sync", state: "paused", disabled: false },
+      after: { testId: "catalog-sync-pause-btn", label: "Pause sync", state: "syncing", disabled: false },
+    },
+    automation: {
+      initial: { label: "Resume automated catalog sync", state: "paused", disabled: false },
+      after: { label: "Run automated catalog sync", state: "idle", disabled: true },
+    },
+    resultMessage: "Continuing catalog sync from the saved endpoint.",
+  },
+  {
+    name: "completed/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "idle",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-pause-btn", label: "Pause sync", state: "syncing", disabled: false },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: false },
+      after: { label: "Run automated catalog sync", state: "idle", disabled: true },
+    },
+    resultMessage: "Syncing catalog records.",
+  },
+  {
+    name: "completed/running",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_RUNNING,
+      topStatus: "syncing",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Pause automated request creation", state: "syncing", disabled: false },
+    },
+  },
+  {
+    name: "completed/pausing",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_PAUSING,
+      topStatus: "pausing",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Pausing automated request creation", state: "pausing", disabled: true },
+    },
+  },
+  {
+    name: "completed/paused",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_PAUSED,
+      topStatus: "paused",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-pause-btn", label: "Pause sync", state: "syncing", disabled: false },
+    },
+    automation: {
+      initial: { label: "Resume automated request creation", state: "paused", disabled: false },
+      after: { label: "Resume automated request creation", state: "paused", disabled: true },
+    },
+    resultMessage: "Syncing catalog records.",
+  },
+  {
+    name: "completed/completed",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      topStatus: "idle",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+      requestCreation: {},
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-pause-btn", label: "Pause sync", state: "syncing", disabled: false },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: false },
+      after: { label: "Run automated catalog sync", state: "idle", disabled: true },
+    },
+    resultMessage: "Syncing catalog records.",
+  },
+  {
+    name: "paused/paused",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_PAUSED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_PAUSED,
+      topStatus: "paused",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-resume-btn", label: "Resume sync", state: "paused", disabled: false },
+      after: { testId: "catalog-sync-pause-btn", label: "Pause sync", state: "syncing", disabled: false },
+    },
+    automation: {
+      initial: { label: "Resume automated request creation", state: "paused", disabled: false },
+      after: { label: "Resume automated request creation", state: "paused", disabled: true },
+    },
+    resultMessage: "Continuing catalog sync from the saved endpoint.",
+  },
+];
+
+const CATALOG_AUTOMATION_MATRIX_CASES = [
+  {
+    name: "not_started/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "idle",
+      syncOwner: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: false },
+      after: { label: "Pause automated catalog sync", state: "syncing", disabled: false },
+    },
+    resultMessage: "Automated catalog sync is running.",
+  },
+  {
+    name: "running/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_RUNNING,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "syncing",
+      syncOwner: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+      after: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Pause automated catalog sync", state: "syncing", disabled: false },
+      after: { label: "Pausing automated catalog sync", state: "pausing", disabled: true },
+    },
+    resultMessage: "Pausing automated catalog sync after the current page finishes.",
+  },
+  {
+    name: "pausing/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_PAUSING,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "pausing",
+      syncOwner: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Pausing automated catalog sync", state: "pausing", disabled: true },
+    },
+  },
+  {
+    name: "paused/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_PAUSED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "paused",
+      syncOwner: SYNC_RUN_MODE_CATALOG_AUTOMATION,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-resume-btn", label: "Resume sync", state: "paused", disabled: false },
+      after: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Resume automated catalog sync", state: "paused", disabled: false },
+      after: { label: "Pause automated catalog sync", state: "syncing", disabled: false },
+    },
+    resultMessage: "Continuing automated catalog sync from the saved endpoint.",
+  },
+  {
+    name: "completed/not_started",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_NOT_STARTED,
+      topStatus: "idle",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: false },
+      after: { label: "Pause automated request creation", state: "syncing", disabled: false },
+    },
+    resultMessage: "Creating book requests from the synced catalog records.",
+  },
+  {
+    name: "completed/running",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_RUNNING,
+      topStatus: "syncing",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+      after: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Pause automated request creation", state: "syncing", disabled: false },
+      after: { label: "Pausing automated request creation", state: "pausing", disabled: true },
+    },
+    resultMessage: "Pausing automated request creation after the current batch finishes.",
+  },
+  {
+    name: "completed/pausing",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_PAUSING,
+      topStatus: "pausing",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Pausing automated request creation", state: "pausing", disabled: true },
+    },
+  },
+  {
+    name: "completed/paused",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_PAUSED,
+      topStatus: "paused",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Resume automated request creation", state: "paused", disabled: false },
+      after: { label: "Pause automated request creation", state: "syncing", disabled: false },
+    },
+    resultMessage: "Resuming automated request creation from saved progress.",
+  },
+  {
+    name: "completed/completed",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_COMPLETED,
+      topStatus: "idle",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+      requestCreation: {},
+    },
+    manual: {
+      initial: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: false },
+      after: { testId: "catalog-sync-start-btn", label: "Start sync", state: "idle", disabled: true },
+    },
+    automation: {
+      initial: { label: "Run automated catalog sync", state: "idle", disabled: false },
+      after: { label: "Pause automated catalog sync", state: "syncing", disabled: false },
+    },
+    resultMessage: "Automated catalog sync is running.",
+  },
+  {
+    name: "paused/paused",
+    state: {
+      syncStatus: CATALOG_PHASE_STATUS_PAUSED,
+      requestCreationStatus: CATALOG_PHASE_STATUS_PAUSED,
+      topStatus: "paused",
+      syncOwner: SYNC_RUN_MODE_MANUAL,
+    },
+    manual: {
+      initial: { testId: "catalog-sync-resume-btn", label: "Resume sync", state: "paused", disabled: false },
+      after: { testId: "catalog-sync-resume-btn", label: "Resume sync", state: "paused", disabled: true },
+    },
+    automation: {
+      initial: { label: "Resume automated request creation", state: "paused", disabled: false },
+      after: { label: "Pause automated request creation", state: "syncing", disabled: false },
+    },
+    resultMessage: "Resuming automated request creation from saved progress.",
+  },
+];
 
 function checkbox(page, pageId, cardId, id) {
   return page.getByTestId(`${pageId}-${cardId}-select-${id}`);
@@ -2404,7 +3199,7 @@ test.describe("processing pages replacement", () => {
     await expect(row(page, "create", "paused", "paused-old")).toHaveCount(0);
   });
 
-  test("paused catalog sync keeps manual and automation runtime ownership isolated", async ({
+  test("paused catalog sync allows either card to resume phase one", async ({
     page,
   }) => {
     const remainingPage = record({
@@ -2452,12 +3247,16 @@ test.describe("processing pages replacement", () => {
       "aria-label",
       "Resume automated catalog sync",
     );
-    await expect(page.getByTestId("catalog-sync-start-btn")).toBeVisible();
-    await expect(page.getByTestId("catalog-sync-start-btn")).toHaveAttribute(
-      "aria-label",
-      "Start sync",
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toBeVisible();
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toHaveAttribute(
+      "data-state",
+      "paused",
     );
-    await expect(page.getByTestId("catalog-sync-start-btn")).toBeDisabled();
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toHaveAttribute(
+      "aria-label",
+      "Resume sync",
+    );
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toBeEnabled();
 
     await page.getByTestId("catalog-automation-run-btn").click();
 
@@ -2469,6 +3268,174 @@ test.describe("processing pages replacement", () => {
       "Continuing automated catalog sync from the saved endpoint.",
     );
   });
+
+  test("completed sync lets automation start request creation directly", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [
+          record({ id: "phase-two-direct", name: "Phase Two Direct" }),
+        ],
+        sync: {
+          ...baseState().sync,
+          status: "idle",
+          phase: "sync",
+          runMode: SYNC_RUN_MODE_MANUAL,
+          fetchedCount: 1,
+          pageIndex: 1,
+          progress: {
+            runMode: SYNC_RUN_MODE_MANUAL,
+            phase: "sync",
+            savedData: {
+              runMode: SYNC_RUN_MODE_MANUAL,
+              nextPageIndex: 1,
+              fetchedCount: 1,
+              sessionId: "catalog-session-direct-phase-two",
+              checkpointToken: "catalog-session-direct-phase-two:0:1:1",
+            },
+            phaseStatuses: {
+              sync: "completed",
+              request_creation: "not_started",
+            },
+          },
+          message: "Sync complete. Updated 0, Skipped 0, Added 1.",
+        },
+        ui: {
+          ...baseState().ui,
+          syncDelayMs: 120,
+          pipelineDelayMs: 120,
+        },
+      }),
+    );
+
+    await expect(page.getByTestId("catalog-sync-start-btn")).toBeEnabled();
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "aria-label",
+      "Run automated catalog sync",
+    );
+
+    await page.getByTestId("catalog-automation-run-btn").click();
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "Creating book requests from the synced catalog records.",
+    );
+    await expect(page.getByTestId("catalog-automation-status")).toContainText(
+      "Created 1 request",
+    );
+  });
+
+  test("paused catalog sync and paused request creation expose the correct resume controls", async ({
+    page,
+  }) => {
+    await boot(
+      page,
+      "/catalog",
+      baseState({
+        records: [
+          record({ id: "dual-paused-a", name: "Dual Paused A", bookCreationState: "created" }),
+          record({ id: "dual-paused-b", name: "Dual Paused B" }),
+        ],
+        requests: [
+          request({
+            id: "request-dual-paused-a",
+            bookRecordId: "dual-paused-a",
+            state: "created",
+          }),
+        ],
+        sync: {
+          ...baseState().sync,
+          status: "paused",
+          phase: "sync",
+          runMode: SYNC_RUN_MODE_MANUAL,
+          remotePages: [[record({ id: "dual-paused-b", name: "Dual Paused B" })], []],
+          pageIndex: 1,
+          fetchedCount: 1,
+          progress: {
+            runMode: SYNC_RUN_MODE_MANUAL,
+            phase: "sync",
+            phaseStatuses: {
+              sync: "paused",
+              request_creation: "paused",
+            },
+            savedData: {
+              runMode: SYNC_RUN_MODE_MANUAL,
+              nextPageIndex: 1,
+              fetchedCount: 1,
+              sessionId: "catalog-session-dual-paused",
+              checkpointToken: "catalog-session-dual-paused:0:1:1",
+            },
+            requestCreation: {
+              baseCheckpointToken: "catalog-session-dual-paused:0:1:1",
+              lastRecordId: "dual-paused-a",
+              processedCount: 1,
+              createdCount: 1,
+              unsupportedCount: 0,
+            },
+          },
+          message: "Sync progress saved. Catalog now has 2 book records.",
+        },
+      }),
+    );
+
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toHaveAttribute(
+      "aria-label",
+      "Resume sync",
+    );
+    await expect(page.getByTestId("catalog-sync-resume-btn")).toHaveAttribute(
+      "data-state",
+      "paused",
+    );
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "aria-label",
+      "Resume automated request creation",
+    );
+    await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
+      "data-state",
+      "paused",
+    );
+  });
+
+  for (const matrixCase of CATALOG_MANUAL_MATRIX_CASES) {
+    test(`catalog manual matrix row ${matrixCase.name}`, async ({ page }) => {
+      await boot(page, "/catalog", catalogMatrixState(matrixCase.state));
+
+      await expectCatalogManualControl(page, matrixCase.manual.initial);
+      await expectCatalogAutomationControl(page, matrixCase.automation.initial);
+
+      if (!matrixCase.manual.after) {
+        return;
+      }
+
+      await page.getByTestId(matrixCase.manual.initial.testId).click();
+      await expectCatalogManualControl(page, matrixCase.manual.after);
+      await expectCatalogAutomationControl(page, matrixCase.automation.after);
+      await expect(page.getByTestId("catalog-sync-progress")).toContainText(
+        matrixCase.resultMessage,
+      );
+    });
+  }
+
+  for (const matrixCase of CATALOG_AUTOMATION_MATRIX_CASES) {
+    test(`catalog automation matrix row ${matrixCase.name}`, async ({ page }) => {
+      await boot(page, "/catalog", catalogMatrixState(matrixCase.state));
+
+      await expectCatalogManualControl(page, matrixCase.manual.initial);
+      await expectCatalogAutomationControl(page, matrixCase.automation.initial);
+
+      if (!matrixCase.automation.after) {
+        return;
+      }
+
+      await page.getByTestId("catalog-automation-run-btn").click();
+      await expectCatalogManualControl(page, matrixCase.manual.after);
+      await expectCatalogAutomationControl(page, matrixCase.automation.after);
+      await expect(page.getByTestId("catalog-automation-status")).toContainText(
+        matrixCase.resultMessage,
+      );
+    });
+  }
 
   test("catalog cards normalize stale record totals against the live overview count", async ({
     page,
@@ -2599,7 +3566,7 @@ test.describe("processing pages replacement", () => {
       .toBeGreaterThan(initialStateRequests);
   });
 
-  test("manual start from paused automated request creation restarts sync from the beginning", async ({
+  test("manual start from paused automated request creation preserves the phase-two checkpoint", async ({
     page,
   }) => {
     await boot(
@@ -2678,12 +3645,12 @@ test.describe("processing pages replacement", () => {
 
     await expect(page.getByTestId("catalog-automation-run-btn")).toHaveAttribute(
       "aria-label",
-      "Run automated catalog sync",
+      "Resume automated request creation",
     );
 
     await page.getByTestId("catalog-automation-run-btn").click();
     await expect(page.getByTestId("catalog-automation-status")).toContainText(
-      "Automated catalog sync is running.",
+      "Resuming automated request creation from saved progress.",
     );
     await expect(page.getByTestId("catalog-automation-status")).toContainText("Created 1 request");
 
