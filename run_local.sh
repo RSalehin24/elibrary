@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-bash "$HOME/Documents/ebook-scrapping/local/scripts/ensure-dockerctl.sh" &&
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
+bash "${SCRIPT_DIR}/local/scripts/ensure-dockerctl.sh" &&
 dockerctl start &&
-bash "$HOME/Documents/ebook-scrapping/local/scripts/dev.sh" up
+bash "${SCRIPT_DIR}/local/scripts/dev.sh" up

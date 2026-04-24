@@ -86,10 +86,11 @@
     height:22px
   }
   .epub-reader-container .reader-wrapper .setting-wrapper {
-    left:auto;
-    right:0;
-    transform-origin:top right;
-    min-width:min(190px,calc(100vw - 32px))
+    left:0;
+    right:auto;
+    transform-origin:top left;
+    min-width:min(190px,calc(100vw - 32px));
+    max-width:calc(100vw - 32px)
   }
   .epub-reader-container .reader-wrapper .arrow {
     width:36px

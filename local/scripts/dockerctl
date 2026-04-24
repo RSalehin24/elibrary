@@ -2,6 +2,16 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -h "${SCRIPT_PATH}" ]; do
+  _link_dir="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" >/dev/null 2>&1 && pwd)"
+  _link_target="$(readlink "${SCRIPT_PATH}")"
+  if [[ "${_link_target}" = /* ]]; then
+    SCRIPT_PATH="${_link_target}"
+  else
+    SCRIPT_PATH="${_link_dir}/${_link_target}"
+  fi
+done
+
 _SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" >/dev/null 2>&1 && pwd)"
 _SCRIPT_STEPS=(
   "docker_install_support.sh"
