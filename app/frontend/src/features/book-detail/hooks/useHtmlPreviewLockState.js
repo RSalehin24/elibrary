@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { resolveAppUrl } from "../../../api/client";
+import { resolveBookDetailUrl } from "../api";
 import { getPreviewLockKey, isPreviewLocked } from "../../../utils/previewLock";
 
 
@@ -18,7 +18,7 @@ export function useHtmlPreviewLockState(book) {
     function syncPreviewLocks() {
       setHtmlPreviewLockedByAssetId(
         htmlAssets.reduce((nextState, asset) => {
-          const previewUrl = resolveAppUrl(asset.download_url);
+          const previewUrl = resolveBookDetailUrl(asset.download_url);
           const lockKey = getPreviewLockKey(previewUrl);
           nextState[asset.id] = lockKey ? isPreviewLocked(lockKey) : false;
           return nextState;

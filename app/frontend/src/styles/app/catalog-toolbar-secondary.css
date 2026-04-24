@@ -1,0 +1,258 @@
+.catalog-result-count {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:64px;
+  min-width:72px;
+  margin:0;
+  padding:0 22px;
+  border:1px solid rgba(17,70,54,.12);
+  border-radius:999px;
+  background:linear-gradient(180deg,#ffffffe0,#f5f9f7d1);
+  box-shadow:inset 0 1px #ffffffbd,0 14px 28px #0c2f2414;
+  color:#0b3d2ec2;
+  font-size:.98rem;
+  font-weight:800;
+  letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;
+  line-height:1
+}
+.catalog-result-count.is-loading {
+  min-width:56px;
+  padding:0 16px
+}
+.catalog-toolbar-secondary-shell {
+  display:grid;
+  min-width:0;
+  height:100%
+}
+.catalog-toolbar-secondary-shell.is-standalone,.catalog-toolbar-secondary-shell.is-below {
+  height:auto
+}
+.catalog-toolbar-secondary-layout {
+  display:grid;
+  grid-template-columns:92px minmax(0,1fr);
+  gap:12px;
+  min-width:0;
+  align-items:stretch
+}
+.property-table-toolbar-layout {
+  display:grid;
+  grid-template-columns:minmax(0,auto) minmax(280px,1fr);
+  gap:12px;
+  min-width:0;
+  align-items:stretch
+}
+.catalog-toolbar-sync-panel,.catalog-toolbar-secondary:not(.property-table-controls),.property-table-toolbar-leading {
+  min-height:124px;
+  border:1px solid rgba(17,70,54,.14);
+  border-radius:24px;
+  background:linear-gradient(180deg,#f8fcfad1,#f0f7f3bd);
+  box-shadow:inset 0 1px #ffffffad,0 10px 18px #0c2f240d
+}
+.catalog-toolbar-sync-panel {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:14px
+}
+.catalog-toolbar-sync-shell {
+  display:grid;
+  justify-items:center;
+  gap:10px
+}
+.property-table-toolbar-leading {
+  display:grid;
+  align-content:center;
+  min-width:0;
+  padding:14px 16px
+}
+.property-table-toolbar-leading .toolbar-action-panel {
+  min-height:0
+}
+.catalog-toolbar-sync-button {
+  width:46px;
+  height:46px;
+  min-height:46px;
+  padding:0;
+  color:#0b3d2ed1
+}
+.catalog-toolbar-sync-button svg {
+  display:block;
+  width:20px;
+  height:20px
+}
+.catalog-toolbar-sync-button .loading-spinner {
+  --spinner-size: 18px
+}
+.catalog-toolbar-sync-status {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:22px;
+  color:#0b3d2eb8;
+  font-size:.8rem;
+  font-weight:700;
+  line-height:1.2;
+  text-align:center
+}
+.catalog-toolbar-sync-status.is-active {
+  color:#7c4d12eb
+}
+.catalog-toolbar-sync-status .loading-spinner {
+  --spinner-size: 12px
+}
+.catalog-toolbar-secondary {
+  display:grid;
+  grid-template-columns:minmax(180px,1fr) 110px minmax(0,1fr);
+  grid-template-areas:"sort rows pagination";
+  align-items:end;
+  gap:12px;
+  height:auto;
+  padding:14px 16px
+}
+.property-table-controls {
+  min-height:0;
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  box-shadow:none
+}
+.property-table-controls--without-sort {
+  grid-template-columns:110px minmax(0,1fr);
+  grid-template-areas:"rows pagination"
+}
+.property-table-controls .catalog-toolbar-field {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:nowrap
+}
+.property-table-controls .catalog-toolbar-select {
+  min-width:0;
+  flex:1 1 auto
+}
+.catalog-toolbar-inline-label {
+  display:inline-flex;
+  align-items:center;
+  margin:0;
+  white-space:nowrap
+}
+.property-table-controls .catalog-toolbar-inline-label {
+  order:0
+}
+.access-users-table-controls {
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-areas:"filter sort";
+  align-items:stretch
+}
+.access-users-table-controls .access-users-filter-field {
+  grid-area:filter
+}
+.access-users-table-controls .access-users-sort-field {
+  grid-area:sort
+}
+.access-users-table-controls .catalog-toolbar-field {
+  display:grid;
+  align-items:stretch;
+  gap:6px;
+  min-width:0;
+  width:100%
+}
+.access-users-table-controls .catalog-toolbar-select {
+  min-width:0;
+  width:100%;
+  flex:none
+}
+.catalog-toolbar-secondary--catalog-card {
+  grid-template-columns:minmax(180px,1fr) 120px;
+  grid-template-areas:"sort rows" "pagination pagination";
+  align-items:center;
+  row-gap:10px
+}
+.catalog-toolbar-secondary--catalog-card .catalog-pagination {
+  width:100%;
+  justify-content:space-between;
+  align-self:center
+}
+.catalog-page-header--with-toolbar:not(.catalog-page-header--stacked) {
+  grid-template-columns:auto minmax(0,1fr);
+  align-items:center
+}
+.catalog-page-header--with-toolbar:not(.catalog-page-header--stacked) .catalog-toolbar-wrap {
+  justify-self:stretch
+}
+.catalog-page-header--property-layout {
+  grid-template-columns:auto minmax(0,1fr);
+  grid-template-areas:"title toolbar" "controls controls";
+  align-items:start;
+  row-gap:8px
+}
+.catalog-page-header--property-layout .catalog-toolbar-wrap {
+  grid-area:toolbar;
+  justify-self:stretch;
+  align-self:start
+}
+.catalog-page-header--property-layout>h1 {
+  grid-area:title;
+  display:flex;
+  align-items:center;
+  min-height:40px;
+  align-self:start;
+  margin-left:10px
+}
+.catalog-page-header--property-layout .catalog-search-row--property-compact {
+  min-height:40px;
+  align-items:center
+}
+.catalog-page-header--property-layout .catalog-search-actions {
+  align-self:center
+}
+.catalog-page-header--property-layout .catalog-result-count {
+  margin-right:10px
+}
+.catalog-page-controls-row {
+  grid-area:controls;
+  display:block;
+  width:100%;
+  margin-top:0
+}
+.catalog-page-controls-row .property-table-controls {
+  grid-template-columns:minmax(170px,1fr) 120px minmax(0,1fr);
+  align-items:center;
+  padding:0
+}
+.catalog-page-controls-row .property-table-controls--without-sort {
+  grid-template-columns:120px minmax(0,1fr)
+}
+.catalog-page-controls-row .catalog-toolbar-select {
+  min-height:36px;
+  padding:0 34px 0 12px;
+  font-size:.84rem;
+  border-radius:12px
+}
+.catalog-page-controls-row .catalog-toolbar-field .fact-label {
+  font-size:.68rem
+}
+.catalog-page-controls-row .catalog-page-indicator {
+  min-height:36px;
+  padding:0 12px;
+  font-size:.8rem
+}
+.catalog-page-controls-row .catalog-pagination-actions .ghost-button {
+  min-height:32px;
+  padding:0 9px;
+  font-size:.72rem
+}
+.catalog-page-header--property-layout .catalog-search-actions-extra .toolbar-icon-button {
+  min-height:40px;
+  border-radius:12px;
+  padding:0 12px;
+  font-size:.82rem
+}
+.catalog-page-header--property-layout .catalog-search-actions-extra .toolbar-icon-button.is-icon-only {
+  width:40px;
+  min-width:40px
+}

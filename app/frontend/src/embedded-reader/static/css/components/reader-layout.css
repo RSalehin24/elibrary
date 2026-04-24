@@ -1,4 +1,4 @@
-@import "./reader-layout/part-01.css";
-@import "./reader-layout/part-02.css";
-@import "./reader-layout/part-03.css";
-@import "./reader-layout/part-04.css";
+@import "./reader-layout/reader-frame-and-toc.css";
+@import "./reader-layout/reader-settings-and-viewer.css";
+@import "./reader-layout/immersive-fullscreen-and-loading.css";
+@import "./reader-layout/responsive-reader-layout.css";

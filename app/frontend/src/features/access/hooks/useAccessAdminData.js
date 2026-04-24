@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../../../api/client";
+import { accessFetch } from "../api";
 import { initialReferences } from "../constants";
 
 export function useAccessAdminData({ activeTab, isSuperAdmin, userId, toast }) {
@@ -22,11 +22,11 @@ export function useAccessAdminData({ activeTab, isSuperAdmin, userId, toast }) {
       const [referencePayload, nextGrantRecords] =
         activeTab === "access"
           ? await Promise.all([
-              apiFetch("/access/references/?view=access"),
-              apiFetch("/access/grants/"),
+              accessFetch("/access/references/?view=access"),
+              accessFetch("/access/grants/"),
             ])
           : [
-              await apiFetch("/access/references/?view=users"),
+              await accessFetch("/access/references/?view=users"),
               [],
             ];
 

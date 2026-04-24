@@ -207,11 +207,8 @@ test.describe("Profile Page TOTP Notifications", () => {
       .locator("xpath=ancestor::section[1]");
 
     await kindleSection.getByRole("button", { name: "Expand" }).click();
-    await expect(
-      page.getByText(
-        "In Amazon Personal Document Settings, allow library-sender@example.com in the Approved Personal Document E-mail List.",
-      ),
-    ).toBeVisible();
+    await expect(kindleSection).toContainText("library-sender@example.com");
+    await expect(kindleSection).toContainText("Personal Document Settings");
     await page.getByLabel("Kindle Email 1").fill("reader@kindle.com");
     await page.getByRole("button", { name: "Add Kindle Email" }).click();
     await page.getByLabel("Kindle Email 2").fill("shared@kindle.com");

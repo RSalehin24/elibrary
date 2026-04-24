@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, resolveAppUrl } from "../../api/client";
+import { readerFetch, resolveReaderUrl } from "./api";
 import { normalizeReaderManifestPayload, resolveReaderManifestUrl } from "./manifest";
 import { decodeValue } from "./params";
 
@@ -23,7 +23,7 @@ export function useReaderLaunch({
     [manifestParam],
   );
   const resolvedManifestParam = useMemo(
-    () => resolveAppUrl(decodedManifestParam),
+    () => resolveReaderUrl(decodedManifestParam),
     [decodedManifestParam],
   );
 
@@ -58,7 +58,7 @@ export function useReaderLaunch({
 
         const manifestFromLaunch = resolveReaderManifestUrl(
           { launch_url: decodedLaunchParam },
-          resolveAppUrl,
+          resolveReaderUrl,
         );
         if (manifestFromLaunch) {
           if (active) {
@@ -81,13 +81,13 @@ export function useReaderLaunch({
           throw new Error("Missing reader details. Open a book and try again.");
         }
 
-        const payload = await apiFetch(`/access/books/${slugParam}/reader-launch/`, {
+        const payload = await readerFetch(`/access/books/${slugParam}/reader-launch/`, {
           method: "POST",
           body: {},
         });
         const manifestUrl = resolveReaderManifestUrl(
-          normalizeReaderManifestPayload(payload, resolveAppUrl),
-          resolveAppUrl,
+          normalizeReaderManifestPayload(payload, resolveReaderUrl),
+          resolveReaderUrl,
         );
 
         if (!manifestUrl) {

@@ -1,0 +1,151 @@
+@media (max-width: 640px) {
+  .processing-settings-card .processing-card-head.processing-card-head--settings {
+    display:grid!important;
+    grid-template-columns:minmax(0,1fr) auto!important;
+    grid-template-areas:"title controls";
+    align-items:center;
+    gap:10px;
+    flex-wrap:nowrap!important
+  }
+  .processing-settings-card .processing-card-head--settings .processing-card-head-meta {
+    grid-area:title;
+    min-width:0
+  }
+  .processing-settings-card .processing-card-head--settings .processing-card-head-meta h2 {
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap
+  }
+  .processing-settings-card .processing-card-head--settings .processing-card-head-controls {
+    grid-area:controls;
+    min-width:0!important;
+    width:auto!important;
+    margin-left:auto;
+    justify-content:flex-end;
+    flex-wrap:nowrap;
+    align-self:center
+  }
+  .processing-settings-card .processing-card-head--settings .processing-icon-button--automation {
+    flex:none
+  }
+  .processing-table.table-mobile-cards tbody tr {
+    display:block;
+    width:100%
+  }
+  .processing-table.table-mobile-cards tbody td {
+    display:grid;
+    grid-template-columns:minmax(0,88px) minmax(0,1fr);
+    gap:10px;
+    width:100%
+  }
+  .processing-table.table-mobile-cards tbody td[data-label]:before {
+    display:block;
+    margin-bottom:0
+  }
+  .processing-table.table-mobile-cards tbody td.processing-col-select {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px
+  }
+  .processing-table.table-mobile-cards tbody td.processing-col-select:before {
+    content:none
+  }
+  .processing-table.table-mobile-cards tbody td.processing-col-select:after {
+    content:attr(data-label);
+    display:inline;
+    color:#0b3d2e9e;
+    font-size:.7rem;
+    font-weight:800;
+    letter-spacing:.08em;
+    line-height:1.3;
+    text-transform:uppercase
+  }
+  .processing-table.table-mobile-cards .processing-table-primary,.processing-table.table-mobile-cards .processing-contributors-list,
+  .processing-table.table-mobile-cards .processing-row-error,.processing-table.table-mobile-cards .processing-table-link {
+    width:100%;
+    max-width:none
+  }
+  .processing-table.table-mobile-cards .processing-table-secondary {
+    max-width:none
+  }
+  .book-grid,.book-grid-loading {
+    grid-template-columns:1fr
+  }
+  .book-card {
+    grid-template-columns:1fr;
+    gap:14px
+  }
+  .book-card-art {
+    width:100%;
+    max-width:none
+  }
+  .book-card-cover {
+    min-height:220px
+  }
+  .book-card-details {
+    grid-template-columns:1fr
+  }
+  .book-card-footer {
+    gap:12px
+  }
+  .book-hero-actions,.login-actions,.manual-book-form-actions,.submission-card-actions,.dialog-actions,
+  .dialog-footer {
+    display:grid;
+    grid-template-columns:1fr;
+    gap:10px
+  }
+  .book-hero-actions>*,.login-actions>*,.manual-book-form-actions>*,.submission-card-actions>*,
+  .dialog-actions>*,.dialog-footer>* {
+    width:100%
+  }
+  .mobile-nav-panel {
+    inset:72px 10px auto;
+    max-height:calc(100dvh - 82px);
+    padding:14px;
+    border-radius:18px
+  }
+  .mobile-nav-link,.mobile-nav-sub-link,.mobile-nav-group-toggle {
+    min-height:46px;
+    padding:0 12px
+  }
+  .profile-menu-toggle-row.mobile-nav-alerts-row {
+    padding:12px;
+    border:1px solid rgba(17,70,54,.14);
+    border-radius:16px;
+    background:#ffffffeb
+  }
+  .access-users-toolbar {
+    grid-template-columns:auto minmax(0,1fr) minmax(0,1fr) auto;
+    grid-template-areas:"title search search count" "filter filter sort sort";
+    gap:6px
+  }
+  .profile-kindle-email-row {
+    grid-template-columns:1fr
+  }
+  .profile-kindle-email-actions,.profile-kindle-email-delete {
+    width:100%
+  }
+  .raw-provenance-block {
+    max-height:300px
+  }
+  .table-mobile-cards tbody td {
+    padding:10px 12px
+  }
+  .access-permission-chip {
+    white-space:normal
+  }
+  .reader-topbar-floating-hide {
+    width:40px;
+    --reader-topbar-height: 60px;
+    height:var(--reader-topbar-height);
+    --reader-topbar-offset: calc(10px + env(safe-area-inset-top, 0px)) ;
+    right:calc(10px + env(safe-area-inset-right,0px));
+    border-radius:14px
+  }
+  .reader-topbar-floating-hide svg {
+    width:22px;
+    height:22px
+  }
+}

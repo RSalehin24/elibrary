@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { apiFetch } from "../api/client";
+import { catalogFetch } from "../api/catalog";
 import {
   CATALOG_TABLE_BATCH_SIZE,
   normalizeCatalogListPayload,
@@ -38,6 +38,15 @@ export function useInfiniteCatalogBooks({
   const requestSeqRef = useRef(0);
   const previousEndpointRef = useRef(endpoint);
 
+  const commitTableState = useCallback((updater) => {
+    setTableState((current) => {
+      const next =
+        typeof updater === "function" ? updater(current) : updater;
+      tableStateRef.current = next;
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     tableStateRef.current = tableState;
   }, [tableState]);
@@ -53,7 +62,7 @@ export function useInfiniteCatalogBooks({
       const requestSeq = requestSeqRef.current + 1;
       requestSeqRef.current = requestSeq;
 
-      setTableState((current) => {
+      commitTableState((current) => {
         const keepExistingRows =
           append || preserveRows || (!resetState && current.loadedOnce);
 
@@ -73,7 +82,7 @@ export function useInfiniteCatalogBooks({
       });
 
       try {
-        const payload = await apiFetch(
+        const payload = await catalogFetch(
           `${endpoint}${toQueryString({
             ...requestFilters,
             page: String(page),
@@ -87,7 +96,7 @@ export function useInfiniteCatalogBooks({
         const normalized = normalizeCatalogListPayload(payload);
         const nextPage = Number(normalized.pagination.page) || page;
 
-        setTableState((current) => ({
+        commitTableState((current) => ({
           entries: append
             ? [...current.entries, ...normalized.entries]
             : normalized.entries,
@@ -107,7 +116,7 @@ export function useInfiniteCatalogBooks({
           return null;
         }
 
-        setTableState((current) => ({
+        commitTableState((current) => ({
           ...current,
           currentPage: resetState && !append ? 0 : current.currentPage,
           hasMore: resetState && !append ? false : current.hasMore,
@@ -129,7 +138,7 @@ export function useInfiniteCatalogBooks({
         return null;
       }
     },
-    [endpoint, requestFilters],
+    [commitTableState, endpoint, requestFilters],
   );
 
   const loadMore = useCallback(async () => {
@@ -166,7 +175,7 @@ export function useInfiniteCatalogBooks({
   );
 
   const prependEntry = useCallback((entry) => {
-    setTableState((current) => {
+    commitTableState((current) => {
       const alreadyPresent = current.entries.some(
         (currentEntry) => currentEntry.id === entry.id,
       );
@@ -179,7 +188,7 @@ export function useInfiniteCatalogBooks({
         totalCount: alreadyPresent ? current.totalCount : current.totalCount + 1,
       };
     });
-  }, []);
+  }, [commitTableState]);
 
   const observeLoadTrigger = useCallback(
     (node) => {

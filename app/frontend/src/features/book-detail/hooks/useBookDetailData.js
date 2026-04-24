@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../../../api/client";
+import { bookDetailFetch } from "../api";
 import { buildBookDetailView } from "../utils";
 import { useHtmlPreviewLockState } from "./useHtmlPreviewLockState";
 
@@ -70,7 +70,7 @@ export function useBookDetailData({
 
   const fetchBook = useCallback(
     async (targetSlug = slug) => {
-      const payload = await apiFetch(`/catalog/books/${targetSlug}/`);
+      const payload = await bookDetailFetch(`/catalog/books/${targetSlug}/`);
       setBook(payload);
       setError("");
       if (payload.slug && payload.slug !== targetSlug) {
@@ -90,8 +90,8 @@ export function useBookDetailData({
       }
 
       const [versionsPayload, reviewsPayload] = await Promise.all([
-        apiFetch(`/catalog/books/${targetSlug}/metadata-versions/`),
-        apiFetch(`/catalog/books/${targetSlug}/metadata-reviews/`),
+        bookDetailFetch(`/catalog/books/${targetSlug}/metadata-versions/`),
+        bookDetailFetch(`/catalog/books/${targetSlug}/metadata-reviews/`),
       ]);
       setMetadataVersions(versionsPayload);
       setMetadataReviews(reviewsPayload);
@@ -102,7 +102,7 @@ export function useBookDetailData({
   const fetchReaderCollections = useCallback(
     async (targetSlug = slug) => {
       const [sessionPayload, bookmarkPayload] = await Promise.all([
-        apiFetch(`/access/books/${targetSlug}/reading-session/`).catch(
+        bookDetailFetch(`/access/books/${targetSlug}/reading-session/`).catch(
           (nextError) => {
             if ([401, 403].includes(nextError.status)) {
               return null;
@@ -110,7 +110,7 @@ export function useBookDetailData({
             throw nextError;
           },
         ),
-        apiFetch(`/access/books/${targetSlug}/bookmarks/`).catch((nextError) => {
+        bookDetailFetch(`/access/books/${targetSlug}/bookmarks/`).catch((nextError) => {
           if ([401, 403].includes(nextError.status)) {
             return [];
           }
@@ -182,7 +182,7 @@ export function useBookDetailData({
         if (canEditMetadata) {
           requests.push(
             Promise.all([
-              apiFetch(`/catalog/books/${slug}/metadata-versions/`).catch(
+              bookDetailFetch(`/catalog/books/${slug}/metadata-versions/`).catch(
                 (nextError) => {
                   if ([401, 403].includes(nextError.status)) {
                     return [];
@@ -190,7 +190,7 @@ export function useBookDetailData({
                   throw nextError;
                 },
               ),
-              apiFetch(`/catalog/books/${slug}/metadata-reviews/`).catch(
+              bookDetailFetch(`/catalog/books/${slug}/metadata-reviews/`).catch(
                 (nextError) => {
                   if ([401, 403].includes(nextError.status)) {
                     return [];

@@ -41,7 +41,7 @@ test.describe("Access Page", () => {
 
     await accessPage.goto();
     await accessPage.switchToAccessRules();
-    await accessPage.selectGrantUserByLabel(seedData.accessUser.name);
+    await accessPage.selectGrantUserByLabel(seedData.accessUser.email);
     await accessPage.toggleGrantPermission("Edit metadata");
     await accessPage.chooseGrantTargetType("Books");
     await accessPage.searchTargets("Access Grant");

@@ -1,0 +1,120 @@
+
+def scrape_lesson_content(url, title=""):
+    """Scrape content from a lesson or topic URL."""
+    soup = get_soup(url)
+    if not soup:
+        return ""
+
+    div = soup.find("div", class_="ld-tab-content ld-visible entry-content")
+    if div:
+        div = clean_buttons(div)
+        content = div.decode_contents()
+        content = remove_redundant_headers(content, title)
+        return content
+    return ""
+
+def build_toc_structure(lessons_data):
+    """
+    Build a hierarchical table of contents structure.
+    Returns a list representing the TOC.
+    """
+    toc = []
+    
+    for lesson in lessons_data:
+        lesson_entry = {
+            "title": lesson["title"],
+            "type": "lesson",
+            "has_content": True
+        }
+        
+        if lesson["has_topics"]:
+            # This lesson has topics
+            lesson_entry["children"] = []
+            for topic_title, topic_url in lesson["topics"]:
+                lesson_entry["children"].append({
+                    "title": topic_title,
+                    "type": "topic",
+                    "has_content": True
+                })
+        
+        toc.append(lesson_entry)
+    
+    return toc
+
+def scrape_book_data(book_url, *, content_limits=None):
+    book_url = normalize_source_url(book_url)
+    soup = get_soup(book_url)
+    if not soup:
+        print("Failed to fetch the book page.")
+        return None
+
+    book_title, title_author = extract_title_and_author(soup)
+    meta_author, series, book_type = scrape_book_meta(soup)
+    author = meta_author or title_author
+    output_folder = create_output_folder(book_title)
+
+    cover = download_cover_image(soup, output_folder)
+    main_content = scrape_main_content(soup)
+
+    # Extract book info and dedication from main content
+    book_info, dedication, main_content = extract_dedication(main_content)
+
+    crawl_limits = normalize_scrape_limits(content_limits)
+    disable_recursive = False
+    if isinstance(content_limits, dict):
+        raw_disable_recursive = content_limits.get("disable_recursive", False)
+        if isinstance(raw_disable_recursive, str):
+            disable_recursive = raw_disable_recursive.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        else:
+            disable_recursive = bool(raw_disable_recursive)
+
+    if disable_recursive:
+        print("Skipping recursive content structure fetch.")
+        toc = []
+        content_items = []
+        main_content = truncate_scraped_content(
+            main_content,
+            crawl_limits.get("max_content_chars"),
+        )
+    else:
+        print("Fetching recursive content structure...")
+        root_node = scrape_recursive_content_node(
+            book_url,
+            title_hint=book_title,
+            node_type="book",
+            cache={},
+            active_urls=set(),
+            prefetched_soup=soup,
+            prefetched_main_content=main_content,
+            crawl_state={"visited_nodes": 0},
+            crawl_limits=crawl_limits,
+            depth=0,
+        )
+        toc = [
+            content_node_to_toc_entry(child)
+            for child in root_node.get("children", [])
+        ]
+        content_items = flatten_content_nodes(
+            root_node.get("children", []),
+            max_items=crawl_limits.get("max_nodes"),
+        )
+        main_content = root_node.get("content", main_content)
+
+    return {
+        "book_title": book_title,
+        "author": author,
+        "series": series,
+        "book_type": book_type,
+        "cover": cover,
+        "main_content": main_content,
+        "book_info": book_info,  # Extracted book info before dedication
+        "dedication": dedication,  # Extracted dedication
+        "toc": toc,
+        "content_items": content_items,
+        "output_folder": output_folder
+    }

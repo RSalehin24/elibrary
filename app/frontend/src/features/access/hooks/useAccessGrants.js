@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { apiFetch } from "../../../api/client";
+import { accessFetch } from "../api";
 import { initialGrantForm } from "../constants";
 import { grantTargetField, sortValues } from "../utils";
 
@@ -124,7 +124,7 @@ export function useAccessGrants({
           continue;
         }
         requests.push(
-          apiFetch("/access/grants/", {
+          accessFetch("/access/grants/", {
             method: "POST",
             body: {
               user: grantForm.user,
@@ -174,7 +174,7 @@ export function useAccessGrants({
 
     try {
       setDeletingGrantId(grant.id);
-      await apiFetch(`/access/grants/${grant.id}/`, { method: "DELETE" });
+      await accessFetch(`/access/grants/${grant.id}/`, { method: "DELETE" });
       toast.success("Access removed.");
       await loadAdminData();
     } catch (error) {

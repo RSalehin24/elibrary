@@ -1,0 +1,207 @@
+@media (max-width: 640px) {
+  .shell {
+    padding:10px
+  }
+  .topbar {
+    padding:10px 12px!important
+  }
+  .shell-reader-mode .topbar {
+    min-height:60px;
+    margin:0 calc(52px + env(safe-area-inset-right,0px)) 10px calc(10px + env(safe-area-inset-left,0px));
+    padding:8px 10px;
+    border-radius:15px
+  }
+  .brand-block-reader {
+    gap:7px
+  }
+  .shell-reader-mode .brand-mark-suffix {
+    display:none
+  }
+  .reader-topbar-breadcrumb {
+    min-height:34px;
+    padding:0 10px;
+    border-radius:14px
+  }
+  .detail-card,.detail-main,.detail-sidebar,.landing-panel,.landing-results,.book-card,.book-hero,
+  .backend-status-modal {
+    padding:16px
+  }
+  .catalog-search-field,.catalog-filter-toggle,.catalog-result-count {
+    min-height:54px
+  }
+  .catalog-search-field {
+    padding-left:50px;
+    padding-right:16px
+  }
+  .catalog-search-icon {
+    left:15px
+  }
+  .catalog-search-actions,.catalog-search-actions-extra,.manual-books-toolbar-actions,.toolbar-action-cluster,
+  .catalog-pagination-actions,.login-actions,.manual-book-form-actions,.book-hero-actions {
+    display:grid;
+    grid-template-columns:1fr;
+    gap:10px
+  }
+  .catalog-search-sort,.catalog-filter-toggle,.catalog-result-count,.catalog-search-actions-extra,
+  .catalog-search-actions-extra>*,.manual-books-toolbar-actions>*,.toolbar-action-cluster>*,
+  .catalog-pagination-actions>*,.login-actions>*,.manual-book-form-actions>*,.book-hero-actions>* {
+    width:100%;
+    min-width:0
+  }
+  .catalog-pagination {
+    gap:8px
+  }
+  .catalog-page-indicator {
+    justify-content:flex-start
+  }
+  .catalog-saved-strip {
+    display:grid;
+    grid-template-columns:1fr
+  }
+  .saved-filter-chip {
+    width:100%;
+    justify-content:space-between;
+    border-radius:18px;
+    gap:8px;
+    align-items:stretch
+  }
+  .saved-filter-apply {
+    flex:1 1 auto
+  }
+  .saved-filter-delete {
+    width:34px;
+    height:34px;
+    align-self:center
+  }
+  .catalog-filter-actions>* {
+    width:100%
+  }
+  .catalog-search-actions {
+    grid-template-columns:1fr;
+    grid-template-areas:"sort" "filter" "count" "extra";
+    gap:8px
+  }
+  .catalog-filter-toggle {
+    justify-content:space-between;
+    padding:0 16px
+  }
+  .catalog-result-count {
+    justify-content:flex-start;
+    padding:0 16px
+  }
+  .catalog-search-actions-extra {
+    gap:8px
+  }
+  .catalog-filter-grid {
+    grid-template-columns:1fr;
+    gap:10px;
+    padding:12px;
+    border-radius:18px
+  }
+  .catalog-filter-field {
+    gap:6px
+  }
+  .catalog-filter-field input,.catalog-filter-field select {
+    min-height:44px
+  }
+  .catalog-filter-actions {
+    grid-template-columns:1fr;
+    gap:8px
+  }
+  .catalog-page-header--property-layout>h1 {
+    min-height:34px;
+    padding-right:0
+  }
+  .catalog-page-header--property-layout .catalog-search-field {
+    min-height:46px;
+    padding-left:42px;
+    padding-right:12px
+  }
+  .catalog-page-header--property-layout .catalog-search-icon {
+    left:13px
+  }
+  .catalog-page-header--property-layout .catalog-search-field input {
+    min-height:44px;
+    font-size:.94rem
+  }
+  .catalog-page-header--property-layout .catalog-search-actions {
+    display:contents
+  }
+  .catalog-page-header--property-layout .catalog-filter-toggle {
+    width:auto;
+    min-height:42px;
+    justify-content:center;
+    gap:6px;
+    padding:0 12px
+  }
+  .catalog-page-header--property-layout .catalog-search-sort,.catalog-page-header--property-layout .catalog-search-sort .catalog-toolbar-select {
+    width:100%;
+    min-width:0
+  }
+  .catalog-page-header--property-layout .catalog-search-actions-extra {
+    width:100%
+  }
+  .catalog-page-header--property-layout .catalog-search-actions-extra>*,.catalog-page-header--property-layout .manual-books-toolbar-actions,
+  .catalog-page-header--property-layout .toolbar-action-panel {
+    width:100%;
+    min-width:0
+  }
+  .catalog-page-header--property-layout .manual-books-toolbar-actions {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:8px;
+    align-items:center
+  }
+  .catalog-page-header--property-layout .manual-books-toolbar-actions>.toolbar-action-panel:first-child {
+    grid-column:1 / -1
+  }
+  .catalog-page-header--property-layout .manual-books-toolbar-actions>.toolbar-action-panel-compact {
+    grid-column:2;
+    width:auto;
+    justify-self:end
+  }
+  .catalog-page-header--property-layout .toolbar-action-cluster,.catalog-page-header--property-layout .manual-books-toolbar-actions .toolbar-action-cluster {
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+    width:100%
+  }
+  .catalog-page-header--property-layout .toolbar-action-cluster .toolbar-icon-button {
+    width:100%;
+    min-width:0;
+    justify-content:center
+  }
+  .catalog-page-header--property-layout .toolbar-action-panel>.toolbar-icon-button.is-icon-only {
+    width:42px;
+    min-width:42px;
+    justify-self:end
+  }
+  .catalog-page-header--property-layout .catalog-result-count {
+    position:static;
+    width:auto;
+    min-width:46px;
+    min-height:32px;
+    padding:0 10px;
+    justify-self:end;
+    justify-content:center;
+    font-size:.82rem
+  }
+  .catalog-page-header--property-layout .catalog-filter-grid {
+    grid-template-columns:1fr;
+    padding:10px;
+    border-radius:16px
+  }
+  .catalog-page-header--property-layout .catalog-filter-field input,.catalog-page-header--property-layout .catalog-filter-field select {
+    min-height:40px
+  }
+  .catalog-page-header--property-layout .catalog-filter-actions {
+    grid-template-columns:minmax(0,1fr) auto
+  }
+  .catalog-page-header--property-layout .catalog-filter-actions>* {
+    width:auto;
+    min-width:0
+  }
+  .catalog-page-header--property-layout .catalog-filter-actions .primary-button {
+    width:100%
+  }
+}

@@ -34,6 +34,7 @@ done
 
 require_cmd npm
 require_cmd curl
+require_cmd python3
 
 APP_ENV_FILE="${REPO_ROOT}/local/env/.env"
 COMPOSE_FILE="${REPO_ROOT}/local/compose/docker-compose.yml"
@@ -95,6 +96,12 @@ run_browser_suite() {
 }
 
 for run_index in $(seq 1 "${repeat_count}"); do
+  print_info "Verification run ${run_index}/${repeat_count}: file-size policy"
+  python3 "${REPO_ROOT}/tests/scripts/check-file-size-policy.py"
+
+  print_info "Verification run ${run_index}/${repeat_count}: architecture policy"
+  python3 "${REPO_ROOT}/tests/scripts/check-architecture-policy.py"
+
   print_info "Verification run ${run_index}/${repeat_count}: starting live stack"
   compose "${COMPOSE_ARGS[@]}" up -d --build "${STACK_SERVICES[@]}"
   compose "${COMPOSE_ARGS[@]}" stop worker processing-worker beat >/dev/null 2>&1 || true

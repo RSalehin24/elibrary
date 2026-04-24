@@ -43,6 +43,7 @@ export default function BookDetailPage() {
     returnTarget,
     reviewForm: detailState.reviewForm,
     setBook: detailState.setBook,
+    setBookmarks: detailState.setBookmarks,
     setHtmlPreviewLockedByAssetId: detailState.setHtmlPreviewLockedByAssetId,
     setMetadataReviews: detailState.setMetadataReviews,
     setReviewForm: detailState.setReviewForm,

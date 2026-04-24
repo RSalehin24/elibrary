@@ -9,6 +9,7 @@ import {
   sortValues,
 } from "../utils";
 import { isValidEmail, normalizeEmail } from "../../../utils/email";
+import { copyPasswordToClipboard } from "./clipboardActions";
 
 export function useAccessUsers({
   allAccountScopeValues,
@@ -58,20 +59,7 @@ export function useAccessUsers({
     successMessage = "Password copied.",
     showError = true,
   ) {
-    if (!password) {
-      if (showError) {
-        toast.error("Generate or enter a password first.");
-      }
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(password);
-      toast.success(successMessage);
-    } catch {
-      if (showError) {
-        toast.error("Could not copy the password.");
-      }
-    }
+    await copyPasswordToClipboard({ password, showError, successMessage, toast });
   }
 
   function toggleUserScope(scopeValue) {
