@@ -67,19 +67,19 @@ export function CatalogProcessingPage() {
   return <PageFrame pageId="catalog" title="Catalog">
       <OverviewPanel pageId="catalog" loading={!catalogOverviewLoaded} stats={[{
       id: "records",
-      label: "Book Records",
+      label: "Records",
       value: summary.records || 0
     }, {
       id: "not-created",
-      label: "Not Created",
+      label: "Remaining",
       value: summary.notCreated || 0
     }, {
       id: "active",
-      label: "Active Requests",
+      label: "Creating",
       value: summary.active || 0
     }, {
       id: "created",
-      label: "Created",
+      label: "Books",
       value: summary.created || 0
     }, {
       id: "on-hold",
