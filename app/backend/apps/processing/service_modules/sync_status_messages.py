@@ -174,10 +174,10 @@ def build_catalog_request_creation_progress(
         f"request-{request_creation.get('lastRecordId') or request_creation.get('processedCount', 0)}"
     )
     base_sync_checkpoint_token = (
-        _catalog_phase_checkpoint_from_saved_data(
+        request_creation_base_checkpoint_token(request_creation)
+        or _catalog_phase_checkpoint_from_saved_data(
             _phase_saved_data(current_sync_phase_state.get("savedData"))
         )
-        or request_creation_base_checkpoint_token(request_creation)
     )
     next_request_creation_phase_state = _catalog_phase_state(
         CATALOG_REQUEST_CREATION_PHASE,

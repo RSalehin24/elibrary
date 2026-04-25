@@ -1,6 +1,4 @@
 import json
-import os
-import threading
 import time
 
 from django.http import StreamingHttpResponse
@@ -31,8 +29,6 @@ from .services import (
     PROCESSING_SYNC_KEY_CATALOG,
     PROCESSING_SYNC_KEY_INCOMPLETE,
     active_sync_scope,
-    advance_pipeline_once,
-    advance_sync_once,
     allow_processing_remote_page_payloads,
     apply_request_action,
     collect_processing_ui_version_updates,
@@ -46,7 +42,6 @@ from .services import (
     processing_ui_versions_map,
     resume_sync,
     run_catalog_automation,
-    run_due_processing_automations,
     run_incomplete_automation,
     run_manual_catalog_sync,
     sync_run_mode,
@@ -125,23 +120,6 @@ def processing_mutation_payload(versions, *, extra=None):
     return payload
 
 
-PROCESSING_READ_TICK_LOCK = threading.Lock()
-
-
-def run_processing_read_tick():
-    if not PROCESSING_READ_TICK_LOCK.acquire(blocking=False):
-        return
-    try:
-        run_due_processing_automations()
-        for sync_key in (PROCESSING_SYNC_KEY_CATALOG, PROCESSING_SYNC_KEY_INCOMPLETE):
-            if get_sync_state(sync_key).status == ProcessingSyncStatus.PAUSING:
-                advance_sync_once(sync_key)
-        if not os.environ.get("PYTEST_CURRENT_TEST"):
-            advance_pipeline_once()
-    finally:
-        PROCESSING_READ_TICK_LOCK.release()
-
-
 class EventStreamRenderer(BaseRenderer):
     media_type = "text/event-stream"
     format = "event-stream"
@@ -156,7 +134,6 @@ class ProcessingStateView(APIView):
     permission_classes = [CanManageProcessing]
 
     def get(self, request):
-        run_processing_read_tick()
         include_lists = truthy_query_param(
             request.query_params.get("includeLists"),
             default=True,
@@ -170,7 +147,6 @@ class ProcessingCardView(APIView):
     permission_classes = [CanManageProcessing]
 
     def get(self, request):
-        run_processing_read_tick()
         card = str(request.query_params.get("card") or "").strip()
         if not card:
             raise ValidationError({"card": ["This query parameter is required."]})
@@ -232,7 +208,6 @@ class ProcessingTableView(APIView):
     permission_classes = [CanManageProcessing]
 
     def get(self, request):
-        run_processing_read_tick()
         card = str(request.query_params.get("card") or "").strip()
         if not card:
             raise ValidationError({"card": ["This query parameter is required."]})

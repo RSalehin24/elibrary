@@ -37,6 +37,7 @@ export function useProcessingStateRuntime({
   const lastLoadedPageRef = useRef("");
   const sharedVersionSignatureRef = useRef(sharedVersionSignature);
   const domainVersionsRef = useRef(domainVersions);
+  const queuedSharedSignatureRef = useRef("");
 
   useEffect(() => {
     sharedVersionSignatureRef.current = sharedVersionSignature;
@@ -68,9 +69,13 @@ export function useProcessingStateRuntime({
     if (!changed) return { changed: false, sharedChanged: false };
 
     domainVersionsRef.current = nextVersions;
+    sharedVersionSignatureRef.current = versionSignature(
+      nextVersions,
+      sharedProcessingCardKeys
+    );
     setDomainVersions(nextVersions);
     return { changed, sharedChanged };
-  }, []);
+  }, [sharedProcessingCardKeys]);
 
   const getDomainVersion = useCallback(
     (cardKey) => normalizeVersionValue(domainVersions[cardKey]),
@@ -82,13 +87,18 @@ export function useProcessingStateRuntime({
       return Promise.resolve(null);
     }
     if (loadPromiseRef.current) {
-      reloadQueuedRef.current = true;
+      const currentSharedSignature = sharedVersionSignatureRef.current;
+      if (currentSharedSignature !== queuedSharedSignatureRef.current) {
+        queuedSharedSignatureRef.current = currentSharedSignature;
+        reloadQueuedRef.current = true;
+      }
       return loadPromiseRef.current;
     }
 
     let disposed = false;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
+    queuedSharedSignatureRef.current = sharedVersionSignatureRef.current;
     setProcessingStateStatus((current) => ({
       ...current,
       initialLoading: !current.loadedOnce,
@@ -102,12 +112,33 @@ export function useProcessingStateRuntime({
       .then((payload) => {
         if (disposed || requestId < appliedRequestIdRef.current) return payload;
         appliedRequestIdRef.current = requestId;
+        const payloadVersions = payload?.versions || {};
         applyProcessingVersions(payload?.versions || {});
-        appliedSharedSignatureRef.current = versionSignature(
-          payload?.versions || {},
+        const payloadSharedSignature = versionSignature(
+          payloadVersions,
           sharedProcessingCardKeys
         );
-        sharedVersionSignatureRef.current = appliedSharedSignatureRef.current;
+        const knownSharedSignature = versionSignature(
+          domainVersionsRef.current || {},
+          sharedProcessingCardKeys
+        );
+        appliedSharedSignatureRef.current = payloadSharedSignature;
+        sharedVersionSignatureRef.current = knownSharedSignature;
+        if (
+          queuedSharedSignatureRef.current === payloadSharedSignature &&
+          knownSharedSignature === payloadSharedSignature
+        ) {
+          reloadQueuedRef.current = false;
+        }
+        if (knownSharedSignature !== payloadSharedSignature) {
+          setProcessingStateStatus((current) => ({
+            ...current,
+            initialLoading: !current.loadedOnce,
+            refreshing: current.loadedOnce,
+            error: ""
+          }));
+          return payload;
+        }
         setProcessingStateStatus({
           data: payload,
           loadedOnce: true,
@@ -156,10 +187,11 @@ export function useProcessingStateRuntime({
 
   const queueProcessingStateReload = useCallback(() => {
     if (!onProcessingPage || !canLoadProcessingState) return;
-    reloadQueuedRef.current = true;
-    if (!loadPromiseRef.current) {
-      void loadProcessingStateRef.current?.();
+    if (loadPromiseRef.current) {
+      reloadQueuedRef.current = true;
+      return;
     }
+    void loadProcessingStateRef.current?.();
   }, [canLoadProcessingState, onProcessingPage]);
 
   useEffect(() => {
@@ -170,6 +202,7 @@ export function useProcessingStateRuntime({
     reloadQueuedRef.current = false;
     appliedRequestIdRef.current = 0;
     appliedSharedSignatureRef.current = "";
+    queuedSharedSignatureRef.current = "";
     lastLoadedPageRef.current = "";
     return undefined;
   }, [canLoadProcessingState]);
@@ -181,6 +214,7 @@ export function useProcessingStateRuntime({
       reloadQueuedRef.current = false;
       appliedRequestIdRef.current = 0;
       appliedSharedSignatureRef.current = "";
+      queuedSharedSignatureRef.current = "";
       lastLoadedPageRef.current = "";
       return undefined;
     }
@@ -191,6 +225,9 @@ export function useProcessingStateRuntime({
       !processingStateStatus.loadedOnce ||
       sharedVersionSignature !== appliedSharedSignatureRef.current
     ) {
+      if (loadPromiseRef.current) {
+        return undefined;
+      }
       loadProcessingState();
     }
     return undefined;

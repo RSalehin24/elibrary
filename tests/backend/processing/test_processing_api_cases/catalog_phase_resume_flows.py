@@ -205,6 +205,9 @@ def test_manual_start_from_paused_automation_request_creation_preserves_phase_tw
     payload = advance_processing_sync(client)
     assert payload["sync"]["status"] == "paused"
     assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+    paused_request_creation_base_token = payload["sync"]["progress"][
+        "phaseStates"
+    ]["request_creation"]["baseSyncCheckpointToken"]
 
     _mutation, payload = post_processing_mutation(
         client,
@@ -230,6 +233,16 @@ def test_manual_start_from_paused_automation_request_creation_preserves_phase_tw
     assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "completed"
     assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "paused"
     assert payload["sync"]["progress"]["requestCreation"]["processedCount"] == 1
+    completed_sync_checkpoint_token = payload["sync"]["progress"]["phaseStates"][
+        "sync"
+    ]["savedData"]["checkpointToken"]
+    assert completed_sync_checkpoint_token != paused_request_creation_base_token
+    assert (
+        payload["sync"]["progress"]["phaseStates"]["request_creation"][
+            "baseSyncCheckpointToken"
+        ]
+        == paused_request_creation_base_token
+    )
     assert BookCreationRequest.objects.count() == 1
 
     _mutation, payload = post_processing_mutation(
@@ -241,6 +254,16 @@ def test_manual_start_from_paused_automation_request_creation_preserves_phase_tw
     assert payload["sync"]["message"] == "Resuming automated request creation from saved progress."
     assert payload["sync"]["progress"]["phaseStatuses"]["sync"] == "completed"
     assert payload["sync"]["progress"]["phaseStatuses"]["request_creation"] == "running"
+    assert (
+        payload["sync"]["progress"]["phaseStates"]["request_creation"][
+            "baseSyncCheckpointToken"
+        ]
+        == paused_request_creation_base_token
+    )
+    assert (
+        payload["sync"]["progress"]["requestCreation"]["baseCheckpointToken"]
+        == paused_request_creation_base_token
+    )
 
     payload = advance_processing_sync(client, count=2)
     assert payload["sync"]["status"] == "idle"

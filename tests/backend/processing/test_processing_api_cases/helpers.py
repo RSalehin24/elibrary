@@ -220,7 +220,11 @@ def set_catalog_runtime_state(
             else ""
         ),
         request_creation=request_creation_payload,
-        base_sync_checkpoint_token=checkpoint_token if request_creation_payload else "",
+        base_sync_checkpoint_token=(
+            request_creation_payload.get("baseCheckpointToken")
+            if request_creation_payload
+            else ""
+        ),
     )
     phase_states = {
         processing_services.CATALOG_SYNC_PHASE: sync_phase_state,

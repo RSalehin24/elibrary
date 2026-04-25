@@ -161,6 +161,63 @@ test.describe("processing pages mocked coverage", () => {
     await page.waitForTimeout(150);
     expect(processingApi.getRequestCount("table:create-requests")).toBe(initialLoads + 1);
   });
+  test("shared version bumps refetch shared state exactly once", async ({
+    page
+  }) => {
+    const processingApi = await boot(page, "/create", baseState({
+      requests: [request({
+        id: "req-initial",
+        bookRecordId: "record-1",
+        state: "initial"
+      })],
+      records: [record({
+        id: "record-1",
+        name: "Record One",
+        updatedAt: iso(20)
+      })],
+      ui: {
+        ...baseState().ui,
+        stateLoadDelayMs: 80,
+        pipelineDelayMs: 60_000
+      }
+    }));
+    await expect(row(page, "create", "requests", "req-initial")).toBeVisible();
+    await page.waitForTimeout(150);
+    const initialStateLoads = processingApi.getRequestCount("state");
+    await processingApi.emitVersions(["create-overview"]);
+    await expect.poll(() => processingApi.getRequestCount("state")).toBe(initialStateLoads + 1);
+    await page.waitForTimeout(300);
+    expect(processingApi.getRequestCount("state")).toBe(initialStateLoads + 1);
+  });
+  test("shared version bumps during an in-flight state load are not dropped", async ({
+    page
+  }) => {
+    const processingApi = await boot(page, "/create", baseState({
+      requests: [request({
+        id: "req-initial",
+        bookRecordId: "record-1",
+        state: "initial"
+      })],
+      records: [record({
+        id: "record-1",
+        name: "Record One",
+        updatedAt: iso(20)
+      })],
+      ui: {
+        ...baseState().ui,
+        stateLoadDelayMs: 250,
+        pipelineDelayMs: 60_000
+      }
+    }), {
+      stateVersionsSnapshotAtRequestStart: true
+    });
+    await expect.poll(() => processingApi.getRequestCount("state")).toBe(1);
+    await processingApi.emitVersions(["create-overview"]);
+    await expect.poll(() => processingApi.getRequestCount("state")).toBe(2);
+    await expect(row(page, "create", "requests", "req-initial")).toBeVisible();
+    await page.waitForTimeout(300);
+    expect(processingApi.getRequestCount("state")).toBe(2);
+  });
   test("card search, filters, counts, and actions stay scoped to their own cards", async ({
     page
   }) => {

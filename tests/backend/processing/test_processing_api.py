@@ -10,6 +10,7 @@ _MODULE_FILES = (
     "incomplete_catalog_and_domain_versions.py",
     "catalog_sync_persistence.py",
     "runtime_tick_and_projection_reads.py",
+    "read_endpoint_purity.py",
     "ui_version_publication.py",
     "state_payload_and_tables.py",
     "automation_ownership_flows.py",
