@@ -1,30 +1,22 @@
-check_published_port() {
-  local service="$1"
-  local container_port="$2"
-  local expected="127.0.0.1:$3"
-  local published=""
-
-  for _ in $(seq 1 20); do
-    published="$("${compose_cmd[@]}" "${compose_args[@]}" port "${service}" "${container_port}" 2>/dev/null || true)"
-    if [[ "${published}" == "${expected}" ]]; then
-      return 0
-    fi
-    sleep 2
-  done
-
-  echo "Port binding mismatch for ${service}: expected ${expected}, got ${published:-<none>}" >&2
-  "${compose_cmd[@]}" "${compose_args[@]}" ps
-  return 1
-}
-
-check_published_port backend 8000 "${BACKEND_PORT}"
-check_published_port frontend 80 "${FRONTEND_PORT}"
-EOF
-}
-
 configure_remote_nginx() {
   print_info "[7/8] Configuring host nginx and certbot on ${TARGET}"
   ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && sudo bash deploy/scripts/setup-host-nginx.sh '${DOMAIN}' '${CERTBOT_EMAIL}' '${REMOTE_APP_ABS_DIR}' '${BACKEND_PORT}' '${FRONTEND_PORT}' '${DEPLOY_NGINX_CONFIG_NAME}' '${DEPLOY_NGINX_CONF_DIR}' '${DEPLOY_NGINX_VERSION}'"
+}
+
+wait_for_https_endpoint() {
+  local endpoint="${1:?endpoint is required}"
+  local attempts="${2:-20}"
+  local delay_seconds="${3:-3}"
+  local attempt
+
+  for attempt in $(seq 1 "${attempts}"); do
+    if ssh "${TARGET}" "if command -v curl >/dev/null 2>&1; then curl -fsIL --max-time 20 '${endpoint}' >/dev/null 2>&1; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 '${endpoint}'; else exit 127; fi"; then
+      return 0
+    fi
+    sleep "${delay_seconds}"
+  done
+
+  return 1
 }
 
 verify_deployment() {
@@ -32,7 +24,14 @@ verify_deployment() {
 
   print_info "[8/8] Verifying nginx configuration and HTTPS reachability"
   ssh "${TARGET}" "sudo nginx -T 2>/dev/null | grep -Fq '${remote_nginx_config_path}'" || die "Expected nginx config was not loaded: ${remote_nginx_config_path}"
-  ssh "${TARGET}" "if command -v curl >/dev/null 2>&1; then curl -fsSIL --max-time 20 https://${DOMAIN}/ >/dev/null && curl -fsSI --max-time 20 https://${DOMAIN}/api/csrf/ >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --spider --timeout=20 https://${DOMAIN}/ && wget -q --spider --timeout=20 https://${DOMAIN}/api/csrf/; else exit 127; fi" || die "HTTPS verification failed for https://${DOMAIN}"
+
+  if ! wait_for_https_endpoint "https://${DOMAIN}/" 20 3 || ! wait_for_https_endpoint "https://${DOMAIN}/api/csrf/" 20 3; then
+    print_info "HTTPS probes failed. Collecting remote diagnostics from ${TARGET}."
+    ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && if docker compose version >/dev/null 2>&1; then docker compose -f '${DEPLOY_COMPOSE_REL}' ps && docker compose -f '${DEPLOY_COMPOSE_REL}' logs --tail=80 backend frontend; elif command -v docker-compose >/dev/null 2>&1; then docker-compose -f '${DEPLOY_COMPOSE_REL}' ps && docker-compose -f '${DEPLOY_COMPOSE_REL}' logs --tail=80 backend frontend; fi" || true
+    ssh "${TARGET}" "sudo tail -n 80 /var/log/nginx/error.log" || true
+    die "HTTPS verification failed for https://${DOMAIN}"
+  fi
+
   print_info "Deployment verification passed for https://${DOMAIN}"
 }
 
@@ -90,7 +89,7 @@ DEPLOY_NGINX_CONF_DIR="${DEPLOY_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
 DEPLOY_NGINX_CONFIG_NAME="${DEPLOY_NGINX_CONFIG_NAME:-${DEPLOY_DOMAIN}.conf}"
 DEPLOY_NGINX_VERSION="${DEPLOY_NGINX_VERSION:-1.29.4}"
 DEPLOY_DOCKER_VERSION="${DEPLOY_DOCKER_VERSION:-}"
-DEPLOY_REMOTE_EDITOR="${DEPLOY_REMOTE_EDITOR:-${EDITOR:-nano}}"
+DEPLOY_REMOTE_EDITOR="${DEPLOY_REMOTE_EDITOR:-nano}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-4173}"
 REPO_SSH="${REPO_SSH:-git@github.com:RSalehin24/ebook-scrapping.git}"
@@ -117,7 +116,7 @@ require_cmd python3
 [[ -n "${DEPLOY_CERTBOT_EMAIL}" ]] || die "DEPLOY_CERTBOT_EMAIL must be set in deploy/env/.host.env"
 
 if [[ "${local_env_created}" == "yes" ]]; then
-  choice="$(timed_prompt "Prepared ${LOCAL_ENV_FILE}. Edit it now? [y/N] (auto-continue in 5s): " 5 "n")"
+  choice="$(timed_yes_no_prompt "Prepared ${LOCAL_ENV_FILE}. Edit it now?" 5 "n")"
   if [[ "${choice}" =~ ^[Yy]$ ]]; then
     "${EDITOR:-nano}" "${LOCAL_ENV_FILE}"
   fi
@@ -152,7 +151,7 @@ fi
 case "${SYNC_MODE}" in
   push|preserve) ;;
   prompt)
-    SYNC_MODE="$(timed_prompt "Remote env sync mode [push/preserve] (default preserve, auto-continue in 5s): " 5 "preserve")"
+    SYNC_MODE="$(timed_prompt "Remote env sync mode [push/preserve], default preserve" 5 "preserve")"
     [[ "${SYNC_MODE}" == "push" || "${SYNC_MODE}" == "preserve" ]] || SYNC_MODE="preserve"
     ;;
   *)
@@ -162,10 +161,13 @@ esac
 
 sync_remote_env_file "${SYNC_MODE}"
 
-remote_env_choice="$(timed_prompt "Edit remote deploy/env/.app.env now? [y/N] (auto-continue in 5s): " 5 "n")"
+print_info "Prompting for optional remote env edit"
+remote_env_choice="$(timed_yes_no_prompt "Edit remote deploy/env/.app.env now?" 5 "n")"
 if [[ "${remote_env_choice}" =~ ^[Yy]$ ]]; then
-  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && ${DEPLOY_REMOTE_EDITOR} ${REMOTE_APP_ENV_REL}"
+  ssh -tt "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && ${DEPLOY_REMOTE_EDITOR} ${REMOTE_APP_ENV_REL}"
 fi
+
+refresh_ports_from_remote_env
 
 ensure_remote_docker
 start_remote_stack

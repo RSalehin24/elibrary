@@ -145,24 +145,95 @@ timed_prompt() {
   local timeout_seconds="${2:-5}"
   local default_value="${3:-}"
   local response=""
+  local prompt_in="/dev/stdin"
+  local prompt_out="/dev/stderr"
+  local remaining
 
-  if [[ ! -t 0 ]]; then
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    prompt_in="/dev/tty"
+    prompt_out="/dev/tty"
+  elif [[ ! -t 0 ]]; then
     printf '%s' "${default_value}"
     return 0
   fi
 
-  printf '%s' "${prompt_text}"
-  if IFS= read -r -t "${timeout_seconds}" response; then
-    printf '\n'
-  else
-    printf '\n'
-    response="${default_value}"
+  if [[ ! "${timeout_seconds}" =~ ^[0-9]+$ ]]; then
+    timeout_seconds=5
   fi
+
+  remaining="${timeout_seconds}"
+  while (( remaining > 0 )); do
+    printf '\r%s (auto-default in %ss): ' "${prompt_text}" "${remaining}" >"${prompt_out}"
+    if IFS= read -r -t 1 response <"${prompt_in}"; then
+      break
+    fi
+    ((remaining--))
+  done
 
   if [[ -z "${response}" ]]; then
     response="${default_value}"
   fi
 
+  printf '\n' >"${prompt_out}"
+  printf '%s' "${response}"
+}
+
+timed_yes_no_prompt() {
+  local prompt_text="${1:?prompt text is required}"
+  local timeout_seconds="${2:-5}"
+  local default_value="${3:-n}"
+  local response=""
+  local prompt_in="/dev/stdin"
+  local prompt_out="/dev/stderr"
+  local remaining
+
+  case "${default_value}" in
+    y|Y)
+      default_value="y"
+      ;;
+    *)
+      default_value="n"
+      ;;
+  esac
+
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    prompt_in="/dev/tty"
+    prompt_out="/dev/tty"
+  elif [[ ! -t 0 ]]; then
+    printf '%s' "${default_value}"
+    return 0
+  fi
+
+  if [[ ! "${timeout_seconds}" =~ ^[0-9]+$ ]]; then
+    timeout_seconds=5
+  fi
+
+  remaining="${timeout_seconds}"
+  while (( remaining > 0 )); do
+    printf '\r%s yes[y]/no[n] (default %s in %ss): ' "${prompt_text}" "${default_value}" "${remaining}" >"${prompt_out}"
+    if IFS= read -r -n 1 -t 1 response <"${prompt_in}"; then
+      case "${response}" in
+        y|Y)
+          response="y"
+          break
+          ;;
+        n|N)
+          response="n"
+          break
+          ;;
+        *)
+          response=""
+          ;;
+      esac
+    fi
+    ((remaining--))
+  done
+
+  if [[ -z "${response}" ]]; then
+    response="${default_value}"
+  fi
+
+  printf '\n' >"${prompt_out}"
   printf '%s' "${response}"
 }
 

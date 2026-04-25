@@ -197,6 +197,23 @@ sync_remote_env_file() {
   print_info "Merged non-empty values from $(basename "${LOCAL_ENV_FILE}") into ${REMOTE_APP_ENV_REL}"
 }
 
+refresh_ports_from_remote_env() {
+  local remote_backend_port remote_frontend_port
+
+  remote_backend_port="$(ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && awk -F '=' '/^BACKEND_PORT=/{print \$2}' '${REMOTE_APP_ENV_REL}' | tail -n 1" 2>/dev/null || true)"
+  remote_frontend_port="$(ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && awk -F '=' '/^FRONTEND_PORT=/{print \$2}' '${REMOTE_APP_ENV_REL}' | tail -n 1" 2>/dev/null || true)"
+
+  if [[ -n "${remote_backend_port}" && "${remote_backend_port}" =~ ^[0-9]+$ ]]; then
+    BACKEND_PORT="${remote_backend_port}"
+  fi
+
+  if [[ -n "${remote_frontend_port}" && "${remote_frontend_port}" =~ ^[0-9]+$ ]]; then
+    FRONTEND_PORT="${remote_frontend_port}"
+  fi
+
+  print_info "Using runtime ports backend:${BACKEND_PORT} frontend:${FRONTEND_PORT}"
+}
+
 ensure_remote_docker() {
   local needs_install
 
@@ -214,7 +231,7 @@ ensure_remote_docker() {
 
 start_remote_stack() {
   print_info "[6/8] Starting dockerized frontend and backend on ${TARGET}"
-  ssh -t "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && BACKEND_PORT='${BACKEND_PORT}' FRONTEND_PORT='${FRONTEND_PORT}' bash -s" <<'EOF'
+  ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && BACKEND_PORT='${BACKEND_PORT}' FRONTEND_PORT='${FRONTEND_PORT}' bash -s" <<'EOF'
 set -euo pipefail
 
 source automation/lib/common.sh
@@ -247,4 +264,75 @@ then
   "${compose_cmd[@]}" "${compose_args[@]}" logs --tail=60 worker
   exit 1
 fi
+
+check_published_port() {
+  local service="$1"
+  local container_port="$2"
+  local expected="127.0.0.1:$3"
+  local published=""
+
+  for _ in $(seq 1 20); do
+    published="$("${compose_cmd[@]}" "${compose_args[@]}" port "${service}" "${container_port}" 2>/dev/null || true)"
+    if [[ "${published}" == "${expected}" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Port binding mismatch for ${service}: expected ${expected}, got ${published:-<none>}" >&2
+  "${compose_cmd[@]}" "${compose_args[@]}" ps
+  return 1
+}
+
+check_published_port backend 8000 "${BACKEND_PORT}"
+check_published_port frontend 80 "${FRONTEND_PORT}"
+
+http_probe() {
+  local url="$1"
+
+  if command -v curl >/dev/null 2>&1; then
+    local status
+    status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${url}" 2>/dev/null || true)"
+    [[ -n "${status}" && "${status}" != "000" && "${status:0:1}" != "5" ]]
+    return
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -q --spider --timeout=10 "${url}"
+    return
+  fi
+
+  return 127
+}
+
+wait_for_http_ready() {
+  local url="$1"
+  local service_name="$2"
+  local attempts=30
+  local attempt
+
+  for attempt in $(seq 1 "${attempts}"); do
+    if http_probe "${url}"; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Timed out waiting for ${service_name} at ${url}" >&2
+  return 1
+}
+
+if ! wait_for_http_ready "http://127.0.0.1:${BACKEND_PORT}/api/csrf/" "backend readiness"; then
+  "${compose_cmd[@]}" "${compose_args[@]}" ps
+  "${compose_cmd[@]}" "${compose_args[@]}" logs --tail=120 backend backend-init
+  exit 1
+fi
+
+if ! wait_for_http_ready "http://127.0.0.1:${FRONTEND_PORT}/" "frontend readiness"; then
+  "${compose_cmd[@]}" "${compose_args[@]}" ps
+  "${compose_cmd[@]}" "${compose_args[@]}" logs --tail=120 frontend
+  exit 1
+fi
+EOF
+}
 
