@@ -11,6 +11,10 @@
   flex-wrap: wrap;
 }
 
+.topbar-app .topnav {
+  justify-content: flex-end;
+}
+
 .nav-link,
 .ghost-button,
 .primary-button,
