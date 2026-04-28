@@ -30,7 +30,7 @@ function createDeferred() {
   return { promise, release };
 }
 
-function createBook(index) {
+function createBook(index, overrides = {}) {
   const bookNumber = String(index + 1).padStart(3, "0");
   return {
     id: `book-${bookNumber}`,
@@ -45,6 +45,9 @@ function createBook(index) {
     primary_source: {
       display_path: `source/${bookNumber}`,
     },
+    is_in_my_books: false,
+    my_books_added_at: null,
+    ...overrides,
   };
 }
 
@@ -61,19 +64,63 @@ async function mockAuthenticatedSession(page) {
   });
 }
 
-async function mockCatalogBooksApi(page, total = 75) {
-  const books = Array.from({ length: total }, (_, index) => createBook(index));
+async function mockCatalogBooksApi(page, total = 75, options = {}) {
+  const ownedBookIndexes = new Set(options.ownedBookIndexes || []);
+  const books = Array.from({ length: total }, (_, index) =>
+    createBook(index, {
+      is_in_my_books: ownedBookIndexes.has(index),
+      my_books_added_at: ownedBookIndexes.has(index)
+        ? "2026-04-20T08:00:00Z"
+        : null,
+    }),
+  );
   const pageTwoRequest = createDeferred();
   const requestLog = [];
 
   await page.route("**/api/catalog/books/**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/my-books/")) {
+      if (options.myBooksActionDelay) {
+        await options.myBooksActionDelay.promise;
+      }
+      const slug = decodeURIComponent(
+        url.pathname.split("/").filter(Boolean).at(-2) || "",
+      );
+      const book = books.find((candidate) => candidate.slug === slug);
+      if (!book) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Not found." }),
+        });
+        return;
+      }
+      if (route.request().method() === "DELETE") {
+        book.is_in_my_books = false;
+        book.my_books_added_at = null;
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      book.is_in_my_books = true;
+      book.my_books_added_at = "2026-04-21T08:00:00Z";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(book),
+      });
+      return;
+    }
+
     const currentPage = Number(url.searchParams.get("page") || "1");
     const limit = Number(url.searchParams.get("limit") || "60");
     const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
+    const scopedBooks =
+      url.searchParams.get("ownership") === "mine"
+        ? books.filter((book) => book.is_in_my_books)
+        : books;
     const filteredBooks = query
-      ? books.filter((book) => book.title.toLowerCase().includes(query))
-      : books;
+      ? scopedBooks.filter((book) => book.title.toLowerCase().includes(query))
+      : scopedBooks;
 
     requestLog.push({
       page: currentPage,
@@ -119,12 +166,94 @@ async function mockCatalogBooksApi(page, total = 75) {
   };
 }
 
+test("Books table My Books action shows an immediate centered loader", async ({
+  page,
+}) => {
+  await mockAuthenticatedSession(page);
+  const actionDelay = createDeferred();
+  await mockCatalogBooksApi(page, 3, { myBooksActionDelay: actionDelay });
+
+  await page.goto("/library");
+  const addButton = page.getByRole("button", {
+    name: "Add Catalog Book 001 to My Books",
+  });
+  await expect(addButton).toBeVisible();
+
+  await addButton.click();
+  await expect(addButton).toBeDisabled();
+  await expect(addButton).toHaveAttribute("aria-busy", "true");
+  await expect(addButton).toHaveText("Adding...");
+  await expect(addButton.locator(".button-label-spinner-slot")).toHaveCount(2);
+  const labelColumns = await addButton
+    .locator(".button-label--stable")
+    .evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" "));
+  expect(labelColumns[0]).toBe(labelColumns[2]);
+
+  actionDelay.release();
+  const removeButton = page.getByRole("button", {
+    name: "Remove Catalog Book 001 from My Books",
+  });
+  await expect(removeButton).toBeEnabled();
+  const removeCentering = await removeButton.evaluate((button) => {
+    const buttonBox = button.getBoundingClientRect();
+    const labelBox = button
+      .querySelector(".button-label-text")
+      .getBoundingClientRect();
+    return {
+      buttonCenter: buttonBox.left + buttonBox.width / 2,
+      labelCenter: labelBox.left + labelBox.width / 2,
+    };
+  });
+  expect(Math.abs(removeCentering.buttonCenter - removeCentering.labelCenter)).toBeLessThan(1);
+});
+
+test("My Books cards expose a compact non-red remove action", async ({
+  page,
+}) => {
+  await mockAuthenticatedSession(page);
+  await mockCatalogBooksApi(page, 3, { ownedBookIndexes: [0] });
+
+  await page.goto("/created-books");
+  await expect(page.getByRole("heading", { name: "My Books" })).toBeVisible();
+  const removeButton = page.getByRole("button", {
+    name: "Remove Catalog Book 001 from My Books",
+  });
+  await expect(removeButton).toBeVisible();
+
+  const buttonStyles = await removeButton.evaluate((node) => {
+    const styles = getComputedStyle(node);
+    return {
+      position: styles.position,
+      top: styles.top,
+      right: styles.right,
+      backgroundColor: styles.backgroundColor,
+      width: styles.width,
+      height: styles.height,
+    };
+  });
+  expect(buttonStyles.position).toBe("absolute");
+  expect(buttonStyles.top).not.toBe("auto");
+  expect(buttonStyles.right).not.toBe("auto");
+  expect(buttonStyles.backgroundColor).not.toBe("rgb(220, 38, 38)");
+  expect(Number.parseFloat(buttonStyles.width)).toBeGreaterThanOrEqual(38);
+  expect(Number.parseFloat(buttonStyles.height)).toBeGreaterThanOrEqual(38);
+});
+
 for (const pageVariant of pageVariants) {
   test(`${pageVariant.heading} uses shared inline controls and incremental loading`, async ({
     page,
   }) => {
     await mockAuthenticatedSession(page);
-    const { releasePageTwo, requestLog } = await mockCatalogBooksApi(page);
+    const { releasePageTwo, requestLog } = await mockCatalogBooksApi(
+      page,
+      75,
+      {
+        ownedBookIndexes:
+          pageVariant.path === "/created-books"
+            ? Array.from({ length: 75 }, (_, index) => index)
+            : [],
+      },
+    );
 
     await page.goto(pageVariant.path);
     await expect(

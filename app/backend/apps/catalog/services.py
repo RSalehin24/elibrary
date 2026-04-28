@@ -13,11 +13,11 @@ from apps.catalog.models import (
     WRITER_ENTITY_TAG,
     Series,
 )
-from apps.common.text import clean_display_text, normalize_catalog_text
+from apps.common.text import clean_entity_display_text, normalize_catalog_text
 
 
 def canonical_display_name(value):
-    return clean_display_text(value).strip(" -:ঃ–—|/")
+    return clean_entity_display_text(value)
 
 
 def canonical_contributor_role(role):

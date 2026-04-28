@@ -13,6 +13,7 @@ import {
   librarySortOptions,
   libraryToolbarFields,
 } from "../features/library/libraryFilters";
+import { useMyBooksAction } from "../features/library/useMyBooksAction";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -53,11 +54,13 @@ export default function LibraryPage() {
     loadingMore,
     refreshing,
     error,
+    updateEntry,
     tableShellRef,
     observeLoadTrigger,
   } = useInfiniteCatalogBooks({
     filters: appliedFilters,
   });
+  const myBooksAction = useMyBooksAction({ toast, updateEntry });
 
   async function loadSavedFilters() {
     if (!authenticated) {
@@ -167,6 +170,7 @@ export default function LibraryPage() {
   }
 
   async function runDownload(mode) {
+    setDownloadState(mode);
     try {
       const exportItems = await loadLibraryBooksForExport(appliedFilters);
       const blocked = getExportBlockState({
@@ -188,7 +192,6 @@ export default function LibraryPage() {
         filename: "catalog-books.csv",
       });
       pendingExportRef.current = exportRequest;
-      setDownloadState(mode);
       const startedAt = Date.now();
       await waitForExportUi();
 
@@ -280,6 +283,9 @@ export default function LibraryPage() {
           initialLoading={initialLoading}
           loadingMore={loadingMore}
           refreshing={refreshing}
+          showMyBooksAction
+          onMyBooksToggle={myBooksAction.toggleMyBooks}
+          myBooksBusyIds={myBooksAction.busyIds}
         />
       )}
     </div>

@@ -82,8 +82,7 @@ export default function PropertyTable({
   tableClassName = "",
 }) {
   const showInitialSkeleton = (initialLoading || refreshing) && !items.length;
-  const showIncrementalSkeleton =
-    (loadingMore || refreshing) && items.length > 0;
+  const showIncrementalSkeleton = loadingMore && items.length > 0;
   const tableClasses = [
     "catalog-table",
     "property-table",
@@ -100,6 +99,11 @@ export default function PropertyTable({
       aria-busy={initialLoading || loadingMore || refreshing}
     >
       <table className={tableClasses}>
+        <colgroup>
+          {columnKinds.map((kind, index) => (
+            <col key={`${kind}-${index}`} className={`property-table-col-${kind}`} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
             {headers.map((header) => (

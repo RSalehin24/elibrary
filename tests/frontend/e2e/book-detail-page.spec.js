@@ -42,6 +42,9 @@ test.describe("Book Detail Page", () => {
     await expect(
       page.getByRole("heading", { name: "Table of Contents", exact: true }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Entities and Details", exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("Chapter 1", { exact: true })).toBeVisible();
   });
 

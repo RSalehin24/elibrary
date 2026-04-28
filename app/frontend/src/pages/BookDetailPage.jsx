@@ -144,12 +144,12 @@ export default function BookDetailPage() {
         <section className="detail-card">
           <div className="section-title-block">
             <p className="eyebrow">Extracted</p>
-            <h2>Book Details</h2>
+            <h2>Entities and Details</h2>
           </div>
-          {detail.frontMatter.length ? (
+          {detail.extractedEntries.length ? (
             <div className="metadata-list">
-              {detail.frontMatter.map((entry) => (
-                <div key={`${entry.key}-${entry.value}`} className="metadata-row">
+              {detail.extractedEntries.map((entry, index) => (
+                <div key={`${entry.key}-${entry.value}-${index}`} className="metadata-row">
                   <span className="fact-label">{entry.label}</span>
                   <strong className="metadata-value">{entry.value}</strong>
                 </div>

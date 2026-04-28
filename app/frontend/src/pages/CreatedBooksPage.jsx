@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { removeBookFromMyBooks } from "../api/catalog";
 import BookCardGrid from "../components/BookCardGrid";
 import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
+import { useAsyncAction } from "../hooks/useAsyncAction";
+import { useToast } from "../hooks/useToast";
 import {
   cleanQueryParams,
   filtersFromSearchParams,
@@ -72,6 +75,7 @@ const createdBookSortOptions =
   createdBookFilterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function CreatedBooksPage() {
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
     () => filtersFromSearchParams(defaultFilters, searchParams),
@@ -87,10 +91,12 @@ export default function CreatedBooksPage() {
     loadingMore,
     refreshing,
     error,
+    removeEntry,
     observeLoadTrigger,
   } = useInfiniteCatalogBooks({
     filters: appliedFilters,
   });
+  const removeAction = useAsyncAction();
 
   useEffect(() => {
     setFilters(appliedFilters);
@@ -110,6 +116,14 @@ export default function CreatedBooksPage() {
   function clearSearch(nextFilters) {
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
+  }
+
+  async function removeFromMyBooks(book) {
+    await removeAction.run(book.id, async () => {
+      await removeBookFromMyBooks(book.slug);
+      removeEntry(book.id);
+      toast.success("Removed from My Books.");
+    }).catch((nextError) => toast.error(nextError.message));
   }
 
   const resultCount = error && !books.length ? "" : `${totalCount}`;
@@ -163,6 +177,8 @@ export default function CreatedBooksPage() {
           initialLoading={initialLoading}
           loadingMore={loadingMore}
           refreshing={refreshing}
+          onRemoveFromMyBooks={removeFromMyBooks}
+          removingBookIds={{ [removeAction.pendingKey]: true }}
         />
       ) : (
         <EmptyState

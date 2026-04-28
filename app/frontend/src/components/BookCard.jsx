@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { Link } from "react-router-dom";
 import BookRouteLink from "./BookRouteLink";
 import BookCoverArt from "./BookCoverArt";
+import LoadingSpinner from "./LoadingSpinner";
 import {
   formatBookDate,
   getWriterColumnGroups
@@ -23,14 +24,47 @@ function renderFilterLinks(values, queryKey, emptyLabel) {
   ));
 }
 
-export default function BookCard({ book, cardRef = undefined }) {
+function RemoveIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <path
+        d="M5.25 5.25l9.5 9.5M14.75 5.25l-9.5 9.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export default function BookCard({
+  book,
+  cardRef = undefined,
+  onRemoveFromMyBooks = null,
+  removing = false,
+}) {
   const contributorGroups = getWriterColumnGroups(book);
   const series = book.series || [];
   const categories = book.categories || [];
   const bookIdLabel = book.catalog_code || "Pending";
+  const addedAt = book.my_books_added_at || book.latest_submission_at;
 
   return (
     <article className="book-card" ref={cardRef}>
+      {onRemoveFromMyBooks ? (
+        <button
+          type="button"
+          className="book-card-remove-button"
+          onClick={() => onRemoveFromMyBooks(book)}
+          disabled={removing}
+          aria-busy={removing ? "true" : undefined}
+          aria-label={`Remove ${book.title} from My Books`}
+          title="Remove from My Books"
+        >
+          {removing ? <LoadingSpinner size={16} /> : <RemoveIcon />}
+        </button>
+      ) : null}
       <div className="book-card-art">
         <BookCoverArt book={book} className="book-card-cover" ariaHidden />
       </div>
@@ -70,7 +104,7 @@ export default function BookCard({ book, cardRef = undefined }) {
         <div className="book-card-footer">
           <div className="book-meta-stack">
             <p className="book-timestamp">{book.record_type === "manual" ? "Manual entry" : "Library record"}</p>
-            {book.latest_submission_at ? <p className="book-timestamp">Added on {formatBookDate(book.latest_submission_at)}</p> : null}
+            {addedAt ? <p className="book-timestamp">Added on {formatBookDate(addedAt)}</p> : null}
           </div>
           <BookRouteLink
             slug={book.slug}

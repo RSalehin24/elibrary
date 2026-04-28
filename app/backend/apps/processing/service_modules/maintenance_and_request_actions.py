@@ -89,17 +89,75 @@ def mark_stale_processing_requests():
             BookCreationRequestState.QUEUED,
         )
         recovered_request.error_message = ""
-        recovered_request.save(update_fields=["error_message", "updated_at"])
+        recovered_request.is_resumed = True
+        recovered_request.save(update_fields=["error_message", "is_resumed", "updated_at"])
         recovered.append(recovered_request)
         queue_processing_request(processing_request)
     return recovered
 
 
+def recover_stale_sync_states():
+    cutoff = timezone.now() - PROCESSING_STALE_AFTER
+    states = list(
+        ProcessingSyncState.objects.filter(
+            status__in=SYNC_ACTIVE_STATUSES,
+            updated_at__lt=cutoff,
+        ).order_by("singleton_key")
+    )
+    recovered = []
+    for state in states:
+        run_mode = sync_run_mode(state)
+        if state.status == ProcessingSyncStatus.PAUSING:
+            if state.singleton_key == PROCESSING_SYNC_KEY_CATALOG and sync_phase(state) == CATALOG_REQUEST_CREATION_PHASE:
+                state.progress = build_catalog_request_creation_progress(
+                    state,
+                    request_creation=catalog_request_creation_progress(state) or initial_catalog_request_creation_progress(state),
+                    run_mode=run_mode,
+                    trigger_source=sync_trigger_source(state),
+                    request_creation_phase_status=CATALOG_PHASE_STATUS_PAUSED,
+                    sync_phase_state=catalog_phase_state(state, CATALOG_SYNC_PHASE),
+                )
+            elif state.singleton_key == PROCESSING_SYNC_KEY_CATALOG:
+                state.progress = build_catalog_sync_progress(
+                    state,
+                    run_mode,
+                    next_page_index=state.page_index,
+                    fetched_count=state.fetched_count,
+                    saved_at=timezone.now().isoformat(),
+                    live_fetch=sync_uses_live_fetch(state),
+                    trigger_source=sync_trigger_source(state),
+                    sync_phase_status=CATALOG_PHASE_STATUS_PAUSED,
+                    request_creation_phase_state=catalog_phase_state(state, CATALOG_REQUEST_CREATION_PHASE),
+                )
+            else:
+                state.progress = build_sync_progress(
+                    run_mode,
+                    next_page_index=state.page_index,
+                    fetched_count=state.fetched_count,
+                    saved_at=timezone.now().isoformat(),
+                    live_fetch=sync_uses_live_fetch(state),
+                    trigger_source=sync_trigger_source(state),
+                )
+            state.status = ProcessingSyncStatus.PAUSED
+            state.message = f"{sync_run_label(run_mode)} progress saved after interruption."
+        else:
+            state.message = f"Recovering interrupted {sync_run_label(run_mode).lower()}."
+        state.task_id = ""
+        state.queue_name = ""
+        save_sync_state(state, update_fields=["status", "progress", "task_id", "queue_name", "message", "updated_at"])
+        if state.status == ProcessingSyncStatus.SYNCING and should_enqueue_processing_sync_work():
+            dispatch_sync_task(state, force=True)
+        recovered.append(state)
+    return recovered
+
+
 def run_processing_maintenance():
     recovered = mark_stale_processing_requests()
+    recovered_sync = recover_stale_sync_states()
     repaired = repair_self_linked_duplicate_requests()
     return {
         "recoveredCount": len(recovered),
+        "syncRecoveredCount": len(recovered_sync),
         "repairedCount": len(repaired),
     }
 

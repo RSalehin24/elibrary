@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import AsyncButton from "../../../components/AsyncButton";
 import LoadingSpinner from "../../../components/LoadingSpinner";
 import {
   CATALOG_PHASE_STATUS_NOT_STARTED,
@@ -261,9 +262,9 @@ export function AutomationPanel({
           </span>
         </label>
         <div className="processing-automation-save-slot">
-          <button type="button" className="primary-button" disabled={controlsDisabled} onClick={() => onSave(form)} data-testid={`${pageId}-automation-save-btn`}>
+          <AsyncButton type="button" className="primary-button" disabled={controlsDisabled} loading={saving} loadingLabel="Saving" onClick={() => onSave(form)} data-testid={`${pageId}-automation-save-btn`}>
             Save
-          </button>
+          </AsyncButton>
         </div>
       </div>
       {showFooter ? <div className="processing-card-footer">

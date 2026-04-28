@@ -1,4 +1,4 @@
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Subquery
 from django.http import Http404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.access.models import PermissionScope
-from apps.catalog.models import Book, MetadataReview, MetadataVersion
+from apps.catalog.models import Book, MetadataReview, MetadataVersion, UserBook
 from apps.catalog.serializers import BookDetailSerializer, BookMetadataUpdateSerializer, MetadataReviewDecisionSerializer, MetadataReviewSerializer
 from apps.common.models import LifecycleState
 from apps.common.permissions import CanEditMetadata, user_has_scope
@@ -21,8 +21,9 @@ class BookDetailView(generics.RetrieveDestroyAPIView):
     lookup_field = "slug"
 
     def get_queryset(self):
-        owned_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=self.request.user)
-        return Book.objects.prefetch_related("book_contributors__contributor", "book_series__series", "book_categories__category", "generated_assets", "source_urls", "processing_jobs").annotate(user_owns_book=Exists(owned_submission)).filter(deleted_at__isnull=True)
+        owned = UserBook.objects.filter(book=OuterRef("pk"), user=self.request.user).order_by("-created_at")
+        latest_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=self.request.user).order_by("-created_at").values("created_at")[:1]
+        return Book.objects.prefetch_related("book_contributors__contributor", "book_series__series", "book_categories__category", "generated_assets", "source_urls", "processing_jobs").annotate(is_in_my_books=Exists(owned), user_owns_book=Exists(owned), my_books_added_at=Subquery(owned.values("created_at")[:1]), latest_submission_at=Subquery(latest_submission)).filter(deleted_at__isnull=True)
 
     def get_object(self):
         queryset = self.get_queryset()

@@ -1,6 +1,7 @@
 import { useBookAssetActions } from "./useBookAssetActions";
 import { useBookLifecycleActions } from "./useBookLifecycleActions";
 import { useBookMetadataActions } from "./useBookMetadataActions";
+import { useBookOwnershipActions } from "./useBookOwnershipActions";
 import { useBookReaderAction } from "./useBookReaderAction";
 
 export function useBookDetailActions({
@@ -25,6 +26,12 @@ export function useBookDetailActions({
   user
 }) {
   const readerActions = useBookReaderAction({ navigate, slug, toast });
+  const ownershipActions = useBookOwnershipActions({
+    book,
+    setBook,
+    slug,
+    toast
+  });
   const lifecycleActions = useBookLifecycleActions({
     book,
     currentDetailPath,
@@ -63,6 +70,7 @@ export function useBookDetailActions({
     ...assetActions,
     ...lifecycleActions,
     ...metadataActions,
+    ...ownershipActions,
     ...readerActions
   };
 }

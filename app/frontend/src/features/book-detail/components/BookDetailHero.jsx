@@ -1,3 +1,4 @@
+import AsyncButton from "../../../components/AsyncButton";
 import BookCoverArt from "../../../components/BookCoverArt";
 import LoadingSpinner from "../../../components/LoadingSpinner";
 import StatusPill from "../../../components/StatusPill";
@@ -148,31 +149,41 @@ export default function BookDetailHero({
         ) : null}
 
         <div className="book-hero-actions">
-          <button
+          <AsyncButton
+            data-testid="book-my-books-button"
+            className={
+              book.is_in_my_books
+                ? "ghost-button book-my-books-button is-in-my-books"
+                : "primary-button book-my-books-button"
+            }
+            onClick={actions.toggleMyBooks}
+            loading={actions.togglingMyBooks}
+            loadingLabel={book.is_in_my_books ? "Removing..." : "Adding..."}
+          >
+            {book.is_in_my_books ? "Remove from My Books" : "Add to My Books"}
+          </AsyncButton>
+          <AsyncButton
             type="button"
             data-testid="book-open-reader-button"
             className="primary-button"
             onClick={actions.launchReader}
-            disabled={launchingReader}
+            loading={launchingReader}
+            loadingLabel="Opening..."
           >
-            <span className="button-label">
-              {launchingReader ? <LoadingSpinner size={16} /> : null}
-              {launchingReader ? "Opening..." : "Open reader"}
-            </span>
-          </button>
+            Open reader
+          </AsyncButton>
           {detail.epubAsset ? (
-            <button
+            <AsyncButton
               type="button"
               data-testid="book-send-to-kindle-button"
               className="ghost-button"
               onClick={actions.sendToKindle}
               disabled={sendingToKindle || detail.hasActiveProcessing}
+              loading={sendingToKindle}
+              loadingLabel="Sending..."
             >
-              <span className="button-label">
-                {sendingToKindle ? <LoadingSpinner size={16} /> : null}
-                {sendingToKindle ? "Sending..." : "Send to Kindle"}
-              </span>
-            </button>
+              Send to Kindle
+            </AsyncButton>
           ) : null}
           {detail.downloadableAssets.map((asset) => {
             const isDownloading = Boolean(assetLoadingCounts[asset.id]);
@@ -180,24 +191,21 @@ export default function BookDetailHero({
               asset.asset_type === "html" &&
               Boolean(htmlPreviewLockedByAssetId[asset.id]);
             return (
-              <button
+              <AsyncButton
                 key={asset.id}
                 type="button"
                 data-testid={`book-asset-${asset.asset_type}`}
                 className="ghost-button asset-link"
                 onClick={() => actions.downloadAsset(asset)}
                 disabled={isDownloading || isHtmlPreviewLocked}
+                loading={isDownloading}
+                loadingLabel="Preparing..."
               >
-                <span className="button-label">
-                  {isDownloading ? <LoadingSpinner size={16} /> : null}
-                  {isDownloading
-                    ? "Preparing..."
-                    : isHtmlPreviewLocked
-                      ? "Preview Open"
-                      : assetLabels[asset.asset_type] ||
-                        `Download ${asset.asset_type.toUpperCase()}`}
-                </span>
-              </button>
+                {isHtmlPreviewLocked
+                  ? "Preview Open"
+                  : assetLabels[asset.asset_type] ||
+                    `Download ${asset.asset_type.toUpperCase()}`}
+              </AsyncButton>
             );
           })}
           {canEditMetadata ? (
@@ -209,7 +217,7 @@ export default function BookDetailHero({
                 hidden
                 onChange={actions.replaceEpub}
               />
-              <button
+              <AsyncButton
                 type="button"
                 data-testid="book-replace-epub-button"
                 className="ghost-button"
@@ -220,20 +228,11 @@ export default function BookDetailHero({
                   regenerating ||
                   detail.hasActiveProcessing
                 }
+                loading={pickingEpub || replacingEpub}
+                loadingLabel={pickingEpub ? "Selecting..." : "Uploading..."}
               >
-                <span className="button-label">
-                  {pickingEpub || replacingEpub ? (
-                    <LoadingSpinner size={16} />
-                  ) : null}
-                  {pickingEpub
-                    ? "Selecting..."
-                    : replacingEpub
-                      ? "Uploading..."
-                      : detail.epubAsset
-                        ? "Replace EPUB"
-                        : "Upload EPUB"}
-                </span>
-              </button>
+                {detail.epubAsset ? "Replace EPUB" : "Upload EPUB"}
+              </AsyncButton>
             </>
           ) : null}
         </div>

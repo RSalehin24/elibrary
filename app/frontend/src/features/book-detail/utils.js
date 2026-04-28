@@ -1,5 +1,6 @@
 import {
   getContributorGroups,
+  getContributorRoleLabel,
   getPrimaryContributorGroup,
 } from "../../utils/bookPresentation";
 
@@ -75,6 +76,78 @@ export function normalizeFrontMatterEntries(entries, bookIdValue) {
   }, []);
 }
 
+function appendExtractedEntry(entries, seen, entry) {
+  const value = String(entry.value || "").trim();
+  if (!value) {
+    return;
+  }
+  const label = String(entry.label || entry.key || "Detail").trim();
+  const dedupeKey = `${normalizeIdentityLabel(label)}::${normalizeIdentityLabel(value)}`;
+  if (seen.has(dedupeKey)) {
+    return;
+  }
+  seen.add(dedupeKey);
+  entries.push({
+    ...entry,
+    label,
+    value,
+  });
+}
+
+function extractedContributorLabel(role) {
+  if (role === "author") {
+    return "Author";
+  }
+  return getContributorRoleLabel(role) || "Contributor";
+}
+
+export function buildExtractedDetailEntries(book, frontMatter) {
+  if (!book) {
+    return [];
+  }
+
+  const entries = [];
+  const seen = new Set();
+
+  getContributorGroups(book).forEach((group) => {
+    group.names.forEach((name) => {
+      appendExtractedEntry(entries, seen, {
+        key: `contributor_${group.role}`,
+        label: extractedContributorLabel(group.role),
+        value: name,
+        source: "contributor",
+      });
+    });
+  });
+
+  (book.series || []).forEach((name) => {
+    appendExtractedEntry(entries, seen, {
+      key: "series",
+      label: "Series",
+      value: name,
+      source: "series",
+    });
+  });
+
+  (book.categories || []).forEach((name) => {
+    appendExtractedEntry(entries, seen, {
+      key: "category",
+      label: "Category",
+      value: name,
+      source: "category",
+    });
+  });
+
+  (frontMatter || []).forEach((entry) => {
+    appendExtractedEntry(entries, seen, {
+      ...entry,
+      source: "front_matter",
+    });
+  });
+
+  return entries;
+}
+
 export function waitForUiFrame() {
   return new Promise((resolve) => {
     window.requestAnimationFrame(() => {
@@ -118,6 +191,7 @@ export function buildBookDetailView(book, readerState) {
       bookIdValue: "Pending",
       downloadableAssets: [],
       epubAsset: null,
+      extractedEntries: [],
       frontMatter: [],
       hasActiveProcessing: false,
       hasDedication: false,
@@ -144,8 +218,9 @@ export function buildBookDetailView(book, readerState) {
     book.front_matter || [],
     bookIdValue,
   );
+  const extractedEntries = buildExtractedDetailEntries(book, frontMatter);
   const hasFrontMatter = Boolean(
-    frontMatter.length || book.book_info_html?.trim(),
+    extractedEntries.length || book.book_info_html?.trim(),
   );
   const hasDedication = Boolean(book.dedication_html?.trim());
   const hasToc = Boolean(book.toc?.length);
@@ -179,6 +254,7 @@ export function buildBookDetailView(book, readerState) {
     bookIdValue,
     downloadableAssets,
     epubAsset,
+    extractedEntries,
     frontMatter,
     hasActiveProcessing,
     hasDedication,

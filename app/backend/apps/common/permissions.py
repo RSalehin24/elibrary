@@ -42,7 +42,7 @@ def user_owns_book(user, book):
     owned_flag = getattr(book, "user_owns_book", None)
     if owned_flag is not None:
         return bool(owned_flag)
-    return book.linked_submissions.filter(submitter=user).exists()
+    return book.user_books.filter(user=user).exists()
 
 
 def user_can_download_book_assets(user, book):

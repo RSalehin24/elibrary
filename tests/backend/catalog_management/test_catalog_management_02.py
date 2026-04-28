@@ -5,6 +5,7 @@ _MODULE_DIR = _Path(__file__).with_name("test_catalog_management_02_cases")
 _MODULE_FILES = (
     "catalog_references_and_manual_books.py",
     "exports_and_contributor_filters.py",
+    "my_books.py",
 
 )
 

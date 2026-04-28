@@ -128,16 +128,31 @@
 }
 
 .button-label--stable {
-  gap: 6px;
+  display: inline-grid;
+  grid-template-columns:
+    var(--button-spinner-slot-size, 16px)
+    minmax(0, 1fr)
+    var(--button-spinner-slot-size, 16px);
+  align-items: center;
+  justify-content: center;
+  column-gap: 6px;
+  width: 100%;
+  min-width: 0;
 }
 
 .button-label-spinner-slot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
+  width: var(--button-spinner-slot-size, 16px);
+  height: var(--button-spinner-slot-size, 16px);
+  flex: 0 0 var(--button-spinner-slot-size, 16px);
+}
+
+.button-label-text {
+  min-width: 0;
+  justify-self: center;
+  text-align: center;
 }
 
 .button-label-spinner-slot .loading-spinner {

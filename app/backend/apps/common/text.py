@@ -8,6 +8,38 @@ def clean_display_text(value):
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+TRAILING_ENTITY_CLOSERS = {
+    ")": "(",
+    "]": "[",
+    "}": "{",
+}
+ENTITY_EDGE_PUNCTUATION = " \t\r\n-:ঃ–—|/"
+
+
+def clean_entity_display_text(value):
+    cleaned = clean_display_text(value).strip(ENTITY_EDGE_PUNCTUATION)
+    if not cleaned:
+        return ""
+
+    while cleaned and cleaned[-1] in TRAILING_ENTITY_CLOSERS:
+        opener = TRAILING_ENTITY_CLOSERS[cleaned[-1]]
+        if cleaned.count(cleaned[-1]) <= cleaned.count(opener):
+            break
+        cleaned = clean_display_text(cleaned[:-1]).strip(ENTITY_EDGE_PUNCTUATION)
+
+    while cleaned and cleaned[0] in set(TRAILING_ENTITY_CLOSERS.values()):
+        closer = next(
+            close_char
+            for close_char, open_char in TRAILING_ENTITY_CLOSERS.items()
+            if open_char == cleaned[0]
+        )
+        if cleaned.count(cleaned[0]) <= cleaned.count(closer):
+            break
+        cleaned = clean_display_text(cleaned[1:]).strip(ENTITY_EDGE_PUNCTUATION)
+
+    return cleaned if normalize_catalog_text(cleaned) else ""
+
+
 def _is_textual_slug_character(char):
     category = unicodedata.category(char)
     return category.startswith(("L", "N", "M"))

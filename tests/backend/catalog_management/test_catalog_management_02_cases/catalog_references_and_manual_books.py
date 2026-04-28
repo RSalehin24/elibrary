@@ -77,6 +77,15 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
         series_names=[series.name],
         category_names=[category.name],
     )
+    Contributor.objects.filter(pk=translator.pk).update(name="তালিকা অনুবাদক)")
+    translator.name = "তালিকা অনুবাদক)"
+    invalid_translator = Contributor.objects.create(name="and elaborate purports")
+    BookContributor.objects.create(
+        book=book,
+        contributor=invalid_translator,
+        role="translator",
+        sort_order=99,
+    )
     client.force_login(user)
 
     category_response = client.get("/api/catalog/categories/")
@@ -101,7 +110,11 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
     assert writer_response.json()[0]["catalog_code"] == writer.catalog_code
     assert writer_response.json()[0]["book_count"] == 1
     assert translator_response.json()[0]["catalog_code"] == translator.catalog_code
+    assert translator_response.json()[0]["name"] == "তালিকা অনুবাদক"
     assert translator_response.json()[0]["book_count"] == 1
+    assert "and elaborate purports" not in {
+        entry["name"] for entry in translator_response.json()
+    }
     assert compiler_response.json()[0]["catalog_code"] == compiler.catalog_code
     assert compiler_response.json()[0]["book_count"] == 1
     assert {entry["catalog_code"] for entry in editor_response.json()} == {

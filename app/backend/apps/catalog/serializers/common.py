@@ -3,6 +3,7 @@ from pathlib import Path
 from rest_framework import serializers
 
 from apps.catalog.models import ContributorRole, GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType
+from apps.common.text import clean_entity_display_text, normalize_catalog_text
 from apps.common.permissions import user_can_download_book_assets, user_can_view_book_cover
 from apps.common.url_utils import public_api_url
 
@@ -30,10 +31,10 @@ def normalize_name_list(values):
     seen = set()
     normalized_values = []
     for raw_value in values or []:
-        value = (raw_value or "").strip()
+        value = clean_entity_display_text(raw_value)
         if not value:
             continue
-        normalized_key = value.casefold()
+        normalized_key = normalize_catalog_text(value)
         if normalized_key in seen:
             continue
         seen.add(normalized_key)

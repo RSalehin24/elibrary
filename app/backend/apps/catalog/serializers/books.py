@@ -28,6 +28,8 @@ class BookListSerializer(serializers.ModelSerializer):
     categories = serializers.SerializerMethodField()
     cover_download_url = serializers.SerializerMethodField()
     latest_submission_at = serializers.SerializerMethodField()
+    is_in_my_books = serializers.SerializerMethodField()
+    my_books_added_at = serializers.SerializerMethodField()
     primary_source = serializers.SerializerMethodField()
     binding = serializers.SerializerMethodField()
     publisher = serializers.CharField(source="manual_publisher", read_only=True)
@@ -57,6 +59,8 @@ class BookListSerializer(serializers.ModelSerializer):
             "is_compilation",
             "cover_download_url",
             "latest_submission_at",
+            "is_in_my_books",
+            "my_books_added_at",
             "primary_source",
             "created_at",
         ]
@@ -113,6 +117,12 @@ class BookListSerializer(serializers.ModelSerializer):
 
     def get_latest_submission_at(self, obj):
         return getattr(obj, "latest_submission_at", None)
+
+    def get_is_in_my_books(self, obj):
+        return bool(getattr(obj, "is_in_my_books", False))
+
+    def get_my_books_added_at(self, obj):
+        return getattr(obj, "my_books_added_at", None)
 
     def serialize_source_record(self, source):
         url = source.normalized_source_url or source.source_url

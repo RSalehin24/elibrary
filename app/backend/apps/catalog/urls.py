@@ -6,6 +6,7 @@ from apps.catalog.views import (
     BookExportView,
     BookListView,
     BookMetadataUpdateView,
+    BookMyBooksView,
     BookRegenerateView,
     BookTicketExportView,
     CategoryListView,
@@ -44,6 +45,11 @@ urlpatterns = [
         "books/<path:slug>/regenerate/",
         BookRegenerateView.as_view(),
         name="catalog-book-regenerate",
+    ),
+    path(
+        "books/<path:slug>/my-books/",
+        BookMyBooksView.as_view(),
+        name="catalog-book-my-books",
     ),
     path(
         "books/<path:slug>/metadata-versions/",

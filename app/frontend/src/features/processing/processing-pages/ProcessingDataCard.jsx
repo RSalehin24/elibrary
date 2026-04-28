@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import AsyncButton from "../../../components/AsyncButton";
 import LoadingSpinner from "../../../components/LoadingSpinner";
 import { ProcessingCountSkeleton } from "../../../components/ProcessingCardSkeleton";
 import { countActiveFilters, renderField } from "../../../components/catalog-toolbar/fields.jsx";
@@ -135,10 +136,10 @@ export function ProcessingDataCard({
     }));
   }
   const bulkActions = actions.length ? <div className="processing-bulk-actions">
-      {actions.map(action => <button key={action.id} type="button" className={action.danger ? "ghost-button danger-button" : "primary-button"} disabled={busy || initialLoading || selectedRows.length === 0} onClick={() => runAction(action)} data-testid={`${pageId}-${cardId}-${action.id}-btn`}>
+      {actions.map(action => <AsyncButton key={action.id} type="button" className={action.danger ? "ghost-button danger-button" : "primary-button"} disabled={initialLoading || selectedRows.length === 0} loading={busy} loadingLabel="Working" onClick={() => runAction(action)} data-testid={`${pageId}-${cardId}-${action.id}-btn`}>
           {action.label}
           {selectedRows.length ? ` (${selectedRows.length})` : ""}
-        </button>)}
+        </AsyncButton>)}
     </div> : null;
   const countBadge = <span className="catalog-result-count processing-card-title-count" aria-label={`${countValue} results`} data-testid={`${pageId}-${cardId}-count`}>
       {showInitialTableSkeleton && sharedCount === null ? <ProcessingCountSkeleton /> : countValue}

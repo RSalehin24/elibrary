@@ -1,3 +1,5 @@
+import AsyncButton from "./AsyncButton";
+
 export default function ConfirmationDialog({
   open,
   title,
@@ -25,9 +27,9 @@ export default function ConfirmationDialog({
           <button type="button" className="ghost-button" onClick={onCancel} disabled={loading}>
             {cancelLabel}
           </button>
-          <button type="button" className="primary-button danger-button" onClick={onConfirm} disabled={loading}>
-            {loading ? "Deleting..." : confirmLabel}
-          </button>
+          <AsyncButton className="primary-button danger-button" onClick={onConfirm} loading={loading} loadingLabel="Deleting...">
+            {confirmLabel}
+          </AsyncButton>
         </div>
       </section>
     </div>

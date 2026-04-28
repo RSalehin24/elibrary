@@ -1,7 +1,7 @@
 from django.db import models
 
 from apps.common.models import TimeStampedModel, UUIDPrimaryKeyModel
-from apps.common.text import clean_display_text, normalize_catalog_text
+from apps.common.text import clean_display_text, clean_entity_display_text, normalize_catalog_text
 
 from .catalog_codes import (
     CATEGORY_ENTITY_TAG,
@@ -31,7 +31,7 @@ class Contributor(UUIDPrimaryKeyModel, TimeStampedModel):
         return clean_display_text(previous) != self.name
 
     def save(self, *args, **kwargs):
-        self.name = clean_display_text(self.name)
+        self.name = clean_entity_display_text(self.name)
         self.normalized_name = normalize_catalog_text(self.name)
         if self._should_refresh_slug():
             self.slug = build_unique_slug(Contributor, self.name, self)
@@ -62,7 +62,7 @@ class Series(UUIDPrimaryKeyModel, TimeStampedModel):
         return clean_display_text(previous) != self.name
 
     def save(self, *args, **kwargs):
-        self.name = clean_display_text(self.name)
+        self.name = clean_entity_display_text(self.name)
         self.normalized_name = normalize_catalog_text(self.name)
         if self._should_refresh_slug():
             self.slug = build_unique_slug(Series, self.name, self)
@@ -89,7 +89,7 @@ class Category(UUIDPrimaryKeyModel, TimeStampedModel):
         return clean_display_text(previous) != self.name
 
     def save(self, *args, **kwargs):
-        self.name = clean_display_text(self.name)
+        self.name = clean_entity_display_text(self.name)
         self.normalized_name = normalize_catalog_text(self.name)
         if self._should_refresh_slug():
             self.slug = build_unique_slug(Category, self.name, self)

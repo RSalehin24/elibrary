@@ -1,4 +1,4 @@
-import LoadingSpinner from "../../components/LoadingSpinner";
+import AsyncButton from "../../components/AsyncButton";
 import TagInput from "../../components/TagInput";
 import { emptyManualBookForm } from "./manualBookFilters";
 
@@ -127,12 +127,9 @@ export function ManualBookComposer({
         </div>
 
         <div className="inline-pills manual-book-form-actions">
-          <button type="submit" className="primary-button" disabled={submitting}>
-            <span className="button-label">
-              {submitting ? <LoadingSpinner size={14} /> : null}
-              {submitting ? "Adding..." : "Add & next"}
-            </span>
-          </button>
+          <AsyncButton type="submit" className="primary-button" loading={submitting} loadingLabel="Adding..." spinnerSize={14}>
+            Add & next
+          </AsyncButton>
           <button
             type="button"
             className="ghost-button"

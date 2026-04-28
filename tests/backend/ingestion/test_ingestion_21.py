@@ -65,6 +65,32 @@ def test_translator_and_publisher_values_are_cleaned_to_names_only():
     }
 
 
+def test_lowercase_english_prose_is_not_a_translator_name():
+    normalized = normalize_scraped_book(
+        {
+            "book_title": "Bad Translator Fixture",
+            "author": "Valid Writer",
+            "series": "",
+            "book_type": "",
+            "book_info": "<p>অনুবাদ : and elaborate purports</p>",
+        }
+    )
+
+    assert contributor_pairs(normalized) == {("Valid Writer", "author")}
+
+    titlecase_prose = normalize_scraped_book(
+        {
+            "book_title": "Bad Reader Fixture",
+            "author": "Valid Writer",
+            "series": "",
+            "book_type": "",
+            "book_info": "<p>অনুবাদ : Readers Ways</p>",
+        }
+    )
+
+    assert contributor_pairs(titlecase_prose) == {("Valid Writer", "author")}
+
+
 def test_first_edition_line_is_extracted_as_book_detail():
     entries = extract_front_matter_entries("<p>প্রথম সংস্করণ: বৈশাখ ১৩৮২</p>")
 

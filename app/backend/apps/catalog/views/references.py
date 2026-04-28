@@ -1,3 +1,5 @@
+import re
+
 from django.db.models import Count, Q
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
@@ -5,6 +7,9 @@ from rest_framework.permissions import IsAuthenticated
 from apps.catalog.models import BookRecordType, Category, Contributor, ContributorRole, Series
 from apps.catalog.serializers import CategoryListSerializer, ContributorListSerializer, SeriesListSerializer
 from apps.common.text import normalize_catalog_text
+from apps.ingestion.services.normalization_support.metadata import (
+    ENGLISH_PROSE_FRAGMENT_WORDS,
+)
 
 from .shared import (
     CONTRIBUTOR_ROLES_BY_PAGE,
@@ -12,6 +17,10 @@ from .shared import (
     apply_created_at_filters,
     normalized_text_search_clause,
     requested_record_type,
+)
+
+PROSE_FRAGMENT_PATTERN = r"(^| )({})($| )".format(
+    "|".join(re.escape(word) for word in sorted(ENGLISH_PROSE_FRAGMENT_WORDS))
 )
 
 
@@ -100,8 +109,11 @@ class ContributorListView(OptionalPaginationListMixin, generics.ListAPIView):
 
     def get_queryset(self):
         roles = self.get_contributor_roles()
+        contributors = Contributor.objects.filter(book_contributions__role__in=roles)
+        if ContributorRole.PUBLISHER not in roles:
+            contributors = contributors.exclude(normalized_name__iregex=PROSE_FRAGMENT_PATTERN)
         queryset = annotate_reference_counts(
-            Contributor.objects.filter(book_contributions__role__in=roles).distinct(),
+            contributors.distinct(),
             "book_contributions__book",
             record_type=requested_record_type(self.request, BookRecordType.DIGITAL),
             contributor_roles=roles,

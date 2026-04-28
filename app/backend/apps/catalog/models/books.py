@@ -106,6 +106,18 @@ class BookCategory(UUIDPrimaryKeyModel, TimeStampedModel):
         return f"{self.book} / {self.category}"
 
 
+class UserBook(UUIDPrimaryKeyModel, TimeStampedModel):
+    user = models.ForeignKey("accounts.User", on_delete=models.CASCADE, related_name="my_books")
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="user_books")
+
+    class Meta:
+        ordering = ["-created_at"]
+        unique_together = ("user", "book")
+
+    def __str__(self):
+        return f"{self.user} / {self.book}"
+
+
 class BookSource(UUIDPrimaryKeyModel, TimeStampedModel):
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="source_urls")
     source_url = models.URLField(max_length=1000)

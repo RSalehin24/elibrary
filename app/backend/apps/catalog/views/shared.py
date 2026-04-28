@@ -4,7 +4,7 @@ from django.db.models import Exists, OuterRef, Q, Subquery
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework.response import Response
 
-from apps.catalog.models import Book, BookRecordType, ContributorRole
+from apps.catalog.models import Book, BookRecordType, ContributorRole, UserBook
 from apps.common.text import normalize_catalog_text
 from apps.ingestion.models import BookSubmission
 
@@ -126,8 +126,7 @@ def filtered_book_queryset(queryset, request, *, default_record_type):
         queryset = queryset.filter(record_type=record_type)
     ownership = request.query_params.get("ownership", "").strip()
     if ownership == "mine":
-        latest_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=request.user).order_by("-created_at").values("created_at")[:1]
-        queryset = queryset.annotate(latest_submission_at=Subquery(latest_submission)).filter(latest_submission_at__isnull=False)
+        queryset = queryset.filter(my_books_added_at__isnull=False)
 
     query = request.query_params.get("q", "").strip()
     if query:
@@ -259,8 +258,8 @@ def filtered_book_queryset(queryset, request, *, default_record_type):
     sort = request.query_params.get("sort", "-requested_at" if ownership == "mine" else "-created_at")
     sort_map = {"catalog_code": "catalog_code", "-catalog_code": "-catalog_code", "title": "title", "-title": "-title", "created_at": "created_at", "-created_at": "-created_at"}
     if ownership == "mine":
-        sort_map.update({"requested_at": "latest_submission_at", "-requested_at": "-latest_submission_at"})
-    sort_field = sort_map.get(sort, "-latest_submission_at" if ownership == "mine" else "-created_at")
+        sort_map.update({"requested_at": "my_books_added_at", "-requested_at": "-my_books_added_at"})
+    sort_field = sort_map.get(sort, "-my_books_added_at" if ownership == "mine" else "-created_at")
     return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "-created_at")
 
 
@@ -268,7 +267,8 @@ class BookQueryMixin:
     default_record_type = BookRecordType.DIGITAL
 
     def base_queryset(self):
-        owned_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=self.request.user)
+        owned = UserBook.objects.filter(book=OuterRef("pk"), user=self.request.user).order_by("-created_at")
+        latest_submission = BookSubmission.objects.filter(linked_book=OuterRef("pk"), submitter=self.request.user).order_by("-created_at").values("created_at")[:1]
         return (
             Book.objects.prefetch_related(
                 "book_contributors__contributor",
@@ -277,7 +277,7 @@ class BookQueryMixin:
                 "generated_assets",
                 "source_urls",
             )
-            .annotate(user_owns_book=Exists(owned_submission))
+            .annotate(is_in_my_books=Exists(owned), user_owns_book=Exists(owned), my_books_added_at=Subquery(owned.values("created_at")[:1]), latest_submission_at=Subquery(latest_submission))
             .defer(
                 "summary",
                 "raw_scraped_metadata",

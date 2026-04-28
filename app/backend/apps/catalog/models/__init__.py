@@ -7,6 +7,7 @@ from .books import (
     GeneratedAsset,
     MetadataReview,
     MetadataVersion,
+    UserBook,
 )
 from .catalog_codes import (
     BOOK_PAYLOAD_TAG,
@@ -56,6 +57,7 @@ __all__ = [
     "MetadataVersion",
     "Series",
     "UNKNOWN_RELATION_SEQUENCE",
+    "UserBook",
     "WRITER_ENTITY_TAG",
     "build_book_catalog_code",
     "build_category_catalog_code",

@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { Link } from "react-router-dom";
+import AsyncButton from "./AsyncButton";
 import BookRouteLink from "./BookRouteLink";
 import {
   formatBookDate,
@@ -37,7 +38,11 @@ function renderWriterCell(book, linkFilters) {
   );
 }
 
-function BookTableSkeletonRows({ count = 5, incremental = false }) {
+function BookTableSkeletonRows({
+  count = 5,
+  incremental = false,
+  showMyBooksAction = false,
+}) {
   return Array.from({ length: count }, (_, index) => (
     <tr
       key={`${incremental ? "more" : "initial"}-skeleton-${index}`}
@@ -75,6 +80,11 @@ function BookTableSkeletonRows({ count = 5, incremental = false }) {
       <td>
         <span className="skeleton-line skeleton-line-sm" />
       </td>
+      {showMyBooksAction ? (
+        <td className="table-action-cell">
+          <span className="ghost-button skeleton-button skeleton-button-sm" />
+        </td>
+      ) : null}
       <td className="table-action-cell">
         <span className="ghost-button skeleton-button skeleton-button-sm" />
       </td>
@@ -94,9 +104,13 @@ export default function BookTable({
   initialLoading = false,
   loadingMore = false,
   refreshing = false,
+  showMyBooksAction = false,
+  onMyBooksToggle = null,
+  myBooksBusyIds = {},
 }) {
   const showInitialSkeleton = (initialLoading || refreshing) && !books?.length;
-  const showIncrementalSkeleton = (loadingMore || refreshing) && books?.length > 0;
+  const showIncrementalSkeleton = loadingMore && books?.length > 0;
+  const columnCount = showMyBooksAction ? 9 : 8;
 
   return (
     <div
@@ -106,7 +120,11 @@ export default function BookTable({
       }`}
       aria-busy={initialLoading || loadingMore || refreshing}
     >
-      <table className="catalog-table book-table table-mobile-cards">
+      <table
+        className={`catalog-table book-table table-mobile-cards${
+          showMyBooksAction ? " book-table-with-my-books" : ""
+        }`}
+      >
         <colgroup>
           <col className="book-table-col-id" />
           <col className="book-table-col-title" />
@@ -115,6 +133,7 @@ export default function BookTable({
           <col className="book-table-col-series" />
           <col className="book-table-col-type" />
           <col className="book-table-col-created" />
+          {showMyBooksAction ? <col className="book-table-col-action" /> : null}
           <col className="book-table-col-action" />
         </colgroup>
         <thead>
@@ -126,16 +145,20 @@ export default function BookTable({
             <th>Series</th>
             <th>Type</th>
             <th>Created</th>
+            {showMyBooksAction ? <th>My Books</th> : null}
             <th>Action</th>
           </tr>
         </thead>
         <tbody>
           {showInitialSkeleton ? (
-            <BookTableSkeletonRows />
+            <BookTableSkeletonRows showMyBooksAction={showMyBooksAction} />
           ) : books?.length ? (
             books.map((book, rowIndex) => {
               const categories = book.categories || [];
               const series = book.series || [];
+              const myBooksBusy = Boolean(
+                myBooksBusyIds[book.id] || myBooksBusyIds[book.slug],
+              );
 
               return (
                 <tr
@@ -194,6 +217,28 @@ export default function BookTable({
                     </span>
                   </td>
                   <td data-label="Created">{formatBookDate(book.created_at)}</td>
+                  {showMyBooksAction ? (
+                    <td className="table-action-cell" data-label="My Books">
+                      <AsyncButton
+                        className={
+                          book.is_in_my_books
+                            ? "ghost-button table-row-action my-books-toggle is-in-my-books"
+                            : "primary-button table-row-action my-books-toggle"
+                        }
+                        loading={myBooksBusy}
+                        loadingLabel={book.is_in_my_books ? "Removing..." : "Adding..."}
+                        onClick={() => onMyBooksToggle?.(book)}
+                        disabled={!onMyBooksToggle}
+                        aria-label={
+                          book.is_in_my_books
+                            ? `Remove ${book.title} from My Books`
+                            : `Add ${book.title} to My Books`
+                        }
+                      >
+                        {book.is_in_my_books ? "Remove" : "Add"}
+                      </AsyncButton>
+                    </td>
+                  ) : null}
                   <td className="table-action-cell" data-label="Action">
                     <BookRouteLink
                       slug={book.slug}
@@ -207,13 +252,17 @@ export default function BookTable({
             })
           ) : (
             <tr>
-              <td colSpan={8} className="table-empty-cell">
+              <td colSpan={columnCount} className="table-empty-cell">
                 {emptyLabel}
               </td>
             </tr>
           )}
           {showIncrementalSkeleton ? (
-            <BookTableSkeletonRows count={3} incremental />
+            <BookTableSkeletonRows
+              count={3}
+              incremental
+              showMyBooksAction={showMyBooksAction}
+            />
           ) : null}
         </tbody>
       </table>

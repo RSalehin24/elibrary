@@ -21,6 +21,7 @@ _MODULE_FILES = (
     "incomplete_automation_flows.py",
     "processing_pipeline_dispatch.py",
     "checkpoint_and_dispatch_recovery.py",
+    "stale_recovery.py",
     "queue_fallback_and_reset.py",
     "maintenance_and_actions.py",
     "duplicate_resolution_actions.py",

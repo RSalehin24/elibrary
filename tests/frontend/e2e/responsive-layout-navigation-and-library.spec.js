@@ -83,6 +83,36 @@ test.describe("responsive layout navigation and library coverage", () => {
     await expectElementsNotOverlapping(page, [".brand-block", ".topnav", ".session-box"]);
     await assertNoPageOverflow(page);
   });
+  test("route changes start at the top after scrolling the previous page", async ({
+    page
+  }) => {
+    await page.setViewportSize({
+      width: 1440,
+      height: 900
+    });
+    await mockAuthenticatedSession(page, {
+      capabilities: ["processing:manage"],
+      is_superuser: true
+    });
+    await mockCatalogBooksApi(page, 96);
+    await mockAccessApi(page, 12);
+    await page.goto("/home");
+    await expect(page.getByRole("heading", {
+      name: "All Books",
+      exact: true
+    })).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(async () => page.evaluate(() => window.scrollY)).toBeGreaterThan(300);
+    await page.getByRole("link", {
+      name: "Users & Access",
+      exact: true
+    }).click();
+    await expect(page.getByRole("heading", {
+      name: "Users & Access",
+      exact: true
+    })).toBeVisible();
+    await expect.poll(async () => page.evaluate(() => window.scrollY)).toBe(0);
+  });
   test("small tablet header uses the mobile drawer", async ({
     page
   }) => {

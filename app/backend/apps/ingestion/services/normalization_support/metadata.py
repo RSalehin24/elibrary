@@ -1,7 +1,11 @@
 import re
 
 from apps.catalog.models import ContributorRole
-from apps.common.text import clean_display_text, normalize_catalog_text
+from apps.common.text import (
+    clean_display_text,
+    clean_entity_display_text,
+    normalize_catalog_text,
+)
 
 
 ROLE_PATTERNS = {
@@ -74,7 +78,7 @@ MAX_CONTRIBUTOR_NAME_WORDS = 8
 MAX_CONTRIBUTOR_NAME_LENGTH = 80
 CONTRIBUTOR_CONNECTOR_PATTERN = re.compile(r"\s+(?:ও|and|&)\s+", re.IGNORECASE)
 CONTRIBUTOR_INITIAL_TOKEN_PATTERN = re.compile(r"^(?:[A-Za-z\u0980-\u09FF]{1,4}\.)+$")
-ROLE_SEGMENT_SPLIT_PATTERN = re.compile(r"\s*(?:/|\||\n)\s*")
+ROLE_SEGMENT_SPLIT_PATTERN = re.compile(r"\s*(?:(?<!\d)/(?!\d)|\||\n)\s*")
 LEADING_CONTRIBUTOR_HELPER_PATTERN = re.compile(
     r"^(?:করেছেন|কর্তৃক|দ্বারা|by)\b\s*[:ঃ\-–—]?\s*",
     re.IGNORECASE,
@@ -135,6 +139,26 @@ NON_NAME_PHRASE_WORDS = {
     "শেষ",
     "নেই",
 }
+ENGLISH_PROSE_FRAGMENT_WORDS = {
+    "and",
+    "book",
+    "books",
+    "chapter",
+    "chapters",
+    "content",
+    "contents",
+    "elaborate",
+    "foreword",
+    "novel",
+    "novels",
+    "preface",
+    "purports",
+    "reader",
+    "readers",
+    "story",
+    "text",
+    "texts",
+}
 ADDRESS_FRAGMENT_WORDS = {
     "বাংলাদেশ",
     "ঢাকা",
@@ -144,6 +168,7 @@ ADDRESS_FRAGMENT_WORDS = {
     "সড়ক",
     "রোড",
     "road",
+    "row",
     "street",
     "avenue",
     "সেগুনবাগিচা",
@@ -174,10 +199,31 @@ LEADING_ROLE_DESCRIPTOR_PATTERN = re.compile(
 POTENTIAL_METADATA_BOUNDARY_PATTERN = re.compile(r"\s{2,}|\s+(?=[A-Za-z\u0980-\u09FF])")
 ROLE_LABEL_HELPER_PATTERN = re.compile(r"\b(?:করেছেন|কর্তৃক|দ্বারা|by)\b", re.IGNORECASE)
 PUBLISHER_STOP_PATTERN = re.compile(
-    r"(?:[।.]|;|,?\s+(?:printed at|first edition|price)\b|,?\s+(?:প্রথম প্রকাশ|প্রকাশকাল)\b)",
+    r"(?:[।.]|;|,?\s+at\s+\d|,?\s+(?:printed at|first edition|price)\b|,?\s+(?:প্রথম প্রকাশ|প্রকাশকাল)\b)",
     re.IGNORECASE,
 )
+TRAILING_ADDRESS_INTRO_PATTERN = re.compile(r"\s+(?:at|ঠিকানা)\s*$", re.IGNORECASE)
 ALLOWED_COLON_NAME_PREFIX_PATTERN = re.compile(r"^(?:মো[:ঃ])\s*", re.IGNORECASE)
+LOWERCASE_LATIN_FRAGMENT_PATTERN = re.compile(r"^[a-z][a-z\s'’.-]*$")
+BANGLA_TEXT_PATTERN = re.compile(r"[\u0980-\u09FF]")
+INCOMPLETE_NAME_TOKENS = {
+    "মো",
+    "মোঃ",
+    "মো:",
+    "md",
+    "md.",
+    "mohd",
+    "mohd.",
+}
+ENGLISH_BYLINE_PATTERN = re.compile(r"^(?P<title>.+?)\s+by\s+(?P<name>.+)$", re.IGNORECASE)
+ENGLISH_BYLINE_ROLE_PREFIXES = {
+    "compiled",
+    "edited",
+    "illustrated",
+    "published",
+    "translated",
+    "written",
+}
 
 
 def build_metadata_label_aliases():
@@ -310,7 +356,7 @@ def split_multi_value(value):
     deduped = []
     seen = set()
     for chunk in chunks:
-        cleaned = clean_display_text(chunk.strip(" -:ঃ–—"))
+        cleaned = clean_entity_display_text(chunk)
         normalized = normalize_catalog_text(cleaned)
         if not cleaned or not normalized or normalized in seen:
             continue
@@ -320,7 +366,7 @@ def split_multi_value(value):
 
 
 def clean_contributor_value(value):
-    cleaned = clean_display_text(value)
+    cleaned = clean_entity_display_text(value)
     if not cleaned:
         return ""
 
@@ -335,7 +381,7 @@ def clean_contributor_value(value):
             break
         cleaned = next_value
     cleaned = TRAILING_CONTRIBUTOR_HELPER_PATTERN.sub("", cleaned)
-    return clean_display_text(cleaned.strip(" -:ঃ–—|/"))
+    return clean_entity_display_text(cleaned)
 
 
 def has_non_name_phrase_marker(value):
@@ -346,9 +392,29 @@ def has_non_name_phrase_marker(value):
     )
 
 
+def has_english_prose_marker(value):
+    return bool(set(normalize_catalog_text(value).split()) & ENGLISH_PROSE_FRAGMENT_WORDS)
+
+
+def looks_like_english_prose_fragment(value):
+    cleaned = clean_display_text(value)
+    if not cleaned or BANGLA_TEXT_PATTERN.search(cleaned):
+        return False
+    if not LOWERCASE_LATIN_FRAGMENT_PATTERN.fullmatch(cleaned):
+        return False
+    tokens = normalize_catalog_text(cleaned).split()
+    if len(tokens) < 2:
+        return False
+    if tokens[0] in {"and", "or", "the", "a", "an"}:
+        return True
+    return bool(set(tokens) & ENGLISH_PROSE_FRAGMENT_WORDS)
+
+
 def looks_like_contributor_name(value, role=""):
-    cleaned = clean_display_text(value.strip(" -:ঃ–—()[]{}"))
+    cleaned = clean_entity_display_text(value)
     if not cleaned:
+        return False
+    if normalize_catalog_text(cleaned.strip(".:ঃ")) in INCOMPLETE_NAME_TOKENS:
         return False
     if role != ContributorRole.PUBLISHER and re.search(r"[0-9০-৯]", cleaned):
         return False
@@ -369,6 +435,10 @@ def looks_like_contributor_name(value, role=""):
     if normalized_tokens & {normalize_catalog_text(word) for word in NON_PERSON_TITLE_WORDS}:
         return False
     if role != ContributorRole.PUBLISHER and has_non_name_phrase_marker(cleaned):
+        return False
+    if role != ContributorRole.PUBLISHER and has_english_prose_marker(cleaned):
+        return False
+    if role != ContributorRole.PUBLISHER and looks_like_english_prose_fragment(cleaned):
         return False
     if role and role != ContributorRole.PUBLISHER and is_role_label_text(cleaned):
         return False
@@ -422,6 +492,7 @@ def trim_publisher_candidate(chunk):
     if address_match and address_match.start() > 0:
         cleaned = clean_display_text(cleaned[: address_match.start()])
 
+    cleaned = clean_display_text(TRAILING_ADDRESS_INTRO_PATTERN.sub("", cleaned))
     if not cleaned or looks_like_address_fragment(cleaned):
         return []
 
@@ -466,9 +537,9 @@ def split_contributor_chunks(value, role=""):
 
         for raw_candidate in raw_candidates:
             expanded = [
-                clean_display_text(part.strip(" -:ঃ–—"))
+                clean_entity_display_text(part)
                 for part in CONTRIBUTOR_CONNECTOR_PATTERN.split(raw_candidate)
-                if clean_display_text(part.strip(" -:ঃ–—"))
+                if clean_entity_display_text(part)
             ]
             if canonical == ContributorRole.PUBLISHER and len(expanded) > 1:
                 if not all(contains_publisher_keyword(part) for part in expanded):
@@ -618,6 +689,24 @@ def parse_role_labeled_segment(segment):
             clean_contributor_value(suffix_match.group("value")),
             role=ContributorRole.EDITOR,
         )
+
+    byline_match = ENGLISH_BYLINE_PATTERN.match(cleaned)
+    if byline_match:
+        title_prefix = clean_display_text(byline_match.group("title"))
+        normalized_prefix_tokens = normalize_catalog_text(title_prefix).split()
+        if (
+            title_prefix
+            and not (
+                len(normalized_prefix_tokens) == 1
+                and normalized_prefix_tokens[0] in ENGLISH_BYLINE_ROLE_PREFIXES
+            )
+        ):
+            names = split_contributor_value(
+                clean_contributor_value(byline_match.group("name")),
+                role=ContributorRole.AUTHOR,
+            )
+            if names:
+                return [ContributorRole.AUTHOR], names
 
     return [], []
 

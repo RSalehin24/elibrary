@@ -20,7 +20,11 @@ from apps.catalog.models import (
 )
 from apps.catalog.services import replace_book_relations
 from apps.common.models import LifecycleState
-from apps.common.text import clean_display_text, normalize_catalog_text
+from apps.common.text import (
+    clean_display_text,
+    clean_entity_display_text,
+    normalize_catalog_text,
+)
 from apps.ingestion.models import SourceCatalogEntry
 from apps.ingestion.pipeline import epub_book
 from apps.ingestion.services.normalization import normalize_scraped_book
@@ -179,7 +183,7 @@ def update_processing_records(dry_run=False, limit=0):
 def clean_contributor_display_names(dry_run=False):
     changed = 0
     for contributor in Contributor.objects.iterator(chunk_size=100):
-        cleaned = contributor.name.strip(" -:ঃ–—|/")
+        cleaned = clean_entity_display_text(contributor.name)
         if cleaned and cleaned != contributor.name:
             changed += 1
             if not dry_run:
@@ -189,7 +193,7 @@ def clean_contributor_display_names(dry_run=False):
 
 
 def contributor_name_is_noise(value):
-    cleaned = clean_display_text(value).strip(" -:ঃ–—|/")
+    cleaned = clean_entity_display_text(value)
     if not cleaned:
         return True
     if has_non_name_phrase_marker(cleaned):

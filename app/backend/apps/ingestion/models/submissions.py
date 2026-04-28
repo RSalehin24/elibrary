@@ -25,6 +25,24 @@ class BookSubmission(UUIDPrimaryKeyModel, TimeStampedModel):
     class Meta:
         ordering = ["-created_at"]
 
+    def save(self, *args, **kwargs):
+        previous = {"linked_book_id": None, "submitter_id": None}
+        if self.pk:
+            previous = (
+                BookSubmission.objects.filter(pk=self.pk)
+                .values("linked_book_id", "submitter_id")
+                .first()
+                or previous
+            )
+        super().save(*args, **kwargs)
+        if self.submitter_id and self.linked_book_id and (
+            previous["linked_book_id"] != self.linked_book_id
+            or previous["submitter_id"] != self.submitter_id
+        ):
+            from apps.catalog.models import UserBook
+
+            UserBook.objects.get_or_create(user_id=self.submitter_id, book_id=self.linked_book_id)
+
 
 class TitleResolutionAttempt(UUIDPrimaryKeyModel, TimeStampedModel):
     submission = models.ForeignKey(BookSubmission, on_delete=models.CASCADE, related_name="resolution_attempts")

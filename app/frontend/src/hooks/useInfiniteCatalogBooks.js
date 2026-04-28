@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { catalogFetch } from "../api/catalog";
 import {
   CATALOG_TABLE_BATCH_SIZE,
@@ -21,6 +15,13 @@ export function useInfiniteCatalogBooks({
     const { page, limit, ...rest } = filters || {};
     return rest;
   }, [filters]);
+  const requestKey = useMemo(
+    () =>
+      JSON.stringify(
+        Object.entries(requestFilters).sort(([left], [right]) => left.localeCompare(right)),
+      ),
+    [requestFilters],
+  );
   const [tableState, setTableState] = useState({
     entries: [],
     totalCount: 0,
@@ -37,6 +38,7 @@ export function useInfiniteCatalogBooks({
   const observerRef = useRef(null);
   const requestSeqRef = useRef(0);
   const previousEndpointRef = useRef(endpoint);
+  const previousRequestKeyRef = useRef(requestKey);
 
   const commitTableState = useCallback((updater) => {
     setTableState((current) => {
@@ -181,11 +183,35 @@ export function useInfiniteCatalogBooks({
       );
       return {
         ...current,
-        entries: [
-          entry,
-          ...current.entries.filter((currentEntry) => currentEntry.id !== entry.id),
-        ],
+        entries: [entry, ...current.entries.filter((currentEntry) => currentEntry.id !== entry.id)],
         totalCount: alreadyPresent ? current.totalCount : current.totalCount + 1,
+      };
+    });
+  }, [commitTableState]);
+
+  const updateEntry = useCallback((entryId, updater) => {
+    commitTableState((current) => ({
+      ...current,
+      entries: current.entries.map((entry) =>
+        entry.id === entryId
+          ? typeof updater === "function"
+            ? updater(entry)
+            : { ...entry, ...updater }
+          : entry,
+      ),
+    }));
+  }, [commitTableState]);
+
+  const removeEntry = useCallback((entryId) => {
+    commitTableState((current) => {
+      const nextEntries = current.entries.filter((entry) => entry.id !== entryId);
+      return {
+        ...current,
+        entries: nextEntries,
+        totalCount:
+          nextEntries.length === current.entries.length
+            ? current.totalCount
+            : Math.max(0, current.totalCount - 1),
       };
     });
   }, [commitTableState]);
@@ -233,17 +259,19 @@ export function useInfiniteCatalogBooks({
 
     const hasLoadedRows = tableStateRef.current.entries.length > 0;
     const endpointChanged = previousEndpointRef.current !== endpoint;
+    const filtersChanged = previousRequestKeyRef.current !== requestKey;
     previousEndpointRef.current = endpoint;
+    previousRequestKeyRef.current = requestKey;
     loadPage({
       page: 1,
       limit: CATALOG_TABLE_BATCH_SIZE,
       append: false,
-      preserveRows: hasLoadedRows && !endpointChanged,
-      resetState: endpointChanged,
+      preserveRows: hasLoadedRows && !endpointChanged && !filtersChanged,
+      resetState: endpointChanged || filtersChanged,
     });
 
     return undefined;
-  }, [enabled, endpoint, loadPage]);
+  }, [enabled, endpoint, loadPage, requestKey]);
 
   useEffect(() => {
     return () => {
@@ -260,6 +288,8 @@ export function useInfiniteCatalogBooks({
     loadMore,
     reload,
     prependEntry,
+    removeEntry,
+    updateEntry,
     tableShellRef,
     observeLoadTrigger,
   };

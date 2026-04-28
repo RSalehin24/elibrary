@@ -172,6 +172,7 @@ export default function ManualBooksPage() {
   }
 
   async function runDownload(mode) {
+    setDownloadState(mode);
     try {
       const exportItems = await loadManualBooksForExport(appliedFilters);
       const blocked = getExportBlockState({
@@ -193,7 +194,6 @@ export default function ManualBooksPage() {
         filename: "manual-books.csv",
       });
       pendingExportRef.current = exportRequest;
-      setDownloadState(mode);
       const startedAt = Date.now();
       await waitForExportUi();
 

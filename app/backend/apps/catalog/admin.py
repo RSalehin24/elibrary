@@ -12,6 +12,7 @@ from apps.catalog.models import (
     MetadataReview,
     MetadataVersion,
     Series,
+    UserBook,
 )
 
 @admin.register(Contributor)
@@ -43,5 +44,6 @@ admin.site.register(BookSource)
 admin.site.register(GeneratedAsset)
 admin.site.register(MetadataReview)
 admin.site.register(MetadataVersion)
+admin.site.register(UserBook)
 
 # Register your models here.

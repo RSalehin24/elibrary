@@ -58,6 +58,9 @@ def test_extract_contributor_evidence_handles_exact_role_phrases_without_word_lo
     inline_english_editor = extract_contributor_evidence(
         "Arsen Lupin Gentleman Burgler by Maurice Leblanc Edited by Moheul Islam Mithu"
     )
+    english_byline_with_addressed_publisher = extract_contributor_evidence(
+        "RABIN HOOD by Hemendra Kumar Roy Published by PATRA BHARATI at 3/1 College Row, Kolkata 700009"
+    )
     role_only = extract_contributor_evidence("মূল কিতাব পরিমার্জন ও সম্পাদনায়")
     role_mixed_prose = extract_contributor_evidence(
         "অশীন দাশগুপ্ত সহযোগী সম্পাদক রুদ্রাংশু মুখোপাধ্যায়"
@@ -69,6 +72,8 @@ def test_extract_contributor_evidence_handles_exact_role_phrases_without_word_lo
     committee_only = extract_contributor_evidence("সম্পাদনা পরিষদ")
     dated_location = extract_contributor_evidence("ঢাকা, বাংলাদেশ ২২/০৭/২২")
     numeric_only = extract_contributor_evidence("১")
+    dangling_translator = extract_contributor_evidence("অনুবাদ: সালমান হক)")
+    incomplete_name = extract_contributor_evidence("মো")
 
     assert translated["contributors"] == [
         {
@@ -121,6 +126,11 @@ def test_extract_contributor_evidence_handles_exact_role_phrases_without_word_lo
     ]
     assert inline_english_publisher["contributors"] == [
         {
+            "name": "Avijit Pal",
+            "role": "author",
+            "raw_value": "SRI RAMAKRISHNA O SAMAKALIN KOLKATA by Avijit Pal Published by ATMAJAA PUBLISHERS",
+        },
+        {
             "name": "ATMAJAA PUBLISHERS",
             "role": "publisher",
             "raw_value": "SRI RAMAKRISHNA O SAMAKALIN KOLKATA by Avijit Pal Published by ATMAJAA PUBLISHERS",
@@ -128,10 +138,27 @@ def test_extract_contributor_evidence_handles_exact_role_phrases_without_word_lo
     ]
     assert inline_english_editor["contributors"] == [
         {
+            "name": "Maurice Leblanc",
+            "role": "author",
+            "raw_value": "Arsen Lupin Gentleman Burgler by Maurice Leblanc Edited by Moheul Islam Mithu",
+        },
+        {
             "name": "Moheul Islam Mithu",
             "role": "editor",
             "raw_value": "Arsen Lupin Gentleman Burgler by Maurice Leblanc Edited by Moheul Islam Mithu",
         }
+    ]
+    assert english_byline_with_addressed_publisher["contributors"] == [
+        {
+            "name": "Hemendra Kumar Roy",
+            "role": "author",
+            "raw_value": "RABIN HOOD by Hemendra Kumar Roy Published by PATRA BHARATI at 3/1 College Row, Kolkata 700009",
+        },
+        {
+            "name": "PATRA BHARATI",
+            "role": "publisher",
+            "raw_value": "RABIN HOOD by Hemendra Kumar Roy Published by PATRA BHARATI at 3/1 College Row, Kolkata 700009",
+        },
     ]
     assert role_only["contributors"] == []
     assert role_only["authors"] == []
@@ -145,12 +172,23 @@ def test_extract_contributor_evidence_handles_exact_role_phrases_without_word_lo
     assert dated_location["authors"] == []
     assert numeric_only["contributors"] == []
     assert numeric_only["authors"] == []
+    assert incomplete_name["contributors"] == []
+    assert incomplete_name["authors"] == []
+    assert dangling_translator["contributors"] == [
+        {
+            "name": "সালমান হক",
+            "role": "translator",
+            "raw_value": "অনুবাদ: সালমান হক)",
+        }
+    ]
 
 
 def test_front_matter_and_weak_author_resolution_preserve_exact_names_and_roles():
     book_info_html = """
-    <p><strong>অনুবাদ করেছেন</strong> – মো: রিয়াজ উদ্দিন খান</p>
+    <p><strong>অনুবাদ করেছেন</strong> – মো: রিয়াজ উদ্দিন খান)</p>
     <p><strong>অনুবাদ ও সম্পাদনা</strong> – বুদ্ধদেব বসু</p>
+    <p><strong>প্রথম প্রকাশ</strong>: মার্চ ২০২৩</p>
+    <p><strong>প্রকাশক</strong>: উত্তর প্রকাশনী)</p>
     """
 
     entries = extract_front_matter_entries(book_info_html)
@@ -166,6 +204,9 @@ def test_front_matter_and_weak_author_resolution_preserve_exact_names_and_roles(
 
     assert entries[0]["value"] == "মো: রিয়াজ উদ্দিন খান"
     assert entries[1]["roles"] == ["translator", "editor"]
+    assert {entry["key"]: entry["value"] for entry in entries if not entry["role"]} == {
+        "first_published": "মার্চ ২০২৩",
+    }
 
     contributor_roles = {
         (entry["name"], entry["role"])
@@ -176,10 +217,25 @@ def test_front_matter_and_weak_author_resolution_preserve_exact_names_and_roles(
     assert ("মো: রিয়াজ উদ্দিন খান", "translator") in contributor_roles
     assert ("বুদ্ধদেব বসু", "translator") in contributor_roles
     assert ("বুদ্ধদেব বসু", "editor") in contributor_roles
+    assert ("উত্তর প্রকাশনী", "publisher") in contributor_roles
     assert not any("করেছেন" in entry["name"] for entry in normalized["contributors"])
+    assert not any(entry["name"].endswith(")") for entry in normalized["contributors"])
 
 
 def test_front_matter_line_breaks_do_not_create_ambiguous_publishers_or_role_fragments():
+    addressed_publisher_case = normalize_scraped_book(
+        {
+            "book_title": "RABIN HOOD",
+            "author": "Hemendra Kumar Roy",
+            "series": "",
+            "book_type": "",
+            "book_info": """
+            <p>RABIN HOOD by Hemendra Kumar Roy<br/>
+            Published by PATRA BHARATI at 3/1 College Row,<br/>
+            Kolkata 700009</p>
+            """,
+        }
+    )
     publisher_case = normalize_scraped_book(
         {
             "book_title": "হ্যারেৎজ",
@@ -209,6 +265,18 @@ def test_front_matter_line_breaks_do_not_create_ambiguous_publishers_or_role_fra
         }
     )
 
+    assert addressed_publisher_case["contributors"] == [
+        {
+            "name": "Hemendra Kumar Roy",
+            "role": "author",
+            "raw_value": "Hemendra Kumar Roy",
+        },
+        {
+            "name": "PATRA BHARATI",
+            "role": "publisher",
+            "raw_value": "PATRA BHARATI at 3/1 College Row,",
+        },
+    ]
     assert publisher_case["contributors"] == [
         {
             "name": "স্বর্ণাভ বেরা",

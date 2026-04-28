@@ -17,10 +17,15 @@
   width: 100%;
   min-width: 980px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .book-table {
-  min-width: 1120px;
+  min-width: 1060px;
+}
+
+.book-table-with-my-books {
+  min-width: 1172px;
 }
 
 .book-table-col-id {
@@ -28,19 +33,38 @@
 }
 
 .book-table-col-writer {
-  width: 320px;
+  width: 260px;
+}
+
+.book-table-col-title {
+  width: 260px;
+}
+
+.book-table-col-category,
+.book-table-col-series {
+  width: 156px;
+}
+
+.book-table-col-type {
+  width: 116px;
+}
+
+.book-table-col-created {
+  width: 132px;
 }
 
 .book-table-col-action {
-  width: 112px;
+  width: 124px;
 }
 
 .catalog-table th,
 .catalog-table td {
+  position: relative;
   padding: 14px 16px;
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid rgba(17, 70, 54, 0.1);
+  overflow-wrap: anywhere;
 }
 
 .catalog-table th {
@@ -158,9 +182,11 @@
 
 .table-action-cell {
   white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .table-row-action {
+  width: 100%;
   min-width: 88px;
 }
 
@@ -170,6 +196,16 @@
 
 .property-table {
   min-width: 720px;
+}
+
+.property-table-col-code {
+  width: 132px;
+}
+
+.property-table-col-stat,
+.property-table-col-date,
+.property-table-col-action {
+  width: 112px;
 }
 
 .property-table th,
