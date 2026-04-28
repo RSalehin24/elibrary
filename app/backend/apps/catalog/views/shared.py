@@ -11,11 +11,12 @@ from apps.ingestion.models import BookSubmission
 
 VALID_RECORD_TYPES = {choice for choice, _ in BookRecordType.choices}
 VALID_CONTRIBUTOR_ROLES = {choice for choice, _ in ContributorRole.choices}
-CONTRIBUTOR_ROLE_BY_PAGE = {
-    "writers": ContributorRole.AUTHOR,
-    "translators": ContributorRole.TRANSLATOR,
-    "compilers": ContributorRole.COMPILER,
-    "editors": ContributorRole.EDITOR,
+CONTRIBUTOR_ROLES_BY_PAGE = {
+    "writers": (ContributorRole.AUTHOR,),
+    "translators": (ContributorRole.TRANSLATOR,),
+    "compilers": (ContributorRole.COMPILER,),
+    "editors": (ContributorRole.EDITOR, ContributorRole.COMPILER),
+    "publishers": (ContributorRole.PUBLISHER,),
 }
 FLEXIBLE_SEPARATOR_REGEX = r"[\s\-.–—(){}\[\],:;/'\"_|]*"
 
@@ -71,6 +72,12 @@ def bounded_positive_int(raw_value, *, default, minimum=1, maximum=100):
     except (TypeError, ValueError):
         return default
     return max(minimum, min(value, maximum))
+
+
+def contributor_roles_for_filter(role):
+    if role == ContributorRole.EDITOR:
+        return (ContributorRole.EDITOR, ContributorRole.COMPILER)
+    return (role,) if role in VALID_CONTRIBUTOR_ROLES else ()
 
 
 class OptionalPaginationListMixin:
@@ -216,7 +223,12 @@ def filtered_book_queryset(queryset, request, *, default_record_type):
         value = request.query_params.get(param, "").strip()
         if value:
             if param == "contributor":
+                role_filters = contributor_roles_for_filter(
+                    request.query_params.get("contributor_role", "").strip()
+                )
                 queryset = queryset.filter(
+                    Q(book_contributors__role__in=role_filters) if role_filters else Q()
+                ).filter(
                     normalized_text_search_clause(
                         value,
                         normalize_catalog_text(value),
@@ -236,8 +248,11 @@ def filtered_book_queryset(queryset, request, *, default_record_type):
         value = request.query_params.get(param, "").strip()
         if value:
             contributor_filters = {field: value}
-            if contributor_role in VALID_CONTRIBUTOR_ROLES:
-                contributor_filters["book_contributors__role"] = contributor_role
+            role_filters = contributor_roles_for_filter(contributor_role)
+            if len(role_filters) == 1:
+                contributor_filters["book_contributors__role"] = role_filters[0]
+            elif len(role_filters) > 1:
+                contributor_filters["book_contributors__role__in"] = role_filters
             queryset = queryset.filter(**contributor_filters)
 
     queryset = apply_created_at_filters(queryset, request).distinct()

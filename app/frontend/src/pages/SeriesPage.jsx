@@ -79,9 +79,10 @@ export default function SeriesPage() {
     setFilters(appliedFilters);
   }, [appliedFilters]);
 
-  function applyFilters(event) {
+  function applyFilters(event, nextFilters = filters) {
     event.preventDefault();
-    setSearchParams(cleanQueryParams(filters));
+    setFilters(nextFilters);
+    setSearchParams(cleanQueryParams(nextFilters));
   }
 
   function resetFilters() {

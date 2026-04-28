@@ -45,10 +45,28 @@ def texts_are_similar(left, right):
     return scraper.texts_are_similar(left, right)
 
 
-def scrape_book(url):
+def scrape_book_with_limits(url, content_limits=None):
     scraper, _, _ = legacy_modules()
     normalized_url = validate_source_url(url)
-    return scraper.scrape_book_data(normalized_url)
+    return scraper.scrape_book_data(normalized_url, content_limits=content_limits)
+
+
+def high_fidelity_scrape_limits():
+    scraper, _, _ = legacy_modules()
+    limits = scraper.normalize_scrape_limits(getattr(scraper, "DEFAULT_SCRAPE_LIMITS", {}))
+    limits["disable_recursive"] = False
+    return limits
+
+
+def scrape_book(url):
+    return scrape_book_with_limits(url)
+
+
+def scrape_book_high_fidelity(url):
+    return scrape_book_with_limits(
+        url,
+        content_limits=high_fidelity_scrape_limits(),
+    )
 
 
 def generate_exports(book_data):

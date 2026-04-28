@@ -46,6 +46,22 @@ export default function CatalogToolbar({
   const toplineClassName = `catalog-toolbar-topline${hasSplitTopline ? " has-secondary" : ""}${
     hasSecondaryOnlyTopline ? " is-secondary-only" : ""
   }${bare ? " is-bare" : ""}`;
+  const handleSubmit = (event, submittedFilters = null) => {
+    if (!onSubmit) {
+      return;
+    }
+
+    if (submittedFilters) {
+      onSubmit(event, submittedFilters);
+      return;
+    }
+
+    const queryInput = event.currentTarget?.querySelector('input[type="search"]');
+    onSubmit(event, {
+      ...filters,
+      q: queryInput ? queryInput.value : filters.q,
+    });
+  };
   const searchRow = showSearchRow ? (
     <CatalogSearchRow
       filters={filters}
@@ -61,6 +77,7 @@ export default function CatalogToolbar({
       compact={searchRowCompact}
       className={searchRowClassName}
       onSearchClear={onSearchClear}
+      onSearchSubmit={handleSubmit}
       showResultCount={showResultCount}
       buttonsDisabled={buttonsDisabled}
       actionsExtra={searchActionsExtra}
@@ -114,7 +131,7 @@ export default function CatalogToolbar({
   return (
     <section className={wrapperClassName}>
       <div className="catalog-toolbar-surface">
-        <form className="catalog-toolbar-form" onSubmit={onSubmit}>
+        <form className="catalog-toolbar-form" onSubmit={handleSubmit}>
           {drawerFirst ? filterDrawer : null}
           {searchRow || hasInlineSecondary ? (
             <div className={toplineClassName}>

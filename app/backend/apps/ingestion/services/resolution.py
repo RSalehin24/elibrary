@@ -88,7 +88,8 @@ class TitleResolver:
         refreshed = []
         seen = set()
         page_signatures = set()
-        for page_number in range(1, max_pages + 1):
+        page_number = 1
+        while max_pages is None or page_number <= max_pages:
             response = get_with_host_fallback(
                 self.session,
                 CATALOG_URL,
@@ -116,6 +117,7 @@ class TitleResolver:
                 )
                 if created:
                     refreshed.append(entry)
+            page_number += 1
 
         return refreshed
 

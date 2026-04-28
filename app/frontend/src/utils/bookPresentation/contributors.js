@@ -3,18 +3,16 @@ import { formatRole } from "./formatters";
 const CONTRIBUTOR_ROLE_ORDER = [
   "author",
   "translator",
-  "compiler",
   "editor",
   "illustrator",
   "cover_artist",
   "publisher",
   "other",
 ];
-const PRIMARY_CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "compiler", "editor"];
+const PRIMARY_CONTRIBUTOR_ROLE_ORDER = ["author", "translator", "editor"];
 const CONTRIBUTOR_ROLE_LABELS = {
   author: "",
   translator: "Translator",
-  compiler: "Compiler",
   editor: "Editor",
   illustrator: "Illustration",
   cover_artist: "Cover",
@@ -24,6 +22,10 @@ const CONTRIBUTOR_ROLE_LABELS = {
 
 function normalizeContributorName(value) {
   return (value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function canonicalContributorRole(value) {
+  return value === "compiler" ? "editor" : value || "other";
 }
 
 function getNormalizedContributorEntries(book) {
@@ -36,14 +38,14 @@ function getNormalizedContributorEntries(book) {
       if (!entry?.name) {
         return;
       }
-      const role = entry.role || "other";
+      const role = canonicalContributorRole(entry.role);
       const normalizedName = normalizeContributorName(entry.name);
       const contributorKey = `${normalizedName}|${role}`;
       if (!normalizedName || exactSeen.has(contributorKey)) {
         return;
       }
       exactSeen.add(contributorKey);
-      if (["translator", "compiler", "editor"].includes(role)) {
+      if (role !== "author") {
         nonAuthorNames.add(normalizedName);
       }
       entries.push({ name: entry.name, role });
@@ -79,7 +81,6 @@ export function getWriterColumnGroups(book) {
   const roleConfigs = [
     { role: "author", label: "", queryKey: "author" },
     { role: "translator", label: "Translator", queryKey: "contributor" },
-    { role: "compiler", label: "Compiler", queryKey: "contributor" },
     { role: "editor", label: "Editor", queryKey: "contributor" },
   ];
   return roleConfigs
@@ -92,8 +93,8 @@ export function getBookIdentityContributorLine(book) {
   const parts = [
     ["author", ""],
     ["translator", "Translator"],
-    ["compiler", "Compiler"],
     ["editor", "Editor"],
+    ["publisher", "Publisher"],
   ]
     .map(([role, label]) => {
       const names = getContributorNamesByRole(book, role);
@@ -109,7 +110,7 @@ export function getBookIdentityContributorLine(book) {
 export function getContributorGroups(book) {
   const grouped = new Map();
   getNormalizedContributorEntries(book).forEach((entry) => {
-    const role = entry.role || "other";
+    const role = canonicalContributorRole(entry.role);
     const names = grouped.get(role) || [];
     if (!names.includes(entry.name)) {
       grouped.set(role, [...names, entry.name]);
@@ -136,4 +137,3 @@ export function getContributorLine(book) {
     .map((group) => (group.label ? `${group.label}: ${group.names.join(", ")}` : group.names.join(", ")))
     .join(" · ");
 }
-

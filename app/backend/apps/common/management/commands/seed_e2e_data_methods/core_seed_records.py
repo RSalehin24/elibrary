@@ -47,11 +47,22 @@ def handle(self, *args, **options):
         )
     )
 def cleanup_existing_records(self):
-    for asset in GeneratedAsset.objects.select_related("book").filter(book__title__startswith=E2E_TITLE_PREFIX):
+    e2e_book_filter = Q(book__title__startswith=E2E_TITLE_PREFIX) | Q(
+        book__source_urls__normalized_source_url__startswith=E2E_SOURCE_PREFIX
+    )
+    for asset in (
+        GeneratedAsset.objects.select_related("book")
+        .filter(e2e_book_filter)
+        .distinct()
+    ):
         if asset.file and asset.file.name:
             asset.file.delete(save=False)
 
-    Book.objects.filter(title__startswith=E2E_TITLE_PREFIX).delete()
+    Book.objects.filter(
+        Q(title__startswith=E2E_TITLE_PREFIX)
+        | Q(source_urls__normalized_source_url__startswith=E2E_SOURCE_PREFIX)
+    ).distinct().delete()
+    BookSource.objects.filter(normalized_source_url__startswith=E2E_SOURCE_PREFIX).delete()
     SourceCatalogEntry.objects.filter(source_url__startswith=E2E_SOURCE_PREFIX).delete()
     CatalogCurationRun.objects.all().delete()
     BookSubmission.objects.filter(

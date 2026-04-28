@@ -8,12 +8,19 @@ from apps.catalog.services import normalize_book_contributors
 from apps.common.text import clean_display_text, normalize_catalog_text
 from apps.ingestion.services.normalization_support.metadata import (
     ALL_METADATA_LABELS,
+    EXPLICIT_SEPARATOR_ONLY_LABELS,
     FRONT_MATTER_PATTERNS,
     METADATA_LABEL_ALIASES,
     ROLE_PATTERNS,
+    clean_contributor_value,
+    extract_contributor_evidence,
+    has_non_name_phrase_marker,
+    is_role_label_text,
     looks_like_contributor_name,
     match_pattern_key,
+    roles_in_text,
     split_contributor_value,
+    split_metadata_fragments,
     split_multi_value,
 )
 
@@ -29,6 +36,13 @@ INLINE_TOC_HEADING_PATTERNS = [
     "table of contents",
     "contents",
 ]
+SOURCE_GENERATED_TOC_SELECTORS = (
+    ".ftwp-in-post",
+    ".ftwp-wrap",
+    "#ftwp-container-outer",
+    "#ftwp-container",
+    "#ftwp-contents",
+)
 
 DEDICATION_INLINE_PREFIX_PATTERN = re.compile(
     r"^\s*(?:অনুবাদকের\s+উৎসর্গ|লেখকের\s+উৎসর্গ|উৎসর্গ|dedication)\s*[:ঃ\-–—]?\s*",
@@ -40,14 +54,30 @@ BODY_SECTION_PATTERNS = [
     "প্রস্তাবনা",
     "লেখকের কথা",
     "অনুবাদকের কথা",
+    "সম্পাদকের কথা",
+    "সংকলকের কথা",
     "প্রকাশকের কথা",
     "সূচিপত্র",
     "অধ্যায়",
     "অধ্যায়",
     "পর্ব",
+    "খণ্ড",
+    "পরিচ্ছেদ",
     "chapter",
+    "section",
+    "part",
     "preface",
     "introduction",
+]
+
+SUPPLEMENTARY_CHAPTER_HEADING_PATTERNS = [
+    "নমুনা অধ্যায়",
+    "নমুনা অধ্যায়",
+    "প্রিভিউ অধ্যায়",
+    "প্রিভিউ অধ্যায়",
+    "sample chapter",
+    "preview chapter",
+    "excerpt",
 ]
 
 FRONT_SECTION_HEADING_PATTERNS = [
@@ -55,7 +85,22 @@ FRONT_SECTION_HEADING_PATTERNS = [
     "প্রস্তাবনা",
     "লেখকের কথা",
     "অনুবাদকের কথা",
+    "অনুবাদকের নিবেদন",
+    "অনুবাদকের ভূমিকা",
+    "সম্পাদকের কথা",
+    "সম্পাদকের নিবেদন",
+    "সম্পাদকের ভূমিকা",
+    "সম্পাদকীয়",
+    "সংকলকের কথা",
+    "সংকলকের নিবেদন",
     "প্রকাশকের কথা",
+    "প্রকাশকের নিবেদন",
+    "দ্বিতীয় সংস্করণের কথা",
+    "দ্বিতীয় সংস্করণের কথা",
+    "তৃতীয় সংস্করণের কথা",
+    "তৃতীয় সংস্করণের কথা",
+    "পরিবর্ধিত সংস্করণের কথা",
+    "সংস্করণ প্রসঙ্গে",
     "সহস্রাব্দ সংস্করণের কথা",
     "প্রারম্ভ কথন",
     "প্রারম্ভকথন",
@@ -63,6 +108,13 @@ FRONT_SECTION_HEADING_PATTERNS = [
     "foreword",
     "introduction",
     "preface",
+    "translator's note",
+    "editor's note",
+    "publisher's note",
+    "edition note",
+    "second edition note",
+    "afterword",
+    *SUPPLEMENTARY_CHAPTER_HEADING_PATTERNS,
 ]
 
 SEPARATOR_PARAGRAPH_VALUES = {".", "।", "..", "..."}
@@ -133,6 +185,13 @@ def remove_inline_toc_heading_and_lists(block):
         if next_block is None or next_block.name not in {"ul", "ol"}:
             break
         current_block = next_block
+
+
+def remove_source_generated_toc_containers(soup):
+    for selector in SOURCE_GENERATED_TOC_SELECTORS:
+        for block in list(soup.select(selector)):
+            if block.parent is not None:
+                block.decompose()
 
 
 def is_probable_inline_toc_list(block):
@@ -231,7 +290,13 @@ def is_likely_section_title_text(text):
         return False
     if text_matches_patterns(plain_text, DEDICATION_PATTERNS + BODY_SECTION_PATTERNS):
         return False
-    if search_front_matter_label_value(plain_text, strong_text=plain_text, has_break="\n" in str(text)):
+    has_line_break = "\n" in str(text)
+    metadata_candidate = search_front_matter_label_value(
+        plain_text,
+        strong_text=plain_text,
+        has_break=has_line_break,
+    )
+    if metadata_candidate and not has_line_break:
         return False
     if looks_like_letter_excerpt_marker(plain_text):
         return False

@@ -51,6 +51,7 @@ class ManualBookCreateSerializer(serializers.Serializer):
         translator_names = validated_data.pop("translators", [])
         compiler_names = validated_data.pop("compilers", [])
         editor_names = validated_data.pop("editors", [])
+        publisher_name = (validated_data.get("publisher") or "").strip()
         category_names = validated_data.pop("categories", [])
         series_names = validated_data.pop("series", [])
         book = Book.objects.create(
@@ -72,8 +73,8 @@ class ManualBookCreateSerializer(serializers.Serializer):
             contributors=[
                 *[{"name": name, "role": ContributorRole.AUTHOR} for name in writer_names],
                 *[{"name": name, "role": ContributorRole.TRANSLATOR} for name in translator_names],
-                *[{"name": name, "role": ContributorRole.COMPILER} for name in compiler_names],
-                *[{"name": name, "role": ContributorRole.EDITOR} for name in editor_names],
+                *[{"name": name, "role": ContributorRole.EDITOR} for name in [*compiler_names, *editor_names]],
+                *([{"name": publisher_name, "role": ContributorRole.PUBLISHER}] if publisher_name else []),
             ],
             series_names=series_names,
             category_names=category_names,

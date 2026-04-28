@@ -30,6 +30,25 @@ def _processing_request_duplicate_check(processing_request, scraped_data):
     return None
 
 
+def _claim_unlinked_source_book(processing_request, candidate_book):
+    if candidate_book is None:
+        return False
+    if duplicate_candidate_is_current_book(processing_request, candidate_book):
+        return True
+    if BookRecord.objects.filter(linked_book=candidate_book).exclude(
+        pk=processing_request.book_record_id,
+    ).exists():
+        return False
+    if BookCreationRequest.objects.filter(linked_book=candidate_book).exclude(
+        pk=processing_request.pk,
+    ).exists():
+        return False
+
+    processing_request.linked_book = candidate_book
+    processing_request.save(update_fields=["linked_book", "updated_at"])
+    return True
+
+
 def _saved_scraped_data_for_resume(processing_request):
     saved_data = _request_saved_data(processing_request)
     checkpoint = _request_progress(processing_request).get("checkpoint") or ""
@@ -72,6 +91,15 @@ def _process_request_once(processing_request):
 
     if not processing_request.is_confirmed_not_duplicate:
         source_duplicate = find_existing_book_by_source_url(normalized_url)
+        if source_duplicate and not duplicate_candidate_is_current_book(
+            processing_request,
+            source_duplicate,
+        ):
+            if _claim_unlinked_source_book(processing_request, source_duplicate):
+                processing_request = _reload_processing_request(processing_request.id)
+            else:
+                return _mark_request_duplicate(processing_request, source_duplicate)
+
         if source_duplicate and not duplicate_candidate_is_current_book(
             processing_request,
             source_duplicate,

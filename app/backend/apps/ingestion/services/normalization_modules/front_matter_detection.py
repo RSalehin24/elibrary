@@ -16,6 +16,10 @@ def looks_like_title_prefix(prefix):
     cleaned_prefix = clean_display_text(prefix.strip(" -–—|/"))
     if not cleaned_prefix or len(cleaned_prefix) > MAX_TITLE_PREFIX_LENGTH:
         return False
+    if re.search(r"[,;।.!?]", cleaned_prefix):
+        return False
+    if has_non_name_phrase_marker(cleaned_prefix):
+        return False
     if ":" in cleaned_prefix or "ঃ" in cleaned_prefix:
         return False
     if text_matches_patterns(cleaned_prefix, ALL_METADATA_LABELS + DEDICATION_PATTERNS + BODY_SECTION_PATTERNS):
@@ -30,7 +34,15 @@ def is_plausible_metadata_value(entry, value):
         return False
 
     if entry["role"]:
-        return bool(split_contributor_value(cleaned_value))
+        candidates = split_contributor_value(
+            clean_contributor_value(cleaned_value),
+            role=entry["role"],
+        )
+        if not candidates:
+            return False
+        if len(cleaned_value.split()) > 8 and all(len(candidate.split()) == 1 for candidate in candidates):
+            return False
+        return True
 
     sentence_markers = count_sentence_markers(cleaned_value)
     if sentence_markers > 1:
@@ -55,7 +67,7 @@ def search_front_matter_label_value(text, strong_text="", has_break=False):
         alias = entry["alias"]
         alias_normalized = normalize_catalog_text(alias)
         pattern = re.compile(
-            rf"{re.escape(alias)}\s*(?:[:ঃ]\s*|[-–—]\s*|\s+)(?P<value>.+)$",
+            rf"{re.escape(alias)}\s*(?P<separator>[:ঃ]\s*|[-–—]\s*|\s+)(?P<value>.+)$",
             re.IGNORECASE,
         )
         for match in pattern.finditer(cleaned_text):
@@ -68,7 +80,20 @@ def search_front_matter_label_value(text, strong_text="", has_break=False):
 
             prefix = cleaned_text[: match.start()]
             cleaned_prefix = clean_display_text(prefix.strip(" -–—|/"))
-            value = clean_display_text(match.group("value").strip(" -:ঃ"))
+            separator = match.group("separator") or ""
+            if (
+                alias_normalized in EXPLICIT_SEPARATOR_ONLY_LABELS
+                and separator.isspace()
+            ):
+                continue
+            value = clean_display_text(match.group("value").strip(" -:ঃ–—"))
+            if (
+                cleaned_prefix
+                and separator.isspace()
+                and not cleaned_strong
+                and not has_break
+            ):
+                continue
             if not value or len(value) > MAX_METADATA_VALUE_LENGTH or not is_plausible_metadata_value(entry, value):
                 continue
 
@@ -96,9 +121,14 @@ def search_front_matter_label_value(text, strong_text="", has_break=False):
                 continue
 
             label = cleaned_strong if normalized_strong and alias_normalized in normalized_strong else alias
+            cleaned_value = (
+                clean_contributor_value(value)
+                if entry["role"]
+                else value
+            )
             candidate = {
                 "label": clean_display_text(label),
-                "value": value,
+                "value": cleaned_value,
                 "role": entry["role"],
                 "key": entry["key"],
                 "score": score,
@@ -137,7 +167,7 @@ def is_body_section_marker(text, tag_name=""):
     cleaned_text = clean_display_text(text)
     if not cleaned_text:
         return False
-    if text_matches_patterns(cleaned_text, BODY_SECTION_PATTERNS) and len(cleaned_text) <= 80:
+    if heading_matches_patterns(cleaned_text, BODY_SECTION_PATTERNS) and len(cleaned_text) <= 80:
         return True
     normalized = normalize_catalog_text(cleaned_text)
     if tag_name in HEADING_TAG_NAMES and re.search(r"(অধ্যা|পর্ব|chapter)", normalized):
@@ -192,9 +222,13 @@ def is_front_section_heading(text, tag_name=""):
     cleaned_text = clean_display_text(text)
     if not cleaned_text or len(cleaned_text) > 140:
         return False
-    if not text_matches_patterns(cleaned_text, FRONT_SECTION_HEADING_PATTERNS):
+    if not heading_matches_patterns(cleaned_text, FRONT_SECTION_HEADING_PATTERNS):
         return False
     normalized = normalize_catalog_text(cleaned_text)
-    if re.search(r"(অধ্যা|পর্ব|chapter)", normalized):
+    is_supplementary_chapter = heading_matches_patterns(
+        cleaned_text,
+        SUPPLEMENTARY_CHAPTER_HEADING_PATTERNS,
+    )
+    if re.search(r"(অধ্যা|পর্ব|chapter)", normalized) and not is_supplementary_chapter:
         return False
     return tag_name in HEADING_TAG_NAMES or len(cleaned_text.split()) <= 8

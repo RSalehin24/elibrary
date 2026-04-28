@@ -6,11 +6,11 @@ export function exportBooksToCsv(books, filename) {
   const header = [
     "Book ID",
     "Title",
-    "Writer / Translator / Compiler / Editor",
+    "Writer / Translator / Editor / Publisher",
     "Writers",
     "Translators",
-    "Compilers",
     "Editors",
+    "Publishers",
     "Categories",
     "Series",
     "Type",
@@ -27,8 +27,8 @@ export function exportBooksToCsv(books, filename) {
         row.contributors,
         row.authors,
         row.translators,
-        row.compilers,
         row.editors,
+        row.publishers,
         row.categories,
         row.series,
         row.type,
@@ -42,4 +42,3 @@ export function exportBooksToCsv(books, filename) {
   ];
   downloadBlob(new Blob([`\ufeff${lines.join("\n")}`], { type: "text/csv;charset=utf-8" }), filename);
 }
-

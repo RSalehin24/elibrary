@@ -15,11 +15,16 @@ def clean_content_html(html_content, title=""):
 
 def build_content_node(title, node_type="lesson", content="", children=None):
     return {
-        "title": clean_display_text(title or ""),
+        "title": normalize_structured_heading_title(title or ""),
         "type": node_type or "lesson",
         "content": content or "",
         "children": list(children or []),
     }
+
+
+def is_direct_book_root_url(url):
+    path_parts = [part for part in urlparse(url).path.split("/") if part]
+    return len(path_parts) == 2 and path_parts[0] == "books"
 
 
 def consume_inline_content_item(title, remaining_items):
@@ -82,7 +87,7 @@ def scrape_recursive_content_node(
     if prefetched_soup is None and prefetched_main_content is None and normalized_url in cache:
         cached_node = cache[normalized_url]
         return {
-            "title": clean_display_text(title_hint) or cached_node.get("title", ""),
+            "title": normalize_structured_heading_title(title_hint) or cached_node.get("title", ""),
             "type": node_type or cached_node.get("type", "lesson"),
             "content": cached_node.get("content", ""),
             "children": cached_node.get("children", []),
@@ -102,7 +107,9 @@ def scrape_recursive_content_node(
             return node
 
         page_title, _ = extract_title_and_author(soup)
-        resolved_title = clean_display_text(title_hint or page_title or normalized_url)
+        resolved_title = normalize_structured_heading_title(
+            title_hint or page_title or normalized_url
+        )
         main_content = (
             prefetched_main_content
             if prefetched_main_content is not None
@@ -118,13 +125,21 @@ def scrape_recursive_content_node(
             crawl_limits.get("max_content_chars"),
         )
 
-        if urlparse(normalized_url).path.startswith("/books/"):
+        if (
+            urlparse(normalized_url).path.startswith("/books/")
+            and (node_type == "book" or is_direct_book_root_url(normalized_url))
+        ):
             lessons = scrape_all_lessons(
                 normalized_url,
                 max_pages=crawl_limits.get("max_lesson_pages"),
+                max_topic_pages=crawl_limits.get("max_lesson_pages"),
             )
             if lessons:
                 for lesson_data in lessons:
+                    lesson_url = normalize_crawl_url(
+                        lesson_data.get("url", ""),
+                        base_url=lesson_data.get("listing_url") or normalized_url,
+                    ) or lesson_data.get("url", "")
                     if lesson_data["has_topics"]:
                         topic_children = []
                         for topic_title, topic_url in lesson_data["topics"]:
@@ -140,17 +155,36 @@ def scrape_recursive_content_node(
                                     depth=depth + 1,
                                 )
                             )
-                        children.append(
-                            build_content_node(
+                        lesson_node = (
+                            scrape_recursive_content_node(
+                                lesson_url,
+                                title_hint=lesson_data["title"],
+                                node_type="lesson",
+                                cache=cache,
+                                active_urls=active_urls,
+                                crawl_state=crawl_state,
+                                crawl_limits=crawl_limits,
+                                depth=depth + 1,
+                            )
+                            if lesson_url
+                            else build_content_node(
                                 lesson_data["title"],
                                 node_type="lesson",
-                                children=topic_children,
                             )
                         )
+                        lesson_node["title"] = normalize_structured_heading_title(
+                            lesson_data["title"]
+                        )
+                        lesson_node["type"] = "lesson"
+                        lesson_node["children"] = merge_unique_children(
+                            lesson_node.get("children", []),
+                            topic_children,
+                        )
+                        children.append(lesson_node)
                     else:
                         children.append(
                             scrape_recursive_content_node(
-                                lesson_data["url"],
+                                lesson_url,
                                 title_hint=lesson_data["title"],
                                 node_type="lesson",
                                 cache=cache,

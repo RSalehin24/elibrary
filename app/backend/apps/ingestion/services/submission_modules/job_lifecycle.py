@@ -48,6 +48,7 @@ from apps.ingestion.services.legacy_adapter import (
     normalize_source_url,
     normalize_text,
     scrape_book,
+    scrape_book_high_fidelity,
     texts_are_similar,
     validate_source_url,
 )

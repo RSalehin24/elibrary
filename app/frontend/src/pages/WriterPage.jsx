@@ -66,20 +66,20 @@ const contributorTabs = [
     emptyLabel: "No translators found.",
   },
   {
-    id: "compilers",
-    label: "Compilers",
-    path: "/compilers",
-    endpoint: "/catalog/compilers/",
-    role: "compiler",
-    emptyLabel: "No compilers found.",
-  },
-  {
     id: "editors",
     label: "Editors",
     path: "/editors",
     endpoint: "/catalog/editors/",
     role: "editor",
     emptyLabel: "No editors found.",
+  },
+  {
+    id: "publishers",
+    label: "Publishers",
+    path: "/publishers",
+    endpoint: "/catalog/publishers/",
+    role: "publisher",
+    emptyLabel: "No publishers found.",
   },
 ];
 
@@ -127,9 +127,10 @@ export default function WriterPage() {
     setFilters(appliedFilters);
   }, [appliedFilters]);
 
-  function applyFilters(event) {
+  function applyFilters(event, nextFilters = filters) {
     event.preventDefault();
-    setSearchParams(cleanQueryParams(filters));
+    setFilters(nextFilters);
+    setSearchParams(cleanQueryParams(nextFilters));
   }
 
   function resetFilters() {

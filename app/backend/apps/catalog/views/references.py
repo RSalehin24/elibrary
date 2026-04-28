@@ -7,7 +7,7 @@ from apps.catalog.serializers import CategoryListSerializer, ContributorListSeri
 from apps.common.text import normalize_catalog_text
 
 from .shared import (
-    CONTRIBUTOR_ROLE_BY_PAGE,
+    CONTRIBUTOR_ROLES_BY_PAGE,
     OptionalPaginationListMixin,
     apply_created_at_filters,
     normalized_text_search_clause,
@@ -15,10 +15,13 @@ from .shared import (
 )
 
 
-def annotate_reference_counts(queryset, relation, *, record_type, contributor_role=None):
+def annotate_reference_counts(queryset, relation, *, record_type, contributor_roles=None):
     base_filter = {f"{relation}__deleted_at__isnull": True}
-    if contributor_role is not None:
-        base_filter["book_contributions__role"] = contributor_role
+    if contributor_roles:
+        if len(contributor_roles) == 1:
+            base_filter["book_contributions__role"] = contributor_roles[0]
+        else:
+            base_filter["book_contributions__role__in"] = contributor_roles
 
     def count_filter(target_record_type=None):
         filters = dict(base_filter)
@@ -91,13 +94,18 @@ class ContributorListView(OptionalPaginationListMixin, generics.ListAPIView):
     pagination_default_limit = 60
     pagination_max_limit = 100
 
-    def get_contributor_role(self):
+    def get_contributor_roles(self):
         role_slug = self.kwargs.get("role") or getattr(self, "role_slug", "writers")
-        return CONTRIBUTOR_ROLE_BY_PAGE.get(role_slug, ContributorRole.AUTHOR)
+        return CONTRIBUTOR_ROLES_BY_PAGE.get(role_slug, (ContributorRole.AUTHOR,))
 
     def get_queryset(self):
-        role = self.get_contributor_role()
-        queryset = annotate_reference_counts(Contributor.objects.filter(book_contributions__role=role).distinct(), "book_contributions__book", record_type=requested_record_type(self.request, BookRecordType.DIGITAL), contributor_role=role)
+        roles = self.get_contributor_roles()
+        queryset = annotate_reference_counts(
+            Contributor.objects.filter(book_contributions__role__in=roles).distinct(),
+            "book_contributions__book",
+            record_type=requested_record_type(self.request, BookRecordType.DIGITAL),
+            contributor_roles=roles,
+        )
         query = self.request.query_params.get("q", "").strip()
         if query:
             queryset = queryset.filter(

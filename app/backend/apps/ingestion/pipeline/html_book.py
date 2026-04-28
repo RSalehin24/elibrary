@@ -2,8 +2,11 @@ import os
 from html import escape
 
 from apps.ingestion.services.normalization import (
+    dedupe_structured_sections,
+    extract_boundary_sections_from_content_items,
     normalize_dedication_heading_and_content,
     split_leading_front_sections,
+    split_trailing_front_sections,
 )
 from .html_book_support.preview import render_preview_single_tab_guard_script
 from .html_book_support.styles import generate_css
@@ -15,11 +18,27 @@ from .html_book_support.toc import (
     html_cover_source,
 )
 
-def save_html(book_title, author, series, book_type, cover, main_content, book_info, dedication, toc, content_items, output_folder):
-    front_sections, compact_main_content = split_leading_front_sections(main_content or "")
-
+def save_html(
+    book_title,
+    author,
+    series,
+    book_type,
+    cover,
+    main_content,
+    book_info,
+    dedication,
+    toc,
+    content_items,
+    output_folder,
+    *,
+    front_sections=None,
+    back_sections=None,
+):
     """Generate and save HTML book with hierarchical TOC, book info and dedication section"""
     existing_ids = set()
+    front_sections = list(front_sections or [])
+    back_sections = list(back_sections or [])
+    compact_main_content = main_content or ""
 
     # Start HTML document
     html = f"""<!DOCTYPE html>
@@ -78,13 +97,23 @@ def save_html(book_title, author, series, book_type, cover, main_content, book_i
         html += "\n      </div>"
 
     if front_sections:
-      for section in front_sections:
-        html += "\n      <div class='front-section'>"
-        html += f"\n        <h2 class='front-section-title'>{escape(section['title'])}</h2>"
-        html += "\n        <div class='front-section-content'>"
-        indented_section = "\n".join(f"          {line}" for line in section["html"].splitlines())
-        html += f"\n{indented_section}"
-        html += "\n        </div>"
+        for section in front_sections:
+            html += "\n      <div class='front-section'>"
+            html += f"\n        <h2 class='front-section-title'>{escape(section['title'])}</h2>"
+            html += "\n        <div class='front-section-content'>"
+            indented_section = "\n".join(f"          {line}" for line in section["html"].splitlines())
+            html += f"\n{indented_section}"
+            html += "\n        </div>"
+            html += "\n      </div>"
+
+    toc_id_map = build_toc_id_map(toc, existing_ids)
+    if toc:
+        html += "\n      <div class='toc-section'>"
+        html += "\n        <h2 class='toc-title'>সূচিপত্র</h2>"
+        html += "\n        <ul class='toc-list'>"
+        toc_html = build_hierarchical_toc_html(toc, toc_id_map)
+        html += toc_html
+        html += "\n        </ul>"
         html += "\n      </div>"
 
     # Main Content
@@ -94,20 +123,19 @@ def save_html(book_title, author, series, book_type, cover, main_content, book_i
       html += f"\n{indented_content}"
       html += "\n      </div>"
 
-    # Table of Contents
-    html += "\n      <div class='toc-section'>"
-    html += "\n        <h2 class='toc-title'>সূচিপত্র</h2>"
-    html += "\n        <ul class='toc-list'>"
-    toc_id_map = build_toc_id_map(toc, existing_ids)
-    toc_html = build_hierarchical_toc_html(toc, toc_id_map)
-    html += toc_html
-    html += "\n        </ul>"
-    html += "\n      </div>"
-
     # Content Sections
     html += "\n      <!-- Content Sections -->"
     content_html = generate_content_html(content_items, toc, toc_id_map)
     html += content_html
+
+    for section in back_sections:
+        html += "\n      <div class='back-section'>"
+        html += f"\n        <h2 class='back-section-title'>{escape(section['title'])}</h2>"
+        html += "\n        <div class='back-section-content'>"
+        indented_section = "\n".join(f"          {line}" for line in section["html"].splitlines())
+        html += f"\n{indented_section}"
+        html += "\n        </div>"
+        html += "\n      </div>"
 
     # Close HTML
     html += "\n    </div>"
@@ -142,16 +170,53 @@ def create_html_book(book_data):
         "output_folder": str
     }
     """
+    reference_fragments = [book_data.get("book_info", ""), book_data.get("dedication", "")]
+    explicit_front_sections = dedupe_structured_sections(
+        book_data.get("front_sections") or [],
+        reference_fragments=reference_fragments,
+    )
+    explicit_back_sections = dedupe_structured_sections(
+        book_data.get("back_sections") or [],
+        reference_fragments=reference_fragments,
+    )
+    toc = book_data["toc"]
+    content_items = list(book_data["content_items"])
+    inferred_front_sections = []
+    inferred_back_sections = []
+    if content_items:
+        (
+            inferred_front_sections,
+            inferred_back_sections,
+            toc,
+            content_items,
+        ) = extract_boundary_sections_from_content_items(content_items, toc)
+    front_sections = dedupe_structured_sections(
+        [*explicit_front_sections, *inferred_front_sections],
+        reference_fragments=reference_fragments,
+    )
+    back_sections = dedupe_structured_sections(
+        [*explicit_back_sections, *inferred_back_sections],
+        reference_fragments=reference_fragments,
+    )
+    main_content = book_data["main_content"]
+    compact_main_content = main_content
+    if not front_sections:
+        front_sections, compact_main_content = split_leading_front_sections(main_content or "")
+    if not back_sections:
+        back_sections, compact_main_content = split_trailing_front_sections(compact_main_content or "")
+
     save_html(
         book_title=book_data["book_title"],
         author=display_value(book_data["author"]),
         series=display_value(book_data["series"]),
         book_type=display_value(book_data["book_type"]),
         cover=book_data["cover"],
-        main_content=book_data["main_content"],
+        main_content=compact_main_content,
         book_info=book_data.get("book_info", ""),
         dedication=book_data.get("dedication", ""),
-        toc=book_data["toc"],
-        content_items=book_data["content_items"],
-        output_folder=book_data["output_folder"]
+        toc=toc,
+        content_items=content_items,
+        output_folder=book_data["output_folder"],
+        front_sections=front_sections,
+        back_sections=back_sections,
     )

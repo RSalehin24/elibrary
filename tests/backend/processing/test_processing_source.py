@@ -84,6 +84,38 @@ def test_processing_source_scrape_limits_can_be_configured(settings):
     }
 
 
+def test_processing_source_high_fidelity_scrape_uses_large_recursive_defaults(monkeypatch):
+    scrape_calls = []
+
+    monkeypatch.setattr(
+        "apps.processing.source.scraper.scrape_book_data",
+        lambda url, **kwargs: scrape_calls.append((url, kwargs)) or {"resolved_url": url},
+    )
+
+    normalized_url = source.normalize_source_url(
+        "https://ebanglalibrary.com/books/high-fidelity-book"
+    )
+    scraped = source.scrape_book_high_fidelity(
+        "https://ebanglalibrary.com/books/high-fidelity-book"
+    )
+
+    assert scraped == {"resolved_url": normalized_url}
+    assert scrape_calls == [
+        (
+            normalized_url,
+            {
+                "content_limits": {
+                    "max_nodes": 320,
+                    "max_depth": 6,
+                    "max_lesson_pages": 20,
+                    "max_content_chars": 120000,
+                    "disable_recursive": False,
+                }
+            },
+        )
+    ]
+
+
 def test_get_soup_uses_host_fallback_and_decodes_bangla_html(monkeypatch):
     class FakeSession:
         def __init__(self):

@@ -11,6 +11,7 @@ from apps.ingestion.services.normalization import (
     combined_front_matter_html,
     extract_front_matter_entries,
     looks_like_contributor_name,
+    merge_front_matter_html_parts,
     split_contributor_value,
 )
 
@@ -63,7 +64,7 @@ class BookListSerializer(serializers.ModelSerializer):
     def relation_contributors(self, obj):
         payload = []
         for relation in obj.book_contributors.all():
-            if looks_like_contributor_name(relation.contributor.name):
+            if looks_like_contributor_name(relation.contributor.name, role=relation.role):
                 payload.append({"name": relation.contributor.name, "role": relation.role})
         return payload
 
@@ -143,7 +144,7 @@ class BookDetailSerializer(BookListSerializer):
     source_records = serializers.SerializerMethodField()
     front_matter = serializers.SerializerMethodField()
     latest_processing_job = serializers.SerializerMethodField()
-    book_info_html = serializers.CharField()
+    book_info_html = serializers.SerializerMethodField()
     dedication_html = serializers.SerializerMethodField()
     toc = serializers.JSONField()
     raw_provenance = serializers.SerializerMethodField()
@@ -167,7 +168,7 @@ class BookDetailSerializer(BookListSerializer):
         payload = list(self.relation_contributors(obj))
         for entry in extract_front_matter_entries(front_matter_html):
             if entry["role"]:
-                for name in split_contributor_value(entry["value"]):
+                for name in split_contributor_value(entry["value"], role=entry["role"]):
                     payload.append({"name": name, "role": entry["role"]})
         return normalize_book_contributors(payload)
 
@@ -185,7 +186,19 @@ class BookDetailSerializer(BookListSerializer):
 
     def get_front_matter(self, obj):
         html = combined_front_matter_html(obj.book_info_html, obj.main_content_html)
-        return [entry for entry in extract_front_matter_entries(html) if not entry["role"]]
+        return [
+            {
+                "key": entry["key"],
+                "label": entry["label"],
+                "value": entry["value"],
+                "role": entry["role"],
+            }
+            for entry in extract_front_matter_entries(html)
+            if not entry["role"]
+        ]
+
+    def get_book_info_html(self, obj):
+        return merge_front_matter_html_parts(obj.book_info_html)
 
     def get_dedication_html(self, obj):
         return clean_extracted_dedication_html(obj.dedication_html)

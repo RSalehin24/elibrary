@@ -2,7 +2,7 @@ from io import StringIO
 
 from apps.catalog.models import BookRecordType, ContributorRole
 
-from .common import book_export_filename, contributor_names_by_role, csv_response, csv_value, table_contributor_lines
+from .common import book_export_filename, contributor_names_by_role, contributor_names_for_roles, csv_response, csv_value, table_contributor_lines
 
 
 def build_books_csv_response(books, *, record_type):
@@ -12,11 +12,11 @@ def build_books_csv_response(books, *, record_type):
         [
             "Book ID",
             "Title",
-            "Writer / Translator / Compiler / Editor",
+            "Writer / Translator / Editor / Publisher",
             "Writers",
             "Translators",
-            "Compilers",
             "Editors",
+            "Publishers",
             "Categories",
             "Series",
             "Type",
@@ -35,8 +35,8 @@ def build_books_csv_response(books, *, record_type):
                 csv_value(" | ".join(table_contributor_lines(book))),
                 csv_value(", ".join(contributor_names_by_role(book, ContributorRole.AUTHOR))),
                 csv_value(", ".join(contributor_names_by_role(book, ContributorRole.TRANSLATOR))),
-                csv_value(", ".join(contributor_names_by_role(book, ContributorRole.COMPILER))),
-                csv_value(", ".join(contributor_names_by_role(book, ContributorRole.EDITOR))),
+                csv_value(", ".join(contributor_names_for_roles(book, ContributorRole.COMPILER, ContributorRole.EDITOR))),
+                csv_value(", ".join(contributor_names_by_role(book, ContributorRole.PUBLISHER))),
                 csv_value(", ".join(relation.category.name for relation in book.book_categories.all())),
                 csv_value(", ".join(relation.series.name for relation in book.book_series.all())),
                 "Manual" if book.record_type == BookRecordType.MANUAL else "Digital",

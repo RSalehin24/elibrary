@@ -47,13 +47,6 @@ export function ManualBookComposer({
             placeholder={loadingOptions ? "Loading..." : "Optional"}
           />
           <TagInput
-            label="Compiler"
-            values={form.compilers}
-            onChange={(compilers) => setForm({ ...form, compilers })}
-            suggestions={contributorOptions}
-            placeholder={loadingOptions ? "Loading..." : "Optional"}
-          />
-          <TagInput
             label="Editor"
             values={form.editors}
             onChange={(editors) => setForm({ ...form, editors })}

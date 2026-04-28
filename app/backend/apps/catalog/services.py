@@ -17,7 +17,11 @@ from apps.common.text import clean_display_text, normalize_catalog_text
 
 
 def canonical_display_name(value):
-    return clean_display_text(value)
+    return clean_display_text(value).strip(" -:ঃ–—|/")
+
+
+def canonical_contributor_role(role):
+    return role or ContributorRole.AUTHOR
 
 
 def normalize_book_contributors(contributors):
@@ -27,7 +31,9 @@ def normalize_book_contributors(contributors):
 
     for contributor_info in contributors or []:
         name = canonical_display_name(contributor_info.get("name", ""))
-        role = contributor_info.get("role", ContributorRole.AUTHOR) or ContributorRole.AUTHOR
+        role = canonical_contributor_role(
+            contributor_info.get("role", ContributorRole.AUTHOR)
+        )
         normalized_name = normalize_catalog_text(name)
         contributor_key = (normalized_name, role)
         if not normalized_name or contributor_key in seen:
@@ -39,7 +45,7 @@ def normalize_book_contributors(contributors):
             "role": role,
         }
         normalized_entries.append(normalized_entry)
-        if role in {ContributorRole.TRANSLATOR, ContributorRole.COMPILER, ContributorRole.EDITOR}:
+        if role != ContributorRole.AUTHOR:
             non_author_names.add(normalized_name)
 
     if not non_author_names:
@@ -64,6 +70,9 @@ def get_or_create_contributor(name):
         normalized_name=normalized,
         defaults={"name": cleaned},
     )
+    if contributor.name != cleaned:
+        contributor.name = cleaned
+        contributor.save(update_fields=["name", "normalized_name", "slug", "catalog_code", "updated_at"])
     if not contributor.catalog_code or not is_entity_catalog_code(
         contributor.catalog_code,
         entity_tag=WRITER_ENTITY_TAG,

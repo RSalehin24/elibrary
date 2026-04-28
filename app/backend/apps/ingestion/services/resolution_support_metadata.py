@@ -6,8 +6,35 @@ from bs4 import BeautifulSoup
 from apps.ingestion.models import SourceCatalogEntry
 from apps.ingestion.pipeline.scraper_support.network import normalize_source_url
 from apps.ingestion.pipeline.scraper_support.text import normalize_text
+from apps.ingestion.services.normalization_support.metadata import (
+    extract_contributor_evidence,
+)
 from apps.ingestion.services.resolution_support_hosts import SEARCH_HEADERS
 from apps.ingestion.services.resolution_support_network import get_with_host_fallback
+
+DISPLAY_TITLE_SEPARATOR_PATTERN = re.compile(r"\s+[–—-]\s+")
+NON_CONTRIBUTOR_TITLE_SUFFIXES = (
+    "খণ্ড",
+    "পর্ব",
+    "অধ্যায়",
+    "অধ্যায়",
+    "সংস্করণ",
+    "গল্প",
+    "ছোটগল্প",
+    "উপন্যাস",
+    "প্রবন্ধ",
+    "কাহিনি",
+    "কাহিনী",
+    "সাহিত্য",
+    "ইতিহাস",
+    "দর্শন",
+    "edition",
+    "volume",
+    "vol",
+    "part",
+    "series",
+    "সমগ্র",
+)
 
 
 def metadata_entry_defaults(source_url, title, author_line="", raw_data=None):
@@ -23,12 +50,44 @@ def metadata_entry_defaults(source_url, title, author_line="", raw_data=None):
     }
 
 
+def trailing_looks_like_contributor_phrase(text):
+    cleaned = re.sub(r"\s+", " ", text).strip(" -–—|/")
+    if not cleaned or len(cleaned) > 140:
+        return False
+    if len(re.findall(r"[।.!?]", cleaned)) > 1:
+        return False
+    if re.search(r"[0-9০-৯]", cleaned):
+        return False
+
+    normalized = normalize_text(cleaned)
+    if any(suffix in normalized for suffix in NON_CONTRIBUTOR_TITLE_SUFFIXES):
+        return False
+
+    evidence = extract_contributor_evidence(cleaned, raw_value=cleaned)
+    if evidence["contributors"]:
+        return True
+
+    author_candidates = evidence["authors"]
+    if not author_candidates:
+        return False
+
+    if normalize_text(", ".join(author_candidates)) == normalized:
+        return True
+
+    return False
+
+
 def split_display_title(display_title):
     cleaned = re.sub(r"\s+", " ", display_title).strip()
-    for separator in (" - ", " – ", " — "):
-        if separator in cleaned:
-            title, author_line = cleaned.rsplit(separator, 1)
-            return title.strip(), author_line.strip()
+    if not cleaned:
+        return "", ""
+
+    matches = list(DISPLAY_TITLE_SEPARATOR_PATTERN.finditer(cleaned))
+    for match in reversed(matches):
+        title = cleaned[: match.start()].strip()
+        author_line = cleaned[match.end() :].strip()
+        if title and trailing_looks_like_contributor_phrase(author_line):
+            return title, author_line
     return cleaned, ""
 
 
@@ -39,6 +98,7 @@ def parse_source_page_metadata(html, source_url):
     title, title_author = split_display_title(full_title)
 
     author_line = ""
+    meta_author_line = ""
     series = ""
     category = ""
     meta = soup.find("div", class_="entry-meta entry-meta-after-content")
@@ -52,7 +112,8 @@ def parse_source_page_metadata(html, source_url):
                 return ", ".join(link.get_text(" ", strip=True) for link in links)
             return span.get_text(" ", strip=True)
 
-        author_line = read_terms("entry-terms-authors") or title_author
+        meta_author_line = read_terms("entry-terms-authors")
+        author_line = meta_author_line or title_author
         series = read_terms("entry-terms-series")
         category = read_terms("entry-terms-ld_course_category")
     else:
@@ -66,8 +127,11 @@ def parse_source_page_metadata(html, source_url):
 
     raw_data = {
         "title": title,
+        "display_title": full_title,
         "full_title": full_title,
         "author_line": author_line,
+        "meta_author_line": meta_author_line,
+        "title_author_line": title_author,
         "series": series,
         "category": category,
         "metadata_source": "book_page",
@@ -90,8 +154,16 @@ def fetch_source_page_metadata(source_url, session=None):
 
 
 def upsert_source_catalog_entry(metadata):
+    defaults = dict(metadata)
+    incoming_raw_data = defaults.get("raw_data") if isinstance(defaults.get("raw_data"), dict) else {}
+    existing = SourceCatalogEntry.objects.filter(source_url=metadata["source_url"]).only("id", "raw_data").first()
+    if existing is not None:
+        defaults["raw_data"] = {
+            **(existing.raw_data if isinstance(existing.raw_data, dict) else {}),
+            **incoming_raw_data,
+        }
     entry, _ = SourceCatalogEntry.objects.update_or_create(
         source_url=metadata["source_url"],
-        defaults=metadata,
+        defaults=defaults,
     )
     return entry

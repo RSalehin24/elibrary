@@ -38,7 +38,7 @@ def test_manual_book_listing_supports_optional_pagination_payload(client):
 
 
 @pytest.mark.django_db
-def test_book_csv_export_includes_translator_and_editor_columns(client):
+def test_book_csv_export_includes_merged_editor_and_publisher_columns(client):
     user = User.objects.create_user(email="export-reader@example.com", password="strong-password-123")
     book = Book.objects.create(title="রপ্তানি বই", state="ready", review_state="approved")
     replace_book_relations(
@@ -48,6 +48,7 @@ def test_book_csv_export_includes_translator_and_editor_columns(client):
             {"name": "অনুবাদক রপ্তানি", "role": "translator"},
             {"name": "সংকলক রপ্তানি", "role": "compiler"},
             {"name": "সম্পাদক রপ্তানি", "role": "editor"},
+            {"name": "প্রকাশক রপ্তানি", "role": "publisher"},
         ],
         category_names=["রপ্তানি বিভাগ"],
         series_names=["রপ্তানি সিরিজ"],
@@ -59,10 +60,11 @@ def test_book_csv_export_includes_translator_and_editor_columns(client):
     assert response.status_code == 200
     assert response["Content-Type"].startswith("text/csv")
     csv_text = response.content.decode("utf-8-sig")
-    assert "Book ID,Title,Writer / Translator / Compiler / Editor" in csv_text
+    assert "Book ID,Title,Writer / Translator / Editor / Publisher" in csv_text
     assert "Translator: অনুবাদক রপ্তানি" in csv_text
     assert "সংকলক রপ্তানি" in csv_text
     assert "সম্পাদক রপ্তানি" in csv_text
+    assert "Publisher: প্রকাশক রপ্তানি" in csv_text
 
 
 @pytest.mark.django_db
@@ -82,6 +84,25 @@ def test_book_list_can_filter_by_contributor_code_and_role(client):
     assert response.status_code == 200
     payload = response.json()
     assert {entry["title"] for entry in payload} == {"অনূদিত বই"}
+
+
+@pytest.mark.django_db
+def test_book_list_editor_filter_includes_legacy_compiler_roles(client):
+    user = User.objects.create_user(email="editor-filter@example.com", password="strong-password-123")
+    contributor = get_or_create_contributor("সমন্বিত সম্পাদক")
+    compiler_book = Book.objects.create(title="সংকলিত বই", state="ready", review_state="approved")
+    editor_book = Book.objects.create(title="সম্পাদিত বই", state="ready", review_state="approved")
+    replace_book_relations(compiler_book, contributors=[{"name": contributor.name, "role": "compiler"}])
+    replace_book_relations(editor_book, contributors=[{"name": contributor.name, "role": "editor"}])
+    client.force_login(user)
+
+    response = client.get(
+        f"/api/catalog/books/?record_type=all&contributor_code={contributor.catalog_code}&contributor_role=editor"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {entry["title"] for entry in payload} == {"সংকলিত বই", "সম্পাদিত বই"}
 
 
 @pytest.mark.django_db

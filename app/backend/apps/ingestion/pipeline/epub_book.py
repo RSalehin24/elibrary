@@ -2,8 +2,11 @@ import os
 
 from .epub_properties.epub_builder import EpubBuilder
 from apps.ingestion.services.normalization import (
+    dedupe_structured_sections,
+    extract_boundary_sections_from_content_items,
     normalize_dedication_heading_and_content,
     split_leading_front_sections,
+    split_trailing_front_sections,
 )
 
 
@@ -62,13 +65,44 @@ def create_epub(book_data):
     dedication_title, dedication_html = normalize_dedication_heading_and_content(
         book_data.get("dedication", "")
     )
-    builder.add_dedication_page(
-        dedication_title=dedication_title,
-        dedication_html=dedication_html,
-    )
+    if dedication_html:
+        builder.add_dedication_page(
+            dedication_title=dedication_title,
+            dedication_html=dedication_html,
+        )
     
     main_content = book_data.get("main_content", "")
-    front_sections, compact_main_content = split_leading_front_sections(main_content)
+    reference_fragments = [book_data.get("book_info", ""), book_data.get("dedication", "")]
+    front_sections = dedupe_structured_sections(
+        book_data.get("front_sections") or [],
+        reference_fragments=reference_fragments,
+    )
+    back_sections = dedupe_structured_sections(
+        book_data.get("back_sections") or [],
+        reference_fragments=reference_fragments,
+    )
+    toc = book_data["toc"]
+    content_items = list(book_data["content_items"])
+    if content_items:
+        (
+            inferred_front_sections,
+            inferred_back_sections,
+            toc,
+            content_items,
+        ) = extract_boundary_sections_from_content_items(content_items, toc)
+        front_sections = dedupe_structured_sections(
+            [*front_sections, *inferred_front_sections],
+            reference_fragments=reference_fragments,
+        )
+        back_sections = dedupe_structured_sections(
+            [*back_sections, *inferred_back_sections],
+            reference_fragments=reference_fragments,
+        )
+    compact_main_content = main_content
+    if not front_sections:
+        front_sections, compact_main_content = split_leading_front_sections(main_content)
+    if not back_sections:
+        back_sections, compact_main_content = split_trailing_front_sections(compact_main_content or "")
 
     if front_sections:
         builder.add_front_section_pages(front_sections)
@@ -77,29 +111,29 @@ def create_epub(book_data):
     if compact_main_content:
         builder.add_main_content_page(main_content=compact_main_content)
 
-    # Convert content_items to (title, content) tuples for lesson pages
-    lessons = []
-    for item in book_data["content_items"]:
-        lessons.append((item["title"], item["content"]))
-    
     # Add hierarchical TOC page (if the method exists in your EpubBuilder)
     # Otherwise, fall back to regular TOC
-    if hasattr(builder, 'add_hierarchical_toc_page'):
+    if (toc or content_items) and hasattr(builder, 'add_hierarchical_toc_page'):
         builder.add_hierarchical_toc_page(
-            toc_structure=book_data["toc"],
-            content_items=book_data["content_items"]
+            toc_structure=toc,
+            content_items=content_items
         )
-    else:
+    elif content_items:
         # Fallback: Build simple TOC lessons list
         toc_lessons = [
             (title, f"lesson_{i+1}.xhtml")
-            for i, (title, _) in enumerate(lessons)
+            for i, title in enumerate(
+                item["title"] for item in content_items
+            )
         ]
         builder.add_toc_page(lessons=toc_lessons)
     
     # Add lesson pages
-    builder.add_lesson_pages(lessons)
+    builder.add_lesson_pages(content_items)
+
+    if back_sections:
+        builder.add_back_section_pages(back_sections)
 
     # Build and save EPUB
     epub_filename = f"{book_data['book_title']}.epub"
-    builder.build_epub(epub_filename)
+    builder.build_epub(epub_filename, toc_structure=toc)

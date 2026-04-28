@@ -36,8 +36,8 @@ export function isBookPropertiesRoute(pathname) {
     pathname === "/series" ||
     pathname === "/writers" ||
     pathname === "/translators" ||
-    pathname === "/compilers" ||
     pathname === "/editors" ||
+    pathname === "/publishers" ||
     pathname === "/manual-books" ||
     pathname.startsWith("/books/")
   );

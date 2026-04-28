@@ -68,10 +68,23 @@ def processing_scrape_limits():
     }
 
 
+def high_fidelity_scrape_limits():
+    limits = scraper.normalize_scrape_limits(getattr(scraper, "DEFAULT_SCRAPE_LIMITS", {}))
+    limits["disable_recursive"] = False
+    return limits
+
+
 def scrape_book(source_url):
     return scraper.scrape_book_data(
         normalize_source_url(source_url),
         content_limits=processing_scrape_limits(),
+    )
+
+
+def scrape_book_high_fidelity(source_url):
+    return scraper.scrape_book_data(
+        normalize_source_url(source_url),
+        content_limits=high_fidelity_scrape_limits(),
     )
 
 
@@ -138,6 +151,7 @@ __all__ = [
     "normalize_text",
     "persist_scraped_book",
     "scrape_book",
+    "scrape_book_high_fidelity",
     "sync_assets",
     "texts_are_similar",
     "upsert_source_catalog_entry",

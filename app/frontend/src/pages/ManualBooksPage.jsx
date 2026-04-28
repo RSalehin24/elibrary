@@ -155,9 +155,10 @@ export default function ManualBooksPage() {
     }
   }
 
-  function applyListFilters(event) {
+  function applyListFilters(event, nextFilters = filters) {
     event.preventDefault();
-    setAppliedFilters(filters);
+    setFilters(nextFilters);
+    setAppliedFilters(nextFilters);
   }
 
   function resetListFilters() {

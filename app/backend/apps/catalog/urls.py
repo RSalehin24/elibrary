@@ -28,6 +28,7 @@ urlpatterns = [
     path("translators/", ContributorListView.as_view(role_slug="translators"), name="catalog-translator-list"),
     path("compilers/", ContributorListView.as_view(role_slug="compilers"), name="catalog-compiler-list"),
     path("editors/", ContributorListView.as_view(role_slug="editors"), name="catalog-editor-list"),
+    path("publishers/", ContributorListView.as_view(role_slug="publishers"), name="catalog-publisher-list"),
     path("manual-books/", ManualBookListCreateView.as_view(), name="catalog-manual-book-list-create"),
     path(
         "books/<path:slug>/metadata/",

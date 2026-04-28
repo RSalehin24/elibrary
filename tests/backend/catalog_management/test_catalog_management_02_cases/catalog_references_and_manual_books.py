@@ -63,6 +63,7 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
     translator = get_or_create_contributor("তালিকা অনুবাদক")
     compiler = get_or_create_contributor("তালিকা সংকলক")
     editor = get_or_create_contributor("তালিকা সম্পাদক")
+    publisher = get_or_create_contributor("তালিকা প্রকাশক")
     book = Book.objects.create(title="তালিকা বই", state="ready", review_state="approved")
     replace_book_relations(
         book,
@@ -71,6 +72,7 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
             {"name": translator.name, "role": "translator"},
             {"name": compiler.name, "role": "compiler"},
             {"name": editor.name, "role": "editor"},
+            {"name": publisher.name, "role": "publisher"},
         ],
         series_names=[series.name],
         category_names=[category.name],
@@ -83,6 +85,7 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
     translator_response = client.get("/api/catalog/translators/")
     compiler_response = client.get("/api/catalog/compilers/")
     editor_response = client.get("/api/catalog/editors/")
+    publisher_response = client.get("/api/catalog/publishers/")
 
     assert category_response.status_code == 200
     assert series_response.status_code == 200
@@ -90,6 +93,7 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
     assert translator_response.status_code == 200
     assert compiler_response.status_code == 200
     assert editor_response.status_code == 200
+    assert publisher_response.status_code == 200
     assert category_response.json()[0]["catalog_code"] == category.catalog_code
     assert category_response.json()[0]["book_count"] == 1
     assert series_response.json()[0]["name"] == series.name
@@ -100,8 +104,13 @@ def test_category_and_contributor_listing_endpoints_return_codes_and_counts(clie
     assert translator_response.json()[0]["book_count"] == 1
     assert compiler_response.json()[0]["catalog_code"] == compiler.catalog_code
     assert compiler_response.json()[0]["book_count"] == 1
-    assert editor_response.json()[0]["catalog_code"] == editor.catalog_code
-    assert editor_response.json()[0]["book_count"] == 1
+    assert {entry["catalog_code"] for entry in editor_response.json()} == {
+        compiler.catalog_code,
+        editor.catalog_code,
+    }
+    assert all(entry["book_count"] == 1 for entry in editor_response.json())
+    assert publisher_response.json()[0]["catalog_code"] == publisher.catalog_code
+    assert publisher_response.json()[0]["book_count"] == 1
 
 
 @pytest.mark.django_db
@@ -194,8 +203,8 @@ def test_manual_book_creation_uses_manual_listing_and_stays_hidden_from_default_
     assert payload["record_type"] == "manual"
     assert len(payload["catalog_code"]) == CATALOG_CODE_LENGTH
     assert payload["translators"] == ["ম্যানুয়াল অনুবাদক"]
-    assert payload["compilers"] == ["ম্যানুয়াল সংকলক"]
-    assert payload["editors"] == ["ম্যানুয়াল সম্পাদক"]
+    assert payload["compilers"] == []
+    assert payload["editors"] == ["ম্যানুয়াল সংকলক", "ম্যানুয়াল সম্পাদক"]
     assert payload["is_compilation"] is True
     assert payload["binding"] == "Paper Back"
     assert payload["publisher"] == "প্রকাশনা ঘর"
@@ -208,8 +217,14 @@ def test_manual_book_creation_uses_manual_listing_and_stays_hidden_from_default_
         .first()
     )
     manual_category_relation = manual_book.book_categories.select_related("category").first()
+    manual_publisher_relation = (
+        manual_book.book_contributors.filter(role="publisher")
+        .select_related("contributor")
+        .first()
+    )
     assert manual_writer_relation is not None
     assert manual_category_relation is not None
+    assert manual_publisher_relation is not None
     assert derive_writer_catalog_code_from_book_code(payload["catalog_code"]) == manual_writer_relation.contributor.catalog_code
     assert derive_category_catalog_code_from_book_code(payload["catalog_code"]) == manual_category_relation.category.catalog_code
 

@@ -34,6 +34,7 @@ export function normalizeFrontMatterEntries(entries, bookIdValue) {
   }
 
   let replacedIdentity = false;
+  const seen = new Set();
 
   return entries.reduce((normalizedEntries, entry) => {
     const normalizedLabel = normalizeIdentityLabel(entry.label);
@@ -48,17 +49,27 @@ export function normalizeFrontMatterEntries(entries, bookIdValue) {
 
     if (isIdentityEntry) {
       if (!replacedIdentity) {
-        normalizedEntries.push({
+        const normalizedEntry = {
           ...entry,
           key: "book_id",
           label: "Book ID",
           value: bookIdValue,
-        });
+        };
+        const dedupeKey = `${normalizeIdentityLabel(normalizedEntry.key)}::${normalizeIdentityLabel(normalizedEntry.value)}`;
+        if (!seen.has(dedupeKey)) {
+          seen.add(dedupeKey);
+          normalizedEntries.push(normalizedEntry);
+        }
         replacedIdentity = true;
       }
       return normalizedEntries;
     }
 
+    const dedupeKey = `${normalizedKey || normalizedLabel}::${normalizeIdentityLabel(entry.value)}`;
+    if (seen.has(dedupeKey)) {
+      return normalizedEntries;
+    }
+    seen.add(dedupeKey);
     normalizedEntries.push(entry);
     return normalizedEntries;
   }, []);

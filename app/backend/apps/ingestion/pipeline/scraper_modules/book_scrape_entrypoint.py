@@ -1,4 +1,15 @@
 
+from apps.ingestion.services.normalization import (
+    dedupe_html_fragment_blocks,
+    dedupe_structured_sections,
+    extract_boundary_sections_from_content_items,
+    infer_structured_content_from_main_content,
+    prune_duplicate_main_content,
+    split_leading_front_sections,
+    split_trailing_front_sections,
+)
+
+
 def scrape_lesson_content(url, title=""):
     """Scrape content from a lesson or topic URL."""
     soup = get_soup(url)
@@ -58,6 +69,8 @@ def scrape_book_data(book_url, *, content_limits=None):
 
     # Extract book info and dedication from main content
     book_info, dedication, main_content = extract_dedication(main_content)
+    book_info = dedupe_html_fragment_blocks(book_info)
+    dedication = dedupe_html_fragment_blocks(dedication)
 
     crawl_limits = normalize_scrape_limits(content_limits)
     disable_recursive = False
@@ -96,14 +109,67 @@ def scrape_book_data(book_url, *, content_limits=None):
             depth=0,
         )
         toc = [
-            content_node_to_toc_entry(child)
-            for child in root_node.get("children", [])
+            toc_entry
+            for toc_entry in (
+                content_node_to_toc_entry(child)
+                for child in root_node.get("children", [])
+            )
+            if toc_entry
         ]
         content_items = flatten_content_nodes(
             root_node.get("children", []),
             max_items=crawl_limits.get("max_nodes"),
         )
         main_content = root_node.get("content", main_content)
+
+    front_sections = []
+    back_sections = []
+
+    extracted_front_sections, main_content = split_leading_front_sections(main_content or "")
+    if extracted_front_sections:
+        front_sections.extend(extracted_front_sections)
+
+    if not toc and not content_items:
+        inferred_toc, inferred_content_items, main_content = infer_structured_content_from_main_content(
+            main_content,
+            book_title=book_title,
+        )
+        if inferred_toc and inferred_content_items:
+            toc = inferred_toc
+            content_items = inferred_content_items
+
+    if content_items:
+        (
+            inferred_front_sections,
+            inferred_back_sections,
+            toc,
+            content_items,
+        ) = extract_boundary_sections_from_content_items(content_items, toc)
+        front_sections.extend(inferred_front_sections)
+        back_sections.extend(inferred_back_sections)
+
+    extracted_back_sections, main_content = split_trailing_front_sections(main_content or "")
+    if extracted_back_sections:
+        back_sections.extend(extracted_back_sections)
+
+    front_sections = dedupe_structured_sections(
+        front_sections,
+        reference_fragments=[book_info, dedication],
+    )
+    back_sections = dedupe_structured_sections(
+        back_sections,
+        reference_fragments=[book_info, dedication],
+    )
+    main_content = prune_duplicate_main_content(
+        main_content,
+        reference_fragments=[
+            book_info,
+            dedication,
+            *[section.get("html", "") for section in front_sections],
+            *[section.get("html", "") for section in back_sections],
+        ],
+        content_items=content_items,
+    )
 
     return {
         "book_title": book_title,
@@ -114,6 +180,8 @@ def scrape_book_data(book_url, *, content_limits=None):
         "main_content": main_content,
         "book_info": book_info,  # Extracted book info before dedication
         "dedication": dedication,  # Extracted dedication
+        "front_sections": front_sections,
+        "back_sections": back_sections,
         "toc": toc,
         "content_items": content_items,
         "output_folder": output_folder

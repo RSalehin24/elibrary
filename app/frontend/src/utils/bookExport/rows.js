@@ -11,8 +11,8 @@ export function bookExportRows(books) {
     contributors: getBookIdentityContributorLine(book),
     authors: getContributorNamesByRole(book, "author").join(", "),
     translators: getContributorNamesByRole(book, "translator").join(", "),
-    compilers: getContributorNamesByRole(book, "compiler").join(", "),
     editors: getContributorNamesByRole(book, "editor").join(", "),
+    publishers: getContributorNamesByRole(book, "publisher").join(", "),
     categories: (book.categories || []).join(", "),
     series: (book.series || []).join(", "),
     type: bookTypeLabel(book),
@@ -21,4 +21,3 @@ export function bookExportRows(books) {
     createdAt: formatBookDate(book.created_at),
   }));
 }
-

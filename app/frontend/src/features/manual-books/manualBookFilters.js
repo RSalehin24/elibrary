@@ -5,7 +5,6 @@ export const emptyManualBookForm = {
   summary: "",
   writers: [],
   translators: [],
-  compilers: [],
   editors: [],
   categories: [],
   series: [],

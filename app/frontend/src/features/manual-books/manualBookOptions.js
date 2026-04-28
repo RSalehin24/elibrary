@@ -5,13 +5,11 @@ export async function loadManualBookOptions() {
     categoryPayload,
     writerPayload,
     translatorPayload,
-    compilerPayload,
     editorPayload
   ] = await Promise.all([
     catalogFetch("/catalog/categories/?record_type=all&sort=name"),
     catalogFetch("/catalog/writers/?record_type=all&sort=name"),
     catalogFetch("/catalog/translators/?record_type=all&sort=name"),
-    catalogFetch("/catalog/compilers/?record_type=all&sort=name"),
     catalogFetch("/catalog/editors/?record_type=all&sort=name")
   ]);
 
@@ -20,7 +18,6 @@ export async function loadManualBookOptions() {
     contributors: mergeContributorSuggestions([
       writerPayload,
       translatorPayload,
-      compilerPayload,
       editorPayload
     ])
   };

@@ -18,6 +18,7 @@ export function CatalogSearchRow({
   onSearchClear = null,
   showResultCount = true,
   onSubmit,
+  onSearchSubmit = null,
   buttonsDisabled = false,
   actionsExtra = null,
   showFilterToggle = true,
@@ -50,6 +51,19 @@ export function CatalogSearchRow({
       onSearchClear({ ...filters, q: "" });
     }
   };
+  const handleQueryKeyDown = (event) => {
+    if (event.key !== "Enter" || typeof onSearchSubmit !== "function") {
+      return;
+    }
+    if (event.nativeEvent?.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    onSearchSubmit(event, {
+      ...filters,
+      q: event.currentTarget.value,
+    });
+  };
 
   return (
     <RowTag className={rowClassName} onSubmit={handleSubmit}>
@@ -66,6 +80,7 @@ export function CatalogSearchRow({
               onSearchClear({ ...filters, q: "" });
             }
           }}
+          onKeyDown={handleQueryKeyDown}
           placeholder={searchPlaceholder}
           autoComplete="off"
           data-testid={searchTestId}

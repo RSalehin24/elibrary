@@ -81,7 +81,11 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
 
         if cancel_requested_for_job(job):
             return finalize_cancelled_job(job)
-        scraped_data = scrape_book(submission.resolved_url)
+        scraped_data = (
+            scrape_book_high_fidelity(submission.resolved_url)
+            if reprocess_book is not None
+            else scrape_book(submission.resolved_url)
+        )
         if not isinstance(scraped_data, dict):
             raise ValueError(
                 f"Source scraping returned no content for {submission.resolved_url}. "

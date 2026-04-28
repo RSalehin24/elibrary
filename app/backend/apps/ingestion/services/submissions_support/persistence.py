@@ -151,6 +151,14 @@ def export_payload_from_book(book, scraped_data):
         "main_content": book.main_content_html or "",
         "book_info": book.book_info_html or "",
         "dedication": book.dedication_html or "",
+        "front_sections": (
+            (book.raw_scrape_payload.get("front_sections") if isinstance(book.raw_scrape_payload, dict) else None)
+            or scraped_data.get("front_sections", [])
+        ),
+        "back_sections": (
+            (book.raw_scrape_payload.get("back_sections") if isinstance(book.raw_scrape_payload, dict) else None)
+            or scraped_data.get("back_sections", [])
+        ),
         "toc": book.toc or [],
         "content_items": book.content_items or [],
         "output_folder": scraped_data["output_folder"],

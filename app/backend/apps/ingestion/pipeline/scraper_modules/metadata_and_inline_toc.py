@@ -1,4 +1,16 @@
 
+from apps.ingestion.services.resolution_support_metadata import split_display_title
+
+ASCII_TO_BANGLA_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+
+def normalize_structured_heading_title(title):
+    cleaned = clean_display_text(title or "")
+    if not cleaned:
+        return ""
+    return cleaned.translate(ASCII_TO_BANGLA_DIGITS)
+
+
 def create_output_folder(book_title):
     base_folder = Path(settings.RUNTIME_STORAGE_DIR) / "media" / "scraped-books"
     if not base_folder.exists():
@@ -21,11 +33,8 @@ def extract_title_and_author(soup):
     if not title_tag:
         return "Book Title", ""
 
-    full_title = title_tag.get_text(strip=True)
-    for sep in ["–", "-"]:
-        if sep in full_title:
-            return map(str.strip, full_title.split(sep, 1))
-    return full_title, ""
+    full_title = title_tag.get_text(" ", strip=True)
+    return split_display_title(full_title)
 
 def scrape_book_meta(soup):
     author = series = book_type = ""
@@ -117,7 +126,7 @@ def extract_inline_toc_entries_from_list(list_block):
     for item in list_block.find_all("li", recursive=False):
         nested_list = item.find(["ul", "ol"], recursive=False)
         title_node = item.find("a") or item
-        title = clean_display_text(title_node.get_text(" ", strip=True))
+        title = normalize_structured_heading_title(title_node.get_text(" ", strip=True))
         if not title:
             continue
 
@@ -138,7 +147,7 @@ def extract_inline_toc_entries_from_list(list_block):
 
 
 def inline_content_heading_text(block):
-    text = clean_display_text(block.get_text(" ", strip=True))
+    text = normalize_structured_heading_title(block.get_text(" ", strip=True))
     if not text or len(text) > 180:
         return ""
 

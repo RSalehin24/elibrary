@@ -35,34 +35,46 @@ def contributor_names_by_role(book, role):
     return [entry["name"] for entry in normalized_book_contributors_for_export(book) if entry["role"] == role]
 
 
+def contributor_names_for_roles(book, *roles):
+    role_set = set(roles)
+    return [
+        entry["name"]
+        for entry in normalized_book_contributors_for_export(book)
+        if entry["role"] in role_set
+    ]
+
+
 def table_contributor_lines(book):
     authors = contributor_names_by_role(book, ContributorRole.AUTHOR)
     translators = contributor_names_by_role(book, ContributorRole.TRANSLATOR)
-    compilers = contributor_names_by_role(book, ContributorRole.COMPILER)
-    editors = contributor_names_by_role(book, ContributorRole.EDITOR)
+    editors = contributor_names_for_roles(book, ContributorRole.COMPILER, ContributorRole.EDITOR)
+    publishers = contributor_names_by_role(book, ContributorRole.PUBLISHER)
     lines = []
     if authors:
         lines.append(", ".join(authors))
     if translators:
         lines.append(f"Translator: {', '.join(translators)}")
-    if compilers:
-        lines.append(f"Compiler: {', '.join(compilers)}")
     if editors:
         lines.append(f"Editor: {', '.join(editors)}")
+    if publishers:
+        lines.append(f"Publisher: {', '.join(publishers)}")
     return lines or ["Contributor unavailable"]
 
 
 def identity_ticket_contributor_line(book):
     parts = []
-    for role, label in [
-        (ContributorRole.AUTHOR, ""),
-        (ContributorRole.TRANSLATOR, "Translator: "),
-        (ContributorRole.COMPILER, "Compiler: "),
-        (ContributorRole.EDITOR, "Editor: "),
-    ]:
-        names = contributor_names_by_role(book, role)
-        if names:
-            parts.append(f"{label}{', '.join(names)}" if label else ", ".join(names))
+    authors = contributor_names_by_role(book, ContributorRole.AUTHOR)
+    translators = contributor_names_by_role(book, ContributorRole.TRANSLATOR)
+    editors = contributor_names_for_roles(book, ContributorRole.COMPILER, ContributorRole.EDITOR)
+    publishers = contributor_names_by_role(book, ContributorRole.PUBLISHER)
+    if authors:
+        parts.append(", ".join(authors))
+    if translators:
+        parts.append(f"Translator: {', '.join(translators)}")
+    if editors:
+        parts.append(f"Editor: {', '.join(editors)}")
+    if publishers:
+        parts.append(f"Publisher: {', '.join(publishers)}")
     return " | ".join(parts) or "Contributor unavailable"
 
 
