@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en" class="epub-reader-html">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+        <meta http-equiv="X-UA-Compatible" content="ie=edge">
+        <meta name="theme-color" media="(prefers-color-scheme: light)" content="#0B3D2E">
+        <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B3D2E">
+        <meta name="theme-color" content="#0B3D2E">
+        <meta name="msapplication-navbutton-color" content="#0B3D2E">
+        <meta name="mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <link rel="manifest" href="manifest.webmanifest?v=1">
+        <link rel="icon" type="image/png" href="static/img/favicon.png">
+        <link rel="apple-touch-icon" href="static/img/icon-192.png">
+        <title>SIMPLE EPUB READER</title>
+        <link rel="stylesheet" href="static/css/base/reset.css">
+        <link rel="stylesheet" href="static/css/base/iconfont.css">
+        <link rel="stylesheet" href="static/css/base/helpers.css">
+        <link rel="stylesheet" href="static/css/components/shortcuts-dialog.css">
+        <link rel="stylesheet" href="static/css/components/landing-screen.css">
+        <link rel="stylesheet" href="static/css/components/reader-layout.css">
+        <link rel="stylesheet" href="static/css/themes/theme-tokens.css">
+        <link rel="stylesheet" href="static/css/themes/theme-overrides.css">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    </head>
+    <body class="epub-container">
+        <a class="skip-link" href="#reader-controls">Skip to reader controls</a>
+        <section class="open-ebook-page">
+            <button type="button" id="open-shortcuts" class="shortcut-trigger">Shortcuts</button>
+            <div class="open-ebook-container">
+                <div class="book-icon-container">
+                    <img class="book-icon" src="static/img/book.svg" alt="logo">
+                </div>
+                <h2 class="open-ebook-title">Hello, Welcome to EPUB Reader</h2>
+                <p class="open-ebook-info">Click button to select your book</p>
+                <button type="button" id="open-new-book" class="open-ebook-btn">Open EPUB book</button>
+                <input type="file" name="epub-file" id="open-epub" accept=".epub" class="hidden-ebook-input">
+                <p class="open-ebook-info-two">This is a simple web EPUB Reader for reading ebooks easily.</p>
+            </div>
+            <div id="shortcut-modal" class="shortcut-modal" aria-hidden="true">
+                <div class="shortcut-modal-panel" role="dialog" aria-modal="true" aria-labelledby="shortcut-modal-title">
+                    <button type="button" id="close-shortcuts" class="shortcut-modal-close" aria-label="Close shortcuts">&times;</button>
+                    <h3 id="shortcut-modal-title" class="shortcut-modal-title">Reader Shortcuts</h3>
+                    <p class="shortcut-modal-subtitle">Controls available for your current device.</p>
+
+                    <div class="shortcut-view shortcut-view-keyboard">
+                        <div class="shortcut-group-title">Keyboard</div>
+                        <div class="shortcut-list">
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Next / Previous page</span>
+                                <span class="shortcut-value"><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></span>
+                            </div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Change theme</span>
+                                <span class="shortcut-value"><kbd>Ctrl</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd></span>
+                            </div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Resize text</span>
+                                <span class="shortcut-value"><kbd>Cmd/Ctrl</kbd> + <kbd>+</kbd> / <kbd>-</kbd></span>
+                            </div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Toggle full screen</span>
+                                <span class="shortcut-value"><kbd>F</kbd> or Double click</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="shortcut-view shortcut-view-gestures">
+                        <div class="shortcut-group-title">Gestures</div>
+                        <div class="shortcut-list">
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Next / Previous page</span>
+                                <span class="shortcut-value">Swipe left / right</span>
+                            </div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Resize text</span>
+                                <span class="shortcut-value">Two-finger pinch</span>
+                            </div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Toggle theme</span>
+                                <span class="shortcut-value">Two-finger tap</span>
+                            </div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-label">Toggle full screen</span>
+                                <span class="shortcut-value">Double tap</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="copyright-text">Copyright @ RSalehin24</div>
+        </section>
+        <section class="epub-reader-container" id="reader-view" aria-label="EPUB reader">
+            <div id="epub-contents-panel" class="epub-contents"></div>
+            <div class="reader-wrapper">
+                <div id="reader-controls" class="wrapper-nav">
+                    <div class="icon-wrap-first-two">
+                        <button type="button" class="icon-wrap icon-control iconmulu" aria-label="Toggle table of contents" aria-controls="epub-contents-panel" aria-expanded="false">
+                            <span class="iconfont" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M4.5 6h0M4.5 12h0M4.5 18h0M9 6h10M9 12h10M9 18h10"></path>
+                                </svg>
+                            </span>
+                        </button>
+                        <div class="icon-anchor">
+                            <button type="button" class="icon-control iconshezhi" aria-label="Open reading settings" aria-haspopup="true" aria-controls="reader-settings-panel" aria-expanded="false">
+                                <span class="iconfont" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M12 8.75a3.25 3.25 0 1 0 0 6.5a3.25 3.25 0 0 0 0-6.5Z"></path>
+                                    <path d="M12 2.75v2.2M12 19.05v2.2M4.95 4.95l1.55 1.55M17.5 17.5l1.55 1.55M2.75 12h2.2M19.05 12h2.2M4.95 19.05l1.55-1.55M17.5 6.5l1.55-1.55"></path>
+                                </svg>
+                                </span>
+                            </button>
+                            <div id="reader-settings-panel" class="setting-wrapper" role="group" aria-label="Reading settings" aria-hidden="true">
+                                <div class="dropdown-caret">
+                                    <span class="caret-outer"></span>
+                                    <span class="caret-inner"></span>
+                                </div>
+                                <div class="setting-size">
+                                    <button type="button" class="size-btn small" data-tag="small" aria-label="Decrease font size">A</button>
+                                    <button type="button" class="size-btn big" data-tag="big" aria-label="Increase font size">A</button>
+                                </div>
+                                <div class="setting-background">
+                                    <button type="button" class="bg-btn" data-type="0" aria-pressed="true">White</button>
+                                    <button type="button" class="bg-btn" data-type="1" aria-pressed="false">Sepia</button>
+                                    <button type="button" class="bg-btn" data-type="2" aria-pressed="false">Night</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="wrapper-main">
+                    <button type="button" class="arrow prev-btn" aria-label="Previous section">
+                        <span class="iconfont iconarrow-left" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M14.5 5.5L8 12l6.5 6.5"></path>
+                            </svg>
+                        </span>
+                    </button>
+                    <div id="viewer" class="reader-wrapper-container"></div>
+                    <button type="button" class="arrow next-btn" aria-label="Next section">
+                        <span class="iconfont iconarrowright" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M9.5 5.5L16 12l-6.5 6.5"></path>
+                            </svg>
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </section>
+        <script src="static/js/app/pwa.js"></script>
+        <script type="module" src="static/js/app/boot-reader.js"></script>
+    </body>
+</html>

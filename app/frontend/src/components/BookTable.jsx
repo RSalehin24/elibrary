@@ -1,0 +1,271 @@
+import { Fragment } from "react";
+import { Link } from "react-router-dom";
+import AsyncButton from "./AsyncButton";
+import BookRouteLink from "./BookRouteLink";
+import {
+  formatBookDate,
+  getWriterColumnGroups,
+} from "../utils/bookPresentation";
+import { CATALOG_TABLE_PREFETCH_TRIGGER } from "../utils/catalogBooks";
+import { toQueryString } from "../utils/query";
+
+function renderLinkedValues(values, queryKey, linkFilters) {
+  return values.map((value, index) => (
+    <Fragment key={`${queryKey}-${value}`}>
+      <Link to={`/library${toQueryString({ ...(linkFilters || {}), [queryKey]: value })}`} className="meta-link">
+        {value}
+      </Link>
+      {index < values.length - 1 ? <span className="meta-divider">, </span> : null}
+    </Fragment>
+  ));
+}
+
+function renderWriterCell(book, linkFilters) {
+  const groups = getWriterColumnGroups(book);
+  if (!groups.length) {
+    return <span className="table-muted">Contributor unavailable</span>;
+  }
+
+  return (
+    <div className="table-writer-stack">
+      {groups.map((group, index) => (
+        <div key={`${book.id}-writer-${index}`} className="table-writer-line">
+          {group.label ? <span className="table-role-label">{group.label}</span> : null}
+          <span>{renderLinkedValues(group.names, group.queryKey, linkFilters)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BookTableSkeletonRows({
+  count = 5,
+  incremental = false,
+  showMyBooksAction = false,
+}) {
+  return Array.from({ length: count }, (_, index) => (
+    <tr
+      key={`${incremental ? "more" : "initial"}-skeleton-${index}`}
+      data-testid={
+        index === 0
+          ? `book-table-${incremental ? "load-more" : "table"}-skeleton`
+          : undefined
+      }
+      aria-hidden="true"
+    >
+      <td className="table-code-cell">
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td className="table-title-cell">
+        <div className="book-table-skeleton-stack">
+          <span className="skeleton-line skeleton-line-xl" />
+          <span className="skeleton-line skeleton-line-sm" />
+        </div>
+      </td>
+      <td>
+        <div className="book-table-skeleton-stack">
+          <span className="skeleton-line skeleton-line-lg" />
+          <span className="skeleton-line skeleton-line-sm" />
+        </div>
+      </td>
+      <td>
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td>
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      <td>
+        <span className="skeleton-pill skeleton-pill-sm" />
+      </td>
+      <td>
+        <span className="skeleton-line skeleton-line-sm" />
+      </td>
+      {showMyBooksAction ? (
+        <td className="table-action-cell">
+          <span className="ghost-button skeleton-button skeleton-button-sm" />
+        </td>
+      ) : null}
+      <td className="table-action-cell">
+        <span className="ghost-button skeleton-button skeleton-button-sm" />
+      </td>
+    </tr>
+  ));
+}
+
+export default function BookTable({
+  books,
+  emptyLabel = "No books found.",
+  linkFilters = {},
+  highlightedBookId = "",
+  shellClassName = "",
+  shellRef = null,
+  hasMore = false,
+  observeLoadTrigger = undefined,
+  initialLoading = false,
+  loadingMore = false,
+  refreshing = false,
+  showMyBooksAction = false,
+  onMyBooksToggle = null,
+  myBooksBusyIds = {},
+}) {
+  const showInitialSkeleton = (initialLoading || refreshing) && !books?.length;
+  const showIncrementalSkeleton = loadingMore && books?.length > 0;
+  const columnCount = showMyBooksAction ? 9 : 8;
+
+  return (
+    <div
+      ref={shellRef}
+      className={`catalog-table-shell book-table-shell${
+        shellClassName ? ` ${shellClassName}` : ""
+      }`}
+      aria-busy={initialLoading || loadingMore || refreshing}
+    >
+      <table
+        className={`catalog-table book-table table-mobile-cards${
+          showMyBooksAction ? " book-table-with-my-books" : ""
+        }`}
+      >
+        <colgroup>
+          <col className="book-table-col-id" />
+          <col className="book-table-col-title" />
+          <col className="book-table-col-writer" />
+          <col className="book-table-col-category" />
+          <col className="book-table-col-series" />
+          <col className="book-table-col-type" />
+          <col className="book-table-col-created" />
+          {showMyBooksAction ? <col className="book-table-col-action" /> : null}
+          <col className="book-table-col-action" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Book ID</th>
+            <th>Title</th>
+            <th>Contributors</th>
+            <th>Category</th>
+            <th>Series</th>
+            <th>Type</th>
+            <th>Created</th>
+            {showMyBooksAction ? <th>My Books</th> : null}
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {showInitialSkeleton ? (
+            <BookTableSkeletonRows showMyBooksAction={showMyBooksAction} />
+          ) : books?.length ? (
+            books.map((book, rowIndex) => {
+              const categories = book.categories || [];
+              const series = book.series || [];
+              const myBooksBusy = Boolean(
+                myBooksBusyIds[book.id] || myBooksBusyIds[book.slug],
+              );
+
+              return (
+                <tr
+                  key={book.id}
+                  className={highlightedBookId === book.id ? "is-highlighted" : ""}
+                  ref={
+                    hasMore &&
+                    typeof observeLoadTrigger === "function" &&
+                    rowIndex ===
+                      Math.max(
+                        0,
+                        books.length - CATALOG_TABLE_PREFETCH_TRIGGER,
+                      )
+                      ? observeLoadTrigger
+                      : undefined
+                  }
+                >
+                  <td className="table-code-cell" data-label="Book ID">
+                    <BookRouteLink slug={book.slug} className="table-code-link">
+                      {book.catalog_code || "Pending"}
+                    </BookRouteLink>
+                  </td>
+                  <td className="table-title-cell" data-label="Title">
+                    <BookRouteLink slug={book.slug} className="table-title-link">
+                      {book.title}
+                    </BookRouteLink>
+                    <span className="table-secondary-line">
+                      {book.primary_source?.display_path ||
+                        (book.record_type === "manual"
+                          ? "Manual entry"
+                          : "Library record")}
+                    </span>
+                  </td>
+                  <td data-label="Contributors">
+                    {renderWriterCell(book, linkFilters)}
+                  </td>
+                  <td data-label="Category">
+                    {categories.length ? (
+                      renderLinkedValues(categories, "category", linkFilters)
+                    ) : (
+                      <span className="table-muted">Unsorted</span>
+                    )}
+                  </td>
+                  <td data-label="Series">
+                    {series.length ? (
+                      series.join(", ")
+                    ) : (
+                      <span className="table-muted">Standalone</span>
+                    )}
+                  </td>
+                  <td data-label="Type">
+                    <span
+                      className={`table-type-pill table-type-pill-${book.record_type || "digital"}`}
+                    >
+                      {book.record_type === "manual" ? "Manual" : "Digital"}
+                    </span>
+                  </td>
+                  <td data-label="Created">{formatBookDate(book.created_at)}</td>
+                  {showMyBooksAction ? (
+                    <td className="table-action-cell" data-label="My Books">
+                      <AsyncButton
+                        className={
+                          book.is_in_my_books
+                            ? "ghost-button table-row-action my-books-toggle is-in-my-books"
+                            : "primary-button table-row-action my-books-toggle"
+                        }
+                        loading={myBooksBusy}
+                        loadingLabel={book.is_in_my_books ? "Removing..." : "Adding..."}
+                        onClick={() => onMyBooksToggle?.(book)}
+                        disabled={!onMyBooksToggle}
+                        aria-label={
+                          book.is_in_my_books
+                            ? `Remove ${book.title} from My Books`
+                            : `Add ${book.title} to My Books`
+                        }
+                      >
+                        {book.is_in_my_books ? "Remove" : "Add"}
+                      </AsyncButton>
+                    </td>
+                  ) : null}
+                  <td className="table-action-cell" data-label="Action">
+                    <BookRouteLink
+                      slug={book.slug}
+                      className="ghost-button table-row-action"
+                    >
+                      Open
+                    </BookRouteLink>
+                  </td>
+                </tr>
+              );
+            })
+          ) : (
+            <tr>
+              <td colSpan={columnCount} className="table-empty-cell">
+                {emptyLabel}
+              </td>
+            </tr>
+          )}
+          {showIncrementalSkeleton ? (
+            <BookTableSkeletonRows
+              count={3}
+              incremental
+              showMyBooksAction={showMyBooksAction}
+            />
+          ) : null}
+        </tbody>
+      </table>
+    </div>
+  );
+}

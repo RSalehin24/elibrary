@@ -1,0 +1,957 @@
+
+
+def split_leading_front_sections(main_content_html):
+    if not main_content_html:
+        return [], main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    remove_source_generated_toc_containers(soup)
+    sections = []
+    current_section = None
+    extraction_started = False
+
+    for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+        if block.parent is None:
+            continue
+
+        text = block_text(block)
+        if not text:
+            continue
+
+        strong_text = block_strong_text(block)
+        has_break = block_has_break(block)
+
+        section_title = resolve_front_section_title(block)
+        if section_title:
+            extraction_started = True
+            if current_section and plain_text_from_html("\n".join(current_section["html_parts"])):
+                sections.append(
+                    {
+                        "title": current_section["title"],
+                        "html": "\n".join(current_section["html_parts"]),
+                    }
+                )
+            current_section = {"title": section_title, "html_parts": []}
+            block.decompose()
+            continue
+
+        if not extraction_started:
+            continue
+
+        if is_separator_paragraph(text):
+            block.decompose()
+            continue
+        if text_matches_patterns(text, INLINE_TOC_HEADING_PATTERNS):
+            remove_inline_toc_heading_and_lists(block)
+            break
+
+        if is_dedication_heading(text, strong_text=strong_text, tag_name=block.name):
+            break
+        if search_front_matter_label_value(text, strong_text=strong_text, has_break=has_break):
+            break
+        if is_body_section_marker(text, tag_name=block.name):
+            break
+        if block.name in HEADING_TAG_NAMES and not is_front_section_heading(text, tag_name=block.name):
+            break
+
+        if current_section is None:
+            break
+
+        current_section["html_parts"].append(str(block))
+        block.decompose()
+
+    if current_section and plain_text_from_html("\n".join(current_section["html_parts"])):
+        sections.append(
+            {
+                "title": current_section["title"],
+                "html": "\n".join(current_section["html_parts"]),
+            }
+        )
+
+    if sections:
+        strip_leading_probable_toc_lists(soup)
+
+    return sections, str(soup)
+
+
+MIN_DUPLICATE_FRAGMENT_SIGNATURE_LENGTH = 8
+SHORT_RESIDUAL_MAIN_CONTENT_LENGTH = 180
+BANGLA_TO_ASCII_DIGITS = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
+NUMERIC_ONLY_SECTION_MARKER_PATTERN = re.compile(
+    r"^(?P<digits>[০-৯0-9]{1,4})(?:\s*[.)।])?$",
+)
+TOC_SECTION_TITLE_PATTERNS = tuple([*INLINE_TOC_HEADING_PATTERNS, "সূচী"])
+
+
+def normalized_fragment_signature(text):
+    cleaned = clean_display_text(text or "")
+    if not cleaned:
+        return ""
+    return normalize_catalog_text(cleaned)
+
+
+def numbered_section_marker_value(text):
+    cleaned_text = clean_display_text(text or "")
+    if not cleaned_text or len(cleaned_text) > 8:
+        return None
+
+    match = NUMERIC_ONLY_SECTION_MARKER_PATTERN.fullmatch(cleaned_text)
+    if not match:
+        return None
+
+    ascii_digits = match.group("digits").translate(BANGLA_TO_ASCII_DIGITS)
+    if not ascii_digits.isdigit():
+        return None
+
+    return int(ascii_digits)
+
+
+def numbered_section_title(number):
+    return str(int(number)).translate(ASCII_TO_BANGLA_DIGITS)
+
+
+def is_probable_source_navigation_section(title, html):
+    normalized_title = normalize_catalog_text(title or "")
+    if not normalized_title:
+        return False
+
+    if not any(
+        normalized_title == normalize_catalog_text(pattern)
+        or normalized_title.startswith(f"{normalize_catalog_text(pattern)} ")
+        for pattern in TOC_SECTION_TITLE_PATTERNS
+    ):
+        return False
+
+    soup = BeautifulSoup(html or "", "html.parser")
+    anchors = [
+        anchor
+        for anchor in soup.find_all("a", href=True)
+        if clean_display_text(anchor.get_text(" ", strip=True))
+    ]
+    if len(anchors) < 3:
+        return False
+
+    external_book_links = 0
+    for anchor in anchors:
+        href = clean_display_text(anchor.get("href", ""))
+        if not href:
+            continue
+        if href.startswith("#"):
+            continue
+        if "/books/" in href:
+            external_book_links += 1
+
+    return external_book_links >= max(3, int(len(anchors) * 0.75))
+
+
+def iter_fragment_blocks(html):
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    return [
+        block
+        for block in soup.find_all(BLOCK_TAG_NAMES)
+        if block.parent is not None and block_text(block)
+    ]
+
+
+def collect_fragment_signatures(*html_fragments):
+    signatures = set()
+    for fragment in html_fragments:
+        for block in iter_fragment_blocks(fragment):
+            signature = normalized_fragment_signature(block_text(block))
+            if signature:
+                signatures.add(signature)
+    return signatures
+
+
+def dedupe_html_fragment_blocks(html):
+    if not html:
+        return ""
+
+    soup = BeautifulSoup(html, "html.parser")
+    seen = set()
+
+    for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+        if block.parent is None:
+            continue
+
+        text = block_text(block)
+        signature = normalized_fragment_signature(text)
+        if not signature:
+            continue
+        if len(signature) < MIN_DUPLICATE_FRAGMENT_SIGNATURE_LENGTH:
+            seen.add(signature)
+            continue
+        if signature in seen:
+            block.decompose()
+            continue
+        seen.add(signature)
+
+    cleaned_html = str(soup).strip()
+    return cleaned_html if plain_text_from_html(cleaned_html) else ""
+
+
+def merge_front_matter_html_parts(*html_fragments):
+    merged_blocks = []
+    seen = set()
+
+    for fragment in html_fragments:
+        if not fragment:
+            continue
+
+        blocks = iter_fragment_blocks(fragment)
+        if not blocks:
+            cleaned_text = clean_display_text(plain_text_from_html(fragment))
+            signature = normalized_fragment_signature(cleaned_text)
+            if cleaned_text and signature and signature not in seen:
+                seen.add(signature)
+                merged_blocks.append(f"<p>{escape(cleaned_text)}</p>")
+            continue
+
+        for block in blocks:
+            signature = normalized_fragment_signature(block_text(block))
+            if signature and signature in seen:
+                continue
+            if signature:
+                seen.add(signature)
+            merged_blocks.append(str(block))
+
+    merged_html = "\n".join(merged_blocks).strip()
+    return merged_html if plain_text_from_html(merged_html) else ""
+
+
+def dedupe_structured_sections(sections, *, reference_fragments=None):
+    reference_signatures = collect_fragment_signatures(*(reference_fragments or []))
+    deduped = []
+    seen = set()
+
+    for section in sections or []:
+        title = clean_display_text((section or {}).get("title") or "")
+        html = str((section or {}).get("html") or "").strip()
+        if reference_signatures and html:
+            soup = BeautifulSoup(html, "html.parser")
+            for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+                if block.parent is None:
+                    continue
+                signature = normalized_fragment_signature(block_text(block))
+                if (
+                    signature
+                    and len(signature) >= MIN_DUPLICATE_FRAGMENT_SIGNATURE_LENGTH
+                    and signature in reference_signatures
+                ):
+                    block.decompose()
+            html = str(soup).strip()
+
+        plain_text = clean_display_text(plain_text_from_html(html))
+        if not title or not plain_text:
+            continue
+        if is_probable_source_navigation_section(title, html):
+            continue
+
+        signature = (
+            normalize_catalog_text(title),
+            normalize_catalog_text(plain_text),
+        )
+        if signature in seen:
+            continue
+
+        merged = False
+        for existing_section in deduped:
+            existing_title = normalize_catalog_text(existing_section["title"])
+            existing_text = clean_display_text(plain_text_from_html(existing_section["html"]))
+            existing_signature = normalize_catalog_text(existing_text)
+            if existing_title != signature[0]:
+                continue
+
+            longer_signature, shorter_signature = sorted(
+                [signature[1], existing_signature],
+                key=len,
+                reverse=True,
+            )
+            length_delta = abs(len(signature[1]) - len(existing_signature))
+            if (
+                shorter_signature
+                and shorter_signature in longer_signature
+                and length_delta <= max(80, int(len(longer_signature) * 0.05))
+            ):
+                if len(signature[1]) < len(existing_signature):
+                    existing_section["html"] = html
+                merged = True
+                break
+
+        if merged:
+            continue
+
+        seen.add(signature)
+        deduped.append({"title": title, "html": html})
+
+    return deduped
+
+
+def prune_duplicate_main_content(
+    main_content_html,
+    *,
+    reference_fragments=None,
+    content_items=None,
+):
+    if not main_content_html:
+        return ""
+
+    reference_signatures = collect_fragment_signatures(*(reference_fragments or []))
+    if not reference_signatures:
+        return main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+        if block.parent is None:
+            continue
+
+        signature = normalized_fragment_signature(block_text(block))
+        if (
+            signature
+            and len(signature) >= MIN_DUPLICATE_FRAGMENT_SIGNATURE_LENGTH
+            and signature in reference_signatures
+        ):
+            block.decompose()
+
+    cleaned_html = str(soup).strip()
+    remaining_text = clean_display_text(plain_text_from_html(cleaned_html))
+    if not remaining_text:
+        return ""
+
+    remaining_blocks = [
+        clean_display_text(block_text(block))
+        for block in soup.find_all(BLOCK_TAG_NAMES)
+        if block.parent is not None and block_text(block)
+    ]
+    if (
+        content_items
+        and remaining_blocks
+        and len(remaining_text) <= SHORT_RESIDUAL_MAIN_CONTENT_LENGTH
+        and all(
+            normalized_fragment_signature(text) in reference_signatures or len(text) <= 24
+            for text in remaining_blocks
+        )
+    ):
+        return ""
+
+    return cleaned_html
+
+
+def strip_leading_dedication_label(text):
+    cleaned_text = clean_display_text(text)
+    if not cleaned_text:
+        return ""
+    stripped = DEDICATION_INLINE_PREFIX_PATTERN.sub("", cleaned_text, count=1)
+    return clean_display_text(stripped)
+
+
+def lines_to_paragraphs_html(lines):
+    cleaned_lines = [clean_display_text(line) for line in lines if clean_display_text(line)]
+    if not cleaned_lines:
+        return ""
+    return "".join(f"<p>{escape(line)}</p>" for line in cleaned_lines)
+
+
+def split_block_on_inline_dedication(block):
+    if block.name not in {"p", "li", "blockquote"}:
+        return None
+
+    raw_text = block.get_text("\n", strip=True)
+    if not raw_text:
+        return None
+
+    lines = [clean_display_text(line) for line in raw_text.splitlines() if clean_display_text(line)]
+    if not lines:
+        return None
+
+    dedication_index = -1
+    for index, line in enumerate(lines):
+        if DEDICATION_INLINE_PREFIX_PATTERN.match(line):
+            dedication_index = index
+            break
+
+    if dedication_index < 0:
+        return None
+
+    before_lines = lines[:dedication_index]
+    dedication_lines = []
+
+    first_dedication_line = strip_leading_dedication_label(lines[dedication_index])
+    if first_dedication_line:
+        dedication_lines.append(first_dedication_line)
+
+    dedication_lines.extend(lines[dedication_index + 1 :])
+
+    return {
+        "before_html": lines_to_paragraphs_html(before_lines),
+        "dedication_html": lines_to_paragraphs_html(dedication_lines),
+    }
+
+
+def extract_main_content_segments(main_content_html):
+    if not main_content_html:
+        return "", "", main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    remove_source_generated_toc_containers(soup)
+    book_info_parts = []
+    dedication_parts = []
+    in_dedication = False
+
+    for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+        if block.parent is None:
+            continue
+
+        text = block_text(block)
+        if not text:
+            continue
+
+        strong_text = block_strong_text(block)
+        has_break = block_has_break(block)
+
+        if in_dedication:
+            if is_separator_paragraph(text):
+                in_dedication = False
+                block.decompose()
+                continue
+            if should_continue_dedication_block(text, strong_text=strong_text, tag_name=block.name):
+                dedication_parts.append(str(block))
+                block.decompose()
+                continue
+            in_dedication = False
+
+        inline_dedication_split = split_block_on_inline_dedication(block)
+        if inline_dedication_split is not None:
+            before_html = inline_dedication_split["before_html"]
+            dedication_html = inline_dedication_split["dedication_html"]
+
+            if before_html:
+                replacement_soup = BeautifulSoup(before_html, "html.parser")
+                block.clear()
+                for child in list(replacement_soup.contents):
+                    block.append(child)
+            else:
+                block.decompose()
+
+            if dedication_html:
+                dedication_parts.append(dedication_html)
+
+            in_dedication = True
+            continue
+
+        metadata_candidate = search_front_matter_label_value(text, strong_text=strong_text, has_break=has_break)
+        if metadata_candidate:
+            book_info_parts.append(str(block))
+            block.decompose()
+            continue
+
+        if is_dedication_heading(text, strong_text=strong_text, tag_name=block.name):
+            block.decompose()
+            in_dedication = True
+            continue
+
+        if is_separator_paragraph(text) and (book_info_parts or dedication_parts):
+            block.decompose()
+
+    return "\n".join(book_info_parts), clean_extracted_dedication_html("\n".join(dedication_parts)), str(soup)
+
+
+ASCII_TO_BANGLA_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+CHAPTER_SECTION_KEYWORD_PATTERN = re.compile(
+    r"(?:(?:^|\s)(?:অধ্যা(?:য়|য|য়)?|পর্ব|খণ্ড|পরিচ্ছেদ|অংশ)(?:\s|[০-৯0-9]|$)|\b(?:chapter|part|section)\b)",
+    re.IGNORECASE,
+)
+NUMERIC_SECTION_PREFIX_PATTERN = re.compile(
+    r"^(?:[০-৯0-9]+(?:\s*[\.\):]|(?:\s+(?:অধ্যা|অধ্যায়|পর্ব|খণ্ড|chapter|part|section)\b)))",
+    re.IGNORECASE,
+)
+ORDINAL_SECTION_PREFIX_PATTERN = re.compile(
+    r"^(?:প্রথম|দ্বিতীয়|দ্বিতীয়|তৃতীয়|তৃতীয়|চতুর্থ|পঞ্চম|ষষ্ঠ|সপ্তম|অষ্টম|নবম|দশম)\b",
+    re.IGNORECASE,
+)
+
+
+def normalize_structured_section_title(title):
+    cleaned = clean_display_text(title or "")
+    if not cleaned:
+        return ""
+    return cleaned.translate(ASCII_TO_BANGLA_DIGITS)
+
+
+def block_heading_candidate_text(block):
+    block_label = heading_plain_text(block_text(block))
+    if not block_label or len(block_label) > 180:
+        return ""
+
+    strong_heading = block_strong_heading_text(block)
+    candidate = heading_plain_text(strong_heading or block_label)
+    if not candidate:
+        return ""
+    loose_heading = False
+    if block.name not in HEADING_TAG_NAMES and not strong_heading:
+        normalized_candidate = normalize_catalog_text(candidate)
+        child_tags = {
+            child.name
+            for child in block.find_all(recursive=False)
+            if isinstance(child, Tag) and child.name
+        }
+        loose_heading = (
+            len(candidate) <= 120
+            and len(candidate.split()) <= 12
+            and count_sentence_markers(candidate) == 0
+            and not text_matches_patterns(candidate, INLINE_TOC_HEADING_PATTERNS)
+            and not search_front_matter_label_value(
+                block_label,
+                strong_text=block_strong_text(block),
+                has_break=block_has_break(block),
+            )
+            and not is_dedication_heading(
+                block_label,
+                strong_text=block_strong_text(block),
+                tag_name=block.name,
+            )
+            and not is_front_section_heading(candidate, tag_name=block.name)
+            and (
+                bool(CHAPTER_SECTION_KEYWORD_PATTERN.search(normalized_candidate))
+                or bool(NUMERIC_SECTION_PREFIX_PATTERN.match(candidate))
+                or bool(child_tags & {"strong", "b", "em", "u", "span"})
+            )
+        )
+    if block.name not in HEADING_TAG_NAMES and not strong_heading and not loose_heading:
+        return ""
+    if count_sentence_markers(candidate) > 1 or len(candidate.split()) > 18:
+        return ""
+    if text_matches_patterns(candidate, INLINE_TOC_HEADING_PATTERNS):
+        return ""
+    if search_front_matter_label_value(
+        block_label,
+        strong_text=strong_heading or block_strong_text(block),
+        has_break=block_has_break(block),
+    ):
+        return ""
+    if is_dedication_heading(
+        block_label,
+        strong_text=strong_heading or block_strong_text(block),
+        tag_name=block.name,
+    ):
+        return ""
+    if is_front_section_heading(candidate, tag_name=block.name):
+        return ""
+    return normalize_structured_section_title(candidate)
+
+
+def structured_body_heading_score(title, *, tag_name=""):
+    normalized = normalize_catalog_text(title)
+    if not normalized:
+        return 0
+
+    score = 0
+    if CHAPTER_SECTION_KEYWORD_PATTERN.search(normalized):
+        score += 3
+    if NUMERIC_SECTION_PREFIX_PATTERN.match(title):
+        score += 3
+    if ORDINAL_SECTION_PREFIX_PATTERN.match(normalized):
+        score += 2
+    if tag_name in HEADING_TAG_NAMES:
+        score += 1
+    if len(title.split()) <= 8:
+        score += 1
+    return score
+
+
+def build_flat_toc_from_content_items(content_items):
+    toc = []
+    for item in content_items:
+        path = item.get("path") or [item.get("title", "")]
+        toc.append(
+            {
+                "title": item.get("title", ""),
+                "type": item.get("type", "lesson"),
+                "has_content": bool(plain_text_from_html(item.get("content", ""))),
+                "path": list(path),
+            }
+        )
+    return toc
+
+
+def infer_numeric_structured_content_from_main_content(main_content_html):
+    if not main_content_html:
+        return [], [], main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    blocks = [
+        block
+        for block in soup.find_all(BLOCK_TAG_NAMES)
+        if block.parent is not None and block_text(block)
+    ]
+    if len(blocks) < 4:
+        return [], [], main_content_html
+
+    markers = []
+    for index, block in enumerate(blocks):
+        if block.name not in {"p", "li", "blockquote"}:
+            continue
+        number = numbered_section_marker_value(block_text(block))
+        if number is None:
+            continue
+        markers.append({"index": index, "number": number})
+
+    if len(markers) < 2:
+        return [], [], main_content_html
+
+    numbers = [marker["number"] for marker in markers]
+    if numbers[0] not in {1, 2}:
+        return [], [], main_content_html
+    if any(next_number <= number for number, next_number in zip(numbers, numbers[1:])):
+        return [], [], main_content_html
+
+    sequential_steps = sum(
+        1
+        for number, next_number in zip(numbers, numbers[1:])
+        if next_number == number + 1
+    )
+    if sequential_steps < max(1, len(markers) - 2):
+        return [], [], main_content_html
+
+    section_specs = []
+    consumed_indices = set()
+    first_marker = markers[0]
+    leading_html = "\n".join(str(blocks[index]) for index in range(first_marker["index"])).strip()
+    leading_text = clean_display_text(plain_text_from_html(leading_html))
+
+    if first_marker["number"] == 2:
+        if len(leading_text) < 20:
+            return [], [], main_content_html
+        section_specs.append(
+            {
+                "title": numbered_section_title(1),
+                "html": leading_html,
+            }
+        )
+        consumed_indices.update(range(first_marker["index"]))
+
+    for marker_index, marker in enumerate(markers):
+        start = marker["index"] + 1
+        end = markers[marker_index + 1]["index"] if marker_index + 1 < len(markers) else len(blocks)
+        section_html = "\n".join(str(blocks[index]) for index in range(start, end)).strip()
+        section_text = clean_display_text(plain_text_from_html(section_html))
+        if len(section_text) < 20:
+            return [], [], main_content_html
+
+        section_specs.append(
+            {
+                "title": numbered_section_title(marker["number"]),
+                "html": section_html,
+            }
+        )
+        consumed_indices.add(marker["index"])
+        consumed_indices.update(range(start, end))
+
+    if len(section_specs) < 2:
+        return [], [], main_content_html
+
+    content_items = [
+        {
+            "title": section["title"],
+            "content": section["html"],
+            "type": "lesson",
+            "parent": None,
+            "path": [section["title"]],
+        }
+        for section in section_specs
+    ]
+
+    residual_html = "\n".join(
+        str(blocks[index])
+        for index in range(len(blocks))
+        if index not in consumed_indices
+    ).strip()
+
+    return build_flat_toc_from_content_items(content_items), content_items, residual_html
+
+
+def prune_toc_entries_without_content(toc_entries, content_items, parent_path=()):
+    non_empty_paths = {
+        tuple(item.get("path") or [])
+        for item in content_items
+        if plain_text_from_html(item.get("content", ""))
+    }
+
+    def prune(entries, base_path=()):
+        pruned = []
+        for entry in entries or []:
+            path = tuple(entry.get("path") or (tuple(base_path) + (entry.get("title", ""),)))
+            children = prune(entry.get("children", []), path)
+            has_content = path in non_empty_paths
+            if not has_content and not children:
+                continue
+            normalized_entry = {
+                **entry,
+                "path": list(path),
+                "has_content": has_content,
+            }
+            if children:
+                normalized_entry["children"] = children
+            else:
+                normalized_entry.pop("children", None)
+            pruned.append(normalized_entry)
+        return pruned
+
+    return prune(toc_entries, parent_path)
+
+
+def infer_structured_content_from_main_content(main_content_html, book_title=""):
+    if not main_content_html:
+        return [], [], main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    blocks = [block for block in list(soup.find_all(BLOCK_TAG_NAMES)) if block.parent is not None]
+    candidates = []
+    normalized_book_title = normalize_catalog_text(book_title)
+
+    for index, block in enumerate(blocks):
+        heading = block_heading_candidate_text(block)
+        if not heading:
+            continue
+        if index == 0 and normalized_book_title and normalize_catalog_text(heading) == normalized_book_title:
+            continue
+        score = structured_body_heading_score(heading, tag_name=block.name)
+        candidates.append(
+            {
+                "index": index,
+                "title": heading,
+                "score": score,
+            }
+        )
+
+    strong_candidates = [entry for entry in candidates if entry["score"] >= 4]
+    usable_candidates = [entry for entry in candidates if entry["score"] >= 3]
+    loose_candidates = [entry for entry in candidates if entry["score"] >= 2]
+    numeric_fallback = lambda: infer_numeric_structured_content_from_main_content(main_content_html)
+
+    if len(usable_candidates) >= 2 and strong_candidates:
+        selected_candidates = usable_candidates
+        used_loose_fallback = False
+    elif len(loose_candidates) >= 3:
+        selected_candidates = loose_candidates
+        used_loose_fallback = True
+    else:
+        return numeric_fallback()
+
+    heading_index_map = {
+        entry["index"]: entry["title"]
+        for entry in selected_candidates
+    }
+
+    content_items = []
+    current_section = None
+    for index, block in enumerate(blocks):
+        if block.parent is None:
+            continue
+
+        section_title = heading_index_map.get(index)
+        if section_title:
+            if current_section and plain_text_from_html("\n".join(current_section["content_parts"])):
+                content_items.append(
+                    {
+                        "title": current_section["title"],
+                        "content": "\n".join(current_section["content_parts"]).strip(),
+                        "type": "lesson",
+                        "parent": None,
+                        "path": [current_section["title"]],
+                    }
+                )
+            current_section = {"title": section_title, "content_parts": []}
+            block.decompose()
+            continue
+
+        if current_section is not None:
+            current_section["content_parts"].append(str(block))
+            block.decompose()
+
+    if current_section and plain_text_from_html("\n".join(current_section["content_parts"])):
+        content_items.append(
+            {
+                "title": current_section["title"],
+                "content": "\n".join(current_section["content_parts"]).strip(),
+                "type": "lesson",
+                "parent": None,
+                "path": [current_section["title"]],
+            }
+        )
+
+    if len(content_items) < 2:
+        return numeric_fallback()
+
+    if used_loose_fallback:
+        substantive_sections = [
+            item
+            for item in content_items
+            if len(clean_display_text(plain_text_from_html(item.get("content", "")))) >= 20
+        ]
+        if len(substantive_sections) < 2:
+            return numeric_fallback()
+
+    if len(content_items) < 2:
+        return numeric_fallback()
+
+    return build_flat_toc_from_content_items(content_items), content_items, str(soup)
+
+
+def split_trailing_front_sections(main_content_html):
+    if not main_content_html:
+        return [], main_content_html
+
+    soup = BeautifulSoup(main_content_html, "html.parser")
+    blocks = [block for block in list(soup.find_all(BLOCK_TAG_NAMES)) if block.parent is not None]
+    if not blocks:
+        return [], main_content_html
+
+    trailing_start_index = None
+    has_content_before = False
+
+    for index, block in enumerate(blocks):
+        text = block_text(block)
+        if not text:
+            continue
+
+        if resolve_front_section_title(block):
+            suffix_has_body_heading = False
+            for suffix_block in blocks[index + 1 :]:
+                if suffix_block.parent is None:
+                    continue
+                suffix_title = block_heading_candidate_text(suffix_block)
+                suffix_text = block_text(suffix_block)
+                if suffix_title and not is_front_section_heading(suffix_title, tag_name=suffix_block.name):
+                    suffix_has_body_heading = True
+                    break
+                if is_body_section_marker(suffix_text, tag_name=suffix_block.name) and not resolve_front_section_title(suffix_block):
+                    suffix_has_body_heading = True
+                    break
+            if not suffix_has_body_heading and has_content_before:
+                trailing_start_index = index
+                break
+
+        if plain_text_from_html(str(block)):
+            has_content_before = True
+
+    if trailing_start_index is None:
+        return [], main_content_html
+
+    sections = []
+    current_section = None
+
+    for block in blocks[trailing_start_index:]:
+        if block.parent is None:
+            continue
+
+        text = block_text(block)
+        if not text:
+            continue
+
+        section_title = resolve_front_section_title(block)
+        if section_title:
+            if current_section and plain_text_from_html("\n".join(current_section["html_parts"])):
+                sections.append(
+                    {
+                        "title": current_section["title"],
+                        "html": "\n".join(current_section["html_parts"]),
+                    }
+                )
+            current_section = {"title": section_title, "html_parts": []}
+            block.decompose()
+            continue
+
+        if is_separator_paragraph(text):
+            block.decompose()
+            continue
+
+        if current_section is None:
+            return [], main_content_html
+
+        current_section["html_parts"].append(str(block))
+        block.decompose()
+
+    if current_section and plain_text_from_html("\n".join(current_section["html_parts"])):
+        sections.append(
+            {
+                "title": current_section["title"],
+                "html": "\n".join(current_section["html_parts"]),
+            }
+        )
+
+    return sections, str(soup)
+
+
+def extract_boundary_sections_from_content_items(content_items, toc):
+    if not content_items:
+        return [], [], toc or [], []
+
+    normalized_items = [dict(item) for item in content_items]
+    front_sections = []
+    back_sections = []
+
+    first_content = normalized_items[0].get("content", "")
+    extracted_front_sections, cleaned_first_content = split_leading_front_sections(first_content)
+    if extracted_front_sections:
+        front_sections.extend(extracted_front_sections)
+        normalized_items[0]["content"] = cleaned_first_content
+
+    last_index = len(normalized_items) - 1
+    last_content = normalized_items[last_index].get("content", "")
+    extracted_back_sections, cleaned_last_content = split_trailing_front_sections(last_content)
+    if extracted_back_sections:
+        back_sections.extend(extracted_back_sections)
+        normalized_items[last_index]["content"] = cleaned_last_content
+
+    normalized_items = [
+        item
+        for item in normalized_items
+        if plain_text_from_html(item.get("content", ""))
+    ]
+
+    normalized_toc = toc or build_flat_toc_from_content_items(normalized_items)
+    normalized_toc = prune_toc_entries_without_content(normalized_toc, normalized_items)
+    return front_sections, back_sections, normalized_toc, normalized_items
+
+
+def clean_extracted_dedication_html(dedication_html):
+    if not dedication_html:
+        return ""
+
+    soup = BeautifulSoup(dedication_html, "html.parser")
+    seen_heading = False
+
+    for block in list(soup.find_all(BLOCK_TAG_NAMES)):
+        if block.parent is None:
+            continue
+
+        text = block_text(block)
+        if not text:
+            block.decompose()
+            continue
+
+        strong_text = block_strong_text(block)
+        is_heading = is_dedication_heading(text, strong_text=strong_text, tag_name=block.name)
+        if is_heading:
+            inline_dedication_text = strip_leading_dedication_label(text)
+            if inline_dedication_text and inline_dedication_text != clean_display_text(text):
+                block.clear()
+                block.append(inline_dedication_text)
+                text = block_text(block)
+                strong_text = block_strong_text(block)
+                is_heading = is_dedication_heading(text, strong_text=strong_text, tag_name=block.name)
+        is_duplicate_heading = seen_heading and text_matches_patterns(text, DEDICATION_PATTERNS) and len(text) <= 40
+
+        if is_separator_paragraph(text) or is_heading or is_duplicate_heading:
+            seen_heading = seen_heading or is_heading
+            block.decompose()
+            continue
+
+        break
+
+    cleaned_html = str(soup).strip()
+    return cleaned_html if plain_text_from_html(cleaned_html) else ""

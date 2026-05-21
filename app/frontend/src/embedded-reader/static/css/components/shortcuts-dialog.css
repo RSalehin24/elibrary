@@ -1,0 +1,216 @@
+.shortcut-trigger {
+  position: absolute;
+  top: calc(var(--safe-area-top) + 12px);
+  right: calc(var(--safe-area-right) + 12px);
+  z-index: 10;
+  border: 1px solid rgba(120, 209, 120, 0.42);
+  border-radius: 999px;
+  padding: 9px 16px;
+  background: rgba(120, 209, 120, 0.14);
+  color: #cfffe5;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.shortcut-trigger:hover {
+  background: rgba(120, 209, 120, 0.24);
+  box-shadow: 0 7px 18px rgba(5, 26, 20, 0.36);
+  transform: translateY(-1px);
+}
+
+.shortcut-trigger:focus-visible {
+  outline: 2px solid #78d178;
+  outline-offset: 2px;
+}
+
+.shortcut-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: calc(var(--safe-area-top) + 74px) calc(var(--safe-area-right) + 18px)
+    calc(var(--safe-area-bottom) + 18px) calc(var(--safe-area-left) + 18px);
+  background: rgba(4, 26, 19, 0.44);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.shortcut-modal.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.shortcut-modal-panel {
+  position: relative;
+  width: min(460px, calc(100vw - 44px));
+  max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 92px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 209, 120, 0.42);
+  background: linear-gradient(180deg, #145740 0%, #0b3d2e 55%, #082c22 100%);
+  color: #cfffe5;
+  box-shadow: 0 24px 42px rgba(4, 17, 13, 0.48);
+  padding: 18px 18px 16px;
+  text-align: left;
+}
+
+.shortcut-modal-close {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #cfffe5;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shortcut-modal-close:hover {
+  background: rgba(207, 255, 229, 0.12);
+}
+
+.shortcut-modal-close:focus-visible {
+  outline: 2px solid #d9f6d9;
+  outline-offset: 2px;
+}
+
+.shortcut-modal-title {
+  margin-right: 32px;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.shortcut-modal-subtitle {
+  margin-top: 5px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 18px;
+  color: rgba(207, 255, 229, 0.84);
+}
+
+.shortcut-group-title {
+  display: inline-block;
+  margin: 8px 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #0b3d2e;
+  background: #78d178;
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: background-color 0.16s ease, transform 0.16s ease;
+}
+
+.shortcut-item:hover,
+.shortcut-item:focus-within {
+  background: rgba(255, 255, 255, 0.14);
+  transform: translateY(-1px);
+}
+
+.shortcut-label {
+  color: rgba(207, 255, 229, 0.94);
+}
+
+.shortcut-value {
+  color: #fff;
+  font-weight: 600;
+}
+
+.shortcut-value kbd {
+  display: inline-block;
+  margin: 0 1px;
+  padding: 2px 6px;
+  border: 1px solid rgba(11, 61, 46, 0.4);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: #d9f6d9;
+  color: #0b3d2e;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.shortcut-view {
+  display: block;
+}
+
+.shortcut-modal-open {
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .shortcut-trigger {
+    top: calc(var(--safe-area-top) + 8px);
+    right: calc(var(--safe-area-right) + 8px);
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .shortcut-modal {
+    justify-content: center;
+    padding: calc(var(--safe-area-top) + 56px) calc(var(--safe-area-right) + 10px)
+      calc(var(--safe-area-bottom) + 10px) calc(var(--safe-area-left) + 10px);
+  }
+
+  .shortcut-modal-panel {
+    width: 100%;
+    max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 70px);
+    border-radius: 14px;
+    padding: 16px 14px 14px;
+  }
+
+  .shortcut-view-keyboard {
+    display: none;
+  }
+
+  .shortcut-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
+
+@media (max-height: 620px) {
+  .shortcut-modal {
+    padding-top: calc(var(--safe-area-top) + 58px);
+  }
+
+  .shortcut-modal-panel {
+    max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 74px);
+  }
+}

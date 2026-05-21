@@ -1,0 +1,145 @@
+.access-users-search-field:focus-within {
+  border-color:#0f4b3847;
+  box-shadow:inset 0 1px #fffc,0 18px 30px #0c2f241a
+}
+.access-users-search-field .catalog-search-icon {
+  left:12px
+}
+.access-users-search-field input {
+  width:100%;
+  min-height:32px;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--ink);
+  font-size:.86rem;
+  font-weight:600
+}
+.access-users-search-field input::placeholder {
+  color:#325347ad;
+  font-weight:500
+}
+.access-users-search-field input:focus {
+  outline:none
+}
+.access-users-result-count {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height:34px;
+  min-width:54px;
+  margin:0;
+  padding:0 9px;
+  border:1px solid rgba(17,70,54,.12);
+  border-radius:999px;
+  background:linear-gradient(180deg,#ffffffe0,#f5f9f7d1);
+  box-shadow:inset 0 1px #ffffffbd,0 14px 28px #0c2f2414;
+  color:#0b3d2ec2;
+  font-size:.8rem;
+  font-weight:800;
+  letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;
+  line-height:1
+}
+.access-users-table-shell {
+  overflow:auto;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
+  max-height:var(--processing-list-card-height, 724px)
+}
+.access-users-table {
+  min-width:980px
+}
+.access-users-table th {
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:#f4f9f6f0
+}
+.access-users-filter-field,.access-users-sort-field {
+  min-width:0;
+  width:100%
+}
+.access-users-toolbar .catalog-toolbar-select {
+  min-height:36px;
+  width:100%;
+  padding:0 32px 0 12px;
+  font-size:.84rem;
+  border-radius:12px
+}
+.access-users-header .catalog-toolbar-field .fact-label {
+  font-size:.72rem
+}
+.form-fieldset-reset {
+  border:0;
+  margin:0;
+  padding:0;
+  min-width:0
+}
+.access-user-editor-primary-row {
+  align-items:start;
+  margin-bottom:16px
+}
+.access-user-editor-primary-row>label {
+  align-self:start
+}
+.access-user-email-field #access-user-email-feedback {
+  margin-top:4px
+}
+.access-user-submit-actions {
+  margin-top:10px
+}
+.access-password-header {
+  align-items:center
+}
+.simple-table tbody tr:last-child td {
+  border-bottom:0
+}
+.table-cell-stack {
+  display:grid;
+  gap:6px
+}
+.access-permission-cell {
+  vertical-align:top
+}
+.access-permission-list {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  max-width:100%
+}
+.access-permission-chip {
+  display:inline-flex;
+  align-items:center;
+  min-height:28px;
+  padding:4px 10px;
+  border:1px solid rgba(17,70,54,.14);
+  border-radius:999px;
+  background:linear-gradient(180deg,#fffffff5,#e8f2ede6);
+  box-shadow:inset 0 1px #ffffffd6,0 10px 18px #0c2f2414;
+  color:#0b3d2ee0;
+  font-size:.79rem;
+  font-weight:700;
+  line-height:1.2;
+  white-space:nowrap
+}
+.access-permission-empty {
+  color:var(--muted);
+  font-weight:600
+}
+.table-actions {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:nowrap
+}
+.table-actions>* {
+  flex-shrink:0
+}
+.table-note {
+  color:var(--muted);
+  font-size:.9rem
+}
+.processing-page {
+  gap:20px
+}

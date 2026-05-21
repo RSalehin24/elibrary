@@ -1,0 +1,111 @@
+.processing-inline-loader {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  width:100%;
+  color:var(--muted);
+  font-size:.92rem;
+  line-height:1.2
+}
+.processing-inline-skeleton {
+  display:block;
+  color:inherit
+}
+.processing-skeleton {
+  display:grid;
+  gap:14px;
+  width:100%
+}
+.processing-skeleton-summary {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+  gap:10px
+}
+.processing-skeleton-stat {
+  display:grid;
+  gap:8px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:linear-gradient(180deg,#fbfdfcfa,#f1f7f3eb)
+}
+.processing-skeleton-table {
+  display:grid;
+  gap:12px
+}
+.processing-skeleton-row {
+  display:grid;
+  grid-template-columns:minmax(0,1.8fr) repeat(3,minmax(0,1fr));
+  gap:12px;
+  align-items:center;
+  padding:12px 0;
+  border-top:1px solid rgba(17,70,54,.08)
+}
+.processing-skeleton-row:first-child {
+  padding-top:0;
+  border-top:0
+}
+.processing-summary-value-skeleton {
+  display:block;
+  height:1rem;
+  width:48px
+}
+.processing-table-skeleton-stack {
+  display:grid;
+  gap:6px
+}
+.processing-table-skeleton-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px
+}
+.processing-action-skeleton {
+  width:78px;
+  height:34px;
+  border-radius:6px
+}
+.processing-checkbox-skeleton {
+  display:inline-block;
+  width:18px;
+  height:18px;
+  border-radius:4px
+}
+.processing-form-field-skeleton {
+  display:grid;
+  gap:8px
+}
+.processing-card-skeleton {
+  padding-bottom:25px
+}
+.processing-switch-skeleton {
+  display:inline-flex
+}
+.processing-summary-card>.processing-inline-loader,.processing-summary-card>.processing-summary-bar,
+.processing-summary-card>.stack-form {
+  min-height:69px
+}
+.processing-summary-card.processing-incomplete-top-card>.processing-table-shell {
+  min-height:0;
+  height:100%
+}
+.processing-skeleton-row--split {
+  height:110px
+}
+.processing-skeleton-row--split>td {
+  height:110px
+}
+.processing-skeleton-row--split .processing-contributors-list {
+  min-height:82px;
+  align-content:start
+}
+.processing-table .processing-table-skeleton-row {
+  display:table-row
+}
+.processing-table .processing-table-skeleton-row td {
+  vertical-align:top
+}
+.processing-table .processing-table-skeleton-row .processing-table-link,.processing-table .processing-table-skeleton-row .processing-table-skeleton-stack,
+.processing-table .processing-table-skeleton-row .processing-contributors-list {
+  width:100%
+}

@@ -1,0 +1,766 @@
+================================================================================
+                         CODING ASSISTANT PROMPT
+          Book Processing Pages — Playwright E2E Tests + TDD Implementation
+================================================================================
+
+OVERVIEW
+────────
+You are rebuilding the Book Processing section of a React + Vite application
+from scratch. The existing pages are being fully replaced. The current design
+system (minimal, clean, to the point) and any reusable UI components, settings
+panels, or theme tokens must be preserved and reused wherever applicable.
+
+Your workflow is strictly test-driven:
+  1. Read and fully understand the specification below.
+  2. Write all Playwright E2E tests first, covering every behavior described,
+     including all normal flows, edge cases, and error scenarios.
+  3. Implement the pages and logic to make those tests pass.
+  4. After implementation, run tests and fix all failures. Keep testing, analyzing,
+     and fixing until every test passes and the feature is fully working.
+  5. Do not skip or defer any test. Do not implement anything that has no test.
+  6. Verify both frontend (React/Vite) and backend (Django/Celery/PostgreSQL)
+     are functioning correctly end-to-end.
+
+Stack: React (with hooks), Vite, TypeScript, Playwright (frontend);
+       Django, Celery, PostgreSQL (backend).
+
+GUIDING PRINCIPLES
+──────────────────
+  - Every card must be fully isolated: actions, loaders, search, filter, and
+    count in one card must not affect any other card.
+  - The processing pipeline (initial → queued → processing → created) must be
+    resilient. It must handle errors, interruptions, long durations, retries,
+    and edge cases automatically, without requiring user intervention to keep
+    running (except where explicitly specified).
+  - The pipeline keeps running until all requests are either in a terminal state
+    (created, failed, duplicate, deleted) or a holding state (paused). Users
+    may intervene to pause, delete, retry, or resolve duplicates, which moves
+    requests out of the cycle into the appropriate cards.
+  - All models and database tables must be verified for correct implementation
+    before any feature tests are written.
+  - Notifications must be shown at appropriate moments throughout the application,
+    accompanied by a soft sound played immediately when the notification appears.
+  - Keep fixing and testing until all errors are gone and no irregular behavior
+    or bugs remain.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 0 — PRE-FLIGHT: MODELS & SCHEMA VERIFICATION
+────────────────────────────────────────────────────────────────────────────────
+
+Before writing any feature tests or implementation code, verify that the Django
+models and PostgreSQL tables are correctly defined and migrated.
+
+Tests:
+  [ ] BookRecord model exists with all required fields (see Part 1).
+  [ ] BookCreationRequest model exists with all required fields (see Part 1).
+  [ ] All enum/choice fields use the correct values defined in Part 1.
+  [ ] Foreign key from BookCreationRequest to BookRecord is correctly set.
+  [ ] All optional fields (progress, errorMessage, isResumed, etc.) are nullable
+      where specified.
+  [ ] Migrations are up to date and apply cleanly on a fresh database.
+  [ ] Django admin (or equivalent) correctly reflects all model fields.
+  [ ] Celery tasks are registered and discoverable.
+  [ ] API endpoints for all CRUD and state-transition operations exist and return
+      correct HTTP status codes and response shapes.
+  [ ] Run the full Django test suite; fix all model/migration errors before
+      proceeding to feature tests.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 1 — DATA MODELS
+────────────────────────────────────────────────────────────────────────────────
+
+All types must be defined in a shared types file before tests or implementation
+are written.
+
+1. BookRecord
+   Fields:
+   - id: string
+   - name: string
+   - url: string
+   - category: string
+   - writer: string | null
+   - translator: string | null
+   - composer: string | null
+   - createdAt: string       // ISO timestamp
+   - updatedAt: string       // ISO timestamp
+   - bookCreationState: BookCreationState
+
+   BookCreationState is one of:
+   - "not_created"           // No creation request has ever been submitted
+   - Any valid BookCreationRequestState (mirrors the active request's state)
+
+2. BookCreationRequest
+   Fields:
+   - id: string
+   - bookRecordId: string
+   - state: BookCreationRequestState
+   - createdAt: string
+   - updatedAt: string
+   - progress?: RequestProgress | null     // Only present when state = paused
+   - errorMessage?: string | null          // Only present when state = failed
+   - isResumed?: boolean                   // Flag set when resuming a paused request
+   - isConfirmedNotDuplicate?: boolean     // Flag set when user chooses "New" on a duplicate
+   - duplicateOfRequestId?: string | null  // Set when duplicate is confirmed
+   - duplicateOfRecordId?: string | null   // Set when duplicate is confirmed
+
+   BookCreationRequestState (string union):
+   "initial" | "queued" | "processing" | "created" |
+   "paused"  | "failed" | "duplicate"  | "deleted"
+
+   Terminal states:   created, failed, duplicate, deleted
+   Holding state:     paused  (can be resumed)
+   Active states:     initial, queued, processing
+
+   RequestProgress:
+   - savedAt: string         // ISO timestamp of when progress was saved
+   - checkpoint: string      // Identifier of the last successfully processed step
+   - savedData: unknown      // Partial book data collected before the pause
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 2 — GLOBAL UI RULES
+────────────────────────────────────────────────────────────────────────────────
+
+These rules apply to every card on every page. Write a shared test helper or
+fixture that verifies these behaviors and reuse it across all test files.
+
+CHECKBOX COLUMN
+  - Each card that has at least one action available must have a leftmost
+    checkbox column for selecting single or multiple rows.
+  - Cards with no available actions must NOT render the checkbox column.
+    (e.g., Catalog/Incomplete Card A — read-only, no actions → no checkboxes)
+  - This rule must be tested for every card on every page.
+
+SELECTION & ISOLATION
+  - When an action is in progress within a card:
+    * All checkboxes and action buttons inside THAT card are disabled.
+    * All other cards on the same page remain fully interactive — their
+      checkboxes and buttons must NOT be disabled.
+  - Isolation must be verified by running simultaneous actions in two cards
+    and asserting that each card's state is independent.
+
+LOADERS
+  - A loading indicator appears inside the card where an action is processing.
+  - The loader disappears when the action completes or fails.
+  - A loader in one card must not affect the display or interactivity of any
+    other card.
+  - Loader behavior must be tested for every card action.
+
+SEARCH (per card)
+  - Searchable fields: Name, Writer, Translator, Publisher.
+  - Search is case-insensitive and filters results in real time.
+  - Search in one card must not alter results in any other card.
+
+FILTERS (per card)
+  - Filterable by: Book Category, Book Creation Request Status.
+  - Active filters are clearly indicated.
+  - Filters in one card must not affect any other card.
+
+RECORD COUNT
+  - Each card displays the count of currently visible (filtered) records.
+  - The count updates reactively as search or filter values change.
+  - Counts in one card must not be influenced by actions or filters in other cards.
+
+RIGOROUS PER-CARD TESTING
+  - For every card on every page, explicitly test:
+    * Search (all searchable fields)
+    * Filter (all filterable dimensions)
+    * Count (verifies count is scoped to that card only)
+    * Every available action (single and bulk where applicable)
+    * Loader visibility during each action
+    * Disabled state during each action
+    * Isolation from all other cards on the same page
+
+DESIGN
+  - Preserve the existing minimal, clean design language.
+  - Reuse existing theme tokens, component styles, and layout patterns.
+  - Do not introduce new design patterns unless there is no existing equivalent.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 3 — NOTIFICATIONS & SOUNDS
+────────────────────────────────────────────────────────────────────────────────
+
+A notification system must be implemented throughout the entire application.
+
+WHEN TO SHOW NOTIFICATIONS
+  - When any action finishes processing (success or failure), show a notification.
+  - When one or more requests enter the "failed" state, show a failure notification.
+  - When one or more duplicate requests are detected, show a duplicate notification.
+  - For failed or duplicate notifications: upon showing the first notification,
+    wait 2 minutes to check whether additional failures or duplicates have arrived.
+    If a new one arrives during that 2-minute window, reset the timer and continue
+    waiting. Only dismiss/consolidate the notification after 2 full minutes pass
+    with no new arrivals.
+  - Notify when an automated sync completes.
+  - Notify when book creation requests are auto-created after automated sync.
+  - Notify when the pipeline completes all requests (all reached terminal or
+    holding states).
+
+SOUND
+  - Every notification must play a soft, unobtrusive sound at the exact moment
+    the notification is displayed.
+  - The sound must be distinct for success, failure/error, and informational
+    notifications.
+  - Sound must not play if the user has muted notifications (add a mute toggle).
+  - Test that sound is triggered on notification display (use a spy/mock on the
+    audio API in tests).
+
+Tests:
+  [ ] Success notification + sound plays when an action completes successfully.
+  [ ] Failure notification + sound plays when one or more requests fail.
+  [ ] Duplicate notification + sound plays when one or more duplicates are found.
+  [ ] After a failure/duplicate notification, the system waits 2 minutes before
+      closing; resetting the timer when a new failure/duplicate arrives.
+  [ ] Notification for automated sync completion is shown + sound plays.
+  [ ] Notification for auto book-creation-request creation is shown + sound plays.
+  [ ] Mute toggle silences sounds while still showing notifications.
+  [ ] All notification types appear at appropriate times throughout every page.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 4 — PAGE SPECIFICATIONS & TEST REQUIREMENTS
+────────────────────────────────────────────────────────────────────────────────
+
+For each page and each card below, write Playwright tests BEFORE implementing
+the feature. Tests must use data-testid attributes for all interactive and
+observable elements.
+
+════════════════════════════════════════
+PAGE 1 — CATALOG  (/catalog)
+════════════════════════════════════════
+
+Purpose: Browse all synced book records, control syncing, and initiate book
+creation requests.
+
+── Section A: Overview ──────────────────
+Tests:
+  [ ] Overview panel renders with correct stat labels.
+  [ ] Stat counts update after a sync completes.
+  [ ] Stat counts update after book creation requests are created.
+
+── Section B: Manual Syncing ────────────
+
+States: idle → syncing → (pausing →) idle | paused
+
+B1. Start Sync
+  Tests:
+  [ ] Clicking "Start Sync" shows the progress loader immediately.
+  [ ] The Start button is replaced or disabled while syncing is active.
+  [ ] Sync fetches records page by page; each page of results appears in the
+      table as it arrives.
+
+B2. Pause Sync
+  Tests:
+  [ ] Clicking "Pause" immediately changes button text/color to "Pausing..."
+  [ ] The "Pausing..." state persists until the in-flight fetch finishes and
+      progress is saved.
+  [ ] After saving, the UI returns to idle state (no loader, correct button).
+  [ ] Saved progress accurately reflects how far the sync had reached before pause.
+  [ ] If the network drops during a pause, the sync retries saving before giving up.
+
+B3. Resume Sync
+  Tests:
+  [ ] Clicking "Resume" restarts from the beginning of the record list.
+  [ ] Records already saved locally are compared against remote; changed records
+      are updated, unchanged records are skipped.
+  [ ] After reconciliation, new records are fetched and appended.
+  [ ] Resume correctly handles the case where no local records exist yet.
+
+B4. Sync Completion
+  Tests:
+  [ ] Sync ends automatically when the API signals no more records
+      (e.g., empty page returned).
+  [ ] On completion, the UI returns to idle state.
+  [ ] All fetched records appear in the book records table.
+  [ ] A notification + sound plays on sync completion.
+
+B5. Automated Sync — Unreachable Domain & Edge Cases
+  Tests:
+  [ ] If the remote domain is unreachable at sync start, an error notification
+      is shown and the sync stops gracefully (no partial corrupt state).
+  [ ] If the domain becomes unreachable mid-sync, the current page fetch is
+      retried up to the defined retry threshold before marking the sync as failed.
+  [ ] If the API returns unexpected/malformed data, the record is skipped and
+      logged; sync continues with the next record.
+  [ ] If the API returns a rate-limit error (429), the sync pauses, waits the
+      indicated retry-after duration, then resumes automatically.
+  [ ] If the sync runs longer than expected (e.g., very large catalog), it
+      continues without timeout until complete or explicitly paused.
+  [ ] If a sync is already running and the user tries to start another, the
+      duplicate start is blocked and a warning notification is shown.
+  [ ] Network intermittency (connection drops and recovers) is handled with
+      exponential backoff retries.
+
+── Section C: Automated Syncing ─────────
+
+Tests:
+  [ ] Automated sync settings panel renders with schedule configuration controls.
+  [ ] Saving settings persists the configuration.
+  [ ] Automated sync runs the same record-comparison logic as manual sync
+      (verify via mocked API responses).
+  [ ] After an automated sync completes, a BookCreationRequest with state
+      "initial" is automatically created for every book record whose
+      bookCreationState is "not_created" OR whose last request state is
+      "failed" or "deleted".
+  [ ] Records with any other active or terminal state ("created", "paused",
+      "queued", "processing", "duplicate") do NOT get a new request.
+  [ ] A notification + sound plays when auto-request creation completes.
+  [ ] Unreachable domain during automated sync: handled same as B5 above.
+  [ ] Automated sync does not run if a manual sync is already in progress;
+      it queues and retries after the manual sync finishes.
+
+Book Creation Pipeline (automated, no user intervention required):
+  Once a request exists at state "initial", the pipeline advances on its own:
+      initial → queued → processing → created
+
+  Tests:
+  [ ] A request created at "initial" automatically transitions to "queued"
+      without user action.
+  [ ] A "queued" request automatically transitions to "processing".
+  [ ] A "processing" request automatically transitions to "created" on success.
+  [ ] The pipeline halts (with correct state transition) if: paused, failed,
+      or duplicate is encountered at any step.
+  [ ] The pipeline is resilient: it keeps processing remaining requests even
+      if one request encounters an error or is interrupted.
+  [ ] The pipeline handles loops (e.g., a request that keeps re-queuing due to
+      a bug) by detecting the loop and marking the request as failed after a
+      threshold.
+  [ ] Requests that take extended periods of time (15–20+ minutes) are handled
+      without timeout; the pipeline waits and continues.
+  [ ] When an exception occurs mid-processing, the request moves to "failed"
+      state (not left in "processing"). No request is stuck in "processing"
+      indefinitely.
+  [ ] Duplicate detection during automated pipeline triggers the correct state
+      transition and notification.
+  [ ] If the Celery worker crashes mid-processing, requests do not remain stuck
+      in "processing" after the worker recovers (implement a stale-request
+      recovery mechanism).
+
+── Section D: Book Records Table ────────
+
+Tests:
+  [ ] All synced book records are displayed.
+  [ ] Search by name filters the table in real time.
+  [ ] Search by writer filters the table in real time.
+  [ ] Search by translator filters the table in real time.
+  [ ] Search by publisher filters the table in real time.
+  [ ] Filter by category shows only matching records.
+  [ ] Filter by creation request status shows only matching records.
+  [ ] Record count updates correctly when search or filters are active.
+  [ ] A book record linked to an active request (state not in: failed, deleted)
+      cannot be selected — its checkbox is disabled.
+  [ ] Selecting one record and clicking "Create Book" creates one request
+      (state: initial) and re-enables the table controls afterward.
+  [ ] Selecting multiple records and clicking "Create Book" creates one request
+      per record.
+  [ ] While requests are being created, checkboxes and "Create Book" are disabled
+      and a loader is shown inside the table section.
+  [ ] Controls re-enable once all requests are created.
+  [ ] A notification + sound plays after book creation requests are submitted.
+  [ ] Search, filter, and count are scoped to this card; other page sections
+      are unaffected.
+
+
+════════════════════════════════════════
+PAGE 2 — CREATE  (/create)
+════════════════════════════════════════
+
+Purpose: Track the active pipeline — from new requests through to created books.
+
+Overview panel: same stats as Catalog, plus per-card counts for all four cards.
+  Tests:
+  [ ] Overview counts match the actual card contents on load.
+  [ ] Counts update in real time as requests move between states.
+  [ ] All four card counts are displayed and correct.
+
+── Card A: Requests (state: initial) ────
+  Tests:
+  [ ] Only requests with state "initial" are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Select + Delete changes state to "deleted" and removes the row.
+  [ ] Bulk delete works for multiple selected rows.
+  [ ] Checkboxes and Delete button are disabled during deletion.
+  [ ] Other cards on this page remain interactive during deletion.
+  [ ] Loader appears during deletion and disappears on completion.
+  [ ] Notification + sound plays when deletion completes.
+  [ ] Search by name, writer, translator, publisher — scoped to this card.
+  [ ] Filter by category and request status — scoped to this card.
+  [ ] Record count is correct and updates with search/filter.
+  [ ] Count in this card does not change when actions occur in other cards.
+
+── Card B: Queue (state: queued) ────────
+  Tests:
+  [ ] Only requests with state "queued" are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Requests automatically appear here after transitioning from "initial".
+  [ ] Select + Delete changes state to "deleted" and removes the row.
+  [ ] Bulk delete, loader, disabled state, and isolation behavior same as Card A.
+  [ ] Notification + sound plays when deletion completes.
+  [ ] Search, filter, and count scoped to this card only.
+
+── Card C: Processing (state: processing) ──
+  Tests:
+  [ ] Only requests with state "processing" are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Requests automatically appear here after transitioning from "queued".
+  [ ] Select + Pause saves progress, changes state to "paused", removes the row,
+      and row appears in On Hold → Paused.
+  [ ] Select + Delete changes state to "deleted" and removes the row.
+  [ ] Bulk Pause and bulk Delete work.
+  [ ] Loader, disabled state, and isolation behavior same as Cards A and B.
+  [ ] Notification + sound plays for both Pause and Delete completions.
+  [ ] Search, filter, and count scoped to this card only.
+  [ ] Pausing a request saves progress accurately (checkpoint, savedAt, savedData).
+  [ ] If pause is triggered while a long-running processing step is active, the
+      system waits for the current step to complete before saving progress.
+
+── Card D: Created (state: created) ─────
+  Tests:
+  [ ] Only requests with state "created" are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Requests automatically appear here after successful processing.
+  [ ] Select + Delete changes state to "deleted", removes the row, AND deletes
+      the associated book from the database.
+  [ ] Bulk delete works.
+  [ ] Loader, disabled state, and isolation behavior same as other cards.
+  [ ] Notification + sound plays when deletion completes.
+  [ ] Search, filter, and count scoped to this card only.
+
+── Pipeline Resilience Tests (Create Page) ──
+  [ ] Create requests for 50+ book records simultaneously; verify all eventually
+      reach "created" without manual intervention.
+  [ ] Simulate a processing error on request N of 50; verify the pipeline
+      marks N as "failed" and continues processing N+1 onward.
+  [ ] Simulate a request that takes 20 minutes; verify it is not timed out and
+      eventually reaches "created".
+  [ ] Simulate a loop (request re-queued repeatedly); verify it is detected and
+      marked "failed" after the threshold.
+  [ ] Simulate a Celery worker crash; verify stale "processing" requests are
+      recovered and re-queued after worker restart.
+  [ ] When a user deletes a request currently in "queued" state, verify the
+      pipeline skips it and continues with the next.
+  [ ] When a user pauses a request in "processing", verify the pipeline
+      continues with remaining requests.
+  [ ] Overview counts on this page update correctly after each of the above.
+
+
+════════════════════════════════════════
+PAGE 3 — ON HOLD  (/on-hold)
+════════════════════════════════════════
+
+Purpose: Manage interrupted, errored, duplicated, and deleted requests.
+
+Overview panel: counts for Paused, Failed, Duplicate, Deleted.
+  Tests:
+  [ ] All four counts are displayed and correct on load.
+  [ ] Counts update reactively as requests move in or out of each state.
+
+── Card A: Paused (state: paused) ───────
+  Tests:
+  [ ] Only requests with state "paused" are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Each row displays the saved progress details (checkpoint, savedAt).
+  [ ] Select + Resume:
+      - Sets isResumed flag on the request.
+      - Changes state to "initial".
+      - Row disappears from Paused card.
+      - Row appears in Create → Card A (Requests).
+      - The pipeline then continues automatically: initial → queued → processing.
+      - During processing, the isResumed flag causes the processor to use saved
+        progress data and skip to the checkpoint before fetching remaining data.
+  [ ] A loader is shown in this card until all selected requests have moved to
+      the Requests card.
+  [ ] Select + Delete clears saved progress and data, changes state to "deleted",
+      and removes the row.
+  [ ] Bulk Resume and bulk Delete work.
+  [ ] Loader, disabled state, and isolation behavior same as Create page cards.
+  [ ] Notification + sound plays for both Resume and Delete completions.
+  [ ] Search, filter, and count scoped to this card only.
+  [ ] Resume correctly restores from checkpoint; does not restart from scratch.
+  [ ] If saved progress data is corrupted, the resumed request falls back to
+      restarting from scratch and logs a warning.
+
+── Card B: Failed (state: failed) ───────
+  Tests:
+  [ ] Only requests with state "failed" are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] An "Error Reason" column is visible and displays errorMessage per row.
+  [ ] Failure is correctly set when:
+      - A retry loop exceeds the defined threshold.
+      - The external fetch (e.g., eBanglaLibrary) fails after extended retries.
+      - A runtime/code exception occurs.
+      - A Celery task times out (if applicable).
+      - The pipeline detects a loop for this request.
+  [ ] Select + Retry changes state to "initial" and moves row to Create → Card A.
+  [ ] Bulk Retry works.
+  [ ] Loader, disabled state, and isolation behavior same as other cards.
+  [ ] Notification + sound plays when Retry action completes.
+  [ ] Failure notification (with 2-minute wait window) is shown when requests fail.
+  [ ] Search, filter, and count scoped to this card only.
+
+── Card C: Duplicate (state: duplicate) ─
+  Tests:
+  [ ] Only requests with state "duplicate" are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Duplicate notification (with 2-minute wait window) is shown when duplicates
+      are detected.
+  [ ] Select + New:
+      - Sets isConfirmedNotDuplicate flag.
+      - Changes state to "initial".
+      - Row moves to Create → Card A.
+      - The pipeline proceeds without triggering duplicate detection again for
+        this request.
+  [ ] Select + Duplicate:
+      - Confirms the duplication.
+      - Sets duplicateOfRequestId and duplicateOfRecordId on the request.
+      - The duplicate book record stores the original's info and a duplicate flag.
+      - The duplicate book record's checkbox is disabled in the Catalog table
+        until the original request reaches a terminal state (failed or deleted).
+  [ ] Select + Delete changes state to "deleted" and removes the row (no data saved).
+  [ ] Bulk actions work for all three actions (New, Duplicate, Delete).
+  [ ] Loader, disabled state, and isolation behavior same as other cards.
+  [ ] Notification + sound plays for each action completion.
+  [ ] Search, filter, and count scoped to this card only.
+
+── Card D: Deleted (state: deleted) ─────
+  Tests:
+  [ ] All deleted requests appear here regardless of which page triggered deletion.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Select + Create Again changes state to "initial" and moves row to
+      Create → Card A.
+  [ ] Bulk Create Again works.
+  [ ] Loader, disabled state, and isolation behavior same as other cards.
+  [ ] Notification + sound plays when Create Again completes.
+  [ ] Search, filter, and count scoped to this card only.
+
+
+════════════════════════════════════════
+PAGE 4 — INCOMPLETE  (/incomplete)
+════════════════════════════════════════
+
+Purpose: Track book records in an incomplete state and monitor their resolution.
+
+── Section A: Overview ──────────────────
+  Tests:
+  [ ] Displays total count of incomplete book records.
+  [ ] Displays count of incomplete records that have since been resolved
+      (moved to a completed category).
+  [ ] Counts update after the automation runs.
+
+── Section B: Automation Settings ───────
+  Tests:
+  [ ] Automation settings panel renders with schedule/interval configuration.
+  [ ] Saving settings persists the configuration.
+  [ ] When automation runs, it detects book records reclassified from incomplete
+      to another category and updates them accordingly.
+  [ ] Records that have been reclassified appear in Card B (Updated).
+  [ ] Notification + sound plays when the automation run completes.
+
+── Card A: Incomplete ───────────────────
+  Tests:
+  [ ] All records currently in incomplete state are displayed.
+  [ ] NO checkbox column rendered — this card has no actions (read-only).
+  [ ] No actions are available — all rows are read-only.
+  [ ] Search by name, writer, translator, publisher — scoped to this card.
+  [ ] Filter by category and request status — scoped to this card.
+  [ ] Record count is correct and updates with search/filter.
+
+── Card B: Updated ──────────────────────
+  Tests:
+  [ ] Only records previously incomplete but now resolved are shown.
+  [ ] Checkbox column is present (card has actions).
+  [ ] Select + Recreate Book resets the associated request to state "initial"
+      and moves it to Create → Card A (Requests).
+  [ ] Select + Delete changes state to "deleted" and moves the request to
+      On Hold → Card D (Deleted).
+  [ ] Bulk Recreate and bulk Delete work.
+  [ ] Loader, disabled state, and isolation behavior same as other page cards.
+  [ ] Notification + sound plays for both Recreate and Delete completions.
+  [ ] Search, filter, and count scoped to this card only.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 5 — CROSS-CUTTING TEST SCENARIOS
+────────────────────────────────────────────────────────────────────────────────
+
+Write dedicated test files for these scenarios that span multiple pages:
+
+1. Full Happy Path
+   [ ] Manual sync fetches records → user selects records → clicks Create Book
+       → requests appear in Create/Requests → auto-advance through queue and
+       processing → appear in Create/Created.
+   [ ] Notifications + sounds fire at each relevant stage.
+
+2. Pause and Resume — Sync
+   [ ] Sync is paused mid-way → progress saved → sync resumed → reconciliation
+       runs → remaining records fetched → sync completes.
+   [ ] Domain becomes unreachable mid-resume; retries with backoff; eventually
+       succeeds when domain recovers.
+
+3. Pause and Resume — Request
+   [ ] Request paused during processing → appears in On Hold/Paused → resumed
+       → moves back through initial/queued/processing → reaches created.
+   [ ] Resumed request correctly uses checkpoint and skips completed steps.
+   [ ] Corrupted checkpoint falls back to full restart.
+
+4. Failure Recovery
+   [ ] Request fails during processing → appears in On Hold/Failed with error
+       message → retried → restarts pipeline → reaches created.
+   [ ] Multiple simultaneous failures trigger batched failure notification with
+       2-minute wait window.
+
+5. Duplicate Resolution — New
+   [ ] Duplicate detected → appears in On Hold/Duplicate → user selects New
+       → moves to Requests → full pipeline completes without re-flagging.
+
+6. Duplicate Resolution — Confirmed
+   [ ] Duplicate detected → user confirms Duplicate → original request proceeds
+       → duplicate book record is locked in Catalog until original is terminal.
+
+7. Delete and Recreate
+   [ ] Request deleted at any stage → appears in On Hold/Deleted → Create Again
+       → moves to Requests → pipeline restarts.
+
+8. Card Isolation
+   [ ] Trigger a long-running action in Card A.
+   [ ] Simultaneously interact with Card B (select rows, trigger a different action).
+   [ ] Verify Card B's action completes successfully and Card A's loader is
+       unaffected by Card B's activity.
+   [ ] Verify search/filter/count in Card B are unaffected by Card A's action.
+
+9. Automated Sync + Auto-Request Creation + Auto-Pipeline
+   [ ] Automated sync runs → records with "not_created", "failed", or "deleted"
+       state get new "initial" requests → pipeline auto-advances to "created"
+       without any user interaction.
+   [ ] Notifications + sounds fire at sync completion, request creation, and
+       final pipeline completion.
+
+10. Extended Duration & Resilience
+    [ ] A batch of 100 requests is processed end-to-end; all reach "created"
+        or a defined holding/terminal state.
+    [ ] A single request that takes 20+ minutes completes successfully.
+    [ ] A Celery worker crash mid-batch is recovered; all requests eventually
+        reach their correct state.
+    [ ] A loop-prone request is detected and failed after the loop threshold.
+
+11. User Intervention During Automated Pipeline
+    [ ] User pauses a request mid-pipeline → it moves to On Hold/Paused →
+        pipeline continues with remaining requests → user resumes → request
+        completes.
+    [ ] User deletes a request mid-pipeline → pipeline skips it and continues.
+    [ ] User retries a failed request → pipeline picks it up and completes it.
+    [ ] Overview counts on Create page are correct throughout all interventions.
+
+12. Notification Edge Cases
+    [ ] Rapid successive failures (5 in 10 seconds) produce one batched notification
+        with the 2-minute wait window reset on each new arrival.
+    [ ] Muting notifications silences sounds but still shows visual notifications.
+    [ ] Notification for sync completion does not fire if sync was manually paused
+        (only fires on full completion).
+
+13. Full Automated Cycle (End-to-End No-Touch)
+    [ ] Configure automated sync schedule → sync runs → requests auto-created →
+        pipeline processes all → all reach "created" → correct notifications fire.
+        No user interaction after initial configuration.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 6 — EDGE CASES CATALOG
+────────────────────────────────────────────────────────────────────────────────
+
+Discover, document, implement, and test ALL of the following edge cases.
+Add any additional edge cases found during development.
+
+SYNC EDGE CASES
+  [ ] Sync with 0 records returned (empty catalog).
+  [ ] Sync with exactly 1 record.
+  [ ] Sync interrupted at the very first page.
+  [ ] Sync interrupted at the very last page (1 record from completion).
+  [ ] Remote returns duplicate records (same URL) across pages.
+  [ ] Record fields contain special characters (Arabic, Unicode, HTML entities).
+  [ ] Record URL is malformed or unreachable.
+  [ ] API returns a 500 error on a mid-sync page.
+  [ ] API returns stale/cached data that hasn't changed.
+  [ ] User starts sync, immediately pauses, immediately resumes.
+  [ ] Two users (or two browser tabs) attempt to sync simultaneously.
+
+PIPELINE EDGE CASES
+  [ ] Request created for a BookRecord that is deleted before processing starts.
+  [ ] Request transitions to "processing" but external service is down.
+  [ ] Request is paused at the very first processing step (no progress to save).
+  [ ] Request is paused at the very last processing step (almost complete).
+  [ ] Request is deleted while in "queued" state (worker should not process it).
+  [ ] Request is deleted while actively "processing" (worker must detect and stop).
+  [ ] Two requests created for the same BookRecord simultaneously (duplicate detection).
+  [ ] isConfirmedNotDuplicate request encounters a third copy (re-duplicate detection
+      must NOT fire for this request).
+  [ ] Request retried 3 times, fails each time, stays in "failed" permanently.
+  [ ] Bulk action on 200+ requests simultaneously.
+  [ ] Pipeline processes requests in a different order than they were created.
+  [ ] Network drops between Django and Celery broker mid-task.
+
+UI EDGE CASES
+  [ ] User searches with special regex characters; no crash or incorrect filtering.
+  [ ] User applies multiple filters simultaneously; count is correct.
+  [ ] User clears a filter mid-action (action should complete with original filter).
+  [ ] Empty card (0 rows) shows a clear empty-state message, no broken layout.
+  [ ] Very long book title or writer name overflows gracefully (ellipsis/wrap).
+  [ ] Rapid clicking of an action button (debounce / prevent double-submission).
+  [ ] User navigates away from the page during an action; action completes in
+      the background; correct state shown on return.
+  [ ] Browser refresh mid-action; state is correctly restored from server.
+  [ ] Card with 1000+ rows renders without performance issues (virtual scroll
+      or pagination required if count exceeds threshold).
+
+NOTIFICATION EDGE CASES
+  [ ] 50 failures arrive simultaneously; one consolidated notification fires.
+  [ ] Notification fires, user dismisses it, then another failure arrives;
+      a new notification fires.
+  [ ] Application is in background tab when notification fires; sound still plays
+      (or is queued for when tab is focused, per browser policy).
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 7 — IMPLEMENTATION CONSTRAINTS
+────────────────────────────────────────────────────────────────────────────────
+
+- Write tests first. No implementation code until the tests for that feature
+  are written and confirmed to fail for the right reason.
+- Use data-testid attributes on all elements that tests interact with or assert
+  on. Follow the naming pattern: [page]-[section/card]-[element], e.g.,
+  "catalog-records-table", "create-requests-card-delete-btn".
+- API calls must be mockable. Use Playwright's route interception or a dedicated
+  mock layer to simulate all backend responses including errors, delays, and
+  pagination signals.
+- The automated pipeline (initial → queued → processing → created) must be
+  implemented as a background Celery process that does not require the user to
+  be on any specific page.
+- The pipeline must be resilient by design:
+    * Exceptions move requests to "failed"; no request stays stuck.
+    * Loops are detected and terminated.
+    * Extended durations are supported without timeouts.
+    * Worker crashes are recovered via a stale-request recovery mechanism.
+    * User interventions (pause, delete) are respected promptly.
+- Preserve all existing composables, utilities, UI components, and design tokens.
+  Do not rewrite anything that is not part of the Book Processing pages.
+- State management: use the project's existing store pattern. Do not introduce
+  a new state management library.
+- All new code must be TypeScript-strict with no implicit `any`.
+- Backend (Django/Celery/PostgreSQL):
+    * All state transitions must be atomic (use database transactions).
+    * Celery tasks must be idempotent where possible.
+    * Use database-level locking or optimistic concurrency to prevent race conditions
+      on concurrent state transitions.
+    * All API endpoints must be authenticated and return correct status codes.
+- After all tests pass, perform a full end-to-end verification:
+    * Run the complete automated cycle without mocks.
+    * Confirm all pages, cards, actions, notifications, and sounds work correctly.
+    * Run all edge-case tests against the live (dev) backend.
+    * Fix any remaining issues. Keep testing and fixing until zero failures remain.
+
+================================================================================
+END OF PROMPT
+================================================================================

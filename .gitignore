@@ -1,6 +1,63 @@
-.venv/
 .DS_Store
-code/config.py
-*__pycache__
-outputs/
+.env
+.env.local
+.env.*.local
+local/env/.env
+local/env/.compose.env
+deploy/env/.host.env
+deploy/env/.production.env
+deploy/env/.test.env
+deploy/env/.app.env
+deploy/env/.app.compose.env
+local/runtime/*
+!local/runtime/.gitkeep
+!local/runtime/celery/
+local/runtime/celery/*
+!local/runtime/celery/.gitkeep
+.idea/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+.vscode/
+__pycache__/
+*.egg-info/
+*.log
+*.pid
+*.py[cod]
+*.sqlite3
+*.swp
+*.swo
+*.tsbuildinfo
+
+# Python / Django
+app/backend/.coverage
+app/backend/htmlcov/
+app/backend/staticfiles/
+
+# Node / React
+app/frontend/dist/
+app/frontend/node_modules/
+app/frontend/.vite/
+app/frontend/.env
+app/frontend/test-results/
+app/frontend/test-artifacts/
+tests/frontend/test-results/
+tests/frontend/.auth/
+
+# Docker
+.docker/
+docker-data/
+
+# Legacy/generated assets
 ebook-scrapper/
+LOCAL_PASSWORDS.md
+
+# OS noise
+.Spotlight-V100
+.Trashes
+
+app/backend/storage/
+test-artifacts/
+logs/**/*.log
+!logs/**/.gitkeep

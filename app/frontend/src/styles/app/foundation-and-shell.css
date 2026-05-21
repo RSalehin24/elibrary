@@ -1,0 +1,258 @@
+:root {
+  color-scheme: light;
+  --bg:
+    radial-gradient(
+      circle at 10% 8%,
+      rgba(120, 209, 120, 0.1),
+      transparent 34%
+    ),
+    radial-gradient(circle at 92% 94%, rgba(18, 83, 64, 0.18), transparent 40%),
+    linear-gradient(160deg, #eff6f2 0%, #e3eee8 100%);
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-strong: rgba(255, 255, 255, 0.9);
+  --surface-muted: rgba(247, 251, 248, 0.88);
+  --ink: #17392f;
+  --ink-soft: #325347;
+  --muted: #5a6f68;
+  --line: rgba(17, 70, 54, 0.2);
+  --line-strong: rgba(17, 70, 54, 0.32);
+  --accent: #0f4b38;
+  --accent-strong: #0b3d2e;
+  --accent-soft: rgba(17, 70, 54, 0.08);
+  --success: #245042;
+  --warning: #7c6325;
+  --danger: #8a3434;
+  --shadow: 0 18px 42px rgba(14, 52, 39, 0.12);
+  --shadow-soft: 0 10px 22px rgba(14, 52, 39, 0.08);
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
+  font-family:
+    "Avenir Next", "Noto Sans Bengali", "Hind Siliguri", "Kalpurush",
+    "Trebuchet MS", "Gill Sans", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease,
+    opacity 180ms ease;
+}
+
+button:not(:disabled),
+a[href],
+select:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(15, 75, 56, 0.58);
+  outline-offset: 2px;
+}
+
+.shell {
+  position: relative;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.shell-ornament {
+  position: fixed;
+  width: 360px;
+  height: 360px;
+  border-radius: 999px;
+  filter: blur(80px);
+  pointer-events: none;
+  opacity: 0.18;
+}
+
+.shell-ornament-left {
+  top: -140px;
+  left: -160px;
+  background: rgba(120, 209, 120, 0.45);
+}
+
+.shell-ornament-right {
+  right: -170px;
+  bottom: -120px;
+  background: rgba(18, 83, 64, 0.4);
+}
+
+.topbar,
+.landing-panel,
+.landing-results,
+.detail-card,
+.detail-sidebar,
+.detail-main,
+.book-card,
+.submission-card,
+.queue-card,
+.page-state,
+.empty-state {
+  animation: surface-enter 320ms ease both;
+}
+
+.topbar {
+  position: sticky;
+  top: 12px;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 14px;
+  align-items: center;
+  max-width: 1180px;
+  margin: 0 auto 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(12px);
+}
+
+.topbar-public {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.brand-block {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: center;
+}
+
+.eyebrow,
+.stat-label,
+.fact-label,
+.session-label {
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.brand-mark-name {
+  position: relative;
+  display: inline-block;
+  isolation: isolate;
+  padding: 0 2px 3px 0;
+  color: #2f7d5d;
+  font-family:
+    "Chalkboard SE", "Chalkduster", "Marker Felt", "Bradley Hand",
+    "Segoe Print", cursive;
+  font-size: clamp(1.16rem, 1.7vw, 1.44rem);
+  font-style: italic;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-shadow:
+    0.6px 0 rgba(196, 237, 217, 0.42),
+    -0.6px 0 rgba(18, 74, 55, 0.34),
+    0 0 8px rgba(47, 125, 93, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.16);
+}
+
+.brand-mark-name::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: -6px;
+  right: -4px;
+  top: 48%;
+  height: 78%;
+  transform: translateY(-50%) rotate(-3deg);
+  border-radius: 999px 65% 999px 72%;
+  background:
+    radial-gradient(
+      circle at 20% 52%,
+      rgba(189, 231, 209, 0.16),
+      transparent 32%
+    ),
+    radial-gradient(
+      circle at 62% 38%,
+      rgba(255, 255, 255, 0.28),
+      transparent 32%
+    ),
+    linear-gradient(
+      90deg,
+      rgba(131, 187, 161, 0.12),
+      rgba(47, 125, 93, 0.2),
+      rgba(18, 74, 55, 0.08)
+    );
+  filter: blur(7px);
+  opacity: 0.76;
+  pointer-events: none;
+}
+
+.brand-mark-name::after {
+  content: none;
+}
+
+.brand-mark-suffix {
+  color: rgba(50, 83, 71, 0.74);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  padding-bottom: 5px;
+}
+
+.brand-mark:hover .brand-mark-name {
+  color: #3b8c69;
+}
+
+.brand-mark:hover .brand-mark-name::before {
+  opacity: 1;
+}

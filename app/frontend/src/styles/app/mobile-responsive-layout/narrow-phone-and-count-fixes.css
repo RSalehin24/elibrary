@@ -1,0 +1,83 @@
+@media (max-width: 420px) {
+  .shell {
+    padding:8px
+  }
+  .topbar {
+    padding:9px 10px!important
+  }
+  .shell-reader-mode .topbar {
+    min-height:60px;
+    margin:0 calc(48px + env(safe-area-inset-right,0px)) 8px calc(8px + env(safe-area-inset-left,0px));
+    padding:7px 9px;
+    border-radius:14px
+  }
+  .brand-mark-name {
+    font-size:1.06rem
+  }
+  .reader-topbar-breadcrumb {
+    width:36px;
+    min-width:36px;
+    padding:0;
+    justify-content:center
+  }
+  .reader-topbar-breadcrumb-label {
+    display:none
+  }
+  .brand-mark-suffix {
+    font-size:.66rem;
+    letter-spacing:.18em
+  }
+  .detail-card,.detail-main,.detail-sidebar,.landing-panel,.landing-results,.book-card,.book-hero,
+  .backend-status-modal {
+    padding:14px;
+    border-radius:16px
+  }
+  .mobile-nav-trigger,.mobile-nav-close {
+    width:40px;
+    height:40px
+  }
+  .mobile-nav-panel {
+    inset:66px 8px auto;
+    max-height:calc(100dvh - 74px);
+    padding:12px
+  }
+  .saved-filter-chip {
+    border-radius:16px
+  }
+  .catalog-search-field {
+    min-height:50px;
+    padding-left:46px
+  }
+  .catalog-search-field input {
+    font-size:.95rem
+  }
+  .catalog-search-icon {
+    left:14px
+  }
+  .catalog-page-header h1,.book-hero-copy h1 {
+    font-size:clamp(1.5rem,8vw,2rem)
+  }
+  .table-mobile-cards tbody td {
+    grid-template-columns:1fr;
+    gap:6px
+  }
+  .table-mobile-cards tbody td[data-label]:before {
+    margin-bottom:2px
+  }
+  .reader-topbar-floating-hide {
+    width:38px;
+    --reader-topbar-height: 60px;
+    height:var(--reader-topbar-height);
+    --reader-topbar-offset: calc(8px + env(safe-area-inset-top, 0px)) ;
+    right:calc(8px + env(safe-area-inset-right,0px))
+  }
+  .reader-topbar-floating-hide svg {
+    width:20px;
+    height:20px
+  }
+}
+@media (max-width: 640px) {
+  .catalog-page-header--property-layout .catalog-result-count {
+    margin-right:0
+  }
+}

@@ -1,0 +1,119 @@
+.epub-container .epub-reader-container .reader-wrapper .wrapper-main {
+  background: var(--reader-background, var(--page-background));
+}
+
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container {
+  background: transparent !important;
+}
+
+.epub-container .epub-reader-container .epub-contents {
+  color: var(--toc-text);
+  background: var(--toc-background);
+  border-right: 1px solid var(--toc-border);
+}
+
+.epub-container .slide-contents-item {
+  color: var(--toc-text);
+}
+
+.epub-container .slide-contents-item:hover {
+  color: var(--toc-hover-text);
+  background: var(--toc-hover-bg);
+}
+
+.epub-container .slide-contents-item-label.selected {
+  color: var(--toc-selected-text);
+}
+
+.epub-container .reader-wrapper .wrapper-nav {
+  color: var(--nav-text);
+  background: var(--nav-background);
+  border-bottom-color: var(--nav-border);
+}
+
+.epub-container .iconfont,
+.epub-container .icon-wrap {
+  color: var(--icon-color);
+}
+
+.epub-container .epub-reader-container .reader-wrapper-container .epub-container,
+.epub-container .epub-reader-container .reader-wrapper-container [id^="epubjs-container-"] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.epub-container .setting-wrapper.show {
+  background-color: var(--settings-background);
+}
+
+.epub-container .setting-wrapper.show .dropdown-caret .caret-inner {
+  border-bottom-color: var(--settings-caret-inner);
+}
+
+.epub-container .setting-size .size-btn,
+.epub-container .reader-wrapper .setting-background .bg-btn {
+  color: var(--settings-text);
+}
+
+.epub-container .reader-wrapper .setting-size .size-btn:hover,
+.epub-container .reader-wrapper .setting-background .bg-btn:hover {
+  color: var(--settings-hover-text);
+}
+
+.epub-container,
+.epub-container .epub-reader-container .epub-contents,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > [id^="epubjs-container-"] {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.epub-container::-webkit-scrollbar,
+.epub-container .epub-reader-container .epub-contents::-webkit-scrollbar,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > [id^="epubjs-container-"]::-webkit-scrollbar {
+  width: 12px;
+}
+
+.epub-container::-webkit-scrollbar-track,
+.epub-container .epub-reader-container .epub-contents::-webkit-scrollbar-track,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar-track,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar-track,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > [id^="epubjs-container-"]::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.epub-container::-webkit-scrollbar-thumb,
+.epub-container .epub-reader-container .epub-contents::-webkit-scrollbar-thumb,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar-thumb,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar-thumb,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > [id^="epubjs-container-"]::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border: 3px solid var(--scrollbar-track);
+  border-radius: 6px;
+}
+
+.epub-container::-webkit-scrollbar-thumb:hover,
+.epub-container .epub-reader-container .epub-contents::-webkit-scrollbar-thumb:hover,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar-thumb:hover,
+.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar-thumb:hover,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > [id^="epubjs-container-"]::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}

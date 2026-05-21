@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -h "${SCRIPT_PATH}" ]; do
+  _link_dir="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" >/dev/null 2>&1 && pwd)"
+  _link_target="$(readlink "${SCRIPT_PATH}")"
+  if [[ "${_link_target}" = /* ]]; then
+    SCRIPT_PATH="${_link_target}"
+  else
+    SCRIPT_PATH="${_link_dir}/${_link_target}"
+  fi
+done
+
+_SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" >/dev/null 2>&1 && pwd)"
+_SCRIPT_STEPS=(
+  "docker_install_support.sh"
+  "dockerctl_entrypoint.sh"
+)
+for _script_step in "${_SCRIPT_STEPS[@]}"; do
+  _script_path="${_SCRIPT_DIR}/dockerctl_steps/${_script_step}"
+  # shellcheck source=/dev/null
+  source "${_script_path}"
+done

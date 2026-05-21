@@ -1,0 +1,5 @@
+@import "./tablet-responsive-layout/base-and-reader-topbar.css";
+@import "./tablet-responsive-layout/navigation-drawer.css";
+@import "./tablet-responsive-layout/catalog-access-and-reader.css";
+@import "./tablet-responsive-layout/catalog-property-controls.css";
+@import "./tablet-responsive-layout/records-processing-and-reader.css";

@@ -1,0 +1,188 @@
+
+@media (max-width: 640px) {
+  .topbar-public {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-toolbar-surface {
+    padding: 0;
+  }
+
+  .catalog-search-field,
+  .catalog-filter-toggle {
+    min-height: 58px;
+  }
+
+  .catalog-result-count {
+    min-height: 58px;
+  }
+
+  .catalog-search-actions {
+    width: 100%;
+  }
+
+  .submission-card-actions,
+  .dialog-actions,
+  .dialog-footer {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .submission-card-top {
+    grid-template-columns: 1fr;
+  }
+
+  .dialog-footer {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .book-card {
+    grid-template-columns: 1fr;
+  }
+
+  .raw-provenance-card {
+    height: 340px;
+    min-height: 340px;
+  }
+
+  .processing-col-request,
+  .processing-col-select,
+  .processing-col-name,
+  .processing-col-url,
+  .processing-col-status,
+  .processing-col-book-wide,
+  .processing-col-contributors-wide,
+  .processing-col-details,
+  .processing-col-updated,
+  .processing-col-type,
+  .processing-col-time,
+  .processing-col-book,
+  .processing-col-error,
+  .processing-col-action {
+    width: auto;
+  }
+
+  .processing-table-shell,
+  .processing-scroll-shell {
+    max-height: none;
+  }
+
+  .processing-list-card {
+    --processing-list-card-height: 724px;
+  }
+
+  .processing-catalog-card,
+  .processing-catalog-height-card,
+  .processing-secondary-height-card {
+    --processing-list-card-height: 724px;
+  }
+
+  .catalog-toolbar-secondary-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .property-table-toolbar-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-action-cluster,
+  .toolbar-icon-button {
+    width: 100%;
+  }
+
+  .processing-icon-button--manual {
+    width: 58px;
+    min-width: 58px;
+  }
+
+  .processing-icon-button--automation {
+    width: 30px;
+    min-width: 30px;
+  }
+
+  .catalog-toolbar-secondary {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "sort"
+      "rows"
+      "pagination";
+    padding: 12px;
+  }
+
+  .catalog-toolbar-field,
+  .catalog-toolbar-field-sort,
+  .catalog-toolbar-field-rows {
+    min-width: 100%;
+  }
+
+  .catalog-pagination,
+  .catalog-pagination-actions {
+    width: 100%;
+  }
+
+  .catalog-pagination {
+    justify-content: flex-start;
+  }
+
+  .catalog-pagination-actions {
+    flex-wrap: wrap;
+  }
+
+  .topbar-public .session-box {
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .manual-books-tabs {
+    width: 100%;
+  }
+
+  .manual-books-tab {
+    flex: 1 1 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.backend-status-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(12, 29, 23, 0.5);
+  backdrop-filter: blur(2px);
+  pointer-events: all;
+}
+
+.backend-status-modal {
+  width: min(480px, calc(100vw - 32px));
+  margin: 0 16px;
+  padding: 22px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.backend-status-modal h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--danger);
+}
+
+.backend-status-modal p {
+  margin: 0;
+  color: var(--ink-soft);
+}

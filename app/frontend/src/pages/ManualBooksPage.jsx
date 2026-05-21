@@ -1,0 +1,299 @@
+import { useEffect, useRef, useState } from "react";
+import BookTable from "../components/BookTable";
+import CatalogToolbar from "../components/CatalogToolbar";
+import { waitForExportUi, waitForMinimumLoader } from "../features/catalog/exportUiTiming";
+import { ManualBookComposer } from "../features/manual-books/ManualBookComposer";
+import { ManualBooksToolbarActions } from "../features/manual-books/ManualBooksToolbarActions";
+import { createManualBook } from "../features/manual-books/manualBookCreate";
+import { loadManualBooksForExport } from "../features/manual-books/manualBookExport";
+import {
+  MANUAL_BOOKS_EXPORT_STORAGE_KEY,
+  defaultManualBookFilters,
+  emptyManualBookForm,
+  manualBookSortOptions,
+  manualBookToolbarFields,
+} from "../features/manual-books/manualBookFilters";
+import { loadManualBookOptions } from "../features/manual-books/manualBookOptions";
+import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
+import { useToast } from "../hooks/useToast";
+import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
+import { getExportBlockState } from "../utils/export";
+import {
+  clearPendingExport,
+  readPendingExport,
+  writePendingExport,
+} from "../utils/exportSession";
+
+export default function ManualBooksPage() {
+  const toast = useToast();
+  const titleInputRef = useRef(null);
+  const pendingExportRef = useRef(readPendingExport(MANUAL_BOOKS_EXPORT_STORAGE_KEY));
+  const resumedPendingExportRef = useRef(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [form, setForm] = useState(emptyManualBookForm);
+  const [filters, setFilters] = useState(defaultManualBookFilters);
+  const [appliedFilters, setAppliedFilters] = useState(defaultManualBookFilters);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [contributorOptions, setContributorOptions] = useState([]);
+  const [categoryOptions, setCategoryOptions] = useState([]);
+  const [loadingOptions, setLoadingOptions] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [downloadState, setDownloadState] = useState(
+    () => pendingExportRef.current?.mode || "",
+  );
+  const [highlightedBookId, setHighlightedBookId] = useState("");
+  const {
+    entries: manualBooks,
+    totalCount,
+    hasMore,
+    initialLoading,
+    loadingMore,
+    refreshing,
+    error,
+    reload,
+    prependEntry,
+    tableShellRef,
+    observeLoadTrigger,
+  } = useInfiniteCatalogBooks({
+    endpoint: "/catalog/manual-books/",
+    filters: appliedFilters,
+  });
+
+  async function loadOptions() {
+    try {
+      setLoadingOptions(true);
+      const options = await loadManualBookOptions();
+      setCategoryOptions(options.categories);
+      setContributorOptions(options.contributors);
+    } catch (nextError) {
+      toast.error(nextError.message);
+    } finally {
+      setLoadingOptions(false);
+    }
+  }
+
+  useEffect(() => {
+    loadOptions();
+  }, []);
+
+  useEffect(() => {
+    if (!composerOpen) {
+      return;
+    }
+    titleInputRef.current?.focus();
+  }, [composerOpen]);
+
+  useEffect(() => {
+    if (!highlightedBookId) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setHighlightedBookId(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [highlightedBookId]);
+
+  useEffect(() => {
+    const pendingExport = pendingExportRef.current;
+    if (!pendingExport || resumedPendingExportRef.current) {
+      return;
+    }
+
+    resumedPendingExportRef.current = true;
+
+    async function resumePendingExport() {
+      try {
+        setDownloadState(pendingExport.mode);
+        const startedAt = Date.now();
+        await waitForExportUi();
+
+        if (pendingExport.mode === "csv") {
+          exportBooksToCsv(
+            pendingExport.items,
+            pendingExport.filename || "manual-books.csv",
+          );
+          toast.success("CSV export started.");
+        } else {
+          await exportBooksToPdf(
+            pendingExport.items,
+            pendingExport.title || "Physical Books' List Export",
+          );
+          toast.success("PDF export downloaded.");
+        }
+
+        await waitForMinimumLoader(startedAt);
+      } catch (nextError) {
+        toast.error(nextError.message);
+      } finally {
+        clearPendingExport(MANUAL_BOOKS_EXPORT_STORAGE_KEY);
+        pendingExportRef.current = null;
+        setDownloadState("");
+      }
+    }
+
+    resumePendingExport();
+  }, [toast]);
+
+  async function handleCreate(event) {
+    event.preventDefault();
+    try {
+      setSubmitting(true);
+      const payload = await createManualBook(form);
+      prependEntry(payload);
+      setHighlightedBookId(payload.id);
+      setForm(emptyManualBookForm);
+      setComposerOpen(true);
+      titleInputRef.current?.focus();
+      toast.success(
+        `Added ${payload.catalog_code}. Ready for the next manual book.`,
+      );
+      loadOptions();
+      void reload({ preserveRows: true });
+    } catch (nextError) {
+      toast.error(nextError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function applyListFilters(event, nextFilters = filters) {
+    event.preventDefault();
+    setFilters(nextFilters);
+    setAppliedFilters(nextFilters);
+  }
+
+  function resetListFilters() {
+    setFilters(defaultManualBookFilters);
+    setAppliedFilters(defaultManualBookFilters);
+  }
+
+  function clearSearch(nextFilters) {
+    setFilters(nextFilters);
+    setAppliedFilters(nextFilters);
+  }
+
+  async function runDownload(mode) {
+    setDownloadState(mode);
+    try {
+      const exportItems = await loadManualBooksForExport(appliedFilters);
+      const blocked = getExportBlockState({
+        items: exportItems,
+        loading: initialLoading || refreshing,
+        error,
+        nounSingular: "manual book",
+        nounPlural: "manual books",
+      });
+      if (blocked) {
+        toast[blocked.type](blocked.message);
+        return;
+      }
+
+      const exportRequest = writePendingExport(MANUAL_BOOKS_EXPORT_STORAGE_KEY, {
+        mode,
+        items: exportItems,
+        title: "Physical Books' List Export",
+        filename: "manual-books.csv",
+      });
+      pendingExportRef.current = exportRequest;
+      const startedAt = Date.now();
+      await waitForExportUi();
+
+      if (mode === "csv") {
+        exportBooksToCsv(exportRequest.items, exportRequest.filename);
+        toast.success("CSV export started.");
+      } else {
+        await exportBooksToPdf(exportRequest.items, exportRequest.title);
+        toast.success("PDF export downloaded.");
+      }
+
+      await waitForMinimumLoader(startedAt);
+    } catch (nextError) {
+      toast.error(nextError.message);
+    } finally {
+      clearPendingExport(MANUAL_BOOKS_EXPORT_STORAGE_KEY);
+      pendingExportRef.current = null;
+      setDownloadState("");
+    }
+  }
+
+  const resultCount =
+    error && !manualBooks.length ? "" : `${totalCount}`;
+  const showErrorState = Boolean(error && !manualBooks.length && !initialLoading);
+  const headerActions = (
+    <ManualBooksToolbarActions
+      composerOpen={composerOpen}
+      downloadState={downloadState}
+      onExport={runDownload}
+      onToggleComposer={() => setComposerOpen((current) => !current)}
+    />
+  );
+
+  return (
+    <div className="catalog-page page-stack">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
+        <h1>Physical Books' List</h1>
+
+        <CatalogToolbar
+          filters={filters}
+          setFilters={setFilters}
+          fields={manualBookToolbarFields}
+          defaultFilters={defaultManualBookFilters}
+          filtersExpanded={filtersExpanded}
+          setFiltersExpanded={setFiltersExpanded}
+          onSubmit={applyListFilters}
+          onReset={resetListFilters}
+          searchPlaceholder="Search manual books, book IDs, writers..."
+          resultCount={resultCount}
+          resultCountLoading={initialLoading || refreshing}
+          searchActionsExtra={headerActions}
+          sortValue={filters.sort}
+          sortOptions={manualBookSortOptions}
+          onSortChange={(nextSort) => {
+            const nextFilters = { ...filters, sort: nextSort };
+            setFilters(nextFilters);
+            setAppliedFilters(nextFilters);
+          }}
+          sortAriaLabel="Sort manual books"
+          searchRowCompact
+          searchRowClassName="catalog-search-row--property-compact"
+          onSearchClear={clearSearch}
+          inline
+          bare
+          buttonsLoading={initialLoading || refreshing}
+          buttonsDisabled={initialLoading || loadingMore || refreshing}
+        />
+      </header>
+
+      {composerOpen ? (
+        <ManualBookComposer
+          categoryOptions={categoryOptions}
+          contributorOptions={contributorOptions}
+          form={form}
+          loadingOptions={loadingOptions}
+          onClose={() => setComposerOpen(false)}
+          onSubmit={handleCreate}
+          setForm={setForm}
+          submitting={submitting}
+          titleInputRef={titleInputRef}
+        />
+      ) : null}
+
+      {showErrorState ? (
+        <div className="page-state page-state-error">{error}</div>
+      ) : (
+        <BookTable
+          books={manualBooks}
+          emptyLabel="No manual books found."
+          linkFilters={{ record_type: "manual" }}
+          highlightedBookId={highlightedBookId}
+          shellClassName="catalog-table-shell--incremental"
+          shellRef={tableShellRef}
+          hasMore={hasMore}
+          observeLoadTrigger={observeLoadTrigger}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          refreshing={refreshing}
+        />
+      )}
+    </div>
+  );
+}

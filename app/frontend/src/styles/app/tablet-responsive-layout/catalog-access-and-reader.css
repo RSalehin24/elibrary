@@ -1,0 +1,109 @@
+@media (max-width: 980px) {
+  .book-card,.book-hero,.processing-list-card,.processing-catalog-card,.processing-catalog-height-card,
+  .processing-secondary-height-card {
+    min-height:0
+  }
+  .book-card-footer,.book-hero-actions {
+    grid-auto-rows:minmax(0,auto)
+  }
+  .catalog-search-actions,.catalog-search-actions-extra,.catalog-saved-strip {
+    width:100%;
+    min-width:0
+  }
+  .catalog-search-actions {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto auto;
+    align-items:stretch;
+    justify-content:stretch;
+    gap:10px
+  }
+  .catalog-search-actions>*,.catalog-search-actions-extra>* {
+    min-width:0
+  }
+  .catalog-search-sort {
+    flex:1 1 auto;
+    width:100%
+  }
+  .catalog-filter-toggle,.catalog-result-count {
+    width:100%;
+    justify-content:center
+  }
+  .catalog-search-actions-extra {
+    display:grid;
+    grid-column:1 / -1;
+    grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+    gap:10px
+  }
+  .catalog-filter-drawer {
+    gap:12px
+  }
+  .catalog-filter-grid {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:12px;
+    padding:16px
+  }
+  .catalog-filter-actions {
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    justify-content:stretch
+  }
+  .saved-filter-chip {
+    max-width:100%
+  }
+  .saved-filter-apply {
+    min-width:0;
+    overflow-wrap:anywhere;
+    white-space:normal;
+    text-align:left
+  }
+  .access-users-header {
+    grid-template-columns:1fr
+  }
+  .access-users-search-field {
+    height:34px;
+    min-height:34px;
+    padding:0 10px 0 34px
+  }
+  .access-users-toolbar {
+    grid-template-columns:auto minmax(0,1fr) minmax(0,1fr) auto;
+    grid-template-areas:"title search search count" "filter filter sort sort";
+    gap:8px 6px
+  }
+  .access-users-search-field .catalog-search-icon {
+    left:10px
+  }
+  .access-users-toolbar .catalog-toolbar-field {
+    gap:0
+  }
+  .access-users-toolbar .catalog-toolbar-select {
+    min-height:34px;
+    padding:0 34px 0 10px;
+    border-radius:999px;
+    font-size:.8rem
+  }
+  .access-page .access-user-editor-primary-row {
+    grid-template-columns:1fr!important
+  }
+  .raw-provenance-card {
+    height:auto;
+    min-height:0
+  }
+  .raw-provenance-block {
+    max-height:min(50vh,400px)
+  }
+  .reader-page-fullscreen,.reader-fullscreen-frame {
+    width:100%;
+    max-width:100%
+  }
+  .reader-topbar-floating-hide {
+    --reader-topbar-height: 62px;
+    --reader-topbar-offset: calc(12px + env(safe-area-inset-top, 0px)) ;
+    right:calc(12px + env(safe-area-inset-right,0px));
+    width:50px;
+    border-radius:16px
+  }
+  .reader-topbar-floating-hide svg {
+    width:28px;
+    height:28px
+  }
+}

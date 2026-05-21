@@ -1,0 +1,295 @@
+x-app-environment: &app_environment
+  APP_ENV: ${APP_ENV:-development}
+  TIME_ZONE: ${TIME_ZONE:-Asia/Dhaka}
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-development-only-insecure-secret-key}
+  DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/bangla_library}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+  CELERY_TASK_ALWAYS_EAGER: ${CELERY_TASK_ALWAYS_EAGER:-0}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:${BACKEND_PORT:-8000}}
+  PUBLIC_API_ORIGIN: ${PUBLIC_API_ORIGIN:-http://127.0.0.1:${BACKEND_PORT:-8000}}
+  FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://127.0.0.1:${FRONTEND_PORT:-5173}}
+  FRONTEND_PORT: ${FRONTEND_PORT:-5173}
+  VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+  DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@banglalibrary.local}
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}
+  BREVO_API_KEY: ${BREVO_API_KEY:-}
+  BREVO_SENDER_EMAIL: ${BREVO_SENDER_EMAIL:-}
+  ACCOUNT_INVITE_FROM_EMAIL: ${ACCOUNT_INVITE_FROM_EMAIL:-}
+  EMAIL_HOST: ${EMAIL_HOST:-}
+  EMAIL_PORT: ${EMAIL_PORT:-587}
+  EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+  EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+  EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
+  SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-admin@example.com}
+  SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-changeme}
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+  DJANGO_CORS_ALLOWED_ORIGINS: ${DJANGO_CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+  DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000}
+  DJANGO_CORS_ALLOW_CREDENTIALS: ${DJANGO_CORS_ALLOW_CREDENTIALS:-1}
+  DJANGO_USE_X_FORWARDED_HOST: ${DJANGO_USE_X_FORWARDED_HOST:-0}
+  DJANGO_SECURE_PROXY_SSL_HEADER: ${DJANGO_SECURE_PROXY_SSL_HEADER:-0}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
+  CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-0}
+  SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
+  CSRF_COOKIE_SAMESITE: ${CSRF_COOKIE_SAMESITE:-Lax}
+  RUNTIME_STORAGE_DIR: ${RUNTIME_STORAGE_DIR:-/app/storage}
+x-backend-sync-ignore: &backend_sync_ignore
+  - requirements.txt
+  - requirements-dev.txt
+  - storage/
+  - __pycache__/
+  - .pytest_cache/
+  - apps/*/__pycache__/
+  - config/__pycache__/
+x-frontend-sync-ignore: &frontend_sync_ignore
+  - node_modules/
+  - dist/
+  - package.json
+  - package-lock.json
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bangla_library}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bangla_library}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [internal]
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    volumes:
+      - redis_data:/data
+    networks: [internal]
+  backend-init:
+    build:
+      context: ../..
+      dockerfile: local/docker/backend.Dockerfile
+    environment:
+      <<: *app_environment
+    command: >
+      sh -c "python manage.py migrate &&
+      python manage.py seed_superadmin"
+    volumes:
+      - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
+      - ../../logs:/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal]
+  backend:
+    build:
+      context: ../..
+      dockerfile: local/docker/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *app_environment
+    command: >
+      sh -c "mkdir -p /logs/local/backend &&
+      python manage.py migrate &&
+      python manage.py seed_superadmin &&
+      python manage.py runserver 0.0.0.0:8000 --noreload
+      2>&1 | tee -a /logs/local/backend/backend.log"
+    volumes:
+      - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
+      - ../../tests:/workspace/tests:ro
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
+    develop:
+      watch:
+        - action: sync
+          path: ../../app/backend
+          target: /app
+          ignore: *backend_sync_ignore
+        - action: rebuild
+          path: ../../app/backend/requirements.txt
+        - action: rebuild
+          path: ../../app/backend/requirements-dev.txt
+    ports:
+      - "${HOST_BIND_IP:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:8000/api/health/'', timeout=5).read()"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+    networks: [public, internal]
+  worker:
+    build:
+      context: ../..
+      dockerfile: local/docker/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *app_environment
+      CELERY_WORKER_CONCURRENCY: 1
+      CELERY_WORKER_PREFETCH_MULTIPLIER: 1
+      CELERY_WORKER_MAX_TASKS_PER_CHILD: 1
+    command: >
+      sh -c "mkdir -p /logs/local/celery &&
+      celery -A config worker --pool=solo --loglevel=info --concurrency=1
+      --queues=celery
+      --prefetch-multiplier=1
+      --max-tasks-per-child=1
+      2>&1 | tee -a /logs/local/celery/worker.log"
+    volumes:
+      - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
+    develop:
+      watch:
+        - action: sync+restart
+          path: ../../app/backend/apps
+          target: /app/apps
+        - action: sync+restart
+          path: ../../app/backend/config
+          target: /app/config
+        - action: rebuild
+          path: ../../app/backend/requirements.txt
+        - action: rebuild
+          path: ../../app/backend/requirements-dev.txt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+    networks: [public, internal]
+  processing-worker:
+    build:
+      context: ../..
+      dockerfile: local/docker/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *app_environment
+      CELERY_WORKER_CONCURRENCY: 1
+      CELERY_WORKER_PREFETCH_MULTIPLIER: 1
+      CELERY_WORKER_MAX_TASKS_PER_CHILD: 1
+    command: >
+      sh -c "mkdir -p /logs/local/celery &&
+      celery -A config worker --pool=solo --loglevel=info --concurrency=1
+      --queues=processing
+      --hostname=processing@%h
+      --prefetch-multiplier=1
+      --max-tasks-per-child=1
+      2>&1 | tee -a /logs/local/celery/processing-worker.log"
+    volumes:
+      - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
+    develop:
+      watch:
+        - action: sync+restart
+          path: ../../app/backend/apps
+          target: /app/apps
+        - action: sync+restart
+          path: ../../app/backend/config
+          target: /app/config
+        - action: rebuild
+          path: ../../app/backend/requirements.txt
+        - action: rebuild
+          path: ../../app/backend/requirements-dev.txt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+    networks: [public, internal]
+  beat:
+    build:
+      context: ../..
+      dockerfile: local/docker/backend.Dockerfile
+    environment:
+      <<: *app_environment
+    command: >
+      sh -c "mkdir -p /logs/local/celery &&
+      celery -A config beat --loglevel=info --schedule=/runtime/celery/celerybeat-schedule
+      2>&1 | tee -a /logs/local/celery/beat.log"
+    volumes:
+      - ../../app/backend/storage:${RUNTIME_STORAGE_DIR:-/app/storage}
+      - ../../logs:/logs
+      - ../../local/runtime:/runtime
+    develop:
+      watch:
+        - action: sync+restart
+          path: ../../app/backend/apps
+          target: /app/apps
+        - action: sync+restart
+          path: ../../app/backend/config
+          target: /app/config
+        - action: rebuild
+          path: ../../app/backend/requirements.txt
+        - action: rebuild
+          path: ../../app/backend/requirements-dev.txt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+    networks: [internal]
+  frontend:
+    build:
+      context: ../..
+      dockerfile: local/docker/frontend.Dockerfile
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+      VITE_DEV_PROXY_TARGET: http://backend:8000
+    command: >
+      sh -c "mkdir -p /logs/local/frontend &&
+      npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-5173}
+      2>&1 | tee -a /logs/local/frontend/frontend.log"
+    volumes:
+      - ../../logs:/logs
+      - frontend_node_modules:/app/node_modules
+    develop:
+      watch:
+        - action: sync
+          path: ../../app/frontend
+          target: /app
+          ignore: *frontend_sync_ignore
+        - action: rebuild
+          path: ../../app/frontend/package.json
+        - action: rebuild
+          path: ../../app/frontend/package-lock.json
+    ports:
+      - "${HOST_BIND_IP:-127.0.0.1}:${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [public]
+volumes:
+  postgres_data:
+  redis_data:
+  frontend_node_modules:
+networks:
+  public:
+  internal:
+    internal: true

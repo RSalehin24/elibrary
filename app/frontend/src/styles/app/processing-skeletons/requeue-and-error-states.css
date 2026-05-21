@@ -1,0 +1,202 @@
+.processing-requeue-layout {
+  display:grid;
+  grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);
+  gap:14px;
+  align-items:stretch
+}
+.processing-row-error {
+  width:100%;
+  border:1px solid rgba(153,43,43,.16);
+  border-radius:12px;
+  background:#fff1f1b8;
+  overflow:hidden
+}
+.processing-row-error>summary {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  cursor:pointer;
+  padding:7px 10px;
+  color:#9a2c2c;
+  font-size:.8rem;
+  font-weight:700;
+  line-height:1.2;
+  list-style:none
+}
+.processing-row-error>summary::-webkit-details-marker {
+  display:none
+}
+.processing-row-error>summary:before {
+  content:"+";
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:16px;
+  height:16px;
+  border-radius:999px;
+  background:#9a2c2c1f;
+  font-size:.9rem;
+  line-height:1
+}
+.processing-row-error[open]>summary:before {
+  content:"-"
+}
+.processing-row-error-body {
+  max-height:96px;
+  overflow:auto;
+  padding:0 10px 10px;
+  border-top:1px dashed rgba(153,43,43,.2)
+}
+.processing-row-error-body pre {
+  margin:8px 0 0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  color:#7d2424;
+  font-family:SFMono-Regular,Menlo,monospace;
+  font-size:.76rem;
+  line-height:1.45
+}
+.processing-inline-error-cell {
+  max-height:108px;
+  overflow:auto;
+  padding:8px 10px;
+  border:1px solid rgba(153,43,43,.16);
+  border-radius:12px;
+  background:#fff1f1b8
+}
+.processing-inline-error-cell pre {
+  margin:0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  color:#7d2424;
+  font-family:SFMono-Regular,Menlo,monospace;
+  font-size:.76rem;
+  line-height:1.45
+}
+.processing-requeue-table-wrap,.processing-failed-table-wrap {
+  min-width:0;
+  overflow:auto
+}
+.processing-requeue-select {
+  justify-content:flex-start;
+  width:100%;
+  min-height:34px;
+  padding:0 8px
+}
+.processing-requeue-layout .is-active-row {
+  background:#0f4b380f
+}
+.processing-requeue-error-panel {
+  min-width:0;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:linear-gradient(180deg,#fcfefdf5,#f1f7f3e6);
+  padding:14px;
+  display:grid;
+  align-content:start;
+  gap:10px;
+  overflow:hidden
+}
+.processing-requeue-error-panel h3 {
+  margin:0;
+  font-size:.95rem;
+  line-height:1.3
+}
+.processing-requeue-error-panel .table-note {
+  margin:0
+}
+.processing-requeue-error-scroll {
+  max-height:320px;
+  overflow:auto;
+  border:1px dashed var(--line-strong);
+  border-radius:12px;
+  background:#fffc;
+  padding:12px
+}
+.processing-requeue-error-scroll pre {
+  margin:0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  color:var(--ink-soft);
+  font-family:SFMono-Regular,Menlo,monospace;
+  font-size:.82rem;
+  line-height:1.45
+}
+.processing-requeue-error-scroll hr {
+  border:0;
+  border-top:1px dashed var(--line-strong);
+  margin:12px 0
+}
+.processing-failure-disclosure {
+  border:1px solid rgba(15,75,56,.16);
+  border-radius:12px;
+  background:#f4f9f6f5;
+  overflow:hidden
+}
+.processing-failure-disclosure>summary {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  cursor:pointer;
+  padding:10px 12px;
+  color:var(--ink);
+  font-size:.82rem;
+  font-weight:700;
+  line-height:1.3;
+  list-style:none
+}
+.processing-failure-disclosure>summary::-webkit-details-marker {
+  display:none
+}
+.processing-failure-disclosure>summary:after {
+  content:"+";
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:18px;
+  height:18px;
+  border-radius:999px;
+  background:#0f4b381a;
+  color:#0b3d2ee6;
+  font-size:.95rem;
+  line-height:1
+}
+.processing-failure-disclosure[open]>summary:after {
+  content:"-"
+}
+.processing-failure-disclosure-body {
+  max-height:220px;
+  overflow:auto;
+  padding:0 12px 12px;
+  border-top:1px dashed rgba(15,75,56,.16)
+}
+.processing-failure-disclosure-body pre {
+  margin:10px 0 0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  color:var(--ink-soft);
+  font-family:SFMono-Regular,Menlo,monospace;
+  font-size:.8rem;
+  line-height:1.5
+}
+.processing-inline-danger {
+  min-height:34px;
+  padding:0 10px
+}
+.processing-toggle-card {
+  width:100%
+}
+.detail-facts strong {
+  font-size:.95rem;
+  line-height:1.4
+}
+@media (max-width: 640px) {
+  .processing-skeleton-row {
+    grid-template-columns:repeat(2,minmax(0,1fr))
+  }
+}
