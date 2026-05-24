@@ -147,8 +147,11 @@ export const readerApplicationHighlightMethods = {
       if (!doc.getElementById(selStyleId)) {
         const style = doc.createElement("style");
         style.id = selStyleId;
-        style.textContent =
-          "::selection { background: rgba(255,235,59,0.45); }";
+        style.textContent = [
+          "::selection { background: rgba(255,235,59,0.45); }",
+          ".epubjs-quote-text { font-style: italic; }",
+          ".epubjs-quote-mark { font-style: normal; color: #7c3aed; font-weight: 600; }",
+        ].join("\n");
         (doc.head || doc.documentElement).appendChild(style);
       }
     } catch {
@@ -206,6 +209,12 @@ export const readerApplicationHighlightMethods = {
           this.appliedHighlightTypes?.set(highlight.id, "underline");
           continue;
         }
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn("Failed to attach quote annotation", highlight.id, error);
+        continue;
+      }
+      try {
         const isUnderline = highlight.color === "underline";
         if (isUnderline) {
           // Use epub.js underline API — draws SVG <line> elements under text.
@@ -245,6 +254,14 @@ export const readerApplicationHighlightMethods = {
         );
       }
     }
+    // After underline SVGs are attached, mutate the iframe DOM so quoted text
+    // is wrapped in italic and flanked by smart quotation marks. Idempotent
+    // per (iframe, highlight id).
+    try {
+      this._applyQuoteDecorations();
+    } catch {
+      // best effort
+    }
   },
 
   removeHighlightAnnotation(highlight) {
@@ -257,8 +274,100 @@ export const readerApplicationHighlightMethods = {
     } catch {
       // ignore
     }
+    if (highlight.kind === "quote") {
+      this._undoQuoteDecoration(highlight.id);
+    }
     this.appliedHighlightIds?.delete(highlight.id);
     this.appliedHighlightTypes?.delete(highlight.id);
+  },
+
+  _applyQuoteDecorations() {
+    if (!this.rendition || !this.highlights) return;
+    let contentsList = [];
+    try {
+      contentsList = this.rendition.getContents?.() || [];
+    } catch {
+      contentsList = [];
+    }
+    if (!Array.isArray(contentsList) || !contentsList.length) return;
+    for (const highlight of this.highlights.values()) {
+      if (highlight.kind !== "quote" || !highlight.cfi_range) continue;
+      for (const contents of contentsList) {
+        const doc = contents?.document;
+        if (!doc) continue;
+        // Already decorated in this iframe?
+        if (doc.querySelector?.(`[data-quote-id="${highlight.id}"]`)) continue;
+        let range;
+        try {
+          range = contents.range?.(highlight.cfi_range);
+        } catch {
+          range = null;
+        }
+        if (!range) continue;
+        try {
+          const frag = range.extractContents();
+          const wrap = doc.createElement("span");
+          wrap.className = "epubjs-quote-text";
+          wrap.setAttribute("data-quote-id", highlight.id);
+          wrap.appendChild(frag);
+
+          const open = doc.createElement("span");
+          open.className = "epubjs-quote-mark";
+          open.setAttribute("data-quote-id", highlight.id);
+          open.setAttribute("data-quote-role", "open");
+          open.textContent = "\u201C";
+
+          const close = doc.createElement("span");
+          close.className = "epubjs-quote-mark";
+          close.setAttribute("data-quote-id", highlight.id);
+          close.setAttribute("data-quote-role", "close");
+          close.textContent = "\u201D";
+
+          range.insertNode(wrap);
+          wrap.parentNode.insertBefore(open, wrap);
+          if (wrap.nextSibling) {
+            wrap.parentNode.insertBefore(close, wrap.nextSibling);
+          } else {
+            wrap.parentNode.appendChild(close);
+          }
+        } catch (error) {
+          // Range may cross element boundaries; skip decoration silently.
+          // The underline still renders the bottom rule.
+          // eslint-disable-next-line no-console
+          console.debug("Quote decoration skipped", highlight.id, error);
+        }
+      }
+    }
+  },
+
+  _undoQuoteDecoration(id) {
+    if (!this.rendition || !id) return;
+    let contentsList = [];
+    try {
+      contentsList = this.rendition.getContents?.() || [];
+    } catch {
+      contentsList = [];
+    }
+    for (const contents of contentsList) {
+      const doc = contents?.document;
+      if (!doc?.querySelectorAll) continue;
+      const nodes = doc.querySelectorAll(`[data-quote-id="${id}"]`);
+      nodes.forEach((node) => {
+        if (node.classList.contains("epubjs-quote-text")) {
+          // Unwrap: move children out, then remove the wrapper.
+          const parent = node.parentNode;
+          if (!parent) {
+            node.remove();
+            return;
+          }
+          while (node.firstChild) parent.insertBefore(node.firstChild, node);
+          node.remove();
+        } else {
+          // Quote-mark spans — just remove.
+          node.remove();
+        }
+      });
+    }
   },
 
   ensureHighlightToolbar() {
@@ -916,43 +1025,12 @@ export const readerApplicationHighlightMethods = {
       "font:500 12px/1 system-ui,-apple-system,Segoe UI,sans-serif",
       "left:-9999px",
       "top:-9999px",
+      "width:170px",
     ].join(";");
 
-    // Color swatches — only for plain highlights (not quotes/underlines).
-    // Clicking a swatch updates the existing highlight's color in place.
-    if (highlight.kind !== "quote" && highlight.color !== "underline") {
-      for (const [color, meta] of Object.entries(HIGHLIGHT_COLORS)) {
-        if (color === "underline") continue;
-        const dot = document.createElement("button");
-        dot.type = "button";
-        dot.title = meta.label;
-        dot.style.cssText = [
-          "width:18px;height:18px;border-radius:50%;cursor:pointer;padding:0;transition:transform .1s",
-          `background:${meta.fill}`,
-          highlight.color === color
-            ? "border:2px solid #fff;box-shadow:0 0 0 1px #6366f1;transform:scale(1.12)"
-            : "border:2px solid rgba(255,255,255,.35)",
-        ].join(";");
-        dot.addEventListener("click", () => {
-          const existing = this.highlights.get(id);
-          if (!existing || existing.color === color) {
-            this._dismissAnnotationMenu();
-            return;
-          }
-          this.removeHighlightAnnotation(existing);
-          this.appliedHighlightIds?.delete(id);
-          this.highlights.set(id, { ...existing, color });
-          this.applyPendingHighlights();
-          this.updateHighlightById(id, { color });
-          this._dismissAnnotationMenu();
-        });
-        menu.appendChild(dot);
-      }
-      const sep = document.createElement("div");
-      sep.style.cssText =
-        "width:1px;height:18px;background:rgba(255,255,255,.2);";
-      menu.appendChild(sep);
-    }
+    // Colour changes are handled exclusively by the selection toolbar
+    // (re-select the same text and pick a new colour). The annotation menu
+    // shown when clicking an existing highlight only offers Edit + Delete.
 
     // Edit note — inline textarea (no dialog)
     menu.appendChild(
@@ -1040,14 +1118,64 @@ export const readerApplicationHighlightMethods = {
       menu.style.top = `${Math.min(Math.max(8, top), window.innerHeight - mh - 8)}px`;
     });
 
-    // Dismiss on outside click
-    const outsideClick = (e) => {
-      if (!menu.contains(e.target)) {
-        this._dismissAnnotationMenu();
-        document.removeEventListener("mousedown", outsideClick);
+    // Dismiss on outside click — listen on the parent document AND on every
+    // rendered EPUB iframe document, because clicks inside the iframe do not
+    // bubble to the parent, and the menu itself lives in the parent DOM (so
+    // any iframe click is, by definition, outside the menu).
+    const cleanupListeners = [];
+    const handleOutside = (e) => {
+      // Parent-doc clicks: only dismiss if the click target is outside the menu.
+      // Iframe clicks: always outside the menu, so always dismiss.
+      const target = e?.target;
+      const insideMenu =
+        target && typeof menu.contains === "function" && menu.contains(target);
+      if (insideMenu) return;
+      this._dismissAnnotationMenu();
+      cleanupListeners.forEach((fn) => {
+        try {
+          fn();
+        } catch {
+          // best effort
+        }
+      });
+    };
+
+    const attachOutside = () => {
+      document.addEventListener("mousedown", handleOutside);
+      cleanupListeners.push(() =>
+        document.removeEventListener("mousedown", handleOutside),
+      );
+      try {
+        const contentsList = this.rendition?.getContents?.() || [];
+        for (const contents of contentsList) {
+          const doc = contents?.document;
+          if (!doc?.addEventListener) continue;
+          doc.addEventListener("mousedown", handleOutside);
+          doc.addEventListener("touchstart", handleOutside);
+          cleanupListeners.push(() => {
+            try {
+              doc.removeEventListener("mousedown", handleOutside);
+              doc.removeEventListener("touchstart", handleOutside);
+            } catch {
+              // best effort
+            }
+          });
+        }
+      } catch {
+        // best effort
       }
     };
-    setTimeout(() => document.addEventListener("mousedown", outsideClick), 0);
+    setTimeout(attachOutside, 0);
+    this._annotationMenuCleanup = () => {
+      cleanupListeners.forEach((fn) => {
+        try {
+          fn();
+        } catch {
+          // best effort
+        }
+      });
+      cleanupListeners.length = 0;
+    };
   },
 
   _dismissAnnotationMenu() {
@@ -1057,6 +1185,14 @@ export const readerApplicationHighlightMethods = {
       );
     }
     this._annotationMenuElement = null;
+    if (typeof this._annotationMenuCleanup === "function") {
+      try {
+        this._annotationMenuCleanup();
+      } catch {
+        // best effort
+      }
+      this._annotationMenuCleanup = null;
+    }
   },
 
   _annotationMenuBtn(label, onClick, color = "#f3f4f6") {
