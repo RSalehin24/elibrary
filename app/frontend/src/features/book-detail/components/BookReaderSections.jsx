@@ -181,7 +181,7 @@ export default function BookReaderSections({
 
 function NoteSection({ title, icon, count, children }) {
   return (
-    <section className="detail-card">
+    <section className="detail-card detail-card-brs">
       <div className="brs-note-header">
         <p className="eyebrow">Reader</p>
         <h2 className="brs-note-title">

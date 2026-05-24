@@ -642,7 +642,10 @@
 /* ── BookReaderSections — individual note-type cards ────────────────────── */
 
 .brs-note-header {
-  margin-bottom: 10px;
+  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  max-height: 42.36px;
 }
 
 .brs-note-title {
@@ -675,6 +678,9 @@
   scrollbar-gutter: stable;
   margin-right: -4px;
   padding-right: 4px;
+  border: 1px solid #d8d6d6;
+  border-radius: 10px;
+  width: 100%;
 }
 
 .brs-loading {
