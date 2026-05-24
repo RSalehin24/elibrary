@@ -1,5 +1,9 @@
 /* ── Notes page layout ──────────────────────────────────────────────────── */
 
+.notes-header-row h1 {
+  margin-left: 10px !important;
+}
+
 .notes-page-header {
   display: flex;
   flex-direction: column;
