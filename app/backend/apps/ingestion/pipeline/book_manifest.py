@@ -1,0 +1,1113 @@
+import json
+import os
+import re
+import time
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
+
+import requests
+from bs4 import BeautifulSoup, Tag
+
+from apps.common.text import clean_display_text, normalize_catalog_text
+from apps.ingestion.pipeline import scraper
+from apps.ingestion.pipeline.curated_extractors import (
+    build_projection,
+    classify_structure,
+    extract_book_entities,
+    extract_sections,
+)
+from apps.ingestion.pipeline.curated_validation import generated_toc_from_content_items
+from apps.ingestion.pipeline.scraper_support.network import (
+    HEADERS,
+    clean_buttons,
+    create_session_with_retries,
+    decode_html_response,
+    normalize_source_url,
+)
+from apps.ingestion.services.normalization import (
+    dedupe_html_fragment_blocks,
+    dedupe_structured_sections,
+    extract_boundary_sections_from_content_items,
+    extract_main_content_segments,
+    infer_structured_content_from_main_content,
+    plain_text_from_html,
+    promote_leading_front_matter,
+    prune_duplicate_main_content,
+    split_leading_front_sections,
+    split_trailing_front_sections,
+)
+from apps.ingestion.services.resolution_support_metadata import split_display_title
+from apps.ingestion.services.resolution_support_network import get_with_host_fallback
+
+
+CURRENT_MANIFEST_SCHEMA_VERSION = "2026-05-03.1"
+UNCAPPED_LIMIT_KEYS = {"max_nodes", "max_lesson_pages", "max_topic_pages", "max_content_chars"}
+SECTION_FALLBACK_TITLE = "প্রারম্ভ"
+BANGLA_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+
+def _as_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def normalize_manifest_limits(content_limits=None):
+    limits = {
+        "max_nodes": None,
+        "max_lesson_pages": None,
+        "max_topic_pages": None,
+        "max_content_chars": None,
+        "disable_recursive": False,
+    }
+    if not isinstance(content_limits, dict):
+        return limits
+
+    for key in UNCAPPED_LIMIT_KEYS:
+        raw_value = content_limits.get(key)
+        if raw_value is None or raw_value == "" or raw_value == 0 or raw_value == "0":
+            limits[key] = None
+            continue
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            limits[key] = None
+            continue
+        limits[key] = parsed if parsed > 0 else None
+
+    limits["disable_recursive"] = _as_bool(content_limits.get("disable_recursive", False))
+    return limits
+
+
+def bounded_total(total, limit):
+    if not isinstance(total, int) or total < 1:
+        total = 1
+    if isinstance(limit, int) and limit > 0:
+        return min(total, limit)
+    return total
+
+
+def truncate_html(html, max_content_chars):
+    if not html:
+        return ""
+    if isinstance(max_content_chars, int) and max_content_chars > 0 and len(html) > max_content_chars:
+        return html[:max_content_chars]
+    return html
+
+
+def build_query_url(base_url, query_updates):
+    parsed = urlparse(base_url)
+    current_query = parse_qs(parsed.query, keep_blank_values=True)
+    for key, value in query_updates.items():
+        current_query[key] = [str(value)]
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urlencode(current_query, doseq=True),
+            "",
+        )
+    )
+
+
+def normalized_heading(title):
+    cleaned = clean_display_text(title or "")
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"\d+\s*Topics?.*$", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned.translate(BANGLA_DIGITS)
+
+
+def html_text(html):
+    return clean_display_text(plain_text_from_html(html or ""))
+
+
+class SourceFetchContext:
+    def __init__(self, session, *, sleep_seconds=0.25):
+        self.session = session
+        self.sleep_seconds = sleep_seconds
+        self.pages = []
+        self.cache = {}
+
+    def fetch_soup(self, url, *, kind, title="", cache=True):
+        if cache and url in self.cache:
+            return self.cache[url]
+
+        page = {
+            "url": url,
+            "kind": kind,
+            "title": clean_display_text(title),
+            "status": "failed",
+            "status_code": None,
+        }
+        try:
+            response = get_with_host_fallback(
+                self.session,
+                url,
+                headers=HEADERS,
+                timeout=30,
+            )
+            page["status_code"] = getattr(response, "status_code", None)
+            if response.status_code != 200:
+                self.pages.append(page)
+                self.cache[url] = None
+                return None
+
+            soup = BeautifulSoup(decode_html_response(response), "html.parser")
+            page["status"] = "fetched"
+            if not page["title"]:
+                page["title"] = page_title_from_soup(soup)
+            self.pages.append(page)
+            if cache:
+                self.cache[url] = soup
+            if self.sleep_seconds:
+                time.sleep(self.sleep_seconds)
+            return soup
+        except requests.exceptions.RequestException as error:
+            page["error"] = str(error)
+            self.pages.append(page)
+            if cache:
+                self.cache[url] = None
+            return None
+
+
+def page_title_from_soup(soup):
+    title_tag = soup.find("title") if soup else None
+    if not title_tag:
+        return ""
+    title, _author = split_display_title(title_tag.get_text(" ", strip=True))
+    return clean_display_text(title)
+
+
+def extract_title_and_author(soup):
+    visible_title = soup.select_one("h1.entry-title")
+    title = clean_display_text(visible_title.get_text(" ", strip=True)) if visible_title else ""
+    title_author = ""
+    title_tag = soup.find("title") if soup else None
+    if title_tag:
+        split_title, split_author = split_display_title(title_tag.get_text(" ", strip=True))
+        title = title or split_title
+        title_author = split_author
+    return title or "Book Title", title_author
+
+
+def class_tokens(tag):
+    return set(tag.get("class") or []) if isinstance(tag, Tag) else set()
+
+
+def has_class_token(tag, token):
+    return token in class_tokens(tag)
+
+
+def extract_entry_terms(soup):
+    terms = {}
+    meta = soup.select_one(".entry-meta.entry-meta-after-content") or soup.select_one(".entry-meta")
+    if not meta:
+        return terms
+
+    for span in meta.find_all("span"):
+        term_key = ""
+        for token in class_tokens(span):
+            if token.startswith("entry-terms-"):
+                term_key = token.replace("entry-terms-", "", 1)
+                break
+        if not term_key:
+            continue
+
+        links = [clean_display_text(link.get_text(" ", strip=True)) for link in span.find_all("a")]
+        values = [value for value in links if value]
+        if not values:
+            text = clean_display_text(span.get_text(" ", strip=True))
+            if text:
+                values = [text]
+        if values:
+            terms[term_key] = values
+    return terms
+
+
+def term_display(terms, *keys):
+    values = []
+    seen = set()
+    for key in keys:
+        for value in terms.get(key, []) or []:
+            normalized = normalize_catalog_text(value)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            values.append(value)
+    return ", ".join(values)
+
+
+def first_srcset_url(value):
+    if not value:
+        return ""
+    first = str(value).split(",")[0].strip()
+    return first.split()[0] if first else ""
+
+
+def extract_cover_url(soup, base_url):
+    figure = (
+        soup.select_one("figure.entry-image-link.entry-image-single")
+        or soup.select_one("figure.entry-image-link")
+        or soup.select_one("figure")
+    )
+    if not figure:
+        return ""
+
+    image = figure.find("img")
+    candidates = []
+    if image:
+        candidates.extend(
+            [
+                image.get("data-src"),
+                image.get("data-lazy-src"),
+                image.get("src"),
+                first_srcset_url(image.get("srcset")),
+                first_srcset_url(image.get("data-srcset")),
+            ]
+        )
+
+    for source in figure.find_all("source"):
+        candidates.append(first_srcset_url(source.get("srcset")))
+
+    for candidate in candidates:
+        if candidate:
+            return urljoin(base_url, candidate)
+    return ""
+
+
+def cover_extension(cover_url, content_type=""):
+    path = urlparse(cover_url or "").path.lower()
+    if ".webp" in path or "webp" in content_type:
+        return ".webp"
+    if ".png" in path or "png" in content_type:
+        return ".png"
+    if ".jpeg" in path or ".jpg" in path or "jpeg" in content_type or "jpg" in content_type:
+        return ".jpg"
+    return ".jpg"
+
+
+def download_cover_asset(cover_url, output_folder, session):
+    if not cover_url or not output_folder:
+        return ""
+    try:
+        response = session.get(cover_url, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return ""
+
+    ext = cover_extension(cover_url, response.headers.get("content-type", ""))
+    filename = f"book_cover{ext}"
+    os.makedirs(output_folder, exist_ok=True)
+    with open(os.path.join(output_folder, filename), "wb") as handle:
+        handle.write(response.content)
+    return filename
+
+
+def extract_entry_content_html(soup, title=""):
+    if not soup:
+        return ""
+    container = (
+        soup.select_one(".ld-tab-content.ld-visible.entry-content")
+        or soup.select_one(".ld-tab-content.entry-content")
+        or soup.select_one("article .entry-content")
+        or soup.select_one(".entry-content")
+    )
+    if not container:
+        return ""
+    container = clean_buttons(container)
+    html = container.decode_contents()
+    return scraper.remove_redundant_headers(html, title)
+
+
+def pagination_data(tag):
+    if not tag or not tag.has_attr("data-pager-results"):
+        return {}
+    raw_value = tag.get("data-pager-results", "")
+    try:
+        return json.loads(raw_value.replace("&quot;", '"'))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def lesson_total_pages(soup):
+    pagers = soup.select(".ld-pagination[data-pager-results]") if soup else []
+    for pager in pagers:
+        data = pagination_data(pager)
+        context = clean_display_text(" ".join(pager.get("class", []))).lower()
+        if "course_content" in context or data.get("pager_context") in {"course_content_shortcode", "course_content"}:
+            try:
+                return max(1, int(data.get("total_pages", 1)))
+            except (TypeError, ValueError):
+                return 1
+    for pager in pagers:
+        data = pagination_data(pager)
+        if "total_pages" in data:
+            try:
+                return max(1, int(data.get("total_pages", 1)))
+            except (TypeError, ValueError):
+                return 1
+    return 1
+
+
+def topic_page_numbers(lesson_item, page_url, max_topic_pages=None):
+    expand_id = lesson_item.get("data-ld-expand-id") if lesson_item else ""
+    if not expand_id:
+        return [1]
+
+    page_numbers = {1}
+    for tag in lesson_item.find_all(href=True):
+        parsed = urlparse(urljoin(page_url, tag.get("href", "")))
+        for value in parse_qs(parsed.query).get("ld-topic-page", []):
+            prefix, _, page_number = str(value).partition("-")
+            if prefix != str(expand_id):
+                continue
+            try:
+                page_numbers.add(int(page_number))
+            except (TypeError, ValueError):
+                continue
+
+    for tag in lesson_item.find_all(attrs={"data-ld-topic-page": True}):
+        prefix, _, page_number = str(tag.get("data-ld-topic-page", "")).partition("-")
+        if prefix != str(expand_id):
+            continue
+        try:
+            page_numbers.add(int(page_number))
+        except (TypeError, ValueError):
+            continue
+
+    for pager in lesson_item.select(".ld-pagination[data-pager-results]"):
+        data = pagination_data(pager)
+        try:
+            total_pages = int(data.get("total_pages", 1))
+        except (TypeError, ValueError):
+            continue
+        page_numbers.update(range(1, bounded_total(total_pages, max_topic_pages) + 1))
+
+    return sorted(page_number for page_number in page_numbers if page_number >= 1)
+
+
+def find_lesson_item_by_expand_id(soup, expand_id):
+    if not soup or not expand_id:
+        return None
+    return soup.find("div", attrs={"data-ld-expand-id": expand_id})
+
+
+def topic_container_for_lesson(lesson_item):
+    expand_id = lesson_item.get("data-ld-expand-id") if lesson_item else ""
+    if expand_id:
+        container = lesson_item.find("div", id=f"{expand_id}-container")
+        if container:
+            return container
+    return lesson_item
+
+
+def extract_topic_entries_from_lesson(lesson_item, *, base_url, seen_urls):
+    container = topic_container_for_lesson(lesson_item)
+    if not container:
+        return []
+
+    topics = []
+    topic_items = container.find_all(
+        "div",
+        class_=lambda value: value and "ld-table-list-item" in value,
+        recursive=True,
+    )
+    for topic_item in topic_items:
+        anchor = topic_item.find(
+            "a",
+            class_=lambda value: value and "ld-table-list-item-preview" in value,
+        )
+        if anchor is None or not anchor.get("href"):
+            continue
+        topic_url = normalize_content_url(anchor.get("href"), base_url)
+        key = topic_url or anchor.get("href")
+        if key in seen_urls:
+            continue
+        seen_urls.add(key)
+
+        title_span = anchor.find("span", class_="ld-topic-title")
+        title = normalized_heading(
+            title_span.get_text(" ", strip=True)
+            if title_span is not None
+            else anchor.get_text(" ", strip=True)
+        )
+        if not title:
+            continue
+        topics.append(
+            {
+                "title": title,
+                "url": topic_url,
+                "type": "topic",
+                "has_content": True,
+                "children": [],
+            }
+        )
+    return topics
+
+
+def scrape_nested_topic_nodes(lesson_item, page_url, ctx, limits):
+    expand_id = lesson_item.get("data-ld-expand-id") if lesson_item else ""
+    if not expand_id:
+        return []
+
+    topics = []
+    seen_urls = set()
+    for page_number in topic_page_numbers(
+        lesson_item,
+        page_url,
+        limits.get("max_topic_pages") or limits.get("max_lesson_pages"),
+    ):
+        paged_lesson_item = lesson_item
+        topic_page_url = page_url
+        if page_number > 1:
+            topic_page_url = build_query_url(page_url, {"ld-topic-page": f"{expand_id}-{page_number}"})
+            topic_soup = ctx.fetch_soup(topic_page_url, kind="topic_toc_page")
+            paged_lesson_item = find_lesson_item_by_expand_id(topic_soup, expand_id)
+            if paged_lesson_item is None:
+                continue
+
+        topics.extend(
+            extract_topic_entries_from_lesson(
+                paged_lesson_item,
+                base_url=topic_page_url,
+                seen_urls=seen_urls,
+            )
+        )
+    return topics
+
+
+def normalize_content_url(url, base_url):
+    if not url:
+        return ""
+    candidate = urljoin(base_url, str(url).strip())
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if parsed.netloc.lower() not in {"ebanglalibrary.com", "www.ebanglalibrary.com"}:
+        return ""
+    normalized_path = parsed.path or "/"
+    if normalized_path.startswith("/books/"):
+        normalized_path = normalized_path.rstrip("/") + "/"
+    return urlunparse(("https", "www.ebanglalibrary.com", normalized_path, parsed.params, parsed.query, ""))
+
+
+def toc_items_container(soup):
+    if not soup:
+        return None
+    containers = soup.select(".ld-item-list.ld-lesson-list .ld-item-list-items")
+    if containers:
+        return containers[0]
+    return soup.select_one(".ld-lesson-list")
+
+
+def parse_lesson_node(lesson_item, page_url, ctx, limits):
+    anchor = lesson_item.find("a", class_=lambda value: value and "ld-item-name" in value)
+    if anchor is None:
+        return None
+    title_node = anchor.find("div", class_=lambda value: value and "ld-item-title" in value) or anchor
+    title = normalized_heading(title_node.get_text(" ", strip=True))
+    url = normalize_content_url(anchor.get("href", ""), page_url)
+    if not title and not url:
+        return None
+    topics = scrape_nested_topic_nodes(lesson_item, page_url, ctx, limits)
+    return {
+        "title": title or url,
+        "url": url,
+        "type": "lesson",
+        "has_content": True,
+        "children": topics,
+    }
+
+
+def section_heading_title(block):
+    heading = block.select_one(".ld-lesson-section-heading") if block else None
+    text = heading.get_text(" ", strip=True) if heading else block.get_text(" ", strip=True)
+    return normalized_heading(text)
+
+
+def parse_toc_nodes_from_page(soup, page_url, ctx, limits):
+    container = toc_items_container(soup)
+    if not container:
+        return []
+
+    nodes = []
+    current_section = None
+    children = [child for child in container.children if isinstance(child, Tag)]
+    if not children:
+        children = container.find_all("div", recursive=False)
+
+    for child in children:
+        if has_class_token(child, "ld-item-list-section-heading"):
+            title = section_heading_title(child)
+            if not title:
+                continue
+            current_section = {
+                "title": title,
+                "url": "",
+                "type": "section",
+                "has_content": False,
+                "children": [],
+            }
+            nodes.append(current_section)
+            continue
+
+        lesson_item = child if has_class_token(child, "ld-item-lesson-item") else None
+        if lesson_item is None:
+            lesson_item = child.find(
+                "div",
+                class_=lambda value: value and "ld-item-lesson-item" in value,
+                recursive=False,
+            )
+        if lesson_item is None:
+            continue
+
+        lesson_node = parse_lesson_node(lesson_item, page_url, ctx, limits)
+        if lesson_node is None:
+            continue
+        if current_section is not None:
+            current_section["children"].append(lesson_node)
+        else:
+            nodes.append(lesson_node)
+
+    return [node for node in nodes if node.get("type") != "section" or node.get("children")]
+
+
+def toc_node_key(node):
+    return (
+        normalize_catalog_text(node.get("url", "")),
+        normalize_catalog_text(node.get("title", "")),
+    )
+
+
+def append_unique_child(container, child, seen_lesson_keys):
+    key = toc_node_key(child)
+    if key in seen_lesson_keys:
+        return
+    seen_lesson_keys.add(key)
+    container.setdefault("children", []).append(child)
+
+
+def mark_toc_subtree_seen(node, seen_lesson_keys):
+    if node.get("type") != "section":
+        seen_lesson_keys.add(toc_node_key(node))
+    for child in node.get("children", []) or []:
+        mark_toc_subtree_seen(child, seen_lesson_keys)
+
+
+def append_toc_node(target, node, seen_lesson_keys, current_section):
+    if node.get("type") == "section":
+        title_key = normalize_catalog_text(node.get("title", ""))
+        if current_section is not None and normalize_catalog_text(current_section.get("title", "")) == title_key:
+            for child in node.get("children", []) or []:
+                append_unique_child(current_section, child, seen_lesson_keys)
+            return current_section
+        target.append(node)
+        mark_toc_subtree_seen(node, seen_lesson_keys)
+        return node
+
+    key = toc_node_key(node)
+    if key in seen_lesson_keys:
+        return current_section
+    seen_lesson_keys.add(key)
+    if current_section is not None:
+        current_section.setdefault("children", []).append(node)
+    else:
+        target.append(node)
+    return current_section
+
+
+def collect_learndash_toc(landing_soup, canonical_url, ctx, limits):
+    if limits.get("disable_recursive"):
+        return [], {"toc_page_count": 0, "has_paginated_toc": False, "has_section_headings": False}
+
+    total_pages = bounded_total(lesson_total_pages(landing_soup), limits.get("max_lesson_pages"))
+    collected = []
+    seen_lesson_keys = set()
+    current_section = None
+    page_count = 0
+
+    for page_number in range(1, total_pages + 1):
+        page_url = canonical_url if page_number == 1 else build_query_url(canonical_url, {"ld-courseinfo-lesson-page": page_number})
+        soup = landing_soup if page_number == 1 else ctx.fetch_soup(page_url, kind="toc_page")
+        if not soup:
+            continue
+        page_count += 1
+        for node in parse_toc_nodes_from_page(soup, page_url, ctx, limits):
+            if node.get("type") == "section":
+                current_section = append_toc_node(collected, node, seen_lesson_keys, current_section)
+                continue
+            current_section = append_toc_node(collected, node, seen_lesson_keys, current_section)
+
+    has_sections = any(node.get("type") == "section" for node in collected)
+    return collected, {
+        "toc_page_count": page_count,
+        "has_paginated_toc": total_pages > 1,
+        "has_section_headings": has_sections,
+        "source_total_pages": lesson_total_pages(landing_soup),
+        "fetched_total_pages": total_pages,
+    }
+
+
+def assign_paths_to_toc(nodes, parent_path=()):
+    normalized_nodes = []
+    for node in nodes or []:
+        title = clean_display_text(node.get("title", ""))
+        if not title:
+            continue
+        path = [*parent_path, title]
+        children = assign_paths_to_toc(node.get("children", []), tuple(path))
+        normalized = {
+            "title": title,
+            "type": node.get("type") or "lesson",
+            "has_content": bool(node.get("has_content", True)),
+            "path": path,
+        }
+        if node.get("url"):
+            normalized["source_url"] = node["url"]
+        if children:
+            normalized["children"] = children
+        normalized_nodes.append(normalized)
+    return normalized_nodes
+
+
+def iter_content_nodes(nodes, parent_path=()):
+    for node in nodes or []:
+        title = clean_display_text(node.get("title", ""))
+        path = [*parent_path, title] if title else list(parent_path)
+        yield node, path
+        yield from iter_content_nodes(node.get("children", []), tuple(path))
+
+
+def duplicate_path_title(title, occurrence):
+    suffix = str(occurrence).translate(BANGLA_DIGITS)
+    return f"{title} ({suffix})"
+
+
+def disambiguate_duplicate_content_paths(toc, content_items):
+    seen_paths = {}
+    updates_by_source_and_path = {}
+    normalized_items = []
+    for item in content_items or []:
+        normalized_item = dict(item)
+        path = [clean_display_text(part) for part in item.get("path", []) if clean_display_text(part)]
+        source_url = item.get("source_url", "")
+        if not path or not source_url:
+            normalized_items.append(normalized_item)
+            continue
+
+        path_key = tuple(path)
+        occurrence = seen_paths.get(path_key, 0) + 1
+        seen_paths[path_key] = occurrence
+        if occurrence > 1:
+            updated_path = [*path[:-1], duplicate_path_title(path[-1], occurrence)]
+            normalized_item["title"] = updated_path[-1]
+            normalized_item["path"] = updated_path
+            updates_by_source_and_path[(source_url, path_key)] = updated_path
+        normalized_items.append(normalized_item)
+
+    def update_toc_entries(entries):
+        updated_entries = []
+        for entry in entries or []:
+            updated_entry = dict(entry)
+            original_path = tuple(
+                clean_display_text(part)
+                for part in updated_entry.get("path", [])
+                if clean_display_text(part)
+            )
+            source_url = updated_entry.get("source_url", "")
+            updated_path = updates_by_source_and_path.get((source_url, original_path))
+            if updated_path:
+                updated_entry["title"] = updated_path[-1]
+                updated_entry["path"] = updated_path
+            if updated_entry.get("children"):
+                updated_entry["children"] = update_toc_entries(updated_entry["children"])
+            updated_entries.append(updated_entry)
+        return updated_entries
+
+    return update_toc_entries(toc), normalized_items
+
+
+def fetch_content_item(node, path, ctx, limits):
+    url = node.get("url", "")
+    if not url:
+        return None
+    soup = ctx.fetch_soup(
+        url,
+        kind=node.get("type", "content"),
+        title=node.get("title", ""),
+        cache=False,
+    )
+    try:
+        html = truncate_html(
+            extract_entry_content_html(soup, node.get("title", "")),
+            limits.get("max_content_chars"),
+        )
+    finally:
+        if soup is not None:
+            soup.decompose()
+    if not html_text(html):
+        return None
+    return {
+        "title": clean_display_text(node.get("title", "")),
+        "content": html,
+        "type": node.get("type") or "lesson",
+        "parent": path[-2] if len(path) > 1 else None,
+        "path": list(path),
+        "source_url": url,
+    }
+
+
+def collect_content_items(nodes, ctx, limits):
+    content_items = []
+    max_nodes = limits.get("max_nodes")
+    for node, path in iter_content_nodes(nodes):
+        if isinstance(max_nodes, int) and max_nodes > 0 and len(content_items) >= max_nodes:
+            break
+        item = fetch_content_item(node, path, ctx, limits)
+        if item is None:
+            node["has_content"] = False
+            continue
+        node["has_content"] = True
+        content_items.append(item)
+    return content_items
+
+
+def list_toc_structure_traits(nodes):
+    lesson_count = 0
+    topic_count = 0
+    section_count = 0
+    lessons_with_topics = 0
+    lessons_without_topics = 0
+
+    def walk(entries):
+        nonlocal lesson_count, topic_count, section_count, lessons_with_topics, lessons_without_topics
+        for entry in entries or []:
+            entry_type = entry.get("type")
+            children = entry.get("children", []) or []
+            if entry_type == "section":
+                section_count += 1
+            elif entry_type == "topic":
+                topic_count += 1
+            else:
+                lesson_count += 1
+                if children:
+                    lessons_with_topics += 1
+                else:
+                    lessons_without_topics += 1
+            walk(children)
+
+    walk(nodes)
+    return {
+        "lesson_count": lesson_count,
+        "topic_count": topic_count,
+        "section_count": section_count,
+        "lessons_with_topics": lessons_with_topics,
+        "lessons_without_topics": lessons_without_topics,
+    }
+
+
+def classify_manifest_structure(toc_nodes, content_items, main_content, toc_meta):
+    traits = list_toc_structure_traits(toc_nodes)
+    if not toc_nodes:
+        if content_items:
+            structure_type = "single_page_heading_split"
+        elif html_text(main_content):
+            structure_type = "single_page_flow_no_toc"
+        else:
+            structure_type = "no_public_body"
+    elif traits["topic_count"] and traits["lessons_without_topics"]:
+        structure_type = "mixed_lessons_and_topics"
+    elif traits["topic_count"]:
+        structure_type = "lesson_topic_nested"
+    else:
+        structure_type = "flat_lessons"
+
+    if traits["section_count"] and structure_type in {"flat_lessons", "lesson_topic_nested", "mixed_lessons_and_topics"}:
+        structure_type = f"sectioned_{structure_type}"
+
+    return {
+        "type": structure_type,
+        "traits": traits,
+        "toc_page_count": toc_meta.get("toc_page_count", 0),
+        "has_paginated_toc": toc_meta.get("has_paginated_toc", False),
+        "has_section_headings": toc_meta.get("has_section_headings", False),
+        "source_total_pages": toc_meta.get("source_total_pages", 1),
+        "fetched_total_pages": toc_meta.get("fetched_total_pages", 1),
+    }
+
+
+def normalize_body_sections(
+    *,
+    book_title,
+    landing_main_content,
+    toc_nodes,
+    content_items,
+):
+    book_info, dedication, residual_main = extract_main_content_segments(landing_main_content or "")
+    book_info = dedupe_html_fragment_blocks(book_info)
+    dedication = dedupe_html_fragment_blocks(dedication)
+
+    front_sections = []
+    back_sections = []
+    leading_sections, residual_main = split_leading_front_sections(residual_main or "")
+    front_sections.extend(leading_sections)
+
+    toc = assign_paths_to_toc(toc_nodes)
+    has_structured_content = bool(toc or content_items)
+
+    if not has_structured_content:
+        inferred_toc, inferred_content_items, residual_main = infer_structured_content_from_main_content(
+            residual_main or "",
+            book_title=book_title,
+        )
+        if inferred_toc and inferred_content_items:
+            toc = inferred_toc
+            content_items = inferred_content_items
+            has_structured_content = True
+
+    if has_structured_content and html_text(residual_main):
+        front_sections.append({"title": SECTION_FALLBACK_TITLE, "html": residual_main})
+        residual_main = ""
+
+    if content_items:
+        inferred_front, inferred_back, toc, content_items = extract_boundary_sections_from_content_items(
+            content_items,
+            toc,
+        )
+        front_sections.extend(inferred_front)
+        back_sections.extend(inferred_back)
+        toc, content_items = disambiguate_duplicate_content_paths(toc, content_items)
+
+    trailing_sections, residual_main = split_trailing_front_sections(residual_main or "")
+    back_sections.extend(trailing_sections)
+
+    front_sections = dedupe_structured_sections(
+        front_sections,
+        reference_fragments=[book_info, dedication],
+    )
+    back_sections = dedupe_structured_sections(
+        back_sections,
+        reference_fragments=[book_info, dedication],
+    )
+    residual_main = prune_duplicate_main_content(
+        residual_main,
+        reference_fragments=[
+            book_info,
+            dedication,
+            *[section.get("html", "") for section in front_sections],
+            *[section.get("html", "") for section in back_sections],
+        ],
+        content_items=content_items,
+    )
+
+    return {
+        "book_info": book_info,
+        "dedication": dedication,
+        "front_sections": front_sections,
+        "back_sections": back_sections,
+        "main_content": residual_main,
+        "toc": toc,
+        "content_items": content_items,
+    }
+
+
+def projection_from_manifest_parts(
+    *,
+    canonical_url,
+    title,
+    author,
+    series,
+    book_type,
+    cover,
+    cover_source_url,
+    output_folder,
+    sections_payload,
+):
+    return {
+        "book_title": title,
+        "author": author,
+        "series": series,
+        "book_type": book_type,
+        "cover": cover or cover_source_url or "",
+        "cover_source_url": cover_source_url or "",
+        "main_content": sections_payload["main_content"],
+        "book_info": sections_payload["book_info"],
+        "dedication": sections_payload["dedication"],
+        "front_sections": sections_payload["front_sections"],
+        "back_sections": sections_payload["back_sections"],
+        "toc": sections_payload["toc"],
+        "content_items": sections_payload["content_items"],
+        "output_folder": output_folder,
+        "source_url": canonical_url,
+    }
+
+
+def build_manifest_from_projection(canonical_url, projection, *, pages=None, source_structure=None, metadata=None):
+    projection = dict(projection or {})
+    if projection.get("content_items") and not projection.get("toc"):
+        projection["toc"] = generated_toc_from_content_items(projection["content_items"])
+
+    entities, evidences = extract_book_entities(projection, canonical_url)
+    sections = extract_sections(projection, canonical_url)
+    assets = [item for item in entities if item.get("entity_type") == "asset"]
+    structure = source_structure or {"type": classify_structure(projection)}
+    return {
+        "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+        "canonical_url": canonical_url,
+        "source_url": projection.get("source_url") or canonical_url,
+        "book": {
+            "title": projection.get("book_title", ""),
+            "author": projection.get("author", ""),
+            "series": projection.get("series", ""),
+            "book_type": projection.get("book_type", ""),
+        },
+        "metadata": metadata or {},
+        "source_structure": structure,
+        "projection": projection,
+        "entities": entities,
+        "evidence": evidences,
+        "sections": sections,
+        "assets": assets,
+        "pages": pages or [],
+    }
+
+
+def build_manifest_source_pages(source_url, *, content_limits=None):
+    canonical_url = normalize_source_url(source_url)
+    limits = normalize_manifest_limits(content_limits)
+    with create_session_with_retries() as session:
+        ctx = SourceFetchContext(session)
+        landing_soup = ctx.fetch_soup(canonical_url, kind="landing")
+        if not landing_soup:
+            return {
+                "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                "source_url": canonical_url,
+                "canonical_url": canonical_url,
+                "pages": ctx.pages,
+                "manifest": {},
+                "raw_scrape_payload": {},
+            }
+
+        title, title_author = extract_title_and_author(landing_soup)
+        terms = extract_entry_terms(landing_soup)
+        author = term_display(terms, "authors", "author") or title_author
+        series = term_display(terms, "series")
+        book_type = term_display(terms, "ld_course_category", "category")
+        output_folder = scraper.create_output_folder(title)
+        cover_source_url = extract_cover_url(landing_soup, canonical_url)
+        cover = download_cover_asset(cover_source_url, output_folder, session)
+        landing_main_content = extract_entry_content_html(landing_soup, title)
+
+        toc_nodes, toc_meta = collect_learndash_toc(landing_soup, canonical_url, ctx, limits)
+        content_items = collect_content_items(toc_nodes, ctx, limits) if toc_nodes else []
+        sections_payload = normalize_body_sections(
+            book_title=title,
+            landing_main_content=landing_main_content,
+            toc_nodes=toc_nodes,
+            content_items=content_items,
+        )
+        source_structure = classify_manifest_structure(
+            toc_nodes,
+            sections_payload["content_items"],
+            sections_payload["main_content"],
+            toc_meta,
+        )
+        projection = projection_from_manifest_parts(
+            canonical_url=canonical_url,
+            title=title,
+            author=author,
+            series=series,
+            book_type=book_type,
+            cover=cover,
+            cover_source_url=cover_source_url,
+            output_folder=output_folder,
+            sections_payload=sections_payload,
+        )
+        manifest = build_manifest_from_projection(
+            canonical_url,
+            projection,
+            pages=ctx.pages,
+            source_structure=source_structure,
+            metadata={"entry_terms": terms, "title_author": title_author},
+        )
+        manifest["toc_source"] = toc_nodes
+        return {
+            "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+            "source_url": canonical_url,
+            "canonical_url": canonical_url,
+            "pages": ctx.pages,
+            "manifest": manifest,
+            "raw_scrape_payload": projection,
+        }
+
+
+def build_manifest_from_legacy_payload(source_url, scraped_data):
+    canonical_url = normalize_source_url(source_url)
+    normalized_payload = dict(scraped_data) if isinstance(scraped_data, dict) else {}
+    promoted_book_info, cleaned_main_content = promote_leading_front_matter(
+        normalized_payload.get("book_info", ""),
+        normalized_payload.get("main_content", ""),
+    )
+    normalized_payload["book_info"] = promoted_book_info
+    normalized_payload["main_content"] = cleaned_main_content
+    if normalized_payload.get("content_items") and not normalized_payload.get("toc"):
+        normalized_payload["toc"] = generated_toc_from_content_items(normalized_payload["content_items"])
+    projection = build_projection(normalized_payload, canonical_url)
+    pages = [
+        {
+            "url": canonical_url,
+            "kind": "landing",
+            "title": projection.get("book_title", ""),
+            "status": "fetched" if isinstance(scraped_data, dict) else "failed",
+            "status_code": None,
+        }
+    ]
+    for index, item in enumerate(projection.get("content_items", []) or []):
+        source_item_url = (item or {}).get("source_url")
+        if source_item_url:
+            pages.append(
+                {
+                    "url": source_item_url,
+                    "kind": (item or {}).get("type") or "content",
+                    "title": (item or {}).get("title", ""),
+                    "status": "fetched",
+                    "status_code": None,
+                    "index": index,
+                }
+            )
+    manifest = build_manifest_from_projection(
+        canonical_url,
+        projection,
+        pages=pages,
+        source_structure={"type": classify_structure(projection), "legacy_payload": True},
+    )
+    return {
+        "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+        "source_url": canonical_url,
+        "canonical_url": canonical_url,
+        "pages": pages,
+        "manifest": manifest,
+        "raw_scrape_payload": projection,
+    }
+
+
+def manifest_to_projection(manifest):
+    projection = dict((manifest or {}).get("projection") or {})
+    projection.setdefault("book_title", (manifest or {}).get("book", {}).get("title", ""))
+    projection.setdefault("author", (manifest or {}).get("book", {}).get("author", ""))
+    projection.setdefault("series", (manifest or {}).get("book", {}).get("series", ""))
+    projection.setdefault("book_type", (manifest or {}).get("book", {}).get("book_type", ""))
+    projection.setdefault("cover", "")
+    projection.setdefault("cover_source_url", "")
+    projection.setdefault("main_content", "")
+    projection.setdefault("book_info", "")
+    projection.setdefault("dedication", "")
+    projection.setdefault("front_sections", [])
+    projection.setdefault("back_sections", [])
+    projection.setdefault("toc", [])
+    projection.setdefault("content_items", [])
+    projection.setdefault("output_folder", "")
+    projection.setdefault("source_url", (manifest or {}).get("canonical_url", ""))
+    return projection

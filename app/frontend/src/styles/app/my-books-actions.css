@@ -1,12 +1,24 @@
 .my-books-toggle {
   min-width: 108px;
+  text-align: center;
+  justify-content: center;
+}
+
+.my-books-toggle .button-label,
+.my-books-toggle .button-label--stable,
+.book-my-books-button .button-label,
+.book-my-books-button .button-label--stable {
+  justify-content: center;
+  text-align: center;
 }
 
 .my-books-toggle.is-in-my-books,
 .book-my-books-button.is-in-my-books {
-  border-color: rgba(15, 75, 56, 0.24);
-  background: linear-gradient(180deg, #ffffff 0%, #f2f7f4 100%);
-  color: var(--accent-strong);
+  color: #fff4f4;
+  background: linear-gradient(180deg, #d84a4a 0%, #a83232 100%);
+  border: 1px solid rgba(122, 25, 25, 0.5);
+  border-color: rgba(122, 25, 25, 0.5);
+  box-shadow: 0 12px 24px rgba(138, 52, 52, 0.24);
 }
 
 .book-card-remove-button {

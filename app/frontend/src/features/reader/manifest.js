@@ -4,10 +4,7 @@ function identity(value) {
   return value;
 }
 
-export function resolveReaderManifestUrl(
-  payload,
-  normalizeUrl = identity,
-) {
+export function resolveReaderManifestUrl(payload, normalizeUrl = identity) {
   const manifestUrl =
     payload?.manifest_url || manifestFromLaunchUrl(payload?.launch_url || "");
 
@@ -29,6 +26,7 @@ export function normalizeReaderManifestPayload(
     "html_preview_url",
     "reading_session_url",
     "bookmarks_url",
+    "highlights_url",
   ].forEach((field) => {
     if (typeof nextManifest[field] === "string" && nextManifest[field]) {
       nextManifest[field] = normalizeUrl(nextManifest[field]);

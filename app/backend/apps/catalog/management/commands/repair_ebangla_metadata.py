@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from apps.catalog.models import (
     Book,
+    BookContributor,
     BookSource,
     Contributor,
     ContributorRole,
@@ -208,6 +209,29 @@ def contributor_name_is_noise(value):
     )):
         return False
     return True
+
+
+def delete_invalid_book_contributions(dry_run=False):
+    """Remove BookContributor rows whose contributor name fails the
+    role-specific ``looks_like_contributor_name`` check (e.g. title
+    fragments like ``"\u09e8 \u099b\u09cb\u099f\u0997\u09b2\u09cd\u09aa"`` or full-sentence
+    translator rows). The contributor records themselves are kept;
+    :func:`delete_invalid_orphan_contributors` will sweep up any that
+    become unreferenced.
+    """
+    deleted = 0
+    queryset = BookContributor.objects.select_related("contributor").order_by("id")
+    for index, relation in enumerate(queryset.iterator(chunk_size=100), start=1):
+        name = relation.contributor.name if relation.contributor_id else ""
+        if not name:
+            continue
+        if looks_like_contributor_name(name, role=relation.role):
+            continue
+        deleted += 1
+        if not dry_run:
+            relation.delete()
+        collect_garbage(index, interval=100)
+    return deleted
 
 
 def delete_invalid_orphan_contributors(dry_run=False):
@@ -494,6 +518,7 @@ class Command(BaseCommand):
         books_renormalized = update_books(dry_run=dry_run, limit=limit)
         contributors_renamed = clean_contributor_display_names(dry_run=dry_run)
         processing_records_changed = update_processing_records(dry_run=dry_run, limit=limit)
+        invalid_book_contributions_deleted = delete_invalid_book_contributions(dry_run=dry_run)
         invalid_orphan_contributors_deleted = delete_invalid_orphan_contributors(dry_run=dry_run)
         epub_nav_spines_repaired = (
             repair_existing_epub_nav_spines(dry_run=dry_run, limit=limit)
@@ -510,6 +535,7 @@ class Command(BaseCommand):
             "source_entries_changed": source_entries_changed,
             "books_renormalized": books_renormalized,
             "contributors_renamed": contributors_renamed,
+            "invalid_book_contributions_deleted": invalid_book_contributions_deleted,
             "invalid_orphan_contributors_deleted": invalid_orphan_contributors_deleted,
             "processing_records_changed": processing_records_changed,
             "epub_nav_spines_repaired": epub_nav_spines_repaired,

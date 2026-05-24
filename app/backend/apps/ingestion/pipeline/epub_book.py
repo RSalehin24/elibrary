@@ -1,6 +1,10 @@
 import os
 
-from .epub_properties.epub_builder import EpubBuilder
+from apps.ingestion.pipeline.curated_export import (
+    curated_document_to_legacy_payload,
+    is_curated_document,
+)
+from .epub_properties.epub_builder import EpubBuilder, html_is_blank
 from apps.ingestion.services.normalization import (
     dedupe_structured_sections,
     extract_boundary_sections_from_content_items,
@@ -8,6 +12,12 @@ from apps.ingestion.services.normalization import (
     split_leading_front_sections,
     split_trailing_front_sections,
 )
+
+
+def _drop_blank_content_items(items):
+    """Remove content items whose body is whitespace-only so the EPUB does
+    not include empty chapters in the spine, NAV, or printed TOC."""
+    return [item for item in items if not html_is_blank((item or {}).get("content", ""))]
 
 
 def display_value(value):
@@ -41,6 +51,10 @@ def create_epub(book_data):
         "output_folder": str
     }
     """
+    if is_curated_document(book_data):
+        book_data = curated_document_to_legacy_payload(book_data)
+    canonical_payload = bool(book_data.get("canonical_manifest") or book_data.get("canonical_sections"))
+
     builder = EpubBuilder(
         book_title=book_data["book_title"],
         author=display_value(book_data["author"]),
@@ -83,7 +97,7 @@ def create_epub(book_data):
     )
     toc = book_data["toc"]
     content_items = list(book_data["content_items"])
-    if content_items:
+    if content_items and not canonical_payload:
         (
             inferred_front_sections,
             inferred_back_sections,
@@ -99,17 +113,17 @@ def create_epub(book_data):
             reference_fragments=reference_fragments,
         )
     compact_main_content = main_content
-    if not front_sections:
+    if not front_sections and not canonical_payload:
         front_sections, compact_main_content = split_leading_front_sections(main_content)
-    if not back_sections:
+    if not back_sections and not canonical_payload:
         back_sections, compact_main_content = split_trailing_front_sections(compact_main_content or "")
+
+    # Drop empty/whitespace-only chapters before TOC + spine generation so
+    # the printed Contents page and EPUB NAV stay in sync with the body.
+    content_items = _drop_blank_content_items(content_items)
 
     if front_sections:
         builder.add_front_section_pages(front_sections)
-
-    # Add main content if available
-    if compact_main_content:
-        builder.add_main_content_page(main_content=compact_main_content)
 
     # Add hierarchical TOC page (if the method exists in your EpubBuilder)
     # Otherwise, fall back to regular TOC
@@ -127,6 +141,10 @@ def create_epub(book_data):
             )
         ]
         builder.add_toc_page(lessons=toc_lessons)
+
+    # Add main content after the generated TOC so EPUB reading order mirrors a physical book.
+    if compact_main_content:
+        builder.add_main_content_page(main_content=compact_main_content)
     
     # Add lesson pages
     builder.add_lesson_pages(content_items)

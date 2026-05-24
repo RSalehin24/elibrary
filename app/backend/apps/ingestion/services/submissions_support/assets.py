@@ -6,6 +6,7 @@ from django.core.files import File
 
 from apps.catalog.models import GeneratedAsset, GeneratedAssetStatus, GeneratedAssetType
 from apps.common.models import LifecycleState, ReviewState
+from apps.ingestion.pipeline.epub_properties.epub_builder import safe_epub_filename
 
 
 def calculate_checksum(path):
@@ -52,7 +53,11 @@ def resolve_generated_cover_path(output_folder, requested_cover):
 
 def candidate_asset_paths(scraped_data):
     output_folder = Path(scraped_data["output_folder"])
-    epub_path = output_folder / f"{scraped_data['book_title']}.epub"
+    # Use the same sanitizer that EpubBuilder.build_epub uses so titles
+    # containing path separators (e.g. "ভলিউম ৪/১") still resolve to the
+    # file that was actually written to disk.
+    epub_filename = safe_epub_filename(f"{scraped_data['book_title']}.epub")
+    epub_path = output_folder / epub_filename
     if not epub_path.exists():
         epub_candidates = sorted(output_folder.glob("*.epub"))
         epub_path = epub_candidates[0] if epub_candidates else None

@@ -109,9 +109,30 @@ export default function ReaderViewport({
               <div className="reader-nav-extra">
                 <button
                   type="button"
+                  id="reader-bookmark-btn"
+                  className="icon-wrap icon-control reader-nav-extra-btn"
+                  aria-label="Bookmark this page"
+                  title="Bookmark this page"
+                >
+                  <span className="iconfont" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      focusable="false"
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+                    </svg>
+                  </span>
+                </button>
+                <button
+                  type="button"
                   className="icon-wrap icon-control reader-nav-extra-btn"
                   onClick={toggleAppNav}
-                  aria-label={navHidden ? "Show main header" : "Hide main header"}
+                  aria-label={
+                    navHidden ? "Show main header" : "Hide main header"
+                  }
                   title={navHidden ? "Show main header" : "Hide main header"}
                 >
                   <span className="iconfont" aria-hidden="true">

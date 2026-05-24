@@ -60,6 +60,7 @@ export const readerApplicationBookInitializationMethods = {
       options.launchManifest || this.launchManifest,
       resolveAppUrl,
     );
+    this.seedHighlightsFromManifest?.(this.launchManifest);
     const normalizedSource =
       typeof source === "string" ? resolveAppUrl(source) : source;
 
@@ -190,8 +191,7 @@ export const readerApplicationBookInitializationMethods = {
           sessionId,
         );
       });
-  }
-,
+  },
   attachRenditionEventHandlers(sessionId) {
     if (!this.rendition) return;
 
@@ -221,8 +221,9 @@ export const readerApplicationBookInitializationMethods = {
         sessionId,
       );
     });
-  }
-,
+
+    this.attachHighlightEventHandlers?.(sessionId);
+  },
   buildReadingStatePayload(location) {
     const normalizedHref = this.normalizeHrefForComparison(
       location?.start?.href || location?.href || this.currentHref || "",
@@ -251,6 +252,5 @@ export const readerApplicationBookInitializationMethods = {
       last_location: normalizedHref,
       progress_percent: progressPercent,
     };
-  }
-,
+  },
 };

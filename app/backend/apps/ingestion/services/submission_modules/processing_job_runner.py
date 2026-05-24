@@ -81,23 +81,36 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
 
         if cancel_requested_for_job(job):
             return finalize_cancelled_job(job)
-        scraped_data = (
-            scrape_book_high_fidelity(submission.resolved_url)
-            if reprocess_book is not None
-            else scrape_book(submission.resolved_url)
+        legacy_scrape_overridden = (
+            getattr(scrape_book, "__module__", "") != "apps.ingestion.services.legacy_adapter"
+            or getattr(scrape_book_high_fidelity, "__module__", "") != "apps.ingestion.services.legacy_adapter"
         )
+        if legacy_scrape_overridden:
+            raw_scraped_data = (
+                scrape_book_high_fidelity(submission.resolved_url)
+                if reprocess_book is not None
+                else scrape_book(submission.resolved_url)
+            )
+            curated_result = curate_scraped_book_data(normalized_url, raw_scraped_data)
+        else:
+            content_limits = high_fidelity_scrape_limits() if reprocess_book is not None else None
+            curated_result = curate_book_document(normalized_url, content_limits=content_limits)
+        scraped_data = curated_result.get("projection", {})
         if not isinstance(scraped_data, dict):
             raise ValueError(
-                f"Source scraping returned no content for {submission.resolved_url}. "
+                f"Source curation returned no content for {submission.resolved_url}. "
                 "Verify the source URL is valid and publicly reachable."
             )
-        promoted_book_info, cleaned_main_content = promote_leading_front_matter(
-            scraped_data.get("book_info", ""),
-            scraped_data.get("main_content", ""),
+        record_job_log(
+            job,
+            "info",
+            "Curated source content.",
+            {
+                "title": scraped_data.get("book_title", ""),
+                "status": curated_result.get("status", ""),
+                "structure_type": curated_result.get("document", {}).get("structure_type", ""),
+            },
         )
-        scraped_data["book_info"] = promoted_book_info
-        scraped_data["main_content"] = cleaned_main_content
-        record_job_log(job, "info", "Scraped source content.", {"title": scraped_data.get("book_title", "")})
         if cancel_requested_for_job(job):
             return finalize_cancelled_job(job)
         exact_title_duplicate = None if reprocess_book or skip_duplicate_checks else find_exact_existing_book(scraped_data)
@@ -156,9 +169,62 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
             job.save(update_fields=["book", "status", "finished_at", "updated_at"])
             return job
 
-        book = persist_scraped_book(submission, job, scraped_data, target_book=reprocess_book)
+        if (
+            not legacy_scrape_overridden
+            and curated_result.get("status") == CuratedDocumentStatus.INVALID
+            and not scraped_data.get("book_title")
+        ):
+            curated_document = persist_curated_document(curated_result, job=job)
+            submission.status = SubmissionStatus.NEEDS_REVIEW
+            submission.review_state = ReviewState.NEEDS_REVIEW
+            submission.error_message = "Curated document requires review before a book can be created."
+            submission.raw_payload = {
+                **submission.raw_payload,
+                "curated_document_id": str(curated_document.id),
+                "curated_validation": curated_result.get("validation", {}),
+            }
+            submission.save(update_fields=["status", "review_state", "error_message", "raw_payload", "updated_at"])
+            sync_deduplicated_submissions(submission)
+            job.status = JobStatus.SUCCEEDED
+            job.finished_at = timezone.now()
+            job.save(update_fields=["status", "finished_at", "updated_at"])
+            record_job_log(job, "warning", "Curated document requires review; no assets were generated.")
+            return job
+
+        book, curated_document = persist_curated_book(
+            submission,
+            job,
+            curated_result,
+            target_book=reprocess_book,
+        )
+        if (
+            not legacy_scrape_overridden
+            and curated_result.get("status") != CuratedDocumentStatus.VALIDATED
+        ):
+            submission.linked_book = book
+            submission.status = SubmissionStatus.NEEDS_REVIEW
+            submission.review_state = ReviewState.NEEDS_REVIEW
+            submission.error_message = "Curated document requires review before asset generation."
+            submission.raw_payload = {
+                **submission.raw_payload,
+                "normalized_url": normalized_url,
+                "linked_book_slug": book.slug,
+                "curated_document_id": str(curated_document.id),
+                "curated_validation": curated_result.get("validation", {}),
+            }
+            submission.save()
+            sync_deduplicated_submissions(submission)
+            job.book = book
+            job.status = JobStatus.SUCCEEDED
+            job.finished_at = timezone.now()
+            job.save(update_fields=["book", "status", "finished_at", "updated_at"])
+            record_job_log(job, "warning", "Curated document requires review; no assets were generated.")
+            return job
+
         export_payload = export_payload_from_book(book, scraped_data)
-        generate_exports(export_payload)
+        generate_exports(
+            curated_document_with_projection(curated_result["document"], export_payload)
+        )
         sync_assets(book, job, export_payload)
         record_job_log(job, "info", "Generated HTML and EPUB exports from canonical book data.")
         complete_processed_submission(

@@ -1,6 +1,10 @@
 import os
 from html import escape
 
+from apps.ingestion.pipeline.curated_export import (
+    curated_document_to_legacy_payload,
+    is_curated_document,
+)
 from apps.ingestion.services.normalization import (
     dedupe_structured_sections,
     extract_boundary_sections_from_content_items,
@@ -170,6 +174,10 @@ def create_html_book(book_data):
         "output_folder": str
     }
     """
+    if is_curated_document(book_data):
+        book_data = curated_document_to_legacy_payload(book_data)
+    canonical_payload = bool(book_data.get("canonical_manifest") or book_data.get("canonical_sections"))
+
     reference_fragments = [book_data.get("book_info", ""), book_data.get("dedication", "")]
     explicit_front_sections = dedupe_structured_sections(
         book_data.get("front_sections") or [],
@@ -183,7 +191,7 @@ def create_html_book(book_data):
     content_items = list(book_data["content_items"])
     inferred_front_sections = []
     inferred_back_sections = []
-    if content_items:
+    if content_items and not canonical_payload:
         (
             inferred_front_sections,
             inferred_back_sections,
@@ -200,9 +208,9 @@ def create_html_book(book_data):
     )
     main_content = book_data["main_content"]
     compact_main_content = main_content
-    if not front_sections:
+    if not front_sections and not canonical_payload:
         front_sections, compact_main_content = split_leading_front_sections(main_content or "")
-    if not back_sections:
+    if not back_sections and not canonical_payload:
         back_sections, compact_main_content = split_trailing_front_sections(compact_main_content or "")
 
     save_html(

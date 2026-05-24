@@ -10,8 +10,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.access.models import Bookmark, PreviewAccessSession
-from apps.access.serializers import BookmarkSerializer, ReadingSessionSerializer
+from apps.access.models import Bookmark, Highlight, PreviewAccessSession
+from apps.access.serializers import BookmarkSerializer, HighlightSerializer, ReadingSessionSerializer
 from apps.catalog.models import Book, GeneratedAssetType
 from apps.common.permissions import user_can_launch_reader
 from apps.common.url_utils import public_api_url
@@ -72,13 +72,17 @@ class ReaderManifestView(APIView):
 
         reading_session = None
         bookmarks = []
+        highlights = []
         reading_session_url = ""
         bookmarks_url = ""
+        highlights_url = ""
         if session.user_id:
             reading_session, _ = reading_session_for_book(session.user, session.book, preview_session=session)
             bookmarks = Bookmark.objects.filter(user=session.user, book=session.book)
+            highlights = Highlight.objects.filter(user=session.user, book=session.book)
             reading_session_url = public_api_url("access-reader-session", kwargs={"token": session.token}, request=request)
             bookmarks_url = public_api_url("access-reader-bookmark-list", kwargs={"token": session.token}, request=request)
+            highlights_url = public_api_url("access-reader-highlight-list", kwargs={"token": session.token}, request=request)
 
         response = Response(
             {
@@ -89,8 +93,10 @@ class ReaderManifestView(APIView):
                 else "",
                 "reading_session_url": reading_session_url,
                 "bookmarks_url": bookmarks_url,
+                "highlights_url": highlights_url,
                 "reading_session": ReadingSessionSerializer(reading_session).data if reading_session else None,
                 "bookmarks": BookmarkSerializer(bookmarks, many=True).data if bookmarks else [],
+                "highlights": HighlightSerializer(highlights, many=True).data if highlights else [],
             }
         )
         return apply_no_store_headers(response)

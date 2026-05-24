@@ -4,6 +4,10 @@ from .books import (
     BookContributor,
     BookSource,
     BookSeries,
+    CuratedBookDocument,
+    CuratedEntity,
+    CuratedEvidence,
+    CuratedSection,
     GeneratedAsset,
     MetadataReview,
     MetadataVersion,
@@ -31,7 +35,16 @@ from .catalog_codes import (
     is_entity_catalog_code,
     next_entity_sequence,
 )
-from .choices import BookRecordType, ContributorRole, GeneratedAssetStatus, GeneratedAssetType, ManualBindingType
+from .choices import (
+    BookRecordType,
+    ContributorRole,
+    CuratedDocumentStatus,
+    CuratedEntityType,
+    CuratedSectionType,
+    GeneratedAssetStatus,
+    GeneratedAssetType,
+    ManualBindingType,
+)
 from .entities import Category, Contributor, Series
 from .utils import build_unique_slug, generated_asset_upload_to
 
@@ -49,6 +62,13 @@ __all__ = [
     "Category",
     "Contributor",
     "ContributorRole",
+    "CuratedBookDocument",
+    "CuratedDocumentStatus",
+    "CuratedEntity",
+    "CuratedEntityType",
+    "CuratedEvidence",
+    "CuratedSection",
+    "CuratedSectionType",
     "GeneratedAsset",
     "GeneratedAssetStatus",
     "GeneratedAssetType",

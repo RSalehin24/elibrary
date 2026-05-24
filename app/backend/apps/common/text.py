@@ -13,7 +13,7 @@ TRAILING_ENTITY_CLOSERS = {
     "]": "[",
     "}": "{",
 }
-ENTITY_EDGE_PUNCTUATION = " \t\r\n-:ঃ–—|/"
+ENTITY_EDGE_PUNCTUATION = " \t\r\n-:ঃ–—|/&,;.\"'“”‘’"
 
 
 def clean_entity_display_text(value):

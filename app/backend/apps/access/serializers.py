@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.access.models import PermissionGrant, SCOPED_PERMISSION_SCOPES, Bookmark, ReadingSession
+from apps.access.models import PermissionGrant, SCOPED_PERMISSION_SCOPES, Bookmark, Highlight, ReadingSession
 from apps.catalog.models import ContributorRole
 
 
@@ -78,14 +78,80 @@ class PermissionGrantSerializer(serializers.ModelSerializer):
 
 
 class ReadingSessionSerializer(serializers.ModelSerializer):
+    book_slug = serializers.CharField(source="book.slug", read_only=True)
+    book_title = serializers.CharField(source="book.title", read_only=True)
+
     class Meta:
         model = ReadingSession
-        fields = ["id", "book", "last_location", "progress_percent", "last_opened_at"]
+        fields = [
+            "id",
+            "book",
+            "book_slug",
+            "book_title",
+            "last_location",
+            "progress_percent",
+            "last_opened_at",
+        ]
         read_only_fields = ["book", "last_opened_at"]
 
 
 class BookmarkSerializer(serializers.ModelSerializer):
+    book_slug = serializers.CharField(source="book.slug", read_only=True)
+    book_title = serializers.CharField(source="book.title", read_only=True)
+
     class Meta:
         model = Bookmark
-        fields = ["id", "book", "location", "label", "note", "created_at"]
-        read_only_fields = ["book", "created_at"]
+        fields = [
+            "id",
+            "book",
+            "book_slug",
+            "book_title",
+            "location",
+            "label",
+            "note",
+            "chapter_href",
+            "chapter_label",
+            "preview_text",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["book", "created_at", "updated_at"]
+
+
+class HighlightSerializer(serializers.ModelSerializer):
+    book_slug = serializers.CharField(source="book.slug", read_only=True)
+    book_title = serializers.CharField(source="book.title", read_only=True)
+
+    class Meta:
+        model = Highlight
+        fields = [
+            "id",
+            "book",
+            "book_slug",
+            "book_title",
+            "cfi_range",
+            "chapter_href",
+            "chapter_label",
+            "text",
+            "note",
+            "color",
+            "kind",
+            "tags",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["book", "created_at", "updated_at"]
+
+    def validate_tags(self, value):
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Tags must be a list of strings.")
+        cleaned = []
+        for item in value:
+            if not isinstance(item, str):
+                raise serializers.ValidationError("Tags must be a list of strings.")
+            trimmed = item.strip()
+            if trimmed and trimmed not in cleaned:
+                cleaned.append(trimmed)
+        return cleaned

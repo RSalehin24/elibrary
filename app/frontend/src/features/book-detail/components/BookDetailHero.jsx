@@ -150,6 +150,16 @@ export default function BookDetailHero({
 
         <div className="book-hero-actions">
           <AsyncButton
+            type="button"
+            data-testid="book-open-reader-button"
+            className="primary-button"
+            onClick={actions.launchReader}
+            loading={launchingReader}
+            loadingLabel="Opening..."
+          >
+            Open reader
+          </AsyncButton>
+          <AsyncButton
             data-testid="book-my-books-button"
             className={
               book.is_in_my_books
@@ -161,16 +171,6 @@ export default function BookDetailHero({
             loadingLabel={book.is_in_my_books ? "Removing..." : "Adding..."}
           >
             {book.is_in_my_books ? "Remove from My Books" : "Add to My Books"}
-          </AsyncButton>
-          <AsyncButton
-            type="button"
-            data-testid="book-open-reader-button"
-            className="primary-button"
-            onClick={actions.launchReader}
-            loading={launchingReader}
-            loadingLabel="Opening..."
-          >
-            Open reader
           </AsyncButton>
           {detail.epubAsset ? (
             <AsyncButton

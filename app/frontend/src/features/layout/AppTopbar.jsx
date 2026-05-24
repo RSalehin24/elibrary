@@ -33,11 +33,17 @@ export function AppTopbar({
   useAppTopbar,
   useMinimalTopbar,
   user,
-  visibleProcessingItems
+  visibleProcessingItems,
 }) {
   return (
-    <header className={useAppTopbar ? "topbar topbar-app" : "topbar topbar-public"}>
-      <div className={isReaderRoute ? "brand-block brand-block-reader" : "brand-block"}>
+    <header
+      className={useAppTopbar ? "topbar topbar-app" : "topbar topbar-public"}
+    >
+      <div
+        className={
+          isReaderRoute ? "brand-block brand-block-reader" : "brand-block"
+        }
+      >
         <NavLink to="/home" className="brand-mark">
           <span className="brand-mark-name">RSalehin24</span>
           <span className="brand-mark-suffix">Library</span>
@@ -102,6 +108,14 @@ export function AppTopbar({
                 }
               >
                 My Books
+              </NavLink>
+              <NavLink
+                to="/notes"
+                className={({ isActive }) =>
+                  isActive ? "nav-link is-active" : "nav-link"
+                }
+              >
+                My Notes
               </NavLink>
               <ProfileMenu
                 displayName={displayName}

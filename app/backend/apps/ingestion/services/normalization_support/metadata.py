@@ -173,8 +173,12 @@ ADDRESS_FRAGMENT_WORDS = {
     "avenue",
     "সেগুনবাগিচা",
     "bangladesh",
+    "dhaka",
     "kolkata",
     "khulna",
+    "chittagong",
+    "chattogram",
+    "sylhet",
 }
 PUBLISHER_ORGANIZATION_KEYWORDS = {
     "প্রকাশনী",
@@ -224,6 +228,112 @@ ENGLISH_BYLINE_ROLE_PREFIXES = {
     "translated",
     "written",
 }
+
+# Tokens that, when they appear as the first token of a contributor candidate,
+# indicate the value is a sentence fragment, role descriptor, dedication, or
+# pronoun-led clause — never a person's name.
+# NOTE: role-label words like "অনুবাদক", "ভূমিকা", "প্রচ্ছদ", "প্রকাশ" are
+# intentionally NOT in this set: the front-matter parser already splits them
+# from values via the colon-separator, and some test placeholders legitimately
+# create contributors whose names begin with these labels (e.g. "অনুবাদক এক").
+LEADING_NON_NAME_BENGALI_TOKENS = {
+    "ও", "এবং", "অথবা", "কিন্তু",
+    "সম্পাদনা",
+    "কবিতা", "সহযোগী",
+    "প্রসঙ্গে", "সম্পর্কে", "পরিচিতি",
+    "উৎসর্গ",
+    "প্রধান", "সরকারি", "বিভাগীয়",
+    "কিতাব", "পরিমার্জন",
+    "আমি", "তুমি", "তোমার", "আমার", "আমরা", "তোমরা",
+    "কোথায়", "কী", "কি", "কে", "যে", "যা", "যদি", "তা", "তাই", "সব",
+    "থেকে",
+    "করতে", "করব", "করল", "করলে", "করিয়ে", "করে",
+    "করেছিল", "করেছিলেন", "করেছেন", "করছেন", "করছে",
+    "করলেন", "ছেপেছেন",
+    # Academic / honorific titles that lead a credential phrase rather
+    # than a name (e.g. "অধ্যাপক রহমান", "ডক্টর হাসান") — when these lead,
+    # the actual person name (if any) is captured separately elsewhere.
+    "অধ্যাপক", "অধ্যাপিকা", "অধ্যক্ষ", "অধ্যক্ষা",
+    "শিক্ষক", "শিক্ষিকা", "প্রিন্সিপাল",
+    "ডক্টর", "ডঃ", "ডা", "ডা.", "ডাঃ",
+    "জনাব", "মৌলভী", "মৌলানা",
+    # Place / date intros that prefix biographical lines.
+    "জন্ম", "মৃত্যু", "প্রয়াত", "জন্মস্থান",
+    # Common publication-metadata leads.
+    "প্রথম", "দ্বিতীয়", "তৃতীয়",
+    "মূল্য", "দাম", "মুদ্রক",
+}
+
+ENGLISH_LEADING_NON_NAME_TOKENS = {
+    "by", "of", "and", "the", "from", "with", "for", "to",
+    "at", "in", "on", "as", "is", "are", "was", "were", "an", "a",
+}
+
+# Bengali single-word values that are never a person's name even though they
+# have Bengali characters and pass other heuristics.
+BENGALI_NON_NAME_STANDALONE_WORDS = {
+    "উৎসর্গ", "প্রসঙ্গে", "সম্পর্কে", "পরিচিতি",
+    "সম্পাদনা", "সম্পাদনায়", "ভূমিকা", "প্রচ্ছদ",
+    "অনুবাদ", "অনুবাদক", "প্রকাশ", "মুদ্রণ", "সংস্করণ",
+    "কবিতা", "সহযোগী",
+    "কলিকাতা", "অধ্যাপক",
+    "কিতাব", "পরিমার্জন",
+    "গপ্পো-সপ্পো",
+}
+
+# Single English topical/genre words frequently mis-captured as translator
+# or author values. Only applied when the candidate is fully Latin script
+# with <=2 tokens.
+ENGLISH_TOPIC_NOISE_WORDS = {
+    "horror", "fiction", "comedy", "drama", "sigma", "thriller",
+    "mystery", "romance", "adventure", "nonfiction", "biography",
+    "categorie", "categories", "essay", "essays", "stories", "story",
+    "short",
+}
+
+# High-confidence Bengali verb-form suffixes (length >= 3). If any token in
+# the candidate ends in one of these, the value is a sentence fragment.
+BENGALI_VERB_SUFFIXES = (
+    "ছেন", "ছিলেন", "চ্ছে", "চ্ছেন", "চ্ছি",
+    "েছিলেন", "েছিলো", "েছিল", "েছেন", "েছে",
+    "াচ্ছা", "বেন",
+)
+
+# Explicit Bengali verb tokens whose suffixes are too short to detect safely
+# but which never appear as parts of a person's name.
+BENGALI_VERB_TOKENS = {
+    "করছে", "করছেন", "করল", "করলে", "করলেন",
+    "করিয়ে", "করেছিল", "করেছিলেন", "করেছেন",
+    "জানালো", "জিজ্ঞেস", "যাচ্ছা", "যাচ্ছি", "যাচ্ছেন",
+    "বলছে", "বলছেন", "চলছে", "চলছেন",
+    "এসেছে", "এসেছেন", "গেছে", "গেছেন",
+    "দাঁড়ায়", "ছেপেছেন", "বেরোচ্ছে", "জানতে",
+    "চাইবেন", "নেবেন", "ফেলেছেন",
+}
+
+LEADING_QUOTE_OR_BULLET_PATTERN = re.compile(
+    r"^[\s\u00a0]*[•·●◦▪◾◽⬛⬜“”‘’\"'`‚„«»]+\s*"
+)
+TRAILING_PARENTHETICAL_PATTERN = re.compile(r"\s*\([^()]*\)\s*$")
+ORPHAN_TRAILING_PAREN_PATTERN = re.compile(r"\)+\s*$")
+
+
+def _strip_leading_quote_or_bullet(value):
+    cleaned = value
+    while True:
+        next_value = LEADING_QUOTE_OR_BULLET_PATTERN.sub("", cleaned, count=1)
+        if next_value == cleaned:
+            return cleaned.strip()
+        cleaned = next_value
+
+
+def _strip_trailing_parens(value):
+    cleaned = value.strip()
+    while TRAILING_PARENTHETICAL_PATTERN.search(cleaned):
+        cleaned = TRAILING_PARENTHETICAL_PATTERN.sub("", cleaned).rstrip()
+    if "(" not in cleaned:
+        cleaned = ORPHAN_TRAILING_PAREN_PATTERN.sub("", cleaned).rstrip()
+    return cleaned
 
 
 def build_metadata_label_aliases():
@@ -291,8 +401,37 @@ PUBLISHER_NON_NAME_WORDS = {
     "pages",
     "price",
     "printed",
-    "press",
+    "press",    "date",
+    "date of",
+    "of",
+    "and",
+    "the",
+    "by",
+    "at",
+    "in",
+    "from",
+    "to",
 }
+# Single-token English words (case-insensitive, normalized) that are never a
+# valid standalone publisher name even when they pass other heuristics. This
+# catches address tails and noise tokens like "Dhaka", "Md", "Mitra" appearing
+# alone without a publishing organisation keyword.
+PUBLISHER_DISALLOWED_SOLO_ENGLISH = {
+    "md",
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "mitra",
+    "kumar",
+    "das",
+    "roy",
+    "sen",
+    "lal",
+    "chand",
+    "mohd",
+    "smt",
+    "shri",}
 EXPLICIT_SEPARATOR_ONLY_LABELS = {
     normalize_catalog_text("মূল"),
 }
@@ -346,7 +485,21 @@ def looks_like_address_fragment(value):
         return True
     if re.search(r"\b\d{3,}\b", cleaned) and len(cleaned.split()) <= 3:
         return True
-    return bool(re.search(r"\b\d+(?:/\d+)?\b", cleaned) and len(cleaned.split()) >= 4)
+    if re.search(r"\b\d+(?:/\d+)?\b", cleaned) and len(cleaned.split()) >= 4:
+        return True
+    # Bengali-numeral street fragments such as "৩৮/২ক" or "১২/খ".
+    # An entire short chunk that is mostly Bengali digits + a slash/letter is an
+    # address number, never a person or organisation name.
+    digit_chars = re.findall(r"[০-৯]", cleaned)
+    if digit_chars and len(cleaned.split()) <= 2:
+        non_space = [ch for ch in cleaned if not ch.isspace()]
+        digit_like = re.findall(r"[০-৯0-9/ক-হ়া-্]", cleaned)
+        if len(digit_chars) >= 2 and len(non_space) <= 6:
+            return True
+        # Pattern like "৩৮/২ক" — digits, optional slash, single Bengali letter.
+        if re.fullmatch(r"[০-৯]+(?:/[০-৯]+)?[ক-হ]?", cleaned.strip()):
+            return True
+    return False
 
 
 def split_multi_value(value):
@@ -381,6 +534,8 @@ def clean_contributor_value(value):
             break
         cleaned = next_value
     cleaned = TRAILING_CONTRIBUTOR_HELPER_PATTERN.sub("", cleaned)
+    cleaned = _strip_leading_quote_or_bullet(cleaned)
+    cleaned = _strip_trailing_parens(cleaned)
     return clean_entity_display_text(cleaned)
 
 
@@ -414,6 +569,12 @@ def looks_like_contributor_name(value, role=""):
     cleaned = clean_entity_display_text(value)
     if not cleaned:
         return False
+    # Strip leading bullets/quotes; they never lead a person's name.
+    cleaned = _strip_leading_quote_or_bullet(cleaned)
+    # Strip trailing balanced `(...)` annotation blocks and orphan `)`.
+    cleaned = _strip_trailing_parens(cleaned)
+    if not cleaned:
+        return False
     if normalize_catalog_text(cleaned.strip(".:ঃ")) in INCOMPLETE_NAME_TOKENS:
         return False
     if role != ContributorRole.PUBLISHER and re.search(r"[0-9০-৯]", cleaned):
@@ -444,6 +605,48 @@ def looks_like_contributor_name(value, role=""):
         return False
     if role != ContributorRole.PUBLISHER and contains_publisher_keyword(cleaned):
         return False
+
+    # New (post-2024-11) rejection rules for persisted-bad-row corpus.
+    if role != ContributorRole.PUBLISHER:
+        # Reject standalone Bengali non-name single words (dedications,
+        # role labels, postpositions, cities).
+        bengali_standalone = {
+            normalize_catalog_text(w) for w in BENGALI_NON_NAME_STANDALONE_WORDS
+        }
+        if normalized in bengali_standalone:
+            return False
+        # Reject single/two-token English candidates that are pure topical
+        # noise (`Horror`, `Short Stories`, `Sigma`).
+        if not BANGLA_TEXT_PATTERN.search(cleaned) and len(cleaned.split()) <= 2:
+            topic_norms = {
+                normalize_catalog_text(w) for w in ENGLISH_TOPIC_NOISE_WORDS
+            }
+            if set(normalized.split()) & topic_norms:
+                return False
+        tokens = cleaned.split()
+        if tokens:
+            first_token_norm = normalize_catalog_text(tokens[0])
+            leading_bad_bn = {
+                normalize_catalog_text(w) for w in LEADING_NON_NAME_BENGALI_TOKENS
+            }
+            if first_token_norm in leading_bad_bn:
+                return False
+            leading_bad_en = {
+                normalize_catalog_text(w) for w in ENGLISH_LEADING_NON_NAME_TOKENS
+            }
+            if first_token_norm in leading_bad_en:
+                return False
+            # Reject any token ending in a high-confidence Bengali verb suffix.
+            for tok in tokens:
+                tok_norm = normalize_catalog_text(tok)
+                if any(tok_norm.endswith(suf) for suf in BENGALI_VERB_SUFFIXES):
+                    return False
+            # Reject any token that matches an explicit Bengali verb form.
+            verb_tokens_norm = {
+                normalize_catalog_text(w) for w in BENGALI_VERB_TOKENS
+            }
+            if {normalize_catalog_text(tok) for tok in tokens} & verb_tokens_norm:
+                return False
     if role == ContributorRole.PUBLISHER:
         publisher_non_name_tokens = {
             normalize_catalog_text(word)
@@ -459,6 +662,24 @@ def looks_like_contributor_name(value, role=""):
             phrase in normalized for phrase in publisher_non_name_phrases
         ):
             return False
+        # Reject standalone English tokens that are never a publisher name on
+        # their own (honorifics, common surnames/first-names, address tails)
+        # unless paired with a publishing organisation keyword.
+        if (
+            not BANGLA_TEXT_PATTERN.search(cleaned)
+            and not contains_publisher_keyword(cleaned)
+        ):
+            disallowed = {
+                normalize_catalog_text(word)
+                for word in PUBLISHER_DISALLOWED_SOLO_ENGLISH
+            }
+            if normalized_tokens & disallowed:
+                return False
+            # Require at least 2 tokens of >=2 chars OR a single token of
+            # >=4 chars for a bare English publisher candidate.
+            english_tokens = [t for t in normalized.split() if t]
+            if len(english_tokens) == 1 and len(english_tokens[0]) < 4:
+                return False
     if (
         role == ContributorRole.PUBLISHER
         and len(cleaned.split()) > 4
@@ -529,8 +750,27 @@ def split_contributor_chunks(value, role=""):
         if stop_match and stop_match.start() > 0:
             cleaned_value = clean_display_text(cleaned_value[: stop_match.start()])
 
+    publisher_raw_chunks = (
+        split_multi_value(cleaned_value)
+        if canonical == ContributorRole.PUBLISHER
+        else []
+    )
+    # When a publisher value is comma-separated and at least one chunk
+    # contains an organisation keyword, the line is almost always shaped
+    # "<proprietor>, <publisher org>, <street>, <area>, <city>". Keep only
+    # the org-keyword chunks; drop proprietor and address tails. Without a
+    # keyword anywhere, fall back to the legacy per-chunk handling so that
+    # single-name publishers like "Penguin" still survive.
+    publisher_keep_only_keyword_chunks = (
+        canonical == ContributorRole.PUBLISHER
+        and len(publisher_raw_chunks) > 1
+        and any(contains_publisher_keyword(c) for c in publisher_raw_chunks)
+    )
+
     for chunk in split_multi_value(cleaned_value):
         if canonical == ContributorRole.PUBLISHER:
+            if publisher_keep_only_keyword_chunks and not contains_publisher_keyword(chunk):
+                continue
             raw_candidates = trim_publisher_candidate(chunk)
         else:
             raw_candidates = [chunk]
@@ -713,6 +953,9 @@ def parse_role_labeled_segment(segment):
 
 def extract_contributor_evidence(text, default_roles=None, raw_value=""):
     default_roles = [role for role in default_roles or [] if role]
+    # Strip trailing list separators ( , ; । etc.) from the raw_value so
+    # callers downstream don't see noisy values like "প্রথমা,".
+    canonical_raw_value = (raw_value or text or "").strip().rstrip(",;।:.ঃ–—- ").strip()
     authors = []
     contributors = []
     seen_author_names = set()
@@ -742,7 +985,7 @@ def extract_contributor_evidence(text, default_roles=None, raw_value=""):
                             {
                                 "name": name,
                                 "role": role,
-                                "raw_value": raw_value or text,
+                                "raw_value": canonical_raw_value or text,
                             }
                         )
                 continue
@@ -770,7 +1013,7 @@ def extract_contributor_evidence(text, default_roles=None, raw_value=""):
                             {
                                 "name": name,
                                 "role": role,
-                                "raw_value": raw_value or text,
+                                "raw_value": canonical_raw_value or text,
                             }
                         )
                 continue

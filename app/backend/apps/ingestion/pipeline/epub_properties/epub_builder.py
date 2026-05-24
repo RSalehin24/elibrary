@@ -17,6 +17,22 @@ def resolve_entry_path(entry, parent_path=()):
     return tuple(parent_path) + (entry.get("title", ""),)
 
 
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_HTML_WHITESPACE_ENTITIES = ("&nbsp;", "&#160;", "&#xa0;", "&zwnj;", "&#8204;", "&#x200c;")
+
+
+def html_is_blank(content):
+    """Return True if HTML content has no visible text once tags and
+    whitespace entities are stripped. Used to skip empty pages."""
+    if not content:
+        return True
+    text = str(content)
+    for entity in _HTML_WHITESPACE_ENTITIES:
+        text = text.replace(entity, " ")
+    text = _HTML_TAG_PATTERN.sub(" ", text)
+    return not text.strip()
+
+
 def safe_epub_filename(filename):
     base_name = str(filename or "book.epub").replace("/", "_").replace("\\", "_")
     base_name = os.path.basename(base_name)
@@ -67,7 +83,13 @@ class EpubBuilder:
 
     def add_cover_page(self, cover_image_path):
         image_name = os.path.basename(cover_image_path)
-        self.book.set_cover(image_name, open(cover_image_path, "rb").read())
+        # create_page=False prevents ebooklib from generating its own cover.xhtml
+        # so the EPUB does not end up with two cover pages.
+        self.book.set_cover(
+            image_name,
+            open(cover_image_path, "rb").read(),
+            create_page=False,
+        )
 
         html_content = self.render_template(
             "cover_page.html",
@@ -128,6 +150,8 @@ class EpubBuilder:
         self.register_chapter(chapter, include_in_nav=True)
 
     def add_main_content_page(self, main_content):
+        if html_is_blank(main_content):
+            return
         html_content = self.render_template(
             "main_content.html",
             main_content=main_content,
@@ -143,6 +167,8 @@ class EpubBuilder:
         for idx, section in enumerate(sections, start=1):
             title = section.get("title") or f"প্রারম্ভ {idx}"
             content = section.get("html") or ""
+            if html_is_blank(content):
+                continue
             html_content = self.render_template(
                 "lesson.html",
                 lesson_title=title,
@@ -159,6 +185,8 @@ class EpubBuilder:
         for idx, section in enumerate(sections, start=1):
             title = section.get("title") or f"সমাপ্তি {idx}"
             content = section.get("html") or ""
+            if html_is_blank(content):
+                continue
             html_content = self.render_template(
                 "lesson.html",
                 lesson_title=title,
@@ -178,6 +206,10 @@ class EpubBuilder:
             file_name="toc.xhtml",
             content=html_content,
         )
+        # The printed সূচিপত্র page sits between front matter and the body in
+        # both the spine and the EPUB NAV so that the on-page reading order
+        # and the navigation order agree (HTML preview and EPUB must show the
+        # same TOC coverage in the same place).
         self.register_chapter(chapter, include_in_nav=True)
 
     def add_hierarchical_toc_page(self, toc_structure, content_items):
@@ -223,6 +255,8 @@ class EpubBuilder:
             file_name="toc.xhtml",
             content=html_content,
         )
+        # See add_toc_page: the printed Contents page is included in both
+        # the spine and the EPUB NAV so that nav order matches reading order.
         self.register_chapter(chapter, include_in_nav=True)
 
     def add_lesson_pages(self, lessons):

@@ -36,8 +36,11 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from apps.catalog.services import find_existing_book_by_source_url
+from apps.catalog.models import CuratedDocumentStatus
 from apps.ingestion.models import SourceCatalogEntry, SubmissionOrigin
 from apps.ingestion.pipeline.scraper_support.network import create_session_with_retries
+from apps.ingestion.pipeline.curated_pipeline import curate_scraped_book_data
+from apps.ingestion.pipeline.curated_export import curated_document_with_projection
 from apps.ingestion.services.normalization import promote_leading_front_matter
 from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_with_host_fallback
 from apps.ingestion.services.resolution_support import (
@@ -62,10 +65,12 @@ from .models import (
 )
 from .source import (
     capture_source_page_metadata,
+    curate_book,
     detect_metadata_duplicate,
     find_exact_existing_book,
     generate_exports,
     normalize_source_url,
+    persist_curated_book,
     persist_scraped_book,
     scrape_book,
     sync_assets,

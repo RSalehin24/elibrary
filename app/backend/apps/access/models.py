@@ -157,9 +157,45 @@ class Bookmark(UUIDPrimaryKeyModel, TimeStampedModel):
     location = models.CharField(max_length=255)
     label = models.CharField(max_length=255, blank=True)
     note = models.TextField(blank=True)
+    chapter_href = models.CharField(max_length=512, blank=True)
+    chapter_label = models.CharField(max_length=255, blank=True)
+    preview_text = models.CharField(max_length=280, blank=True)
 
     class Meta:
         ordering = ["book__title", "-created_at"]
         unique_together = ("user", "book", "location")
 
-# Create your models here.
+
+class HighlightColor(models.TextChoices):
+    YELLOW = "yellow", "Yellow"
+    GREEN = "green", "Green"
+    BLUE = "blue", "Blue"
+    PINK = "pink", "Pink"
+    UNDERLINE = "underline", "Underline"
+
+
+class HighlightKind(models.TextChoices):
+    HIGHLIGHT = "highlight", "Highlight"
+    QUOTE = "quote", "Quote"
+
+
+class Highlight(UUIDPrimaryKeyModel, TimeStampedModel):
+    user = models.ForeignKey("accounts.User", on_delete=models.CASCADE, related_name="highlights")
+    book = models.ForeignKey("catalog.Book", on_delete=models.CASCADE, related_name="highlights")
+    cfi_range = models.CharField(max_length=1024)
+    chapter_href = models.CharField(max_length=512, blank=True)
+    chapter_label = models.CharField(max_length=255, blank=True)
+    text = models.TextField()
+    note = models.TextField(blank=True)
+    color = models.CharField(max_length=16, choices=HighlightColor.choices, default=HighlightColor.YELLOW)
+    kind = models.CharField(max_length=16, choices=HighlightKind.choices, default=HighlightKind.HIGHLIGHT)
+    tags = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "-created_at"]),
+            models.Index(fields=["user", "book"]),
+            models.Index(fields=["user", "kind"]),
+        ]
+

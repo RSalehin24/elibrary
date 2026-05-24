@@ -1,5 +1,8 @@
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { getBookReturnTarget, getCurrentRoutePath } from "../components/BookRouteLink";
+import {
+  getBookReturnTarget,
+  getCurrentRoutePath,
+} from "../components/BookRouteLink";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import BookDetailSkeleton from "../components/BookDetailSkeleton";
 import BookDetailHero from "../features/book-detail/components/BookDetailHero";
@@ -57,7 +60,9 @@ export default function BookDetailPage() {
   }
 
   if (detailState.error) {
-    return <div className="page-state page-state-error">{detailState.error}</div>;
+    return (
+      <div className="page-state page-state-error">{detailState.error}</div>
+    );
   }
 
   const {
@@ -96,6 +101,17 @@ export default function BookDetailPage() {
         replacingEpub={actions.replacingEpub}
         sendingToKindle={actions.sendingToKindle}
         supportingContributorGroups={detail.supportingContributorGroups}
+      />
+
+      {/* ── Reading notes: shown right after the hero for logged-in users ── */}
+      <BookReaderSections
+        bookmarks={bookmarks}
+        bookSlug={book?.slug || slug}
+        deletingBookmarkId={actions.deletingBookmarkId}
+        onDeleteBookmark={actions.deleteBookmark}
+        progressPercent={detail.progressPercent}
+        readerAccess={readerAccess}
+        readerState={readerState}
       />
 
       {detail.sourceRecords.length ? (
@@ -149,7 +165,10 @@ export default function BookDetailPage() {
           {detail.extractedEntries.length ? (
             <div className="metadata-list">
               {detail.extractedEntries.map((entry, index) => (
-                <div key={`${entry.key}-${entry.value}-${index}`} className="metadata-row">
+                <div
+                  key={`${entry.key}-${entry.value}-${index}`}
+                  className="metadata-row"
+                >
                   <span className="fact-label">{entry.label}</span>
                   <strong className="metadata-value">{entry.value}</strong>
                 </div>
@@ -187,15 +206,6 @@ export default function BookDetailPage() {
         </section>
       ) : null}
 
-      <BookReaderSections
-        bookmarks={bookmarks}
-        deletingBookmarkId={actions.deletingBookmarkId}
-        onDeleteBookmark={actions.deleteBookmark}
-        progressPercent={detail.progressPercent}
-        readerAccess={readerAccess}
-        readerState={readerState}
-      />
-
       {canEditMetadata ? (
         <BookMetadataWorkspace
           editor={editor}
@@ -228,7 +238,11 @@ export default function BookDetailPage() {
       <ConfirmationDialog
         open={actions.deleteDialogOpen}
         title="Delete Book?"
-        body={book ? `Delete "${book.title}"? This will hide it from the catalog.` : ""}
+        body={
+          book
+            ? `Delete "${book.title}"? This will hide it from the catalog.`
+            : ""
+        }
         confirmLabel="Delete Book"
         loading={actions.deleting}
         onCancel={() => {

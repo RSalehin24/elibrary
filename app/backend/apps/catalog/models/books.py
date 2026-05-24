@@ -4,7 +4,16 @@ from apps.common.models import LifecycleState, ReviewState, SoftDeleteModel, Tim
 from apps.common.text import clean_display_text, normalize_catalog_text
 
 from .catalog_codes import CATALOG_CODE_LENGTH, build_book_catalog_code, is_book_catalog_code
-from .choices import BookRecordType, ContributorRole, GeneratedAssetStatus, GeneratedAssetType, ManualBindingType
+from .choices import (
+    BookRecordType,
+    ContributorRole,
+    CuratedDocumentStatus,
+    CuratedEntityType,
+    CuratedSectionType,
+    GeneratedAssetStatus,
+    GeneratedAssetType,
+    ManualBindingType,
+)
 from .entities import Category, Contributor, Series
 from .utils import build_unique_slug, generated_asset_upload_to
 
@@ -175,3 +184,99 @@ class MetadataVersion(UUIDPrimaryKeyModel, TimeStampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class CuratedBookDocument(UUIDPrimaryKeyModel, TimeStampedModel):
+    book = models.ForeignKey(
+        Book,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="curated_documents",
+    )
+    source_job = models.ForeignKey(
+        "ingestion.ProcessingJob",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="curated_documents",
+    )
+    source_url = models.URLField(max_length=1000, db_index=True)
+    canonical_url = models.URLField(max_length=1000, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(
+        max_length=24,
+        choices=CuratedDocumentStatus.choices,
+        default=CuratedDocumentStatus.DRAFT,
+        db_index=True,
+    )
+    structure_type = models.CharField(max_length=64, blank=True)
+    title = models.CharField(max_length=255, blank=True)
+    validation_summary = models.JSONField(default=dict, blank=True)
+    source_snapshot = models.JSONField(default=dict, blank=True)
+    document = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        unique_together = ("source_url", "version")
+
+    def __str__(self):
+        return f"{self.title or self.source_url} v{self.version}"
+
+
+class CuratedEntity(UUIDPrimaryKeyModel, TimeStampedModel):
+    document = models.ForeignKey(CuratedBookDocument, on_delete=models.CASCADE, related_name="entities")
+    entity_type = models.CharField(max_length=32, choices=CuratedEntityType.choices)
+    role = models.CharField(max_length=64, blank=True)
+    value = models.CharField(max_length=500)
+    normalized_value = models.CharField(max_length=500, blank=True, db_index=True)
+    source_url = models.URLField(max_length=1000, blank=True)
+    source_location = models.CharField(max_length=255, blank=True)
+    evidence_text = models.TextField(blank=True)
+    confidence = models.FloatField(default=0)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["entity_type", "role", "value"]
+
+    def __str__(self):
+        return f"{self.entity_type}:{self.role}:{self.value}"
+
+
+class CuratedSection(UUIDPrimaryKeyModel, TimeStampedModel):
+    document = models.ForeignKey(CuratedBookDocument, on_delete=models.CASCADE, related_name="sections")
+    section_id = models.CharField(max_length=160)
+    section_type = models.CharField(max_length=32, choices=CuratedSectionType.choices)
+    title = models.CharField(max_length=500, blank=True)
+    path = models.JSONField(default=list, blank=True)
+    source_url = models.URLField(max_length=1000, blank=True)
+    source_location = models.CharField(max_length=255, blank=True)
+    html = models.TextField(blank=True)
+    confidence = models.FloatField(default=0)
+    sort_order = models.PositiveIntegerField(default=0)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["sort_order", "section_id"]
+        unique_together = ("document", "section_id")
+
+    def __str__(self):
+        return f"{self.section_type}:{self.title or self.section_id}"
+
+
+class CuratedEvidence(UUIDPrimaryKeyModel, TimeStampedModel):
+    document = models.ForeignKey(CuratedBookDocument, on_delete=models.CASCADE, related_name="evidence")
+    entity = models.ForeignKey(CuratedEntity, on_delete=models.CASCADE, blank=True, null=True, related_name="evidence")
+    section = models.ForeignKey(CuratedSection, on_delete=models.CASCADE, blank=True, null=True, related_name="evidence")
+    value = models.CharField(max_length=500, blank=True)
+    entity_type = models.CharField(max_length=32, blank=True)
+    role = models.CharField(max_length=64, blank=True)
+    source_url = models.URLField(max_length=1000, blank=True)
+    source_location = models.CharField(max_length=255, blank=True)
+    evidence_text = models.TextField(blank=True)
+    confidence = models.FloatField(default=0)
+    extractor = models.CharField(max_length=120, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]

@@ -162,6 +162,18 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
     )
 
 
+def persist_curated_book(submission, job, curated_result, target_book=None):
+    return _persist_curated_book(
+        curated_result,
+        source_url=submission.resolved_url,
+        job=job,
+        target_book=target_book,
+        find_deleted_book_by_title_fn=find_deleted_book_by_title,
+        find_existing_book_by_source_url_fn=find_existing_book_by_source_url,
+        replace_book_relations_fn=replace_book_relations,
+    )
+
+
 def cancel_requested_for_job(job):
     job.refresh_from_db(fields=["status", "cancel_requested", "updated_at"])
     return job.status == JobStatus.CANCELLED or job.cancel_requested

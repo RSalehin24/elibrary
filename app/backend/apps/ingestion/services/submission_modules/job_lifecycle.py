@@ -19,6 +19,7 @@ from apps.catalog.models import (
     GeneratedAssetType,
     Series,
     ContributorRole,
+    CuratedDocumentStatus,
 )
 from apps.catalog.services import (
     find_deleted_book_by_title,
@@ -44,6 +45,7 @@ from apps.ingestion.models import (
 )
 from apps.ingestion.services.legacy_adapter import (
     generate_exports,
+    high_fidelity_scrape_limits,
     load_legacy_config_entries,
     normalize_source_url,
     normalize_text,
@@ -51,6 +53,13 @@ from apps.ingestion.services.legacy_adapter import (
     scrape_book_high_fidelity,
     texts_are_similar,
     validate_source_url,
+)
+from apps.ingestion.pipeline.curated_pipeline import curate_scraped_book_data
+from apps.ingestion.pipeline.curated_pipeline import curate_book_document
+from apps.ingestion.pipeline.curated_export import curated_document_with_projection
+from apps.ingestion.pipeline.curated_persistence import (
+    persist_curated_book_with_hooks as _persist_curated_book,
+    persist_curated_document,
 )
 from apps.ingestion.services.normalization import clean_extracted_dedication_html, normalize_scraped_book, promote_leading_front_matter
 from apps.ingestion.services.resolution import (

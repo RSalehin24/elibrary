@@ -274,7 +274,7 @@ def test_front_matter_line_breaks_do_not_create_ambiguous_publishers_or_role_fra
         {
             "name": "PATRA BHARATI",
             "role": "publisher",
-            "raw_value": "PATRA BHARATI at 3/1 College Row,",
+            "raw_value": "PATRA BHARATI at 3/1 College Row",
         },
     ]
     assert publisher_case["contributors"] == [
@@ -421,7 +421,7 @@ def test_publication_date_language_and_page_count_do_not_become_publishers():
         {
             "name": "প্রথমা",
             "role": "publisher",
-            "raw_value": "প্রথমা,",
+            "raw_value": "প্রথমা",
         },
         {
             "name": "শীর্ষেন্দু মুখােপাধ্যায়",

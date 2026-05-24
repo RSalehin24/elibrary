@@ -51,6 +51,8 @@ def split_leading_front_sections(main_content_html):
             break
         if is_body_section_marker(text, tag_name=block.name):
             break
+        if numbered_section_marker_value(text) is not None:
+            break
         if block.name in HEADING_TAG_NAMES and not is_front_section_heading(text, tag_name=block.name):
             break
 

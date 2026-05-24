@@ -142,7 +142,7 @@
 }
 
 .book-cover-large.book-hero-placeholder {
-  min-height: 320px;
+  min-height: 100%;
   padding: 22px;
 }
 

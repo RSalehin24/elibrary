@@ -1,17 +1,5 @@
 
 
-def _normalize_scraped_payload(scraped_data):
-    promoted_book_info, cleaned_main_content = promote_leading_front_matter(
-        scraped_data.get("book_info", ""),
-        scraped_data.get("main_content", ""),
-    )
-    return {
-        **scraped_data,
-        "book_info": promoted_book_info,
-        "main_content": cleaned_main_content,
-    }
-
-
 def _processing_request_duplicate_check(processing_request, scraped_data):
     if processing_request.is_confirmed_not_duplicate:
         return None
@@ -67,6 +55,17 @@ def _saved_scraped_data_for_resume(processing_request):
     return None
 
 
+def _saved_curated_result_for_resume(processing_request):
+    saved_data = _request_saved_data(processing_request)
+    checkpoint = _request_progress(processing_request).get("checkpoint") or ""
+    curated_result = saved_data.get("curatedResult")
+    if not processing_request.is_resumed:
+        return None
+    if checkpoint != PROCESSING_SCRAPED_CONTENT_CHECKPOINT:
+        return None
+    return curated_result if isinstance(curated_result, dict) else None
+
+
 def _process_request_once(processing_request):
     processing_request = _reload_processing_request(processing_request.id)
     if processing_request.state in TERMINAL_STATES or processing_request.state == BookCreationRequestState.PAUSED:
@@ -106,15 +105,38 @@ def _process_request_once(processing_request):
         ):
             return _mark_request_duplicate(processing_request, source_duplicate)
 
+    curated_result = _saved_curated_result_for_resume(processing_request)
     scraped_data = _saved_scraped_data_for_resume(processing_request)
-    if scraped_data is None:
-        scraped_data = scrape_book(normalized_url)
+    legacy_scrape_overridden = False
+    if curated_result is None:
+        legacy_scrape_overridden = getattr(scrape_book, "__module__", "") != "apps.processing.source"
+        if legacy_scrape_overridden:
+            raw_scraped_data = scrape_book(normalized_url)
+            curated_result = curate_scraped_book_data(normalized_url, raw_scraped_data)
+        else:
+            curated_result = curate_book(normalized_url)
+        scraped_data = curated_result.get("projection", {})
+        if isinstance(scraped_data, dict) and not scraped_data.get("book_title"):
+            scraped_data = {
+                **scraped_data,
+                "book_title": processing_request.book_record.name,
+                "author": processing_request.book_record.writer,
+                "series": "",
+                "book_type": processing_request.book_record.category,
+            }
+            document = curated_document_with_projection(curated_result["document"], scraped_data)
+            curated_result = {
+                **curated_result,
+                "document": document,
+                "projection": document["projection"],
+            }
         if not isinstance(scraped_data, dict):
             raise ValueError(
-                f"Source scraping returned no content for {normalized_url}. "
+                f"Source curation returned no content for {normalized_url}. "
                 "Verify the source URL is valid and publicly reachable."
             )
-    scraped_data = _normalize_scraped_payload(scraped_data)
+    elif scraped_data is None:
+        scraped_data = curated_result.get("projection", {})
 
     processing_request = _reload_processing_request(processing_request.id)
     if processing_request.state == BookCreationRequestState.DELETED:
@@ -124,7 +146,7 @@ def _process_request_once(processing_request):
         return _save_paused_processing_progress(
             processing_request.id,
             PROCESSING_SCRAPED_CONTENT_CHECKPOINT,
-            {"scrapedData": scraped_data},
+            {"scrapedData": scraped_data, "curatedResult": curated_result},
         )
 
     duplicate_book = _processing_request_duplicate_check(
@@ -137,7 +159,24 @@ def _process_request_once(processing_request):
     ):
         return _mark_request_duplicate(processing_request, duplicate_book)
 
-    book = _persist_processing_book(processing_request, normalized_url, scraped_data)
+    if (
+        not legacy_scrape_overridden
+        and curated_result.get("status") == CuratedDocumentStatus.INVALID
+        and not scraped_data.get("book_title")
+    ):
+        raise ValueError("Curated document requires review before a book can be created.")
+
+    book = _persist_processing_book(
+        processing_request,
+        normalized_url,
+        scraped_data,
+        curated_result=curated_result,
+    )
+    if (
+        not legacy_scrape_overridden
+        and curated_result.get("status") != CuratedDocumentStatus.VALIDATED
+    ):
+        return _mark_request_review_required(processing_request, book, curated_result)
     return _finalize_processing_request(processing_request, book, scraped_data)
 
 
@@ -154,6 +193,35 @@ def _fail_processing_request(processing_request, error):
     processing_request.state = BookCreationRequestState.FAILED
     processing_request.error_message = str(error)
     processing_request.save(update_fields=["state", "error_message", "updated_at"])
+    sync_record_state(processing_request.book_record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.FAILED,
+            record=processing_request.book_record,
+        )
+    )
+    return processing_request
+
+
+def _mark_request_review_required(processing_request, book, curated_result):
+    processing_request = _reload_processing_request(processing_request.id)
+    previous_state = processing_request.state
+    if processing_request.state in {
+        BookCreationRequestState.DELETED,
+        BookCreationRequestState.PAUSED,
+    }:
+        sync_record_state(processing_request.book_record)
+        return processing_request
+
+    processing_request.state = BookCreationRequestState.FAILED
+    processing_request.linked_book = book
+    processing_request.error_message = "Curated document requires review before asset generation."
+    processing_request.progress = {
+        "curatedValidation": curated_result.get("validation", {}),
+        "curatedStatus": curated_result.get("status", ""),
+    }
+    processing_request.save(update_fields=["state", "linked_book", "error_message", "progress", "updated_at"])
     sync_record_state(processing_request.book_record)
     publish_processing_ui_domains(
         processing_domains_for_request_change(
