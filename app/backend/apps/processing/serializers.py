@@ -88,6 +88,7 @@ class BookCreationRequestSerializer(serializers.ModelSerializer):
     duplicateConfirmed = serializers.BooleanField(source="duplicate_confirmed")
     linkedBookId = serializers.CharField(source="linked_book_id", allow_null=True)
     linkedBookSlug = serializers.SerializerMethodField()
+    pipelineOutcome = serializers.CharField(source="pipeline_outcome")
 
     class Meta:
         model = BookCreationRequest
@@ -106,7 +107,7 @@ class BookCreationRequestSerializer(serializers.ModelSerializer):
             "duplicateConfirmed",
             "linkedBookId",
             "linkedBookSlug",
-            "pipeline_outcome",
+            "pipelineOutcome",
         ]
 
     def get_progress(self, obj):
@@ -223,19 +224,6 @@ class AutomationUpdateSerializer(serializers.Serializer):
     time = serializers.TimeField(required=False)
 
 
-def automation_payload():
-    catalog = ProcessingAutomationSettingsSerializer(
-        ProcessingAutomationSettings.objects.get(kind=ProcessingAutomationKind.CATALOG)
-    ).data
-    incomplete = ProcessingAutomationSettingsSerializer(
-        ProcessingAutomationSettings.objects.get(kind=ProcessingAutomationKind.INCOMPLETE)
-    ).data
-    return {
-        "catalog": catalog,
-        "incomplete": incomplete,
-    }
-
-
 __all__ = [
     "AutomationUpdateSerializer",
     "BookCreationRequestSerializer",
@@ -245,5 +233,4 @@ __all__ = [
     "ProcessingSyncStateSerializer",
     "RequestActionSerializer",
     "SyncStartSerializer",
-    "automation_payload",
 ]

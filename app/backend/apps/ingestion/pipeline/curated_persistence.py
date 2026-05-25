@@ -300,7 +300,7 @@ def persist_curated_book_with_hooks(
     if existing_book:
         book = existing_book
         apply_fields(book)
-        book.save()
+        book.save(update_fields=["deleted_at", "state", "review_state", "raw_scraped_metadata", "raw_scrape_payload", "main_content_html", "book_info_html", "dedication_html", "toc", "content_items", "cover_source_url", "updated_at"])
     else:
         create_kwargs = {
             "title": projection["book_title"],
@@ -330,7 +330,7 @@ def persist_curated_book_with_hooks(
             if book is None:
                 raise
             apply_fields(book)
-            book.save()
+            book.save(update_fields=["deleted_at", "state", "review_state", "raw_scraped_metadata", "raw_scrape_payload", "main_content_html", "book_info_html", "dedication_html", "toc", "content_items", "cover_source_url", "updated_at"])
 
     replace_book_relations_fn(
         book,

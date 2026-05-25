@@ -69,13 +69,14 @@ def _update_record_from_source_metadata(record, metadata):
         for field_name in update_fields:
             setattr(record, field_name, desired_values[field_name])
         record.save(update_fields=[*update_fields, "updated_at"])
+        _latest_request = latest_request_for_record(record)
         publish_processing_ui_domains(
             processing_domains_for_record_change(
                 before_snapshot,
                 processing_record_snapshot(record),
                 current_request_state=(
-                    latest_request_for_record(record).state
-                    if latest_request_for_record(record)
+                    _latest_request.state
+                    if _latest_request
                     else None
                 ),
             )

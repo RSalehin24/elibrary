@@ -96,5 +96,3 @@ class SavedFilter(UUIDPrimaryKeyModel, TimeStampedModel):
 
     def __str__(self):
         return f"{self.owner} / {self.target} / {self.name}"
-
-# Create your models here.

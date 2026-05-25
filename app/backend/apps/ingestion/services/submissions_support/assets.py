@@ -107,7 +107,7 @@ def sync_assets(book, job, scraped_data, *, generated_asset_labels, required_ass
         asset, _ = GeneratedAsset.objects.get_or_create(book=book, asset_type=asset_type)
         if not path or not Path(path).exists():
             asset.status = GeneratedAssetStatus.FAILED
-            asset.save()
+            asset.save(update_fields=["status", "updated_at"])
             continue
 
         path = Path(path)
@@ -123,7 +123,7 @@ def sync_assets(book, job, scraped_data, *, generated_asset_labels, required_ass
             asset.file.save(path.name, File(handle), save=False)
         asset.storage_path = asset.file.name
         asset.legacy_path = ""
-        asset.save()
+        asset.save(update_fields=["status", "legacy_path", "file_size", "content_type", "checksum", "source_job", "file", "storage_path", "updated_at"])
         synced_paths.append(path)
         ready_asset_types.add(asset_type)
 

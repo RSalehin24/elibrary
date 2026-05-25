@@ -29,7 +29,7 @@ def complete_processed_submission(
         "processing_source": source,
         "served_from_database": False,
     }
-    submission.save()
+    submission.save(update_fields=["linked_book", "duplicate_of_book", "resolved_url", "resolution_status", "resolution_confidence", "status", "review_state", "error_message", "raw_payload", "updated_at"])
     sync_deduplicated_submissions_fn(submission)
 
     if submission.submitter_id:
@@ -92,7 +92,7 @@ def persist_scraped_book(
     if existing_book:
         book = existing_book
         apply_scraped_fields(book)
-        book.save()
+        book.save(update_fields=["deleted_at", "state", "review_state", "raw_scraped_metadata", "raw_scrape_payload", "main_content_html", "book_info_html", "dedication_html", "toc", "content_items", "cover_source_url", "updated_at"])
     else:
         create_kwargs = {
             "title": scraped_data["book_title"],
@@ -117,7 +117,7 @@ def persist_scraped_book(
             if book is None:
                 raise
             apply_scraped_fields(book)
-            book.save()
+            book.save(update_fields=["deleted_at", "state", "review_state", "raw_scraped_metadata", "raw_scrape_payload", "main_content_html", "book_info_html", "dedication_html", "toc", "content_items", "cover_source_url", "updated_at"])
 
     sync_metadata_relations_fn(book, normalized)
     BookSource.objects.update_or_create(

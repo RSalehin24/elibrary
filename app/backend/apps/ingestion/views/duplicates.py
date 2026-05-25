@@ -1,4 +1,5 @@
 from django.db.models import Prefetch
+from django.shortcuts import get_object_or_404
 from apps.ingestion import views as ingestion_views
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -92,7 +93,7 @@ class DuplicateReviewResolveView(APIView):
     permission_classes = [CanManageProcessing]
 
     def post(self, request, pk):
-        review = DuplicateReview.objects.select_related("submission", "existing_book").get(pk=pk)
+        review = get_object_or_404(DuplicateReview.objects.select_related("submission", "existing_book"), pk=pk)
         serializer = DuplicateReviewDecisionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         decision = serializer.validated_data["decision"]

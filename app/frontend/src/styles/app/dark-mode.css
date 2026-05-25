@@ -381,6 +381,63 @@
 /* ============================================================
    PROFILE SETTINGS LAYOUT  (profile-settings-layout.css)
    ============================================================ */
+[data-theme="dark"] .profile-view-card,
+[data-theme="dark"] .profile-shell .detail-main,
+[data-theme="dark"] .profile-editor-card,
+[data-theme="dark"] .profile-shell .totp-setup-panel {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.92)
+  );
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.08),
+    0 18px 42px rgba(0, 0, 0, 0.35);
+}
+[data-theme="dark"] .profile-shell .settings-list {
+  background: rgba(22, 34, 29, 0.5);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.06),
+    0 8px 18px rgba(0, 0, 0, 0.2);
+}
+[data-theme="dark"] .profile-shell .ghost-button {
+  color: var(--accent-strong);
+  border-color: var(--line);
+  background: linear-gradient(
+    180deg,
+    rgba(38, 56, 48, 0.95),
+    rgba(28, 42, 36, 0.98)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.1),
+    0 6px 14px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .profile-shell .ghost-button:hover {
+  border-color: var(--line-strong);
+  background: linear-gradient(
+    180deg,
+    rgba(44, 64, 55, 0.98),
+    rgba(34, 50, 43, 1)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.12),
+    0 10px 20px rgba(0, 0, 0, 0.38);
+}
+[data-theme="dark"] .profile-shell .stack-form input,
+[data-theme="dark"] .profile-shell .stack-form select,
+[data-theme="dark"] .profile-shell .stack-form textarea {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+}
+[data-theme="dark"] .profile-shell .stack-form input:disabled,
+[data-theme="dark"] .profile-shell .stack-form select:disabled,
+[data-theme="dark"] .profile-shell .stack-form textarea:disabled {
+  color: var(--muted);
+  background: rgba(22, 34, 29, 0.6);
+  border-color: var(--line);
+}
 [data-theme="dark"] .profile-settings-section,
 [data-theme="dark"] .settings-panel {
   background: rgba(28, 42, 36, 0.88);

@@ -1,4 +1,5 @@
 from django.http import Http404
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -91,13 +92,13 @@ class HighlightListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         ensure_book_reader_access(request, book)
         queryset = _highlight_queryset_for_book(request.user, book)
         return Response(HighlightSerializer(queryset, many=True).data)
 
     def post(self, request, slug):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         ensure_book_reader_access(request, book)
         serializer = HighlightSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

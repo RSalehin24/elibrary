@@ -1,4 +1,5 @@
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import DOMPurify from "dompurify";
 import {
   getBookReturnTarget,
   getCurrentRoutePath,
@@ -95,6 +96,7 @@ export default function BookDetailPage() {
         deleting={actions.deleting}
         detail={detail}
         epubInputRef={actions.epubInputRef}
+        hasKindleEmail={Boolean(user?.kindle_emails?.length)}
         htmlPreviewLockedByAssetId={htmlPreviewLockedByAssetId}
         launchingReader={actions.launchingReader}
         pickingEpub={actions.pickingEpub}
@@ -179,7 +181,9 @@ export default function BookDetailPage() {
           ) : (
             <div
               className="rich-content-block"
-              dangerouslySetInnerHTML={{ __html: book.book_info_html }}
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(book.book_info_html),
+              }}
             />
           )}
         </section>
@@ -193,7 +197,9 @@ export default function BookDetailPage() {
           </div>
           <div
             className="rich-content-block"
-            dangerouslySetInnerHTML={{ __html: book.dedication_html }}
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(book.dedication_html),
+            }}
           />
         </section>
       ) : null}

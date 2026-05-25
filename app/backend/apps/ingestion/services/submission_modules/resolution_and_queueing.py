@@ -68,7 +68,7 @@ def fulfill_submission_with_existing_book(
         "existing_book_source": source,
         "linked_book_slug": book.slug,
     }
-    submission.save()
+    submission.save(update_fields=["linked_book", "resolved_url", "resolution_status", "resolution_confidence", "status", "review_state", "error_message", "raw_payload", "updated_at"])
     sync_deduplicated_submissions(submission)
 
     ensure_preview_session(submission.submitter, book, submission=submission)
@@ -122,7 +122,7 @@ def resolve_submission(submission, force_refresh=False):
         submission.review_state = ReviewState.NEEDS_REVIEW
         submission.error_message = "No confident catalog match was found."
 
-    submission.save()
+    submission.save(update_fields=["resolved_url", "resolution_status", "resolution_confidence", "status", "review_state", "error_message", "updated_at"])
     sync_deduplicated_submissions(submission)
     return submission
 

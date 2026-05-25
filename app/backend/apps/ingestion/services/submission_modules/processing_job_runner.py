@@ -153,7 +153,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                     "author": scraped_data.get("author", ""),
                 },
             }
-            submission.save()
+            submission.save(update_fields=["duplicate_of_book", "status", "review_state", "raw_payload", "updated_at"])
             sync_deduplicated_submissions(submission)
             DuplicateReview.objects.create(
                 submission=submission,
@@ -212,7 +212,7 @@ def process_submission_job(job_id, retry_count=0, task_id=""):
                 "curated_document_id": str(curated_document.id),
                 "curated_validation": curated_result.get("validation", {}),
             }
-            submission.save()
+            submission.save(update_fields=["linked_book", "status", "review_state", "error_message", "raw_payload", "updated_at"])
             sync_deduplicated_submissions(submission)
             job.book = book
             job.status = JobStatus.SUCCEEDED

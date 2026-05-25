@@ -92,7 +92,7 @@ def mark_stale_processing_requests():
         recovered_request.is_resumed = True
         recovered_request.save(update_fields=["error_message", "is_resumed", "updated_at"])
         recovered.append(recovered_request)
-        queue_processing_request(processing_request)
+        queue_processing_request(recovered_request)
     return recovered
 
 

@@ -16,6 +16,7 @@ export default function BookDetailHero({
   deleting,
   detail,
   epubInputRef,
+  hasKindleEmail,
   htmlPreviewLockedByAssetId,
   launchingReader,
   pickingEpub,
@@ -46,7 +47,9 @@ export default function BookDetailHero({
             }
             disabled={regenerating || detail.hasActiveProcessing}
           >
-            <RefreshIcon spinning={regenerating || detail.hasActiveProcessing} />
+            <RefreshIcon
+              spinning={regenerating || detail.hasActiveProcessing}
+            />
           </button>
           <button
             type="button"
@@ -85,7 +88,9 @@ export default function BookDetailHero({
             </p>
           ) : (
             <p className="detail-meta-row detail-lead-row">
-              <span className="fact-label">{primaryContributorGroup.label}</span>
+              <span className="fact-label">
+                {primaryContributorGroup.label}
+              </span>
               <span className="detail-meta-values">
                 <BookFilterLinkList
                   values={primaryContributorGroup.names}
@@ -115,7 +120,9 @@ export default function BookDetailHero({
                 <span className="detail-meta-values">
                   <BookFilterLinkList
                     values={group.names}
-                    queryKey={group.role === "author" ? "author" : "contributor"}
+                    queryKey={
+                      group.role === "author" ? "author" : "contributor"
+                    }
                     extraFilters={bookLinkFilters}
                   />
                 </span>
@@ -172,7 +179,7 @@ export default function BookDetailHero({
           >
             {book.is_in_my_books ? "Remove from My Books" : "Add to My Books"}
           </AsyncButton>
-          {detail.epubAsset ? (
+          {detail.epubAsset && hasKindleEmail ? (
             <AsyncButton
               type="button"
               data-testid="book-send-to-kindle-button"

@@ -5,6 +5,7 @@ from urllib.parse import quote, unquote
 
 from django.conf import settings
 from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -36,7 +37,7 @@ class ReaderLaunchView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, slug):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         allowed = user_can_launch_reader(request.user, book)
         session = get_active_preview_session(request.user, book)
         if not allowed and session is None:

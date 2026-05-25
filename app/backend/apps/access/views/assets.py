@@ -117,7 +117,7 @@ class BookAssetDownloadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug, asset_type):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         can_access = (
             user_can_view_book_cover(request.user, book)
             if asset_type == GeneratedAssetType.COVER
