@@ -1,3 +1,8 @@
+/* Neutralise the phantom 8px from the unused “controls controls” grid row
+   in catalog-toolbar-secondary.css. Imported after that file so this wins. */
+.catalog-page-header--property-layout {
+  row-gap: 0;
+}
 
 .catalog-page-header--property-layout
   .catalog-search-actions-extra

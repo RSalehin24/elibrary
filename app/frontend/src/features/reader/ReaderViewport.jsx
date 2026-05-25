@@ -1,14 +1,35 @@
 import PageLoader from "../../components/PageLoader";
 
+// Matches THEMES array indices in reader-settings.js
+const READER_BG_BY_INDEX = { 0: "#fff", 1: "#f4eacd", 2: "#1b1f2a" };
+const READER_THEME_KEY = "epub_reader_theme_index";
+
+function getInitialReaderBg(resolvedTheme) {
+  try {
+    const stored = window.localStorage.getItem(READER_THEME_KEY);
+    if (stored !== null) {
+      const idx = Number(stored);
+      if (READER_BG_BY_INDEX[idx] !== undefined) return READER_BG_BY_INDEX[idx];
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return resolvedTheme === "dark" ? "#1b1f2a" : "#fff";
+}
+
 export default function ReaderViewport({
   isReaderBooted,
   navHidden,
   navigate,
+  resolvedTheme,
   targetBookPath,
   toggleAppNav,
 }) {
   return (
-    <section className="reader-page-fullscreen epub-container">
+    <section
+      className="reader-page-fullscreen epub-container"
+      style={{ backgroundColor: getInitialReaderBg(resolvedTheme) }}
+    >
       <section
         className="epub-reader-container"
         id="reader-view"

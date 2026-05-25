@@ -243,7 +243,7 @@ export default function BookTable({
                   </td>
                   <td data-label="Series">
                     {series.length ? (
-                      series.join(", ")
+                      renderLinkedValues(series, "series", linkFilters)
                     ) : (
                       <span className="table-muted">Standalone</span>
                     )}

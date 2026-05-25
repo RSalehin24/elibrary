@@ -61,11 +61,14 @@ export default function AccessPage() {
 
   if (loadingAdminData) {
     return (
-      <PageLoader
-        label="Loading users and access"
-        detail="Fetching accounts, permissions, and reference data."
-        variant="management"
-      />
+      <div className="page-stack access-page">
+        <AccessHero activeTab={activeTab} onSelectTab={applyActiveTab} />
+        <PageLoader
+          label="Loading users and access"
+          detail="Fetching accounts, permissions, and reference data."
+          variant="table"
+        />
+      </div>
     );
   }
 

@@ -1,13 +1,19 @@
 /* ── Notes page layout ──────────────────────────────────────────────────── */
 
-.notes-header-row h1 {
-  margin-left: 10px !important;
-}
-
 .notes-page-header {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-items: stretch;
+  gap: 20px;
+  position: sticky;
+  top: 86px;
+  z-index: 10;
+  padding: 10px;
+  border-radius: 14px;
+  background: var(--surface-muted);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 4px 16px rgba(14, 52, 39, 0.06);
 }
 
 /* Title + search on the same row */
@@ -43,6 +49,32 @@
   width: auto;
 }
 
+/* ── Color filter wrapper with icon ─────────────────────────────────────── */
+
+.notes-color-filter-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+}
+
+.notes-color-filter-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  z-index: 1;
+}
+
+.notes-color-filter-wrapper .notes-header-color-select {
+  padding-left: 26px;
+  width: auto;
+}
+
 /* ── Shared form controls ─────────────────────────────────────────────── */
 
 .notes-input,
@@ -73,6 +105,14 @@
   background-repeat: no-repeat;
   background-position: right 12px center;
   padding-right: 32px;
+}
+
+/* ── Tabs row (tabs + result count on same line) ─────────────────────────── */
+
+.notes-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* ── Tabs ─────────────────────────────────────────────────────────────── */
@@ -686,7 +726,7 @@
   scrollbar-gutter: stable;
   margin-right: -4px;
   padding-right: 4px;
-  border: 1px solid #d8d6d6;
+  border: 1px solid var(--line);
   border-radius: 10px;
   width: 100%;
 }
@@ -709,7 +749,14 @@
 }
 
 .notes-result-count {
-  margin: 4px 0 12px;
+  margin: 0 0 0 auto;
   color: var(--ink-muted);
-  font-size: 0.875rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  width: fit-content;
+  padding: 10px;
 }

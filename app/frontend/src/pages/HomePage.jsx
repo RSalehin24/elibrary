@@ -128,7 +128,7 @@ export default function HomePage() {
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout catalog-page-header--sticky">
         <h1>All Books</h1>
 
         <CatalogToolbar

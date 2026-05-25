@@ -232,7 +232,7 @@ export default function NotesPage() {
   const showColorFilter = activeTab === "highlights" || activeTab === "notes";
 
   return (
-    <div className="catalog-page page-stack">
+    <div className="catalog-page catalog-page-notes page-stack">
       {/* ── Header ── */}
       <header className="catalog-page-header notes-page-header">
         <div className="notes-header-row">
@@ -248,41 +248,61 @@ export default function NotesPage() {
               aria-label="Search notes"
             />
             {showColorFilter ? (
-              <select
-                className="notes-select notes-header-color-select"
-                value={colorFilter}
-                onChange={(e) => handleColorFilter(e.target.value)}
-                aria-label="Filter by color"
-              >
-                <option value="">All colors</option>
-                {ALL_SWATCHES.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
+              <div className="notes-color-filter-wrapper">
+                <span className="notes-color-filter-icon" aria-hidden="true">
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 16 16"
+                    fill="currentColor"
+                  >
+                    <path d="M1 2.5A.5.5 0 0 1 1.5 2h13a.5.5 0 0 1 .37.83L10 8.67V13.5a.5.5 0 0 1-.22.41l-3 2A.5.5 0 0 1 6 15.5V8.67L1.13 3.33A.5.5 0 0 1 1 2.5z" />
+                  </svg>
+                </span>
+                <select
+                  className="notes-select notes-header-color-select"
+                  value={colorFilter}
+                  onChange={(e) => handleColorFilter(e.target.value)}
+                  aria-label="Filter by color"
+                >
+                  <option value="">All colors</option>
+                  {ALL_SWATCHES.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             ) : null}
           </div>
         </div>
 
         {/* ── Tabs ── */}
-        <nav className="notes-tabs" role="tablist" aria-label="Notes views">
-          {TAB_DEFS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              className={`notes-tab${activeTab === tab.id ? " is-active" : ""}`}
-              onClick={() => handleTabChange(tab.id)}
-            >
-              {tab.label}
-              <span className="notes-tab-count" aria-hidden="true">
-                {counts[tab.id]}
-              </span>
-            </button>
-          ))}
-        </nav>
+        <div className="notes-tabs-row">
+          <nav className="notes-tabs" role="tablist" aria-label="Notes views">
+            {TAB_DEFS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                className={`notes-tab${activeTab === tab.id ? " is-active" : ""}`}
+                onClick={() => handleTabChange(tab.id)}
+              >
+                {tab.label}
+                <span className="notes-tab-count" aria-hidden="true">
+                  {counts[tab.id]}
+                </span>
+              </button>
+            ))}
+          </nav>
+          {!loading && groups.length > 0 && (
+            <p className="notes-result-count" aria-live="polite">
+              {items.length === 1 ? "1 result" : `${items.length} results`}
+              {hasSearch ? ` for "${query.trim()}"` : ""}
+            </p>
+          )}
+        </div>
       </header>
 
       <section>
@@ -321,25 +341,17 @@ export default function NotesPage() {
         ) : groups.length === 0 ? (
           <p className="notes-empty">{EMPTY_HINTS[activeTab]}</p>
         ) : (
-          <>
-            <p className="notes-result-count" aria-live="polite">
-              {items.length === 1
-                ? "1 result"
-                : `${items.length} results`}
-              {hasSearch ? ` for “${query.trim()}”` : ""}
-            </p>
-            {groups.map((group) => (
-              <BookGroup
-                key={group.slug}
-                group={group}
-                tab={activeTab}
-                defaultOpen={hasSearch || groups.length === 1}
-                onDelete={handleDelete}
-                onColorChange={handleColorUpdate}
-                onNoteEdit={handleNoteEdit}
-              />
-            ))}
-          </>
+          groups.map((group) => (
+            <BookGroup
+              key={group.slug}
+              group={group}
+              tab={activeTab}
+              defaultOpen={hasSearch || groups.length === 1}
+              onDelete={handleDelete}
+              onColorChange={handleColorUpdate}
+              onNoteEdit={handleNoteEdit}
+            />
+          ))
         )}
       </section>
     </div>
@@ -499,7 +511,18 @@ function ItemRow({ item, tab, onDelete, onColorChange, onNoteEdit }) {
             aria-label="Delete"
             onClick={() => onDelete(item)}
           >
-            <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false"><path d="M9 3.75h6a1 1 0 0 1 1 1V6h3a.75.75 0 0 1 0 1.5h-1.1l-.79 10.28A2.5 2.5 0 0 1 14.62 20H9.38a2.5 2.5 0 0 1-2.49-2.22L6.1 7.5H5a.75.75 0 0 1 0-1.5h3V4.75a1 1 0 0 1 1-1Zm5.5 2.25v-.75h-5V6h5Zm-6.9 1.5.78 10.17a1 1 0 0 0 1 .83h5.24a1 1 0 0 0 1-.83l.78-10.17Zm2.4 2.25c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Zm4 0c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Z" fill="currentColor"></path></svg>
+            <svg
+              viewBox="0 0 24 24"
+              width="28"
+              height="28"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path
+                d="M9 3.75h6a1 1 0 0 1 1 1V6h3a.75.75 0 0 1 0 1.5h-1.1l-.79 10.28A2.5 2.5 0 0 1 14.62 20H9.38a2.5 2.5 0 0 1-2.49-2.22L6.1 7.5H5a.75.75 0 0 1 0-1.5h3V4.75a1 1 0 0 1 1-1Zm5.5 2.25v-.75h-5V6h5Zm-6.9 1.5.78 10.17a1 1 0 0 0 1 .83h5.24a1 1 0 0 0 1-.83l.78-10.17Zm2.4 2.25c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Zm4 0c.41 0 .75.34.75.75v4.5a.75.75 0 0 1-1.5 0v-4.5c0-.41.34-.75.75-.75Z"
+                fill="currentColor"
+              ></path>
+            </svg>
           </button>
         </div>
       </div>

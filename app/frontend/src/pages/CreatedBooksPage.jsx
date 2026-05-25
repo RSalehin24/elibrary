@@ -8,10 +8,7 @@ import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { usePageTitle } from "../hooks/usePageTitle";
 import { useToast } from "../hooks/useToast";
-import {
-  cleanQueryParams,
-  filtersFromSearchParams,
-} from "../utils/query";
+import { cleanQueryParams, filtersFromSearchParams } from "../utils/query";
 
 const defaultFilters = {
   q: "",
@@ -121,11 +118,13 @@ export default function CreatedBooksPage() {
   }
 
   async function removeFromMyBooks(book) {
-    await removeAction.run(book.id, async () => {
-      await removeBookFromMyBooks(book.slug);
-      removeEntry(book.id);
-      toast.success("Removed from My Books.");
-    }).catch((nextError) => toast.error(nextError.message));
+    await removeAction
+      .run(book.id, async () => {
+        await removeBookFromMyBooks(book.slug);
+        removeEntry(book.id);
+        toast.success("Removed from My Books.");
+      })
+      .catch((nextError) => toast.error(nextError.message));
   }
 
   const resultCount = error && !books.length ? "" : `${totalCount}`;
@@ -133,7 +132,7 @@ export default function CreatedBooksPage() {
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout catalog-page-header--sticky">
         <h1>My Books</h1>
 
         <CatalogToolbar

@@ -19,9 +19,21 @@ usage() {
 Usage:
   deploy/scripts/deploy.sh [--env-name production|test] [--env-file /path/to/file] [--sync-mode push|preserve|prompt]
 
+Options:
+  --env-name    Environment name. Defaults to 'production'. Controls which .env file is loaded.
+  --env-file    Explicit path to the app env file. Overrides --env-name.
+  --sync-mode   How to handle the remote app env file:
+                  push     - overwrite the remote env with the local file (default)
+                  preserve - keep whatever is already on the server
+                  prompt   - ask interactively at runtime
+
+Before deploying:
+  1. Fill in deploy/env/.host.env  (server username, IP, domain, certbot email)
+  2. Fill in deploy/env/.production.env  (Django secret key, super admin credentials, DB URL)
+  Run: deploy/scripts/generate-env.sh host
+       deploy/scripts/generate-env.sh production
+
 Examples:
-  deploy/scripts/generate-env.sh production
-  deploy/scripts/generate-env.sh host
   deploy/scripts/deploy.sh
   deploy/scripts/deploy.sh --env-name test --sync-mode preserve
 
@@ -169,9 +181,11 @@ sync_workspace_files() {
       --exclude='app/backend/__pycache__' \
       --exclude='app/backend/apps/*/__pycache__' \
       --exclude='tests/backend/__pycache__' \
-      --exclude='logs/**/*.log' \
       --exclude='test-artifacts' \
       --exclude='local' \
+      --exclude='migration/runtime' \
+      --exclude='logs/local' \
+      --exclude='logs/remote' \
       --exclude='deploy/env/.host.env' \
       --exclude='deploy/env/.production.env' \
       --exclude='deploy/env/.test.env' \
@@ -218,7 +232,7 @@ ensure_remote_docker() {
   local needs_install
 
   needs_install="$(
-    ssh "${TARGET}" "if ! command -v docker >/dev/null 2>&1; then echo yes; elif [ -n '${DEPLOY_DOCKER_VERSION}' ] && ! docker --version | grep -Fq '${DEPLOY_DOCKER_VERSION}'; then echo yes; else echo no; fi"
+    ssh "${TARGET}" "if ! command -v docker >/dev/null 2>&1; then echo yes; elif ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then echo yes; elif [ -n '${DEPLOY_DOCKER_VERSION}' ] && ! docker --version | grep -Fq '${DEPLOY_DOCKER_VERSION}'; then echo yes; else echo no; fi"
   )"
 
   if [[ "${needs_install}" == "yes" ]]; then

@@ -475,19 +475,69 @@ label:has(+ input:required, + textarea:required, + select:required)
   margin-left: auto;
 }
 
-/* Floating theme toggle (fixed bottom-right) */
-.theme-toggle-floating {
+/* Floating actions container (fixed bottom-right) */
+.floating-actions {
   position: fixed;
   right: clamp(16px, 3vw, 28px);
   bottom: clamp(16px, 3vw, 28px);
   z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Theme toggle inside the floating actions container */
+.theme-toggle-floating {
   width: 44px;
   height: 44px;
   box-shadow: var(--shadow, 0 10px 24px rgba(0, 0, 0, 0.18));
   backdrop-filter: blur(8px);
 }
+
+/* Scroll-to-top button */
+.scroll-to-top-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: var(--shadow, 0 10px 24px rgba(0, 0, 0, 0.18));
+  backdrop-filter: blur(8px);
+  animation: scroll-top-in 200ms ease both;
+  transition:
+    background-color var(--duration-fast, 150ms) ease,
+    border-color var(--duration-fast, 150ms) ease,
+    color var(--duration-fast, 150ms) ease,
+    transform var(--duration-fast, 150ms) ease;
+}
+
+.scroll-to-top-button:hover {
+  background: var(--surface-strong);
+  border-color: var(--line-strong);
+  color: var(--accent-strong, var(--accent));
+  transform: translateY(-2px);
+}
+
+@keyframes scroll-top-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media print {
-  .theme-toggle-floating {
+  .floating-actions {
     display: none;
   }
 }

@@ -194,11 +194,17 @@
 }
 
 .property-table {
-  min-width: 720px;
+  min-width: 900px;
 }
 
 .property-table-col-code {
   width: 132px;
+}
+
+/* Explicit width so the name/series column is never squished to near-zero
+   by the fixed-width stat/date/action columns (which together take 560-692px). */
+.property-table-col-title {
+  width: 200px;
 }
 
 .property-table-col-stat,

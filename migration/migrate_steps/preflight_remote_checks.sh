@@ -93,7 +93,7 @@ remote_connectivity_check() {
   endpoint="$(role_value "${role}" user)@$(role_value "${role}" host):$(role_value "${role}" port)"
 
   if ! output="$(check_ssh_connection "${role}" 2>&1)"; then
-    die "Please configure the ssh authentication for ${label} host (${endpoint}). SSH check failed: ${output}"
+    die "Cannot connect to the ${label} server. Run: ssh-copy-id ${endpoint} from your local machine and retry."
   fi
 
   log_info "${label} host SSH connection verified: ${endpoint}"
@@ -106,12 +106,12 @@ remote_os_check() {
 source /etc/os-release
 printf '%s\n' "${ID}"
 EOF
-)"
+)")"
   case "${os_id}" in
     ubuntu|debian)
       ;;
     *)
-      die "Remote ${role} host must be Ubuntu-like. Found: ${os_id}"
+      die "The ${role} server must be running Ubuntu or Debian. Provision a compatible server, update your config with the new host details, and retry."
       ;;
   esac
 }

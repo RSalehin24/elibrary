@@ -174,6 +174,13 @@
   gap: 14px;
 }
 
+.access-page .admin-hero-card {
+  position: sticky;
+  top: 86px;
+  z-index: 10;
+  backdrop-filter: blur(12px);
+}
+
 .admin-tab-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -184,9 +191,13 @@
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 
+.detail-card-users-access {
+  padding: 15px 18px;
+  border-radius: var(--radius-sm);
+}
+
 .admin-tab-card {
-  min-height: 63px;
-  padding: 16px 18px;
+  padding: 12px 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -216,13 +227,15 @@
 }
 
 .admin-tab-card.is-active {
-  border-color: rgba(11, 61, 46, 0.28);
-  background: linear-gradient(
-    180deg,
-    rgba(19, 91, 69, 0.12),
-    rgba(11, 61, 46, 0.16)
-  );
-  box-shadow: 0 12px 22px rgba(12, 47, 36, 0.12);
+  border-color: rgba(11, 61, 46, 0.42);
+  background: linear-gradient(180deg, #135b45 0%, #0b3d2e 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 12px 22px rgba(12, 47, 36, 0.2);
+}
+
+.admin-tab-card.is-active .admin-tab-label {
+  color: #d8f5e7;
 }
 
 .admin-tab-label {
@@ -233,6 +246,80 @@
 
 .admin-tab-card:not(.is-active) .admin-tab-label {
   color: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .admin-tab-card {
+    background: linear-gradient(
+      180deg,
+      rgba(34, 52, 44, 0.9),
+      rgba(26, 40, 34, 0.95)
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(95, 199, 155, 0.08),
+      0 10px 20px rgba(0, 0, 0, 0.22);
+  }
+
+  :root:not([data-theme="light"]) .admin-tab-card:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(44, 65, 54, 0.96),
+      rgba(36, 54, 45, 0.98)
+    );
+    box-shadow: 0 10px 16px rgba(0, 0, 0, 0.28);
+  }
+
+  :root:not([data-theme="light"]) .admin-tab-card.is-active {
+    border-color: rgba(95, 199, 155, 0.4);
+    background: linear-gradient(
+      180deg,
+      rgba(95, 199, 155, 0.24),
+      rgba(95, 199, 155, 0.14)
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(95, 199, 155, 0.18),
+      0 12px 22px rgba(0, 0, 0, 0.3);
+  }
+
+  :root:not([data-theme="light"]) .admin-tab-card.is-active .admin-tab-label {
+    color: #7fd5ad;
+  }
+}
+
+:root[data-theme="dark"] .admin-tab-card {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 52, 44, 0.9),
+    rgba(26, 40, 34, 0.95)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(95, 199, 155, 0.08),
+    0 10px 20px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme="dark"] .admin-tab-card:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(44, 65, 54, 0.96),
+    rgba(36, 54, 45, 0.98)
+  );
+  box-shadow: 0 10px 16px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="dark"] .admin-tab-card.is-active {
+  border-color: rgba(95, 199, 155, 0.4);
+  background: linear-gradient(
+    180deg,
+    rgba(95, 199, 155, 0.24),
+    rgba(95, 199, 155, 0.14)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(95, 199, 155, 0.18),
+    0 12px 22px rgba(0, 0, 0, 0.3);
+}
+
+:root[data-theme="dark"] .admin-tab-card.is-active .admin-tab-label {
+  color: #7fd5ad;
 }
 
 .profile-page-header {

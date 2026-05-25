@@ -61,3 +61,8 @@ app/backend/storage/
 test-artifacts/
 logs/**/*.log
 !logs/**/.gitkeep
+
+# Migration
+migration/config/migrate.env
+migration/runtime/*
+!migration/runtime/.gitkeep

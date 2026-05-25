@@ -75,6 +75,7 @@ export default function ReaderPage() {
       isReaderBooted={isReaderBooted}
       navHidden={navHidden}
       navigate={navigate}
+      resolvedTheme={resolvedTheme}
       targetBookPath={targetBookPath}
       toggleAppNav={toggleAppNav}
     />

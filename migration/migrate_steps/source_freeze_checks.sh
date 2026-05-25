@@ -19,7 +19,7 @@ print(f"APP_KB={run_du(app_dir, exclude_storage=True)}")
 print(f"STORAGE_KB={run_du(os.path.join(app_dir, 'app/backend/storage'))}")
 PY
 EOF
-)")"
+)"
 }
 
 postgres_data_kb() {
@@ -58,14 +58,14 @@ disk_space_check() {
   local_free_kb="$(free_kb_for_path "${LOCAL_STAGING_DIR}")"
   target_free_kb="$(remote_run target "df -Pk $(q "$(dirname -- "${TARGET_REMOTE_APP_DIR}")") | awk 'NR==2 {print \$4}'")"
 
-  [[ "${local_free_kb}" =~ ^[0-9]+$ ]] || die "Unable to determine local free disk space."
-  [[ "${target_free_kb}" =~ ^[0-9]+$ ]] || die "Unable to determine target free disk space."
+  [[ "${local_free_kb}" =~ ^[0-9]+$ ]] || die "Could not check local disk space. Make sure ${LOCAL_STAGING_DIR} exists and is accessible, then retry."
+  [[ "${target_free_kb}" =~ ^[0-9]+$ ]] || die "Could not check disk space on the target server. Verify the target is reachable via SSH and retry."
 
   if (( local_free_kb < local_required_kb )); then
-    die "Local staging path does not have enough free space. Need ~${local_required_kb}KB, found ${local_free_kb}KB."
+    die "Not enough free disk space on this machine to stage the migration. Free up space in ${LOCAL_STAGING_DIR} and retry."
   fi
   if (( target_free_kb < target_required_kb )); then
-    die "Target host does not have enough free space. Need ~${target_required_kb}KB, found ${target_free_kb}KB."
+    die "Not enough free disk space on the target server. Free up space on the target and retry."
   fi
 }
 
@@ -171,7 +171,7 @@ wait_for_source_drain() {
     elapsed=$((now - started_at))
     if (( elapsed >= DRAIN_TIMEOUT_SECONDS )); then
       restart_source_stack
-      die "Timed out waiting for the source queues to drain."
+      die "The source server queues did not drain in time. Wait for active jobs to finish and retry with --resume."
     fi
 
     sleep 5

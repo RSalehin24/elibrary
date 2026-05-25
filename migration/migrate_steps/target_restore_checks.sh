@@ -141,11 +141,11 @@ container_id="$(compose "${COMPOSE_ARGS[@]}" ps -q backend-init)"
 docker inspect -f '{{.State.ExitCode}}' "${container_id}"
 EOF
 )")")"
-      [[ "${exit_code}" == "0" ]] || die "backend-init failed with exit code ${exit_code}"
+      [[ "${exit_code}" == "0" ]] || die "The backend failed to initialise on the target server. Check the container logs on the target, fix the issue, and retry with --phase restore --resume."
       return 0
     fi
     if (( $(date +%s) >= deadline )); then
-      die "Timed out waiting for backend-init to finish."
+      die "The backend initialisation timed out on the target server. Check the container logs on the target and retry with --phase restore --resume."
     fi
     sleep 5
   done
