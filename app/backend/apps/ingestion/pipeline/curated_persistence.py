@@ -363,5 +363,23 @@ def persist_curated_book_with_hooks(
         "curated_document_model_version": curated_document.version,
     }
     book.save(update_fields=["raw_scrape_payload", "updated_at"])
+
+    # Phase E: honour BookGroup linkage hint stashed on the submission's
+    # raw_payload by the "new_edition" duplicate-resolution action. Both
+    # the freshly-created book and the existing duplicate book are linked
+    # to the same BookGroup so the catalog can surface them as siblings.
+    submission = getattr(job, "submission", None)
+    group_hint = None
+    if submission is not None:
+        group_hint = (submission.raw_payload or {}).get("target_book_group_id")
+    if group_hint and not book.group_id:
+        from apps.catalog.models import BookGroup as _BookGroup
+        try:
+            group = _BookGroup.objects.filter(pk=group_hint).first()
+        except (ValueError, TypeError):
+            group = None
+        if group is not None:
+            book.group = group
+            book.save(update_fields=["group", "updated_at"])
     MetadataVersion.objects.create(book=book, snapshot=curated_document.document, source="curated")
     return book, curated_document

@@ -107,6 +107,7 @@ export function OnHoldProcessingPage() {
     resumePausedRequests,
     retryFailedRequests,
     markDuplicateRequestsAsNew,
+    markDuplicateRequestsAsNewEdition,
     confirmDuplicateRequests,
     createAgainRequests,
     deleteRequests
@@ -162,6 +163,10 @@ export function OnHoldProcessingPage() {
         id: "new",
         label: "New",
         onAction: ids => markDuplicateRequestsAsNew("on-hold-duplicate", ids)
+      }, {
+        id: "new-edition",
+        label: "New Edition",
+        onAction: ids => markDuplicateRequestsAsNewEdition("on-hold-duplicate", ids)
       }, {
         id: "duplicate",
         label: "Duplicate",

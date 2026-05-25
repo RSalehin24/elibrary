@@ -42,6 +42,11 @@ export function notifyRequestAction(toast, action, changedCount, options = {}) {
       description: `${countLabel(changedCount, "request")} will continue without duplicate locking.`,
       type: "success"
     },
+    new_edition: {
+      title: "Marked as new edition",
+      description: `${countLabel(changedCount, "request")} will continue as a new edition linked to the existing book.`,
+      type: "success"
+    },
     confirm_duplicate: {
       title: "Duplicate confirmed",
       description: `${countLabel(changedCount, "request")} will stay locked to the original until it becomes terminal.`,

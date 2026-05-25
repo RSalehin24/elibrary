@@ -46,6 +46,8 @@ export function useRequestActions(runCardAction) {
     deleteRequests,
     markDuplicateRequestsAsNew: (cardId, requestIds) =>
       applyRequestAction(cardId, requestIds, "new"),
+    markDuplicateRequestsAsNewEdition: (cardId, requestIds) =>
+      applyRequestAction(cardId, requestIds, "new_edition"),
     pauseRequests: (cardId, requestIds) =>
       applyRequestAction(cardId, requestIds, "pause"),
     recreateCompletedRequests: (cardId, requestIds) =>

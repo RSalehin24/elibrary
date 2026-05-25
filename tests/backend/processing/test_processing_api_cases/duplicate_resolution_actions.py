@@ -226,3 +226,74 @@ def test_duplicate_new_action_clears_duplicate_locking_and_restarts_request(clie
     assert duplicate_record.linked_book_id is None
     assert duplicate_record.is_duplicate is False
     assert duplicate_record.duplicate_of_record_id is None
+
+
+@pytest.mark.django_db
+def test_duplicate_new_edition_action_links_existing_book_via_book_group(client):
+    """Phase E: the new_edition action should ensure the existing book has a
+    BookGroup and stash the group id on the submission so the to-be-created
+    new book gets linked to the same group."""
+    from apps.catalog.models import BookGroup
+    from apps.ingestion.models import BookSubmission, SubmissionOrigin, SubmissionStatus
+
+    login_processing_admin(client)
+    existing_book = Book.objects.create(title="Existing Edition", state="ready")
+    original_record = BookRecord.objects.create(
+        id="original-edition-record",
+        name="Original Edition",
+        url="https://example.test/books/original-edition",
+        category="Fiction",
+        writer="Writer",
+        publisher="Press",
+        book_creation_state="created",
+        linked_book=existing_book,
+    )
+    duplicate_record = BookRecord.objects.create(
+        id="duplicate-edition-record",
+        name="Duplicate Edition",
+        url="https://example.test/books/duplicate-edition",
+        category="Fiction",
+        writer="Writer",
+        publisher="Press 2",
+        book_creation_state="duplicate",
+        linked_book=existing_book,
+        is_duplicate=True,
+        duplicate_of_record=original_record,
+    )
+    submission = BookSubmission.objects.create(
+        submitter=None,
+        input_type="url",
+        origin=SubmissionOrigin.AUTOMATION,
+        original_input="https://example.test/books/duplicate-edition",
+        normalized_input="https://example.test/books/duplicate-edition",
+        resolved_url="https://example.test/books/duplicate-edition",
+        status=SubmissionStatus.QUEUED,
+    )
+    duplicate_request = BookCreationRequest.objects.create(
+        id="duplicate-edition-request",
+        book_record=duplicate_record,
+        state="duplicate",
+        linked_book=existing_book,
+        duplicate_of_record=original_record,
+        submission=submission,
+    )
+
+    response = client.post(
+        "/api/processing/requests/action/",
+        {"ids": [duplicate_request.id], "action": "new_edition"},
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    existing_book.refresh_from_db()
+    submission.refresh_from_db()
+    duplicate_request.refresh_from_db()
+
+    assert existing_book.group_id is not None
+    group = BookGroup.objects.get(pk=existing_book.group_id)
+    assert group.canonical_title == "Existing Edition"
+    assert submission.raw_payload.get("target_book_group_id") == str(group.id)
+    # Same behaviour as "new": request restarted, duplicate locking cleared.
+    assert duplicate_request.state == "initial"
+    assert duplicate_request.is_confirmed_not_duplicate is True
+    assert duplicate_request.duplicate_of_record_id is None

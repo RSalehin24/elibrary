@@ -1,5 +1,52 @@
 
 
+
+def _resolve_existing_duplicate_book(processing_request):
+    """Return the existing Book this processing_request is duplicating, or None."""
+    candidates = []
+    target_request = processing_request.duplicate_of_request
+    if target_request is not None:
+        candidates.append(getattr(target_request, "linked_book", None))
+    target_record = processing_request.duplicate_of_record
+    if target_record is not None:
+        candidates.append(getattr(target_record, "linked_book", None))
+    for candidate in candidates:
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _ensure_book_group_for_existing(existing_book):
+    """Return (and lazily create) the BookGroup linking sibling editions."""
+    if existing_book.group_id:
+        return existing_book.group
+    canonical_title = (existing_book.title or "").strip() or "Untitled"
+    group = BookGroup.objects.create(canonical_title=canonical_title)
+    existing_book.group = group
+    existing_book.save(update_fields=["group", "updated_at"])
+    return group
+
+
+def apply_new_edition_action(processing_request, *, actor=None):
+    """Phase E: treat as a new book that is a sibling edition of the existing
+    duplicate. Wires both books to a shared BookGroup and re-queues the
+    submission for full creation.
+    """
+    processing_request = _reload_processing_request(processing_request.id)
+
+    existing_book = _resolve_existing_duplicate_book(processing_request)
+    group = _ensure_book_group_for_existing(existing_book) if existing_book else None
+
+    submission = getattr(processing_request, "submission", None)
+    if submission is not None and group is not None:
+        payload = dict(submission.raw_payload or {})
+        payload["target_book_group_id"] = str(group.id)
+        submission.raw_payload = payload
+        submission.save(update_fields=["raw_payload", "updated_at"])
+
+    return apply_new_action(processing_request, actor=actor)
+
+
 def apply_new_action(processing_request, *, actor=None):
     processing_request = _reload_processing_request(processing_request.id)
     previous_state = processing_request.state
@@ -215,6 +262,8 @@ def apply_request_action(request_ids, action, *, delete_book=False, actor=None):
             apply_retry_action(processing_request, actor=actor)
         elif action == "new":
             apply_new_action(processing_request, actor=actor)
+        elif action == "new_edition":
+            apply_new_edition_action(processing_request, actor=actor)
         elif action == "confirm_duplicate":
             apply_confirm_duplicate_action(processing_request)
         elif action in {"create_again", "recreate"}:

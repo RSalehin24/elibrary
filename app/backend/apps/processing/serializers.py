@@ -202,6 +202,7 @@ class RequestActionSerializer(BulkIdsSerializer):
             "resume",
             "retry",
             "new",
+            "new_edition",
             "confirm_duplicate",
             "create_again",
             "recreate",
