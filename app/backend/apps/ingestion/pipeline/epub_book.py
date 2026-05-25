@@ -143,8 +143,14 @@ def create_epub(book_data):
         builder.add_toc_page(lessons=toc_lessons)
 
     # Add main content after the generated TOC so EPUB reading order mirrors a physical book.
+    # For single-flow books with no detected chapter structure, use a neutral
+    # label instead of "প্রস্তাবনা" (preface), which would be misleading.
     if compact_main_content:
-        builder.add_main_content_page(main_content=compact_main_content)
+        if not content_items:
+            main_content_title = book_data.get("book_title") or "মূল লেখা"
+        else:
+            main_content_title = None  # defaults to "প্রারম্ভ" in add_main_content_page
+        builder.add_main_content_page(main_content=compact_main_content, title=main_content_title)
     
     # Add lesson pages
     builder.add_lesson_pages(content_items)

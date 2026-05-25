@@ -47,7 +47,7 @@ export default function LoginPage() {
           ? "Signed in. Finish two-factor setup to continue."
           : "Signed in.",
       );
-      navigate(requiresTotpSetup ? "/two-factor-setup" : "/home", {
+      navigate(requiresTotpSetup ? "/two-factor-setup" : "/my-books", {
         replace: true,
       });
     } catch (error) {

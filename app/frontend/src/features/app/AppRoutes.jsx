@@ -38,7 +38,7 @@ const protectedRoutes = [
   { path: "/publishers", element: <WriterPage /> },
   { path: "/compilers", element: <Navigate to="/editors" replace /> },
   { path: "/manual-books", element: <ManualBooksPage /> },
-  { path: "/created-books", element: <CreatedBooksPage /> },
+  { path: "/my-books", element: <CreatedBooksPage /> },
   { path: "/books/:slug", element: <BookDetailPage /> },
   { path: "/access", element: <AccessPage /> },
   { path: "/profile", element: <ProfilePage /> },
@@ -69,6 +69,10 @@ export default function AppRoutes() {
         }
       />
       <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/created-books"
+        element={<Navigate to="/my-books" replace />}
+      />
       <Route path="/reset-password" element={<PasswordResetPage />} />
       <Route
         path="/reset-password/confirm"

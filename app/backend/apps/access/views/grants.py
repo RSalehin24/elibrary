@@ -1,3 +1,4 @@
+from django.db.models import Count
 from rest_framework import generics
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
@@ -54,6 +55,9 @@ class AccessReferenceDataView(APIView):
                 }
             )
 
+        # Use annotate to compute grant_count in a single query instead of N+1.
+        # capabilities (capability_scopes) are not needed in the grants reference
+        # dropdown and would cause an extra DB query per non-superuser.
         users = [
             {
                 "id": user.id,
@@ -61,16 +65,26 @@ class AccessReferenceDataView(APIView):
                 "name": user.display_name,
                 "is_staff": user.is_staff,
                 "is_superuser": user.is_superuser,
-                "capabilities": user.capability_scopes,
-                "grant_count": user.permission_grants.count(),
+                "grant_count": user.grant_count_value,
             }
-            for user in request.user.__class__.objects.order_by("email")
+            for user in request.user.__class__.objects.annotate(
+                grant_count_value=Count("permission_grants"),
+            ).order_by("email")
         ]
-        books = [{"id": book.id, "title": book.title, "slug": book.slug} for book in Book.objects.order_by("title")]
-        categories = [{"id": category.id, "name": category.name, "slug": category.slug} for category in Category.objects.order_by("name")]
+        books = [
+            {"id": book.id, "title": book.title, "slug": book.slug}
+            for book in Book.objects.only("id", "title", "slug").order_by("title")
+        ]
+        categories = [
+            {"id": category.id, "name": category.name, "slug": category.slug}
+            for category in Category.objects.only("id", "name", "slug").order_by("name")
+        ]
         writers = [
             {"id": contributor.id, "name": contributor.name, "slug": contributor.slug}
-            for contributor in Contributor.objects.filter(book_contributions__role=ContributorRole.AUTHOR).distinct().order_by("name")
+            for contributor in Contributor.objects.only("id", "name", "slug")
+            .filter(book_contributions__role=ContributorRole.AUTHOR)
+            .distinct()
+            .order_by("name")
         ]
         scoped_scopes = [{"value": scope.value, "label": scope.label} for scope in SCOPED_PERMISSION_SCOPES]
         return Response(

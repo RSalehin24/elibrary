@@ -240,6 +240,11 @@ LEADING_NON_NAME_BENGALI_TOKENS = {
     "ও", "এবং", "অথবা", "কিন্তু",
     "সম্পাদনা",
     "কবিতা", "সহযোগী",
+    # Collaboration / courtesy prefix words that introduce the actual name
+    # (e.g. "সহযোগিতায় – অয়ন বন্দ্যোপাধ্যায়"). The raw string with the prefix
+    # is noise; the name after the dash is captured separately by
+    # clean_contributor_value via COLLABORATION_PREFIX_PATTERN.
+    "সহযোগিতায়", "সহায়তায়", "সহকারে", "সৌজন্যে",
     "প্রসঙ্গে", "সম্পর্কে", "পরিচিতি",
     "উৎসর্গ",
     "প্রধান", "সরকারি", "বিভাগীয়",
@@ -318,6 +323,35 @@ TRAILING_PARENTHETICAL_PATTERN = re.compile(r"\s*\([^()]*\)\s*$")
 ORPHAN_TRAILING_PAREN_PATTERN = re.compile(r"\)+\s*$")
 
 
+# Strip "সহযোগিতায় – " (in-collaboration-with) style prefixes so the actual
+# contributor name is validated rather than the prefix phrase.
+COLLABORATION_PREFIX_PATTERN = re.compile(
+    r"^(?:সহযোগিতায়|সহায়তায়|সহকারে|সৌজন্যে)\s*[-\u2013\u2014:]\s*",
+    re.IGNORECASE,
+)
+
+# Bengali/Gregorian calendar month names.
+# A standalone month name is NEVER a valid contributor or publisher name.
+BENGALI_MONTH_NAMES = frozenset({
+    "জানুয়ারি", "জানুয়ারী",
+    "ফেব্রুয়ারি", "ফেব্রুয়ারী",
+    "মার্চ",
+    "এপ্রিল",
+    "মে",
+    "জুন",
+    "জুলাই",
+    "আগস্ট", "আগষ্ট",
+    "সেপ্টেম্বর", "সেপ্টেম্বার",
+    "অক্টোবর", "অক্টোবার",
+    "নভেম্বর", "নভেম্বার",
+    "ডিসেম্বর", "ডিসেম্বার",
+    # Bengali calendar months
+    "বৈশাখ", "জ্যৈষ্ঠ", "আষাঢ়", "শ্রাবণ", "ভাদ্র", "আশ্বিন",
+    "কার্তিক", "অগ্রহায়ণ", "পৌষ", "মাঘ", "ফাল্গুন", "চৈত্র",
+})
+
+
+
 def _strip_leading_quote_or_bullet(value):
     cleaned = value
     while True:
@@ -386,6 +420,8 @@ MIDSTRING_ROLE_LABELS = {
 }
 PUBLISHER_NON_NAME_WORDS = {
     "বইমেলা",
+    # Collaboration prefix words — never a publisher name.
+    "সহযোগিতায়", "সহায়তায়", "সহকারে", "সৌজন্যে",
     "বইয়ের",
     "বইয়ের",
     "ভাষা",
@@ -536,6 +572,12 @@ def clean_contributor_value(value):
     cleaned = TRAILING_CONTRIBUTOR_HELPER_PATTERN.sub("", cleaned)
     cleaned = _strip_leading_quote_or_bullet(cleaned)
     cleaned = _strip_trailing_parens(cleaned)
+    # Strip "সহযোগিতায় – " / "সহায়তায় – " prefix phrases so the actual name is extracted.
+    while True:
+        next_value = COLLABORATION_PREFIX_PATTERN.sub("", cleaned, count=1)
+        if next_value == cleaned:
+            break
+        cleaned = next_value
     return clean_entity_display_text(cleaned)
 
 
@@ -578,6 +620,21 @@ def looks_like_contributor_name(value, role=""):
     if normalize_catalog_text(cleaned.strip(".:ঃ")) in INCOMPLETE_NAME_TOKENS:
         return False
     if role != ContributorRole.PUBLISHER and re.search(r"[0-9০-৯]", cleaned):
+        return False
+    # Reject very short values that cannot be a real name (e.g. জে, বি).
+    if len(cleaned.replace(" ", "")) < 3:
+        return False
+    # Reject standalone Bengali month names and date expressions for ALL roles.
+    _month_norms = {normalize_catalog_text(m) for m in BENGALI_MONTH_NAMES}
+    _norm_for_month = normalize_catalog_text(cleaned)
+    if _norm_for_month in _month_norms:
+        return False
+    _norm_tokens = _norm_for_month.split()
+    if (
+        len(_norm_tokens) == 2
+        and _norm_tokens[1] in _month_norms
+        and re.fullmatch(r"[০-৯0-9]+", _norm_tokens[0])
+    ):
         return False
     if re.search(r"[।!?]", cleaned):
         return False

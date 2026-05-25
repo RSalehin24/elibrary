@@ -28,11 +28,15 @@
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 220px;
+  max-width: 520px;
 }
 
 .notes-header-search-input {
-  width: 300px;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
 }
 
 .notes-header-color-select {

@@ -110,7 +110,7 @@ export function MobileNavigationPanel({
             </NavLink>
           ))}
           <NavLink
-            to="/created-books"
+            to="/my-books"
             className={({ isActive }) =>
               isActive ? "mobile-nav-link is-active" : "mobile-nav-link"
             }

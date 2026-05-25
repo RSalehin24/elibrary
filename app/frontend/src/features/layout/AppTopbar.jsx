@@ -102,7 +102,7 @@ export function AppTopbar({
           {authenticated ? (
             <>
               <NavLink
-                to="/created-books"
+                to="/my-books"
                 className={({ isActive }) =>
                   isActive ? "nav-link is-active" : "nav-link"
                 }

@@ -149,7 +149,7 @@ class EpubBuilder:
         )
         self.register_chapter(chapter, include_in_nav=True)
 
-    def add_main_content_page(self, main_content):
+    def add_main_content_page(self, main_content, title=None):
         if html_is_blank(main_content):
             return
         html_content = self.render_template(
@@ -157,7 +157,7 @@ class EpubBuilder:
             main_content=main_content,
         )
         chapter = epub.EpubHtml(
-            title="প্রস্তাবনা",
+            title=title or "প্রারম্ভ",
             file_name="main_content.xhtml",
             content=html_content,
         )
