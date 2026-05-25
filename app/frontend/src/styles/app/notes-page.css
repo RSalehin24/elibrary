@@ -703,3 +703,9 @@
     max-height: 180px;
   }
 }
+
+.notes-result-count {
+  margin: 4px 0 12px;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}

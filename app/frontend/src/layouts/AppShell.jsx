@@ -7,7 +7,7 @@ import {
   authenticatedNavigation,
   isBookPropertiesRoute,
   isProcessingRoute,
-  processingItems
+  processingItems,
 } from "../features/layout/navigation";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
@@ -22,7 +22,8 @@ export default function AppShell({ children }) {
   const isCreatePasswordRoute = location.pathname === "/create-password";
   const isTotpSetupRoute = location.pathname === "/two-factor-setup";
   const readerNavHidden =
-    isReaderRoute && new URLSearchParams(location.search).get("appNav") !== "shown";
+    isReaderRoute &&
+    new URLSearchParams(location.search).get("appNav") !== "shown";
   const showTopbar = !readerNavHidden;
   const useMinimalTopbar = isTotpSetupRoute || isCreatePasswordRoute;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -36,7 +37,7 @@ export default function AppShell({ children }) {
   const processingMenuRef = useRef(null);
   const canManageProcessing = hasCapability(user, "processing:manage");
   const visibleProcessingItems = processingItems.filter(
-    (item) => !item.capabilityRequired || canManageProcessing
+    (item) => !item.capabilityRequired || canManageProcessing,
   );
   const hasProcessingNav = visibleProcessingItems.length > 0;
   const navigation = authenticated ? authenticatedNavigation(user) : [];
@@ -62,7 +63,10 @@ export default function AppShell({ children }) {
     }
 
     function handlePointerDown(event) {
-      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+      if (
+        profileMenuRef.current &&
+        !profileMenuRef.current.contains(event.target)
+      ) {
         setMenuOpen(false);
       }
       if (
@@ -156,9 +160,9 @@ export default function AppShell({ children }) {
     navigate(
       {
         pathname: location.pathname,
-        search: `?${nextParams.toString()}`
+        search: `?${nextParams.toString()}`,
       },
-      { replace: true }
+      { replace: true },
     );
   }
 
@@ -174,11 +178,20 @@ export default function AppShell({ children }) {
 
   return (
     <div className={isReaderRoute ? "shell shell-reader-mode" : "shell"}>
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
       {!isReaderRoute ? (
-        <div className="shell-ornament shell-ornament-left" aria-hidden="true" />
+        <div
+          className="shell-ornament shell-ornament-left"
+          aria-hidden="true"
+        />
       ) : null}
       {!isReaderRoute ? (
-        <div className="shell-ornament shell-ornament-right" aria-hidden="true" />
+        <div
+          className="shell-ornament shell-ornament-right"
+          aria-hidden="true"
+        />
       ) : null}
       {showTopbar ? (
         <AppTopbar
@@ -226,8 +239,12 @@ export default function AppShell({ children }) {
           navigation={navigation}
           onClose={() => setMobileNavOpen(false)}
           onLogout={handleMobileLogout}
-          onProcessingToggle={() => setMobileProcessingOpen((current) => !current)}
-          onPropertiesToggle={() => setMobilePropertiesOpen((current) => !current)}
+          onProcessingToggle={() =>
+            setMobileProcessingOpen((current) => !current)
+          }
+          onPropertiesToggle={() =>
+            setMobilePropertiesOpen((current) => !current)
+          }
           profileImageUrl={user?.profile_image_url}
           toast={toast}
           visibleProcessingItems={visibleProcessingItems}
@@ -236,7 +253,13 @@ export default function AppShell({ children }) {
       {isReaderRoute && showTopbar ? (
         <ReaderTopbarHideButton onClick={hideReaderTopbar} />
       ) : null}
-      <main className={isReaderRoute ? "page-shell page-shell-reader" : "page-shell"}>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className={
+          isReaderRoute ? "page-shell page-shell-reader" : "page-shell"
+        }
+      >
         {children}
       </main>
     </div>

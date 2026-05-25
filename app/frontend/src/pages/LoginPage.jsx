@@ -2,11 +2,14 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import EmailInputFeedback from "../components/EmailInputFeedback";
 import LoadingSpinner from "../components/LoadingSpinner";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 import { getEmailValidationState } from "../utils/email";
+import { humanizeError } from "../utils/humanizeError";
 
 export default function LoginPage() {
+  usePageTitle("Sign in");
   const navigate = useNavigate();
   const { login } = useSession();
   const toast = useToast();
@@ -59,7 +62,7 @@ export default function LoginPage() {
         setPhase("otp");
       }
 
-      toast.error(error.message);
+      toast.error(humanizeError(error));
     } finally {
       setSubmitting(false);
     }
@@ -149,7 +152,9 @@ export default function LoginPage() {
             <button
               type="submit"
               className="primary-button"
-              disabled={submitting || (phase === "credentials" && !credentialsReady)}
+              disabled={
+                submitting || (phase === "credentials" && !credentialsReady)
+              }
             >
               <span className="button-label">
                 {submitting ? <LoadingSpinner size={16} /> : null}

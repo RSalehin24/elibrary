@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import AsyncButton from "./AsyncButton";
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -10,27 +9,17 @@ const FOCUSABLE_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export default function ConfirmationDialog({
-  open,
-  title,
-  body,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
-  onConfirm,
-  onCancel,
-  loading = false,
-}) {
+// Applies focus trap, body scroll lock, focus restoration, and Escape handling
+// to a modal/dialog element. Returns a ref to attach to the dialog root.
+export function useDialogA11y(open, { onClose, locked = false } = {}) {
   const dialogRef = useRef(null);
   const previouslyFocusedRef = useRef(null);
 
   useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
+    if (!open) return undefined;
 
     previouslyFocusedRef.current =
       typeof document !== "undefined" ? document.activeElement : null;
-
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
@@ -42,25 +31,19 @@ export default function ConfirmationDialog({
 
     function handleKeyDown(event) {
       if (event.key === "Escape") {
-        if (!loading) {
+        if (!locked) {
           event.preventDefault();
-          onCancel?.();
+          onClose?.();
         }
         return;
       }
-      if (event.key !== "Tab") {
-        return;
-      }
+      if (event.key !== "Tab") return;
       const nodes = dialogRef.current?.querySelectorAll(FOCUSABLE_SELECTOR);
-      if (!nodes || nodes.length === 0) {
-        return;
-      }
+      if (!nodes || nodes.length === 0) return;
       const items = Array.from(nodes).filter(
         (node) => node instanceof HTMLElement && !node.hasAttribute("disabled"),
       );
-      if (items.length === 0) {
-        return;
-      }
+      if (items.length === 0) return;
       const firstNode = items[0];
       const lastNode = items[items.length - 1];
       if (event.shiftKey && document.activeElement === firstNode) {
@@ -85,56 +68,7 @@ export default function ConfirmationDialog({
         }
       }
     };
-  }, [open, loading, onCancel]);
+  }, [open, locked, onClose]);
 
-  if (!open) {
-    return null;
-  }
-
-  function handleBackdropMouseDown(event) {
-    if (event.target === event.currentTarget && !loading) {
-      onCancel?.();
-    }
-  }
-
-  return (
-    <div
-      className="dialog-backdrop"
-      role="presentation"
-      onMouseDown={handleBackdropMouseDown}
-    >
-      <section
-        ref={dialogRef}
-        className="dialog-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirmation-dialog-title"
-      >
-        <div className="dialog-header">
-          <div>
-            <h2 id="confirmation-dialog-title">{title}</h2>
-          </div>
-        </div>
-        <p className="muted-copy">{body}</p>
-        <div className="dialog-actions dialog-actions-end">
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={onCancel}
-            disabled={loading}
-          >
-            {cancelLabel}
-          </button>
-          <AsyncButton
-            className="primary-button danger-button"
-            onClick={onConfirm}
-            loading={loading}
-            loadingLabel="Deleting..."
-          >
-            {confirmLabel}
-          </AsyncButton>
-        </div>
-      </section>
-    </div>
-  );
+  return dialogRef;
 }

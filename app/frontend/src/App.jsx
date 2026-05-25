@@ -1,6 +1,8 @@
 import AppShell from "./layouts/AppShell";
 import AppRoutes from "./features/app/AppRoutes";
 import BackendStatusModal from "./features/app/BackendStatusModal";
+import ErrorBoundary from "./components/ErrorBoundary";
+import ThemeToggle from "./components/ThemeToggle";
 import RouteScrollReset from "./features/app/RouteScrollReset";
 import SessionRestartHandler from "./features/app/SessionRestartHandler";
 
@@ -10,7 +12,10 @@ export default function App() {
       <RouteScrollReset />
       <SessionRestartHandler />
       <BackendStatusModal />
-      <AppRoutes />
+      <ErrorBoundary>
+        <AppRoutes />
+      </ErrorBoundary>
+      <ThemeToggle className="theme-toggle-floating" />
     </AppShell>
   );
 }

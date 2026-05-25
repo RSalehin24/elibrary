@@ -11,6 +11,7 @@ import BookReaderSections from "../features/book-detail/components/BookReaderSec
 import BookTocSummary from "../features/book-detail/components/BookTocSummary";
 import { useBookDetailActions } from "../features/book-detail/hooks/useBookDetailActions";
 import { useBookDetailData } from "../features/book-detail/hooks/useBookDetailData";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 import { getSourceLabel } from "../utils/bookPresentation";
@@ -33,6 +34,7 @@ export default function BookDetailPage() {
     toast,
     user,
   });
+  usePageTitle(detailState.book?.title || "Book");
   const actions = useBookDetailActions({
     book: detailState.book,
     currentDetailPath,

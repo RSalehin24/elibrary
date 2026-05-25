@@ -6,6 +6,7 @@ import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { useAsyncAction } from "../hooks/useAsyncAction";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useToast } from "../hooks/useToast";
 import {
   cleanQueryParams,
@@ -75,6 +76,7 @@ const createdBookSortOptions =
   createdBookFilterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function CreatedBooksPage() {
+  usePageTitle("My Books");
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(

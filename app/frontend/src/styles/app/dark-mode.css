@@ -1,0 +1,1330 @@
+/*
+ * dark-mode.css
+ * Overrides all hardcoded light-mode colours so [data-theme="dark"] works
+ * across every component.  Imported LAST in app.css so it wins specificity.
+ *
+ * Colour shorthand used below:
+ *   --dk-surface   = rgba(28, 42, 36, 0.92)   — main card/panel bg
+ *   --dk-surface2  = rgba(34, 50, 43, 0.96)   — elevated surface
+ *   --dk-surface3  = rgba(22, 34, 29, 0.92)   — recessed / input bg
+ *   --dk-btn-top   = rgba(38, 56, 48, 0.95)   — button gradient top
+ *   --dk-btn-bot   = rgba(28, 42, 36, 0.98)   — button gradient bottom
+ *   --dk-inset     = rgba(180, 220, 200, 0.08) — inset highlight
+ */
+
+/* ============================================================
+   GLOBAL FORM CONTROLS
+   ============================================================ */
+[data-theme="dark"]
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background: rgba(22, 34, 29, 0.9);
+  color: var(--ink);
+  border-color: var(--line);
+}
+[data-theme="dark"]
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+[data-theme="dark"] select:focus,
+[data-theme="dark"] textarea:focus {
+  border-color: var(--line-strong);
+  background: rgba(22, 34, 29, 0.95);
+}
+
+/* ============================================================
+   NAVIGATION & BUTTONS  (navigation-and-buttons.css)
+   ============================================================ */
+[data-theme="dark"] .nav-link,
+[data-theme="dark"] .ghost-button,
+[data-theme="dark"] .asset-link,
+[data-theme="dark"] .candidate-button,
+[data-theme="dark"] .icon-button {
+  background: linear-gradient(
+    180deg,
+    rgba(38, 56, 48, 0.95),
+    rgba(28, 42, 36, 0.98)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.1),
+    0 6px 14px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .nav-link:hover,
+[data-theme="dark"] .ghost-button:hover,
+[data-theme="dark"] .asset-link:hover,
+[data-theme="dark"] .candidate-button:hover,
+[data-theme="dark"] .icon-button:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(44, 64, 55, 0.98),
+    rgba(34, 50, 43, 1)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.12),
+    0 10px 20px rgba(0, 0, 0, 0.38);
+}
+[data-theme="dark"] .nav-link.is-active,
+[data-theme="dark"] .primary-button {
+  /* keep the branded dark-green active pill — it looks great in dark mode */
+  background: linear-gradient(180deg, #1e7a5a 0%, #0f5740 100%);
+  color: #d4f5e6;
+  border-color: rgba(95, 199, 155, 0.35);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.38);
+}
+[data-theme="dark"] .toast-dismiss {
+  background: linear-gradient(
+    180deg,
+    rgba(38, 56, 48, 0.95),
+    rgba(28, 42, 36, 0.98)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.08),
+    0 6px 14px rgba(0, 0, 0, 0.28);
+}
+/* Dropdown panels (nav dropdowns) */
+[data-theme="dark"] .nav-dropdown-panel {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] .nav-dropdown-item:hover {
+  background: rgba(40, 58, 50, 0.9);
+}
+
+/* ============================================================
+   PROFILE MENU  (profile-menu-and-page-layout.css)
+   ============================================================ */
+[data-theme="dark"] .profile-menu-dropdown {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] .profile-menu-toggle-row {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.95)
+  );
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.1),
+    0 6px 14px rgba(0, 0, 0, 0.22);
+}
+[data-theme="dark"] .profile-menu-toggle-row:hover {
+  box-shadow: 0 10px 16px rgba(0, 0, 0, 0.32);
+}
+[data-theme="dark"] .profile-menu-toggle-track {
+  border-color: rgba(180, 220, 200, 0.2);
+  background: linear-gradient(
+    180deg,
+    rgba(40, 58, 50, 0.9),
+    rgba(30, 45, 38, 0.9)
+  );
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.12),
+    inset 0 -1px rgba(0, 0, 0, 0.12);
+}
+[data-theme="dark"] .profile-menu-toggle-state {
+  color: rgba(184, 205, 193, 0.75);
+}
+[data-theme="dark"]
+  .profile-menu-toggle
+  input[type="checkbox"]:checked
+  + .profile-menu-toggle-track {
+  border-color: rgba(95, 199, 155, 0.55);
+  background: linear-gradient(180deg, #1f7a56, #0e5038);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.22),
+    0 12px 24px rgba(0, 0, 0, 0.35);
+}
+[data-theme="dark"]
+  .profile-menu-toggle
+  input[type="checkbox"]:checked
+  + .profile-menu-toggle-track
+  .profile-menu-toggle-state {
+  color: rgba(212, 245, 230, 0.9);
+}
+[data-theme="dark"] .profile-menu-toggle-thumb {
+  background: #c8e0d4;
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.45),
+    inset 0 1px rgba(255, 255, 255, 0.3);
+}
+[data-theme="dark"] .profile-menu-link {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.95)
+  );
+  color: var(--ink);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.08),
+    0 6px 14px rgba(0, 0, 0, 0.22);
+}
+[data-theme="dark"] .profile-menu-link:hover {
+  box-shadow: 0 10px 16px rgba(0, 0, 0, 0.32);
+}
+[data-theme="dark"] .profile-menu-signout {
+  background: linear-gradient(
+    180deg,
+    rgba(50, 26, 26, 0.9),
+    rgba(38, 18, 18, 0.95)
+  );
+  border-color: rgba(240, 140, 140, 0.25);
+}
+[data-theme="dark"] .profile-menu-signout:hover {
+  border-color: rgba(240, 140, 140, 0.42);
+  box-shadow: 0 10px 16px rgba(138, 52, 52, 0.3);
+}
+
+/* ============================================================
+   CATALOG TOOLBAR PRIMARY  (catalog-toolbar-primary.css)
+   ============================================================ */
+[data-theme="dark"] .catalog-toolbar-primary {
+  border-color: var(--line);
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.85)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.08),
+    var(--shadow-soft);
+}
+[data-theme="dark"] .catalog-search-field {
+  border-color: var(--line);
+  background: linear-gradient(
+    180deg,
+    rgba(28, 42, 36, 0.92),
+    rgba(22, 34, 29, 0.9)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.06),
+    0 14px 28px rgba(0, 0, 0, 0.2);
+}
+[data-theme="dark"] .catalog-search-field:focus-within {
+  border-color: var(--line-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.1),
+    0 18px 30px rgba(0, 0, 0, 0.28);
+}
+[data-theme="dark"] .catalog-search-icon {
+  color: var(--muted);
+}
+[data-theme="dark"] .catalog-search-sort .catalog-toolbar-select {
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.06),
+    0 12px 24px rgba(0, 0, 0, 0.2);
+}
+[data-theme="dark"] .catalog-toolbar-secondary-shell {
+  border-color: var(--line);
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.85)
+  );
+  box-shadow: var(--shadow-soft);
+}
+[data-theme="dark"] .catalog-filter-actions {
+  border-color: var(--line);
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.85)
+  );
+}
+[data-theme="dark"] .catalog-filter-actions:focus-within {
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .catalog-filter-expand-toggle {
+  background: linear-gradient(
+    180deg,
+    rgba(28, 42, 36, 0.92),
+    rgba(22, 34, 29, 0.9)
+  );
+}
+[data-theme="dark"] .catalog-filter-toggle {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.92),
+    rgba(22, 34, 29, 0.9)
+  );
+  border-color: var(--line);
+  color: var(--ink-soft);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 12px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* ============================================================
+   CATALOG TOOLBAR SECONDARY  (catalog-toolbar-secondary.css)
+   ============================================================ */
+[data-theme="dark"] .catalog-secondary-panel {
+  border-color: var(--line);
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.85)
+  );
+}
+[data-theme="dark"] .catalog-filter-btn {
+  border-color: var(--line);
+  color: var(--ink-soft);
+  background: rgba(28, 42, 36, 0.8);
+}
+[data-theme="dark"] .catalog-filter-btn:hover,
+[data-theme="dark"] .catalog-filter-btn.is-active {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: rgba(38, 56, 48, 0.9);
+}
+
+/* ============================================================
+   CATALOG TABLES  (catalog-tables.css)
+   ============================================================ */
+[data-theme="dark"] .catalog-table-surface {
+  background: rgba(22, 34, 29, 0.92);
+  border-color: var(--line);
+}
+[data-theme="dark"] .catalog-table-row:hover {
+  background: rgba(34, 50, 43, 0.7);
+}
+[data-theme="dark"] .catalog-table-header {
+  background: rgba(28, 42, 36, 0.95);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   CARDS & SUBMISSIONS  (cards-and-submissions.css)
+   ============================================================ */
+[data-theme="dark"] .book-cover-placeholder {
+  border-color: var(--line);
+  background:
+    radial-gradient(
+      circle at 18% 16%,
+      rgba(95, 180, 130, 0.1),
+      transparent 44%
+    ),
+    linear-gradient(
+      160deg,
+      rgba(28, 44, 37, 0.95) 0%,
+      rgba(20, 32, 27, 0.98) 100%
+    );
+  color: var(--accent);
+}
+[data-theme="dark"] .submission-card,
+[data-theme="dark"] .queue-card {
+  border-color: var(--line);
+  background: rgba(28, 42, 36, 0.88);
+}
+[data-theme="dark"] .submission-card:hover,
+[data-theme="dark"] .queue-card:hover {
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .submission-badge,
+[data-theme="dark"] .queue-badge {
+  background: rgba(95, 199, 155, 0.1);
+}
+[data-theme="dark"] .status-badge {
+  background: rgba(95, 199, 155, 0.1);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .status-badge.is-success {
+  background: rgba(111, 210, 164, 0.15);
+}
+[data-theme="dark"] .status-badge.is-warning {
+  background: rgba(228, 192, 113, 0.15);
+}
+[data-theme="dark"] .status-badge.is-danger {
+  background: rgba(240, 140, 140, 0.15);
+}
+[data-theme="dark"] .status-badge.is-active {
+  background: rgba(95, 199, 155, 0.15);
+}
+
+/* ============================================================
+   ACCESS SETTINGS FIELDS  (access-settings-fields.css)
+   ============================================================ */
+[data-theme="dark"] .catalog-field,
+[data-theme="dark"] .field-input,
+[data-theme="dark"] .field-select,
+[data-theme="dark"] .field-textarea {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+  color: var(--ink);
+}
+[data-theme="dark"] .catalog-field:focus,
+[data-theme="dark"] .field-input:focus,
+[data-theme="dark"] .field-select:focus,
+[data-theme="dark"] .field-textarea:focus {
+  border-color: var(--line-strong);
+  background: rgba(22, 34, 29, 0.96);
+}
+[data-theme="dark"] .field-option-group {
+  border-color: var(--line);
+  background: rgba(22, 34, 29, 0.9);
+}
+[data-theme="dark"] .field-option-label {
+  color: var(--ink-soft);
+  background: rgba(28, 42, 36, 0.75);
+}
+[data-theme="dark"] .field-option-label:hover {
+  background: rgba(38, 56, 48, 0.9);
+  color: var(--ink);
+}
+[data-theme="dark"] .field-option-label.is-selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+[data-theme="dark"] .field-meta {
+  color: var(--muted);
+}
+
+/* ============================================================
+   PROFILE SETTINGS LAYOUT  (profile-settings-layout.css)
+   ============================================================ */
+[data-theme="dark"] .profile-settings-section,
+[data-theme="dark"] .settings-panel {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .settings-row {
+  border-color: var(--line);
+}
+[data-theme="dark"] .settings-row:hover {
+  background: rgba(34, 50, 43, 0.5);
+}
+
+/* ============================================================
+   PROFILE SECURITY & ACCESS USERS
+   ============================================================ */
+[data-theme="dark"] .access-action-row,
+[data-theme="dark"] .security-option {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.92)
+  );
+  border-color: var(--line);
+}
+[data-theme="dark"] .access-action-row:hover,
+[data-theme="dark"] .security-option:hover {
+  border-color: var(--line-strong);
+}
+
+/* ============================================================
+   READER SHELL & REQUEST CONTROLS
+   ============================================================ */
+[data-theme="dark"] .reader-request-panel,
+[data-theme="dark"] .reader-request-card {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] .reader-access-card {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.95),
+    rgba(28, 42, 36, 0.98)
+  );
+  border-color: var(--line);
+}
+[data-theme="dark"] .reader-thumbnail-bg {
+  background: rgba(22, 34, 29, 0.92);
+}
+
+/* ============================================================
+   PAGE LOADERS & AUTH DIALOGS
+   ============================================================ */
+[data-theme="dark"] .auth-dialog,
+[data-theme="dark"] .dialog-panel,
+[data-theme="dark"] .modal-panel,
+[data-theme="dark"] .confirmation-dialog {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] .page-loader-backdrop {
+  background: rgba(14, 26, 22, 0.8);
+}
+[data-theme="dark"] .auth-surface {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   TOASTS & CATALOG PAGE  (toasts-and-catalog-page.css)
+   ============================================================ */
+[data-theme="dark"] .catalog-page-backdrop {
+  background: rgba(14, 26, 22, 0.6);
+}
+[data-theme="dark"] .catalog-empty-panel,
+[data-theme="dark"] .catalog-results-panel {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .toast-item {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow-soft);
+  color: var(--ink);
+}
+/* Toast variants already use light text (#fff5f5 / #fff8eb) which works on dark
+   gradient backgrounds — no override needed for toast-error / toast-warn */
+
+/* ============================================================
+   BOOK CARD & DETAIL GRIDS  (book-card-and-detail-grids.css)
+   ============================================================ */
+[data-theme="dark"] .book-card {
+  border-color: var(--line);
+  background: rgba(28, 42, 36, 0.88);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.08),
+    0 18px 36px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .book-card:hover {
+  border-color: var(--line-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.12),
+    0 26px 42px rgba(0, 0, 0, 0.4);
+}
+[data-theme="dark"] .book-card-cover-placeholder {
+  background: rgba(22, 34, 29, 0.9);
+}
+[data-theme="dark"] .book-card-badge {
+  background: rgba(22, 34, 29, 0.9);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .book-detail-card {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .book-card-cover p,
+[data-theme="dark"] .book-hero-placeholder p {
+  color: var(--muted);
+}
+
+/* ============================================================
+   BOOK METADATA & HERO  (book-metadata-and-hero.css)
+   ============================================================ */
+[data-theme="dark"] .book-hero {
+  background: rgba(22, 34, 29, 0.92);
+  border-color: var(--line);
+}
+[data-theme="dark"] .book-meta-chip {
+  background: rgba(34, 50, 43, 0.88);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+
+/* ============================================================
+   BOOK SOURCE & TOC PANELS  (book-source-and-toc-panels.css)
+   ============================================================ */
+[data-theme="dark"] .book-source-panel,
+[data-theme="dark"] .toc-panel {
+  background: rgba(28, 42, 36, 0.92);
+  border-color: var(--line);
+}
+[data-theme="dark"] .toc-item:hover {
+  background: rgba(38, 56, 48, 0.8);
+}
+[data-theme="dark"] .toc-item.is-active {
+  background: var(--accent-soft);
+}
+
+/* ============================================================
+   MANUAL BOOKS & BOOK GRID  (manual-books-and-book-grid.css)
+   ============================================================ */
+[data-theme="dark"] .manual-book-card {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .book-grid-cover-badge {
+  background: rgba(22, 34, 29, 0.9);
+}
+[data-theme="dark"] .manual-book-drop-zone {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+}
+[data-theme="dark"] .manual-book-drop-zone:hover,
+[data-theme="dark"] .manual-book-drop-zone.is-dragging-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+[data-theme="dark"] .manual-book-cover-preview {
+  background: rgba(28, 42, 36, 0.96);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   MY BOOKS ACTIONS  (my-books-actions.css)
+   ============================================================ */
+[data-theme="dark"] .my-books-action-card {
+  background: rgba(28, 42, 36, 0.92);
+  border-color: var(--line);
+}
+[data-theme="dark"] .my-books-action-card:hover {
+  border-color: var(--line-strong);
+}
+
+/* ============================================================
+   NOTES PAGE  (notes-page.css)
+   ============================================================ */
+[data-theme="dark"] .note-card {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .note-card:hover {
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .note-edit-modal-backdrop {
+  background: rgba(10, 18, 14, 0.7);
+}
+[data-theme="dark"] .note-edit-modal {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] .note-delete-danger {
+  color: var(--danger);
+  border-color: rgba(240, 140, 140, 0.28);
+}
+[data-theme="dark"] .note-tag {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--line);
+}
+
+/* ============================================================
+   PROCESSING AUTOMATION & TABLES
+   ============================================================ */
+[data-theme="dark"] .automation-card,
+[data-theme="dark"] .sync-card {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .sync-icon-button {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.95)
+  );
+  border-color: var(--line);
+}
+[data-theme="dark"] .sync-icon-button:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(42, 62, 52, 0.95),
+    rgba(34, 52, 44, 0.98)
+  );
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .automation-switch-track {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+}
+[data-theme="dark"] .automation-field-input {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+  color: var(--ink);
+}
+[data-theme="dark"] .automation-filter-panel {
+  background: rgba(28, 42, 36, 0.95);
+  border-color: var(--line);
+}
+[data-theme="dark"] .automation-filter-checkbox-btn {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .automation-filter-checkbox-btn:hover {
+  background: rgba(34, 50, 43, 0.9);
+}
+
+/* ============================================================
+   PROCESSING SKELETONS  (processing-skeletons/)
+   ============================================================ */
+[data-theme="dark"] .processing-skeleton-row {
+  border-color: var(--line);
+  background: rgba(22, 34, 29, 0.7);
+}
+[data-theme="dark"] .skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(95, 199, 155, 0.06) 48%,
+    transparent
+  );
+}
+[data-theme="dark"] .processing-error-card,
+[data-theme="dark"] .requeue-card {
+  border-color: rgba(240, 140, 140, 0.22);
+  background: rgba(50, 20, 20, 0.7);
+  color: var(--danger);
+}
+[data-theme="dark"] .requeue-row-divider {
+  border-color: rgba(240, 140, 140, 0.18);
+}
+[data-theme="dark"] .requeue-skeleton-overlay {
+  background: rgba(14, 20, 18, 0.8);
+}
+[data-theme="dark"] .processing-table-cell-checkbox {
+  accent-color: var(--accent);
+}
+[data-theme="dark"] .processing-table-row-bg {
+  background: rgba(22, 34, 29, 0.85);
+}
+
+/* ============================================================
+   TABLET NAVIGATION DRAWER  (tablet-responsive-layout/navigation-drawer.css)
+   ============================================================ */
+[data-theme="dark"] .tablet-nav-drawer {
+  background: rgba(20, 30, 25, 0.98);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] .tablet-nav-link {
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .tablet-nav-link:hover,
+[data-theme="dark"] .tablet-nav-link.is-active {
+  background: rgba(34, 50, 43, 0.8);
+  color: var(--ink);
+}
+[data-theme="dark"] .tablet-nav-section-header {
+  background: linear-gradient(
+    180deg,
+    rgba(28, 42, 36, 0.98),
+    rgba(22, 34, 29, 0.98)
+  );
+  border-color: var(--line);
+}
+
+/* ============================================================
+   MOBILE NAV  (tablet/mobile nav drawer variants)
+   ============================================================ */
+[data-theme="dark"] .mobile-nav-panel {
+  background: rgba(18, 28, 23, 0.98);
+  border-color: var(--line);
+}
+[data-theme="dark"] .mobile-nav-link {
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .mobile-nav-link:hover,
+[data-theme="dark"] .mobile-nav-link.is-active {
+  background: rgba(34, 50, 43, 0.8);
+  color: var(--ink);
+}
+[data-theme="dark"] .mobile-nav-group-toggle {
+  background: linear-gradient(
+    180deg,
+    rgba(28, 42, 36, 0.88),
+    rgba(22, 34, 29, 0.9)
+  );
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .mobile-nav-group-panel {
+  background: rgba(18, 28, 23, 0.9);
+  border-color: var(--line);
+}
+[data-theme="dark"] .mobile-nav-session {
+  border-color: var(--line);
+}
+
+/* ============================================================
+   DESKTOP RESPONSIVE  (desktop-responsive-layout.css)
+   ============================================================ */
+[data-theme="dark"] .desktop-cover-placeholder {
+  background: rgba(22, 34, 29, 0.88);
+}
+[data-theme="dark"] .desktop-filter-sidebar {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   TABLE RESPONSIVE COLUMNS  (table-responsive-columns.css)
+   ============================================================ */
+[data-theme="dark"] .table-col-fade-overlay {
+  background: rgba(10, 16, 13, 0.65);
+}
+
+/* ============================================================
+   CATALOG PROPERTY CONTROLS
+   ============================================================ */
+[data-theme="dark"] .property-tag {
+  background: rgba(34, 50, 43, 0.8);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .property-tag:hover,
+[data-theme="dark"] .property-tag.is-active {
+  background: var(--accent-soft);
+  border-color: var(--line-strong);
+  color: var(--accent);
+}
+[data-theme="dark"] .property-filter-panel {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] .property-option-row {
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .property-option-row:hover {
+  background: rgba(38, 56, 48, 0.8);
+  color: var(--ink);
+}
+[data-theme="dark"] .property-option-row.is-selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ============================================================
+   BOOK AND PROCESSING SKELETONS  (book-and-processing-skeletons.css)
+   ============================================================ */
+[data-theme="dark"] .book-skeleton-card {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+}
+[data-theme="dark"] .book-skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(95, 199, 155, 0.07) 48%,
+    transparent
+  );
+}
+
+/* ============================================================
+   PROCESSING CARD TOOLBAR
+   ============================================================ */
+[data-theme="dark"] .processing-card-toolbar {
+  background: rgba(22, 34, 29, 0.92);
+  border-color: var(--line);
+}
+[data-theme="dark"] .processing-toolbar-btn {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.9),
+    rgba(28, 42, 36, 0.95)
+  );
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .processing-toolbar-btn:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+[data-theme="dark"] .processing-toolbar-btn.is-active {
+  background: var(--accent-soft);
+  border-color: var(--line-strong);
+  color: var(--accent);
+}
+
+/* ============================================================
+   ACCESS USERS & PROCESSING LAYOUT
+   ============================================================ */
+[data-theme="dark"] .access-users-table {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+}
+[data-theme="dark"] .access-user-row:hover {
+  background: rgba(34, 50, 43, 0.6);
+}
+[data-theme="dark"] .access-role-badge {
+  background: rgba(34, 50, 43, 0.8);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .processing-layout-card {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   TOPBAR  (foundation-and-shell.css)
+   ============================================================ */
+[data-theme="dark"] .topbar-app {
+  background: rgba(16, 26, 21, 0.92);
+  border-color: var(--line);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* ============================================================
+   FOCUS RING  (foundation-and-shell.css)
+   ============================================================ */
+[data-theme="dark"] :focus-visible {
+  outline-color: var(--accent);
+}
+
+/* ============================================================
+   READER SHELL — FULLSCREEN & OVERLAYS
+   (reader-shell-and-request-controls.css, desktop-responsive-layout.css)
+   ============================================================ */
+[data-theme="dark"] .reader-page-fullscreen {
+  background: #0e1a16;
+}
+[data-theme="dark"] .reader-fullscreen-frame {
+  background: #0e1a16;
+}
+[data-theme="dark"] .reader-boot-overlay {
+  background: rgba(10, 22, 16, 0.75);
+}
+[data-theme="dark"] .reader-header-icon {
+  background: rgba(28, 42, 36, 0.92);
+  border-color: var(--line);
+  color: var(--ink-soft);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+[data-theme="dark"] .reader-header-icon:hover {
+  background: rgba(38, 56, 48, 0.96);
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .reader-topbar-breadcrumb {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.92),
+    rgba(28, 42, 36, 0.96)
+  );
+  border-color: var(--line);
+  color: var(--ink-soft);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.1),
+    0 10px 18px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .reader-topbar-breadcrumb:hover {
+  color: var(--accent);
+}
+[data-theme="dark"] .reader-topbar-floating-hide {
+  background: rgba(28, 42, 36, 0.92);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   PAGE STATE & EMPTY STATE  (page-loaders-and-states.css)
+   ============================================================ */
+[data-theme="dark"] .page-state,
+[data-theme="dark"] .empty-state {
+  background: rgba(22, 34, 29, 0.7);
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .page-loader-table-shell {
+  background: linear-gradient(
+    180deg,
+    rgba(22, 34, 29, 0.92),
+    rgba(18, 28, 23, 0.9)
+  );
+}
+[data-theme="dark"] .page-loader-reader-frame {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.08),
+    0 18px 36px rgba(0, 0, 0, 0.3);
+}
+
+/* ============================================================
+   DIALOG CARD  (page-loaders-and-states/auth-controls-and-dialogs.css)
+   ============================================================ */
+[data-theme="dark"] .dialog-card {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.5);
+}
+
+/* ============================================================
+   PROCESSING AUTOMATION FIELDS & SWITCHES
+   ============================================================ */
+[data-theme="dark"] .processing-automation-row {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.88),
+    rgba(22, 34, 29, 0.9)
+  );
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 12px 22px rgba(0, 0, 0, 0.25);
+}
+[data-theme="dark"] .processing-automation-field-control {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 8px 16px rgba(0, 0, 0, 0.2);
+}
+[data-theme="dark"] .processing-automation-field-control:focus-within {
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .processing-switch-thumb {
+  background: #c8e0d4;
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.45),
+    inset 0 1px rgba(255, 255, 255, 0.3);
+}
+
+/* ============================================================
+   PROCESSING ERROR & REQUEUE STATES
+   (processing-skeletons/requeue-and-error-states.css)
+   ============================================================ */
+[data-theme="dark"] .processing-row-error {
+  background: rgba(50, 20, 20, 0.55);
+  border-color: rgba(240, 140, 140, 0.2);
+}
+[data-theme="dark"] .processing-row-error > summary {
+  color: var(--danger);
+}
+[data-theme="dark"] .processing-row-error-body pre {
+  color: var(--danger);
+}
+[data-theme="dark"] .processing-inline-error-cell {
+  background: rgba(50, 20, 20, 0.55);
+  border-color: rgba(240, 140, 140, 0.2);
+}
+[data-theme="dark"] .processing-inline-error-cell pre {
+  color: var(--danger);
+}
+[data-theme="dark"] .processing-requeue-error-panel {
+  background: linear-gradient(
+    180deg,
+    rgba(28, 42, 36, 0.95),
+    rgba(22, 34, 29, 0.92)
+  );
+  border-color: var(--line);
+}
+[data-theme="dark"] .processing-requeue-error-scroll {
+  background: rgba(14, 22, 18, 0.88);
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .processing-failure-disclosure {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   MOBILE / TABLET RESPONSIVE OVERRIDES
+   ============================================================ */
+/* Mobile: alerts toggle row in nav */
+[data-theme="dark"] .profile-menu-toggle-row.mobile-nav-alerts-row {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+}
+/* Tablet: mobile-card table rows */
+[data-theme="dark"] .table-mobile-cards tbody tr {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.08),
+    0 10px 20px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .table-mobile-cards tbody td {
+  border-color: var(--line);
+}
+[data-theme="dark"] .table-mobile-cards tbody td[data-label]::before {
+  color: var(--muted);
+}
+
+/* ============================================================
+   CATALOG TABLE SHELL & HEADERS
+   (catalog-tables.css — class names updated from surface/row/header)
+   ============================================================ */
+[data-theme="dark"] .catalog-table-shell,
+[data-theme="dark"] .book-table-shell {
+  background: rgba(22, 34, 29, 0.92);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.06),
+    0 16px 28px rgba(0, 0, 0, 0.28);
+}
+[data-theme="dark"] .catalog-table th {
+  background: rgba(28, 42, 36, 0.95);
+  color: var(--muted);
+  border-color: var(--line);
+}
+[data-theme="dark"] .catalog-table td {
+  border-color: var(--line);
+}
+[data-theme="dark"] .catalog-table tbody tr:hover td,
+[data-theme="dark"] .catalog-table tbody tr:hover {
+  background: rgba(34, 50, 43, 0.7);
+}
+[data-theme="dark"] .catalog-table tbody tr.is-highlighted td {
+  background: rgba(95, 199, 155, 0.08);
+}
+[data-theme="dark"] .catalog-table tbody tr.is-highlighted:hover td {
+  background: rgba(95, 199, 155, 0.12);
+}
+[data-theme="dark"] .manual-books-tab {
+  background: rgba(28, 42, 36, 0.85);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .table-type-pill-manual {
+  background: rgba(228, 192, 113, 0.12);
+  color: var(--warning);
+}
+
+/* ============================================================
+   CATALOG PAGE INDICATORS & FILTER FIELDS
+   (catalog-property-controls.css)
+   ============================================================ */
+[data-theme="dark"] .catalog-page-indicator {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .catalog-filter-field input,
+[data-theme="dark"] .catalog-filter-field select {
+  background: rgba(22, 34, 29, 0.9);
+  border-color: var(--line);
+  color: var(--ink);
+}
+[data-theme="dark"] .saved-filter-chip {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 12px 20px rgba(0, 0, 0, 0.25);
+}
+
+/* ============================================================
+   CATALOG PAGE TABS & NOTES  (toasts-and-catalog-page.css)
+   ============================================================ */
+[data-theme="dark"] .contributor-tab {
+  background: rgba(28, 42, 36, 0.85);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .access-invite-note {
+  background: rgba(22, 34, 29, 0.7);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   SETTINGS OPTION CARD  (access-settings-fields.css)
+   ============================================================ */
+[data-theme="dark"] .setting-option-card {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 6px 14px rgba(0, 0, 0, 0.25);
+}
+
+/* ============================================================
+   TOOLBAR ICON BUTTON  (manual-books-and-book-grid.css)
+   ============================================================ */
+[data-theme="dark"] .toolbar-icon-button {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+  color: var(--ink-soft);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 10px 18px rgba(0, 0, 0, 0.25);
+}
+[data-theme="dark"] .tag-suggestion-list {
+  background: rgba(28, 42, 36, 0.97);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+
+/* ============================================================
+   BOOK COVER KICKER  (book-card-and-detail-grids.css)
+   ============================================================ */
+[data-theme="dark"] .book-cover-kicker {
+  background: rgba(28, 42, 36, 0.75);
+  color: var(--accent);
+}
+
+/* ============================================================
+   BOOK CARD REMOVE BUTTON  (my-books-actions.css)
+   ============================================================ */
+[data-theme="dark"] .book-card-remove-button {
+  background: rgba(28, 42, 36, 0.92);
+  border-color: var(--line);
+  color: var(--ink-soft);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+/* ============================================================
+   TOPBAR PUBLIC  (foundation-and-shell.css)
+   ============================================================ */
+[data-theme="dark"] .topbar-public {
+  background: rgba(16, 26, 21, 0.92);
+  border-color: var(--line);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* ============================================================
+   MOBILE NAV TRIGGER & NAV LINKS  (navigation-drawer.css)
+   ============================================================ */
+[data-theme="dark"] .mobile-nav-trigger {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.92),
+    rgba(22, 34, 29, 0.92)
+  );
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.08),
+    0 10px 18px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .mobile-nav-link,
+[data-theme="dark"] .mobile-nav-sub-link,
+[data-theme="dark"] .mobile-nav-close {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.88),
+    rgba(22, 34, 29, 0.9)
+  );
+  border-color: var(--line);
+  color: var(--ink-soft);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 8px 18px rgba(0, 0, 0, 0.25);
+}
+
+/* ============================================================
+   BOOK DETAIL CHIPS  (book-metadata-and-hero.css)
+   ============================================================ */
+[data-theme="dark"] .book-detail-chip,
+[data-theme="dark"] .source-record-card,
+[data-theme="dark"] .toc-record-card,
+[data-theme="dark"] .book-status-note {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 10px 20px rgba(0, 0, 0, 0.25);
+}
+[data-theme="dark"] .book-status-note-error {
+  background:
+    linear-gradient(180deg, rgba(138, 52, 52, 0.14), rgba(80, 24, 24, 0.18)),
+    rgba(22, 34, 29, 0.7);
+  border-color: rgba(240, 140, 140, 0.22);
+}
+
+/* ============================================================
+   PROCESSING SUMMARY STATS  (processing-card-toolbar.css)
+   ============================================================ */
+[data-theme="dark"] .processing-summary-stat {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.88),
+    rgba(28, 42, 36, 0.82)
+  );
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 10px 18px rgba(0, 0, 0, 0.25);
+}
+
+/* ============================================================
+   CATALOG & ACCESS RESULT COUNTS  (catalog-toolbar-secondary.css,
+   access-users-table-layout.css)
+   ============================================================ */
+[data-theme="dark"] .catalog-result-count,
+[data-theme="dark"] .access-users-result-count {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.88),
+    rgba(22, 34, 29, 0.82)
+  );
+  border-color: var(--line);
+  color: var(--accent);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 14px 28px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .access-permission-chip {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.88),
+    rgba(22, 34, 29, 0.82)
+  );
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+[data-theme="dark"] .access-users-search-field {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+}
+
+/* ============================================================
+   PROCESSING ICON BUTTON STATES  (sync-card-and-icon-buttons.css)
+   ============================================================ */
+[data-theme="dark"] .processing-icon-button.is-running {
+  background: linear-gradient(
+    180deg,
+    rgba(28, 42, 36, 0.95),
+    rgba(18, 30, 25, 0.92)
+  );
+  border-color: var(--line-strong);
+  color: var(--accent);
+}
+[data-theme="dark"] .processing-icon-button.is-pending {
+  background: linear-gradient(
+    180deg,
+    rgba(50, 38, 14, 0.88),
+    rgba(38, 28, 8, 0.85)
+  );
+  border-color: rgba(228, 192, 113, 0.3);
+  color: #e4c071;
+}
+
+/* ============================================================
+   SKELETON SHIMMER ANIMATION  (book-and-processing-skeletons.css)
+   ============================================================ */
+[data-theme="dark"] .skeleton-block::after,
+[data-theme="dark"] .skeleton-line::after,
+[data-theme="dark"] .skeleton-pill::after,
+[data-theme="dark"] .skeleton-button::after,
+[data-theme="dark"] .skeleton-panel::after,
+[data-theme="dark"] .processing-value-skeleton::after,
+[data-theme="dark"] .processing-status-line-skeleton::after,
+[data-theme="dark"] .processing-skeleton-control::after,
+[data-theme="dark"] .processing-card-count-skeleton::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(180, 220, 200, 0.06) 22%,
+    rgba(180, 220, 200, 0.14) 48%,
+    rgba(180, 220, 200, 0.07) 66%,
+    transparent
+  );
+}
+
+/* ============================================================
+   ADMIN TAB CARDS  (access-settings-fields.css)
+   ============================================================ */
+[data-theme="dark"] .admin-tab-card {
+  background: linear-gradient(
+    180deg,
+    rgba(34, 50, 43, 0.88),
+    rgba(22, 34, 29, 0.9)
+  );
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 10px 20px rgba(0, 0, 0, 0.25);
+}
+[data-theme="dark"] .admin-tab-card:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(40, 60, 50, 0.92),
+    rgba(28, 44, 36, 0.92)
+  );
+  border-color: var(--line-strong);
+}
+
+/* ============================================================
+   STICKY TABLE HEADERS  (processing-skeletons/table-columns.css,
+   access-users-table-layout.css)
+   ============================================================ */
+[data-theme="dark"] .processing-table thead th,
+[data-theme="dark"] .access-users-table th {
+  background: rgba(22, 36, 30, 0.97);
+  backdrop-filter: blur(6px);
+  border-color: var(--line);
+}
+[data-theme="dark"] .access-page .simple-table th {
+  background: rgba(22, 36, 30, 0.9);
+}

@@ -3,10 +3,13 @@ import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { authApi } from "../api/client";
 import EmailInputFeedback from "../components/EmailInputFeedback";
 import LoadingSpinner from "../components/LoadingSpinner";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useToast } from "../hooks/useToast";
 import { getEmailValidationState } from "../utils/email";
+import { humanizeError } from "../utils/humanizeError";
 
 export default function PasswordResetPage() {
+  usePageTitle("Reset password");
   const [params] = useSearchParams();
   const toast = useToast();
   const [email, setEmail] = useState("");
@@ -39,7 +42,7 @@ export default function PasswordResetPage() {
       const response = await authApi.passwordReset({ email: normalizedEmail });
       toast.success(response?.detail || "Reset email has been sent.");
     } catch (error) {
-      toast.error(error.message);
+      toast.error(humanizeError(error));
     } finally {
       setSubmitting(false);
     }

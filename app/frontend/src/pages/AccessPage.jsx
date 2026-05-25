@@ -9,10 +9,12 @@ import { useAccessAdminData } from "../features/access/hooks/useAccessAdminData"
 import { useAccessGrants } from "../features/access/hooks/useAccessGrants";
 import { useAccessTabs } from "../features/access/hooks/useAccessTabs";
 import { useAccessUsers } from "../features/access/hooks/useAccessUsers";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
 
 export default function AccessPage() {
+  usePageTitle("Access");
   const { user } = useSession();
   const toast = useToast();
   const isSuperAdmin = Boolean(user?.is_superuser);

@@ -4,10 +4,9 @@ import BookCardGrid from "../components/BookCardGrid";
 import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
-import {
-  cleanQueryParams,
-  filtersFromSearchParams,
-} from "../utils/query";
+import { usePageTitle } from "../hooks/usePageTitle";
+import { useSessionFlag } from "../hooks/useSessionFlag";
+import { cleanQueryParams, filtersFromSearchParams } from "../utils/query";
 
 const defaultFilters = {
   q: "",
@@ -73,18 +72,24 @@ const homeFilterFields = [
   },
 ];
 
-const homeToolbarFields = homeFilterFields.filter((field) => field.key !== "sort");
+const homeToolbarFields = homeFilterFields.filter(
+  (field) => field.key !== "sort",
+);
 const homeSortOptions =
   homeFilterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function HomePage() {
+  usePageTitle("Home");
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
     () => filtersFromSearchParams(defaultFilters, searchParams),
     [searchParams],
   );
   const [filters, setFilters] = useState(appliedFilters);
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useSessionFlag(
+    "filters-expanded:home",
+    false,
+  );
   const {
     books,
     totalCount,
@@ -174,6 +179,18 @@ export default function HomePage() {
         <EmptyState
           title="No books found"
           body="Adjust the search or filters."
+          actions={
+            JSON.stringify(cleanQueryParams(appliedFilters)) !==
+            JSON.stringify(cleanQueryParams(defaultFilters)) ? (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={resetFilters}
+              >
+                Clear all filters
+              </button>
+            ) : null
+          }
         />
       )}
     </div>

@@ -7,6 +7,7 @@ import {
   useId,
 } from "react";
 import { Link } from "react-router-dom";
+import ConfirmationDialog from "../components/ConfirmationDialog";
 import PageLoader from "../components/PageLoader";
 import {
   deleteBookmark,
@@ -14,6 +15,8 @@ import {
   fetchMyNotes,
   updateHighlight,
 } from "../api/reading";
+import { useDialogA11y } from "../hooks/useDialogA11y";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useToast } from "../hooks/useToast";
 
 // Must match HIGHLIGHT_COLORS in highlight-methods.js
@@ -65,6 +68,7 @@ function groupByBook(items) {
 
 export default function NotesPage() {
   const toast = useToast();
+  usePageTitle("My Notes");
   const [activeTab, setActiveTab] = useState("bookmarks");
   const [loading, setLoading] = useState(true);
   const [loadedTabs, setLoadedTabs] = useState(new Set());
@@ -83,6 +87,8 @@ export default function NotesPage() {
   const [query, setQuery] = useState("");
   const [colorFilter, setColorFilter] = useState("");
   const [editModal, setEditModal] = useState(null); // { item, note } or null
+  const [deleteTarget, setDeleteTarget] = useState(null); // { item, tab } or null
+  const [deleting, setDeleting] = useState(false);
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
 
@@ -155,23 +161,33 @@ export default function NotesPage() {
   }
 
   async function handleDelete(item) {
+    setDeleteTarget({ item, tab: activeTab });
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const { item, tab } = deleteTarget;
+    setDeleting(true);
     try {
-      if (activeTab === "bookmarks") {
+      if (tab === "bookmarks") {
         await deleteBookmark(item.id);
       } else {
         await deleteHighlight(item.id);
       }
       setData((prev) => ({
         ...prev,
-        [activeTab]: (prev[activeTab] || []).filter((it) => it.id !== item.id),
+        [tab]: (prev[tab] || []).filter((it) => it.id !== item.id),
       }));
       setCounts((prev) => ({
         ...prev,
-        [activeTab]: Math.max(0, (prev[activeTab] || 1) - 1),
+        [tab]: Math.max(0, (prev[tab] || 1) - 1),
       }));
       toast.success("Deleted.");
+      setDeleteTarget(null);
     } catch (err) {
       toast.error(err?.message || "Failed to delete.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -280,23 +296,50 @@ export default function NotesPage() {
           />
         ) : null}
 
+        <ConfirmationDialog
+          open={Boolean(deleteTarget)}
+          title={
+            deleteTarget?.tab === "bookmarks"
+              ? "Delete bookmark?"
+              : "Delete entry?"
+          }
+          body={
+            deleteTarget?.tab === "bookmarks"
+              ? "This bookmark will be removed permanently."
+              : "This entry will be removed permanently. Any note attached to it will also be deleted."
+          }
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          onConfirm={confirmDelete}
+          onCancel={() => (deleting ? null : setDeleteTarget(null))}
+          loading={deleting}
+        />
+
         {/* ── Content ── */}
         {loading ? (
           <PageLoader label="Loading notes" />
         ) : groups.length === 0 ? (
           <p className="notes-empty">{EMPTY_HINTS[activeTab]}</p>
         ) : (
-          groups.map((group) => (
-            <BookGroup
-              key={group.slug}
-              group={group}
-              tab={activeTab}
-              defaultOpen={hasSearch || groups.length === 1}
-              onDelete={handleDelete}
-              onColorChange={handleColorUpdate}
-              onNoteEdit={handleNoteEdit}
-            />
-          ))
+          <>
+            <p className="notes-result-count" aria-live="polite">
+              {items.length === 1
+                ? "1 result"
+                : `${items.length} results`}
+              {hasSearch ? ` for “${query.trim()}”` : ""}
+            </p>
+            {groups.map((group) => (
+              <BookGroup
+                key={group.slug}
+                group={group}
+                tab={activeTab}
+                defaultOpen={hasSearch || groups.length === 1}
+                onDelete={handleDelete}
+                onColorChange={handleColorUpdate}
+                onNoteEdit={handleNoteEdit}
+              />
+            ))}
+          </>
         )}
       </section>
     </div>
@@ -505,20 +548,28 @@ function ItemRow({ item, tab, onDelete, onColorChange, onNoteEdit }) {
 function NoteEditModal({ item, initialNote, onSave, onClose }) {
   const [note, setNote] = useState(initialNote);
   const textareaId = useId();
+  const dialogRef = useDialogA11y(true, { onClose });
 
   function handleKeyDown(e) {
-    if (e.key === "Escape") onClose();
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) onSave(note.trim());
   }
 
+  function handleBackdropMouseDown(e) {
+    if (e.target === e.currentTarget) onClose();
+  }
+
   return (
-    <div className="note-modal-backdrop" onClick={onClose}>
+    <div
+      className="note-modal-backdrop"
+      role="presentation"
+      onMouseDown={handleBackdropMouseDown}
+    >
       <div
+        ref={dialogRef}
         className="note-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="note-modal-title"
-        onClick={(e) => e.stopPropagation()}
       >
         <h2 id="note-modal-title" className="note-modal-title">
           Edit comment

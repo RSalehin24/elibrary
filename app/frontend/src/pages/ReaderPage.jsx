@@ -5,11 +5,15 @@ import ReaderUnavailable from "../features/reader/ReaderUnavailable";
 import ReaderViewport from "../features/reader/ReaderViewport";
 import { useReaderBoot } from "../features/reader/useReaderBoot";
 import { useReaderLaunch } from "../features/reader/useReaderLaunch";
+import { usePageTitle } from "../hooks/usePageTitle";
+import { useTheme } from "../hooks/useTheme";
 import { useToast } from "../hooks/useToast";
 
 export default function ReaderPage() {
+  usePageTitle("Reader");
   const toast = useToast();
   const navigate = useNavigate();
+  const [, , resolvedTheme] = useTheme();
   const [searchParams, setSearchParams] = useSearchParams();
   const slugParam = searchParams.get("slug") || "";
   const launchParam = searchParams.get("launch") || "";
@@ -31,6 +35,7 @@ export default function ReaderPage() {
     setLoading,
     setError,
     toast,
+    resolvedTheme,
   });
 
   const targetBookPath = slugParam

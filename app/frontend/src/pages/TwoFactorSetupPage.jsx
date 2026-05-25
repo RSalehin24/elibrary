@@ -4,8 +4,10 @@ import { authApi } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
 import TwoFactorSetupPanel from "../components/TwoFactorSetupPanel";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import { humanizeError } from "../utils/humanizeError";
 
 const emptySetup = {
   provisioning_uri: "",
@@ -14,6 +16,7 @@ const emptySetup = {
 };
 
 export default function TwoFactorSetupPage() {
+  usePageTitle("Two-factor setup");
   const location = useLocation();
   const navigate = useNavigate();
   const { authenticated, loading, refreshSession, user } = useSession();
@@ -37,7 +40,7 @@ export default function TwoFactorSetupPage() {
       setSetup(payload);
     } catch (error) {
       setSetupError(error.message);
-      toast.error(error.message);
+      toast.error(humanizeError(error));
     } finally {
       setTotpAction("");
       setBootstrapping(false);
@@ -72,7 +75,7 @@ export default function TwoFactorSetupPage() {
       toast.success("Two-factor enabled.");
       navigate(location.state?.from || "/home", { replace: true });
     } catch (error) {
-      toast.error(error.message);
+      toast.error(humanizeError(error));
     } finally {
       setTotpAction("");
     }
@@ -98,7 +101,9 @@ export default function TwoFactorSetupPage() {
   }
 
   if (!authenticated) {
-    return <Navigate to="/login" replace state={{ from: "/two-factor-setup" }} />;
+    return (
+      <Navigate to="/login" replace state={{ from: "/two-factor-setup" }} />
+    );
   }
 
   if (!user?.totp_setup_required) {

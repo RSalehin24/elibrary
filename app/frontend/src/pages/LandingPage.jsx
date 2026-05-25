@@ -1,7 +1,9 @@
 import { Link } from "react-router-dom";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
 
 export default function LandingPage() {
+  usePageTitle("Welcome");
   const { authenticated, user } = useSession();
 
   return (

@@ -1,10 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import ToastViewport from "../components/ToastViewport";
 import {
   createNotificationSoundPlayer,
@@ -37,19 +31,39 @@ export function ToastProvider({ children }) {
     [manager],
   );
 
-  const value = useMemo(
-    () => ({
-      show: (input) => manager.push(input),
-      info: (input) => manager.push(input, "info"),
-      success: (input) => manager.push(input, "success"),
-      error: (input) => manager.push(input, "error"),
+  const value = useMemo(() => {
+    // Auto-dedupe consecutive toasts that share the same title+type within
+    // the manager's holdOpen window. Callers may still pass an explicit
+    // `groupKey` to opt-into stronger grouping (e.g. background polling).
+    function pushWithDedupe(input, fallbackType) {
+      if (typeof input === "string") {
+        return manager.push(
+          { description: input, groupKey: `${fallbackType}:${input}` },
+          fallbackType,
+        );
+      }
+      if (input && typeof input === "object" && !input.groupKey) {
+        const title = (input.title || input.message || "").toString().trim();
+        const description = (input.description || "").toString().trim();
+        const seed = `${input.type || fallbackType}:${title || description}`;
+        if (title || description) {
+          return manager.push({ ...input, groupKey: seed }, fallbackType);
+        }
+      }
+      return manager.push(input, fallbackType);
+    }
+
+    return {
+      show: (input) => pushWithDedupe(input, "info"),
+      info: (input) => pushWithDedupe(input, "info"),
+      success: (input) => pushWithDedupe(input, "success"),
+      error: (input) => pushWithDedupe(input, "error"),
       dismiss: manager.dismiss,
       muted: snapshot.muted,
       setMuted: (value) => manager.setMuted(value),
       toggleMuted: () => manager.toggleMuted(),
-    }),
-    [manager, snapshot.muted],
-  );
+    };
+  }, [manager, snapshot.muted]);
 
   return (
     <ToastContext.Provider value={value}>

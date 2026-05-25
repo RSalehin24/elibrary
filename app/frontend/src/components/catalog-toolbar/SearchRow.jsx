@@ -1,6 +1,9 @@
+import { useEffect, useRef } from "react";
 import LoadingSpinner from "../LoadingSpinner";
 import { FilterIcon, SearchIcon } from "./icons";
 import { countActiveFilters } from "./fields.jsx";
+
+const SEARCH_DEBOUNCE_MS = 400;
 
 export function CatalogSearchRow({
   filters,
@@ -39,17 +42,48 @@ export function CatalogSearchRow({
           event.preventDefault();
           return;
         }
-        const queryInput = event.currentTarget?.querySelector('input[type="search"]');
-        onSubmit(event, { ...filters, q: queryInput ? queryInput.value : filters.q });
+        const queryInput = event.currentTarget?.querySelector(
+          'input[type="search"]',
+        );
+        onSubmit(event, {
+          ...filters,
+          q: queryInput ? queryInput.value : filters.q,
+        });
       }
     : undefined;
 
   const handleQueryChange = (event) => {
     const nextQuery = event.target.value;
     setFilters({ ...filters, q: nextQuery });
-    if (typeof onSearchClear === "function" && String(nextQuery).trim() === "") {
+    if (
+      typeof onSearchClear === "function" &&
+      String(nextQuery).trim() === ""
+    ) {
       onSearchClear({ ...filters, q: "" });
     }
+  };
+  const debounceRef = useRef(null);
+  useEffect(
+    () => () => {
+      if (debounceRef.current) {
+        window.clearTimeout(debounceRef.current);
+      }
+    },
+    [],
+  );
+  const scheduleAutoSubmit = (nextQuery) => {
+    if (typeof onSearchSubmit !== "function") {
+      return;
+    }
+    if (debounceRef.current) {
+      window.clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = window.setTimeout(() => {
+      onSearchSubmit(
+        { preventDefault: () => {}, currentTarget: null },
+        { ...filters, q: nextQuery },
+      );
+    }, SEARCH_DEBOUNCE_MS);
   };
   const handleQueryKeyDown = (event) => {
     if (event.key !== "Enter" || typeof onSearchSubmit !== "function") {
@@ -57,6 +91,10 @@ export function CatalogSearchRow({
     }
     if (event.nativeEvent?.isComposing) {
       return;
+    }
+    if (debounceRef.current) {
+      window.clearTimeout(debounceRef.current);
+      debounceRef.current = null;
     }
     event.preventDefault();
     onSearchSubmit(event, {
@@ -74,9 +112,15 @@ export function CatalogSearchRow({
         <input
           type="search"
           value={filters.q || ""}
-          onChange={handleQueryChange}
+          onChange={(event) => {
+            handleQueryChange(event);
+            scheduleAutoSubmit(event.target.value);
+          }}
           onInput={(event) => {
-            if (typeof onSearchClear === "function" && String(event.target?.value || "").trim() === "") {
+            if (
+              typeof onSearchClear === "function" &&
+              String(event.target?.value || "").trim() === ""
+            ) {
               onSearchClear({ ...filters, q: "" });
             }
           }}
@@ -115,19 +159,29 @@ export function CatalogSearchRow({
           >
             <FilterIcon />
             <span>Filters</span>
-            {activeFilterCount ? <span className="catalog-filter-count">{activeFilterCount}</span> : null}
+            {activeFilterCount ? (
+              <span className="catalog-filter-count">{activeFilterCount}</span>
+            ) : null}
           </button>
         ) : null}
-        {showResultCount && (resultCountLoading || resultCount !== "" && resultCount !== undefined && resultCount !== null) ? (
+        {showResultCount &&
+        (resultCountLoading ||
+          (resultCount !== "" &&
+            resultCount !== undefined &&
+            resultCount !== null)) ? (
           <span
             className={`catalog-result-count${resultCountLoading ? " is-loading" : ""}`}
-            aria-label={resultCountLoading ? "Loading results" : `${resultCount} results`}
+            aria-label={
+              resultCountLoading ? "Loading results" : `${resultCount} results`
+            }
             data-testid={resultCountTestId}
           >
             {resultCountLoading ? <LoadingSpinner size={14} /> : resultCount}
           </span>
         ) : null}
-        {actionsExtra ? <div className="catalog-search-actions-extra">{actionsExtra}</div> : null}
+        {actionsExtra ? (
+          <div className="catalog-search-actions-extra">{actionsExtra}</div>
+        ) : null}
       </div>
     </RowTag>
   );

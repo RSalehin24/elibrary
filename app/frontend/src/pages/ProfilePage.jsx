@@ -11,10 +11,13 @@ import {
 } from "../features/profile/profileModel";
 import { useProfileDerivedState } from "../features/profile/useProfileDerivedState";
 import { useProfileTwoFactorActions } from "../features/profile/useProfileTwoFactorActions";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import { humanizeError } from "../utils/humanizeError";
 
 export default function ProfilePage() {
+  usePageTitle("Profile");
   const { user, refreshSession } = useSession();
   const toast = useToast();
   const [profile, setProfile] = useState(null);
@@ -23,7 +26,7 @@ export default function ProfilePage() {
     enabled: false,
     pending_setup: false,
     required: false,
-    setup_required: false
+    setup_required: false,
   });
   const [fullName, setFullName] = useState("");
   const [setup, setSetup] = useState(emptyTotpSetup);
@@ -54,7 +57,7 @@ export default function ProfilePage() {
     profile,
     profileImageFile,
     profileImagePreview,
-    removeProfileImage
+    removeProfileImage,
   });
 
   async function loadProfile(options = {}) {
@@ -63,7 +66,7 @@ export default function ProfilePage() {
       setLoading(true);
       const [profilePayload, statusPayload] = await Promise.all([
         authApi.profile(),
-        authApi.twoFactorStatus()
+        authApi.twoFactorStatus(),
       ]);
       setProfile(profilePayload);
       if (!preserveEditor) {
@@ -71,7 +74,7 @@ export default function ProfilePage() {
       }
       setTwoFactor(statusPayload);
     } catch (error) {
-      toast.error(error.message);
+      toast.error(humanizeError(error));
     } finally {
       setLoading(false);
     }
@@ -86,7 +89,9 @@ export default function ProfilePage() {
     setProfileImageFile(null);
     setProfileImagePreview(sourceProfile?.profile_image_url || "");
     setRemoveProfileImage(false);
-    setKindleEmails(kindleEmailFieldsFromProfile(sourceProfile?.kindle_emails || []));
+    setKindleEmails(
+      kindleEmailFieldsFromProfile(sourceProfile?.kindle_emails || []),
+    );
     setKindleSectionOpen(false);
     setPasswordSectionOpen(false);
     setCurrentPassword("");
@@ -113,8 +118,8 @@ export default function ProfilePage() {
   function updateKindleEmail(index, value) {
     setKindleEmails((current) =>
       current.map((email, currentIndex) =>
-        currentIndex === index ? value : email
-      )
+        currentIndex === index ? value : email,
+      ),
     );
   }
 
@@ -146,10 +151,10 @@ export default function ProfilePage() {
         resetProfileEditor,
         setIsEditing,
         setProfile,
-        toast
+        toast,
       });
     } catch (error) {
-      toast.error(error.message);
+      toast.error(humanizeError(error));
     } finally {
       setSavingProfile(false);
     }
@@ -174,7 +179,7 @@ export default function ProfilePage() {
     confirmSetup,
     copyProvisioningUrl,
     disableTotp,
-    openSetup
+    openSetup,
   } = useProfileTwoFactorActions({
     loadProfile,
     refreshSession,
@@ -187,7 +192,7 @@ export default function ProfilePage() {
     setup,
     toast,
     token,
-    totpAction
+    totpAction,
   });
 
   if (loading) {

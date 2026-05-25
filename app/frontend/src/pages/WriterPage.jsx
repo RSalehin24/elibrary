@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation, useSearchParams } from "react-router-dom";
 import CatalogToolbar from "../components/CatalogToolbar";
 import PropertyTable from "../components/PropertyTable";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { formatBookDate } from "../utils/bookPresentation";
 import {
   cleanQueryParams,
@@ -101,6 +102,7 @@ export default function WriterPage() {
     () => activeTabForPath(location.pathname),
     [location.pathname],
   );
+  usePageTitle(activeTab?.label || "Contributors");
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
     () => filtersFromSearchParams(defaultFilters, searchParams),

@@ -12,10 +12,15 @@ import { toQueryString } from "../utils/query";
 function renderLinkedValues(values, queryKey, linkFilters) {
   return values.map((value, index) => (
     <Fragment key={`${queryKey}-${value}`}>
-      <Link to={`/library${toQueryString({ ...(linkFilters || {}), [queryKey]: value })}`} className="meta-link">
+      <Link
+        to={`/library${toQueryString({ ...(linkFilters || {}), [queryKey]: value })}`}
+        className="meta-link"
+      >
         {value}
       </Link>
-      {index < values.length - 1 ? <span className="meta-divider">, </span> : null}
+      {index < values.length - 1 ? (
+        <span className="meta-divider">, </span>
+      ) : null}
     </Fragment>
   ));
 }
@@ -30,8 +35,12 @@ function renderWriterCell(book, linkFilters) {
     <div className="table-writer-stack">
       {groups.map((group, index) => (
         <div key={`${book.id}-writer-${index}`} className="table-writer-line">
-          {group.label ? <span className="table-role-label">{group.label}</span> : null}
-          <span>{renderLinkedValues(group.names, group.queryKey, linkFilters)}</span>
+          {group.label ? (
+            <span className="table-role-label">{group.label}</span>
+          ) : null}
+          <span>
+            {renderLinkedValues(group.names, group.queryKey, linkFilters)}
+          </span>
         </div>
       ))}
     </div>
@@ -107,10 +116,32 @@ export default function BookTable({
   showMyBooksAction = false,
   onMyBooksToggle = null,
   myBooksBusyIds = {},
+  sortValue = "",
 }) {
   const showInitialSkeleton = (initialLoading || refreshing) && !books?.length;
   const showIncrementalSkeleton = loadingMore && books?.length > 0;
   const columnCount = showMyBooksAction ? 9 : 8;
+
+  const sortKey = sortValue?.replace(/^-/, "") || "";
+  const sortDirection = sortValue?.startsWith("-") ? "desc" : "asc";
+  const SORT_COLUMN_BY_KEY = {
+    title: "title",
+    catalog_code: "code",
+    created_at: "created",
+  };
+  const activeSortColumn = SORT_COLUMN_BY_KEY[sortKey] || "";
+  function sortIndicator(columnId) {
+    if (activeSortColumn !== columnId) return null;
+    return (
+      <span className="table-sort-indicator" aria-hidden="true">
+        {sortDirection === "desc" ? "▼" : "▲"}
+      </span>
+    );
+  }
+  function sortAriaSort(columnId) {
+    if (activeSortColumn !== columnId) return undefined;
+    return sortDirection === "desc" ? "descending" : "ascending";
+  }
 
   return (
     <div
@@ -138,13 +169,19 @@ export default function BookTable({
         </colgroup>
         <thead>
           <tr>
-            <th>Book ID</th>
-            <th>Title</th>
+            <th aria-sort={sortAriaSort("code")}>
+              Book ID{sortIndicator("code")}
+            </th>
+            <th aria-sort={sortAriaSort("title")}>
+              Title{sortIndicator("title")}
+            </th>
             <th>Contributors</th>
             <th>Category</th>
             <th>Series</th>
             <th>Type</th>
-            <th>Created</th>
+            <th aria-sort={sortAriaSort("created")}>
+              Created{sortIndicator("created")}
+            </th>
             {showMyBooksAction ? <th>My Books</th> : null}
             <th>Action</th>
           </tr>
@@ -163,15 +200,14 @@ export default function BookTable({
               return (
                 <tr
                   key={book.id}
-                  className={highlightedBookId === book.id ? "is-highlighted" : ""}
+                  className={
+                    highlightedBookId === book.id ? "is-highlighted" : ""
+                  }
                   ref={
                     hasMore &&
                     typeof observeLoadTrigger === "function" &&
                     rowIndex ===
-                      Math.max(
-                        0,
-                        books.length - CATALOG_TABLE_PREFETCH_TRIGGER,
-                      )
+                      Math.max(0, books.length - CATALOG_TABLE_PREFETCH_TRIGGER)
                       ? observeLoadTrigger
                       : undefined
                   }
@@ -182,7 +218,10 @@ export default function BookTable({
                     </BookRouteLink>
                   </td>
                   <td className="table-title-cell" data-label="Title">
-                    <BookRouteLink slug={book.slug} className="table-title-link">
+                    <BookRouteLink
+                      slug={book.slug}
+                      className="table-title-link"
+                    >
                       {book.title}
                     </BookRouteLink>
                     <span className="table-secondary-line">
@@ -216,7 +255,9 @@ export default function BookTable({
                       {book.record_type === "manual" ? "Manual" : "Digital"}
                     </span>
                   </td>
-                  <td data-label="Created">{formatBookDate(book.created_at)}</td>
+                  <td data-label="Created">
+                    {formatBookDate(book.created_at)}
+                  </td>
                   {showMyBooksAction ? (
                     <td className="table-action-cell" data-label="My Books">
                       <AsyncButton
@@ -226,7 +267,9 @@ export default function BookTable({
                             : "primary-button table-row-action my-books-toggle"
                         }
                         loading={myBooksBusy}
-                        loadingLabel={book.is_in_my_books ? "Removing..." : "Adding..."}
+                        loadingLabel={
+                          book.is_in_my_books ? "Removing..." : "Adding..."
+                        }
                         onClick={() => onMyBooksToggle?.(book)}
                         disabled={!onMyBooksToggle}
                         aria-label={
