@@ -686,11 +686,15 @@ def test_single_page_book_structure_metadata_and_exports_are_dynamic(tmp_path):
         "EPUB/lesson_2.xhtml",
         "EPUB/back_section_1.xhtml",
     }.issubset(names)
-    # The printed toc.xhtml is the user-facing TOC; nav.xhtml is the EPUB
-    # reader's internal navigation. Per the dynamic-structuring spec they
-    # must list the SAME entries (content chapters + back sections) and
-    # nav.xhtml must NOT contain a self-link to toc.xhtml.
-    assert 'href="toc.xhtml"' not in nav_text
+    # nav.xhtml is the comprehensive EPUB-reader navigation document and
+    # must list every readable page (dedication, front section, the
+    # printed TOC page, every content chapter, every back section). It
+    # must not link to itself (nav.xhtml). The printed toc.xhtml is
+    # content-scoped and is covered by its own test below.
+    assert 'href="nav.xhtml"' not in nav_text
+    assert 'href="dedication.xhtml"' in nav_text
+    assert 'href="front_section_1.xhtml"' in nav_text
+    assert 'href="toc.xhtml"' in nav_text
     assert nav_text.index('href="lesson_1.xhtml"') < nav_text.index('href="lesson_2.xhtml"')
     assert nav_text.index('href="lesson_2.xhtml"') < nav_text.index('href="back_section_1.xhtml"')
     assert opf_text.index('href="front_section_1.xhtml"') < opf_text.index('href="toc.xhtml"')
@@ -806,19 +810,32 @@ def test_epub_builder_includes_visible_toc_page_before_lesson_navigation(tmp_pat
     nav_hrefs = _doc_hrefs(nav_text)
     toc_hrefs = _doc_hrefs(toc_text)
 
-    # Printed toc.xhtml is for humans; nav.xhtml is for the reader software.
-    # Per the dynamic-structuring spec they list the same entries, and
-    # nav.xhtml must NOT include a self-link or front-matter pages.
-    assert nav_hrefs == toc_hrefs == ["lesson_1.xhtml"]
-    for forbidden in (
+    # nav.xhtml is comprehensive — it lists every readable page (title,
+    # info, dedication, front sections, the printed TOC page, content
+    # chapters). The printed toc.xhtml is content-scoped — it lists only
+    # content chapters (and optional back sections). nav.xhtml must NOT
+    # link to itself.
+    assert toc_hrefs == ["lesson_1.xhtml"]
+    assert "nav.xhtml" not in nav_hrefs
+    for required_in_nav in (
+        "title.xhtml",
+        "info.xhtml",
+        "dedication.xhtml",
+        "front_section_1.xhtml",
         "toc.xhtml",
+        "lesson_1.xhtml",
+    ):
+        assert required_in_nav in nav_hrefs, (required_in_nav, nav_hrefs)
+    for forbidden_in_toc in (
         "cover_page.xhtml",
         "title.xhtml",
         "info.xhtml",
         "dedication.xhtml",
         "front_section_1.xhtml",
+        "toc.xhtml",
+        "nav.xhtml",
     ):
-        assert f'href="{forbidden}"' not in nav_text
+        assert forbidden_in_toc not in toc_hrefs, (forbidden_in_toc, toc_hrefs)
     # Printed toc.xhtml stays in the spine between front sections and content.
     assert opf_text.index('href="front_section_1.xhtml"') < opf_text.index('href="toc.xhtml"')
     assert opf_text.index('href="toc.xhtml"') < opf_text.index('href="lesson_1.xhtml"')

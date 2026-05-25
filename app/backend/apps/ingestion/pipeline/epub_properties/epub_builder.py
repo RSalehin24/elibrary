@@ -393,20 +393,49 @@ class EpubBuilder:
                 f"Cannot build EPUB {filename!r}: no content chapters and no main-content page were registered."
             )
 
-        # Unified entry list — drives BOTH the printed toc.xhtml body and the
-        # EPUB nav (book.toc). Front matter (cover/title/info/dedication/front
-        # sections) is intentionally NOT in this list: those pages come before
-        # the printed TOC in the spine and are reached by sequential reading.
-        unified_entries = [*content_entries, *self._back_section_entries]
+        # Printed toc.xhtml is the in-book "Table of Contents" page and
+        # lists only the readable body of the book: content chapters plus
+        # any back-matter sections. Front matter (cover/title/info/
+        # dedication/front sections) is intentionally NOT here — those
+        # pages come before the printed TOC in the spine and are reached
+        # by sequential reading.
+        toc_xhtml_entries = [*content_entries, *self._back_section_entries]
 
-        # Render printed toc.xhtml lazily so it lists the same entries as nav.
         if self._toc_chapter is not None:
             self._toc_chapter.content = self.render_template(
                 "toc_hierarchical.html",
-                lessons=unified_entries,
+                lessons=toc_xhtml_entries,
             )
 
-        self.book.toc = tuple(self._entries_to_nav_nodes(unified_entries))
+        # Comprehensive nav.xhtml — every page in the book, in spine order:
+        # cover → title → info → dedication → front_section_* → toc →
+        # <content tree> → back_section_*. Individual lesson chapters are
+        # spliced as the hierarchical content tree at the position of the
+        # first lesson; subsequent lessons are skipped (already nested).
+        lesson_files = {ch.file_name for ch in self.lesson_chapters}
+        main_content_files = (
+            {"main_content.xhtml"} if self._has_main_content_page else set()
+        )
+        nav_entries = []
+        content_emitted = False
+        for chapter in self.chapters:
+            file_name = chapter.file_name
+            if file_name in lesson_files or file_name in main_content_files:
+                if not content_emitted:
+                    nav_entries.extend(content_entries)
+                    content_emitted = True
+                continue
+            nav_entries.append(
+                {
+                    "title": chapter.title,
+                    "file_name": file_name,
+                    "children": [],
+                }
+            )
+        if not content_emitted and content_entries:
+            nav_entries.extend(content_entries)
+
+        self.book.toc = tuple(self._entries_to_nav_nodes(nav_entries))
         self.book.spine = [*self.chapters, ("nav", "no")]
         self.book.add_item(epub.EpubNcx())
         self.book.add_item(epub.EpubNav())

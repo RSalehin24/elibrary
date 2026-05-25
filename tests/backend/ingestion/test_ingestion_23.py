@@ -27,7 +27,7 @@ def _minimal_book_payload(tmp_path: Path) -> dict:
         "cover": "",
         "main_content": "",
         "book_info": "<p>বইয়ের তথ্য</p>",
-        "dedication": "<p>উৎসর্গ</p>",
+        "dedication": "<p>আমার প্রিয় মাকে এই বইটি উৎসর্গ করছি।</p>",
         "front_sections": [{"title": "ভূমিকা", "html": "<p>শুরু</p>"}],
         "back_sections": [{"title": "পরিশিষ্ট", "html": "<p>শেষ</p>"}],
         "toc": [
@@ -70,11 +70,27 @@ def test_audit_accepts_well_formed_epub(tmp_path):
     assert "toc" in result.spine_slots
     assert "content" in result.spine_slots
     assert result.spine_slots[-1] == "nav"
-    # nav and toc list the same files
-    assert result.nav_hrefs and result.toc_hrefs
-    assert [h.rsplit("/", 1)[-1] for h in result.nav_hrefs] == [
-        h.rsplit("/", 1)[-1] for h in result.toc_hrefs
-    ]
+
+    nav_basenames = {h.rsplit("/", 1)[-1] for h in result.nav_hrefs}
+    toc_basenames = {h.rsplit("/", 1)[-1] for h in result.toc_hrefs}
+    # nav.xhtml is comprehensive — it covers every readable page.
+    assert "cover_page.xhtml" in nav_basenames
+    assert "title.xhtml" in nav_basenames
+    assert "info.xhtml" in nav_basenames
+    assert "dedication.xhtml" in nav_basenames
+    assert "front_section_1.xhtml" in nav_basenames
+    assert "toc.xhtml" in nav_basenames
+    assert "lesson_1.xhtml" in nav_basenames
+    assert "back_section_1.xhtml" in nav_basenames
+    # printed toc.xhtml is content-scoped — no front matter, no nav, no toc itself.
+    assert "cover_page.xhtml" not in toc_basenames
+    assert "title.xhtml" not in toc_basenames
+    assert "info.xhtml" not in toc_basenames
+    assert "dedication.xhtml" not in toc_basenames
+    assert "front_section_1.xhtml" not in toc_basenames
+    assert "toc.xhtml" not in toc_basenames
+    assert "nav.xhtml" not in toc_basenames
+    assert "lesson_1.xhtml" in toc_basenames
 
 
 def test_audit_flags_missing_file(tmp_path):
@@ -126,6 +142,50 @@ def test_audit_flags_nav_self_link(tmp_path):
     result = audit_epub_structure(epub_path)
     assert not result.ok
     assert any("links to itself" in err for err in result.errors)
+
+
+def test_audit_flags_toc_xhtml_with_front_matter_link(tmp_path):
+    # Printed toc.xhtml must be content-scoped. Inject a link to cover_page.xhtml
+    # and the auditor must flag it.
+    payload = _minimal_book_payload(tmp_path)
+    create_epub(payload)
+    epub_path = next(tmp_path.glob("*.epub"))
+    bad_toc = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>toc</title></head>'
+        '<body><ol>'
+        '<li><a href="cover_page.xhtml">Cover</a></li>'
+        '<li><a href="lesson_1.xhtml">Chapter 1</a></li>'
+        '</ol></body></html>'
+    )
+    _replace_in_epub(epub_path, "toc.xhtml", bad_toc)
+
+    result = audit_epub_structure(epub_path)
+    assert not result.ok
+    assert any("non-content target" in err for err in result.errors), result.errors
+
+
+def test_audit_flags_nav_missing_front_matter(tmp_path):
+    # Comprehensive-nav requirement: stripping cover/title from nav.xhtml
+    # must trigger a "missing entries" error.
+    payload = _minimal_book_payload(tmp_path)
+    create_epub(payload)
+    epub_path = next(tmp_path.glob("*.epub"))
+    minimal_nav = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<html xmlns="http://www.w3.org/1999/xhtml" '
+        'xmlns:epub="http://www.idpf.org/2007/ops">'
+        '<head><title>nav</title></head><body>'
+        '<nav epub:type="toc"><ol>'
+        '<li><a href="lesson_1.xhtml">Chapter 1</a></li>'
+        '<li><a href="lesson_2.xhtml">Chapter 2</a></li>'
+        '</ol></nav></body></html>'
+    )
+    _replace_in_epub(epub_path, "nav.xhtml", minimal_nav)
+
+    result = audit_epub_structure(epub_path)
+    assert not result.ok
+    assert any("missing entries" in err for err in result.errors), result.errors
 
 
 def _replace_in_epub(epub_path: Path, target_name: str, new_content: str) -> None:

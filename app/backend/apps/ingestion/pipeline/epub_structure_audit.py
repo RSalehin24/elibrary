@@ -9,9 +9,13 @@ verify that:
   → toc → (content+ | main_content) → back_sections* → nav`` (each optional
   category may be absent, but their relative ordering must hold);
 * every content/back document has at least some visible text (no blank pages);
-* the EPUB-3 navigation document (``nav.xhtml``) and the printed
-  ``toc.xhtml`` reference the same content/back targets in the same order
-  (nav/toc parity);
+* the EPUB-3 navigation document (``nav.xhtml``) is comprehensive — it
+  references every readable page in the book (cover, title, info,
+  dedication, front sections, the printed TOC page, every content page,
+  and every back section);
+* the printed ``toc.xhtml`` is content-scoped — it references content
+  pages (and optionally back sections) only, never front matter and
+  never the nav document itself;
 * the navigation document does not link to itself.
 
 The auditor is intentionally dependency-light — it relies on ``zipfile``,
@@ -323,14 +327,46 @@ def audit_epub_structure(epub_path) -> EpubAuditResult:
             else:
                 result.toc_hrefs = _extract_toc_hrefs(toc_html)
 
-        if result.nav_hrefs and result.toc_hrefs:
-            nav_basenames = [href.rsplit("/", 1)[-1] for href in result.nav_hrefs]
-            toc_basenames = [href.rsplit("/", 1)[-1] for href in result.toc_hrefs]
-            if nav_basenames != toc_basenames:
+        if result.nav_hrefs and spine_files:
+            # nav.xhtml must be comprehensive: every spine page except nav
+            # itself should appear as a nav target. Order is checked loosely
+            # (set equality) since nav nests content chapters and may
+            # reorder siblings under section headers; spine order is
+            # already verified above via _SLOT_RANK.
+            nav_basenames = {href.rsplit("/", 1)[-1] for href in result.nav_hrefs}
+            nav_basename = nav_href.rsplit("/", 1)[-1] if nav_href else ""
+            expected_basenames = {
+                href.rsplit("/", 1)[-1]
+                for href, slot in zip(spine_files, spine_slots)
+                if slot != "nav"
+            }
+            missing_from_nav = expected_basenames - nav_basenames
+            if missing_from_nav:
                 result.errors.append(
-                    "nav/toc parity mismatch: "
-                    f"nav={nav_basenames!r} toc={toc_basenames!r}"
+                    f"nav document is missing entries for: {sorted(missing_from_nav)!r}"
                 )
+            stray_in_nav = nav_basenames - expected_basenames - {nav_basename}
+            if stray_in_nav:
+                result.errors.append(
+                    f"nav document links to non-spine files: {sorted(stray_in_nav)!r}"
+                )
+
+        if result.toc_hrefs and spine_files:
+            # toc.xhtml is content-scoped: only content (lesson_*/main_content)
+            # and back_section_* targets are allowed. Front matter, the toc
+            # page itself, and the nav document must not appear.
+            allowed_toc_basenames = {
+                href.rsplit("/", 1)[-1]
+                for href, slot in zip(spine_files, spine_slots)
+                if slot in ("content", "back")
+            }
+            for href in result.toc_hrefs:
+                basename = href.rsplit("/", 1)[-1]
+                if basename not in allowed_toc_basenames:
+                    result.errors.append(
+                        f"printed toc.xhtml links to a non-content target: {basename!r}"
+                    )
+                    break
 
     if result.errors:
         result.ok = False
