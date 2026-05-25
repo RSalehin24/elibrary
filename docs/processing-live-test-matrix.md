@@ -31,6 +31,27 @@ All scenarios below are intended for the real development application with no mo
 | Worker runtime | Worker crash or restart during processing | request pipeline | Verify behavior only if naturally observed in the live run |
 | Source drift | Temporary omission of incomplete-category rows | `incomplete` | Verify behavior only if naturally observed in the live run |
 
+## 300-Book EPUB Structure Regression
+
+The harness at [tests/scripts/regression_curate_300.sh](../tests/scripts/regression_curate_300.sh) scrapes and exports up to 300 ebanglalibrary.com URLs sampled in [test-artifacts/ebangla-audit-selection.json](../test-artifacts/ebangla-audit-selection.json) and runs [apps/ingestion/pipeline/epub_structure_audit.py](../app/backend/apps/ingestion/pipeline/epub_structure_audit.py) on each produced EPUB.
+
+Asserted invariants per book:
+
+- spine order is `cover → title → info? → dedication? → front_section_* → toc → (lesson_+ | main_content) → back_section_* → nav`;
+- the EPUB-3 `nav.xhtml` and the printed `toc.xhtml` reference the same content/back targets in the same order;
+- `nav.xhtml` does not link to itself;
+- no content/front/back page is blank (visible text after tag/whitespace stripping).
+
+Run:
+
+```
+tests/scripts/regression_curate_300.sh                  # full 300-URL pass
+tests/scripts/regression_curate_300.sh --limit 25       # smoke
+tests/scripts/regression_curate_300.sh --retry-failed   # rework failures from prior runs
+```
+
+State is persisted to `/app/storage/regression-300/state.json` inside the backend container after every URL, so the harness is fully resumable across crashes and container restarts. Exit code is `0` only if every recorded URL has verdict `ok`.
+
 ## Acceptance Notes
 
 - No Playwright route mocking is allowed for processing runtime coverage.
