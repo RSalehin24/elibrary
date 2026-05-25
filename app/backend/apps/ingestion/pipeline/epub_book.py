@@ -152,6 +152,42 @@ def create_epub(book_data):
             if _residual and not html_is_blank(_residual):
                 front_sections = [*front_sections, {"title": "ভূমিকা", "html": _residual}]
             compact_main_content = ""
+        else:
+            # Phase B: top-level inference failed. Try synthesising structure
+            # from inline h2/h3/h4 headings inside the single content blob by
+            # running it through the A.2 sub-chapter splitter as if the whole
+            # book were one giant lesson. If at least 2 sub-chapters emerge,
+            # promote them to top-level lessons.
+            _virtual_title = book_data.get("book_title", "") or "মূল লেখা"
+            _virtual_item = {
+                "title": _virtual_title,
+                "type": "lesson",
+                "content": compact_main_content,
+                "path": [_virtual_title],
+            }
+            _b_toc, _b_items = expand_content_items_with_subchapters(
+                [{"title": _virtual_title, "type": "lesson", "has_content": True, "path": [_virtual_title]}],
+                [_virtual_item],
+            )
+            _promoted = [it for it in _b_items if it.get("parent") == _virtual_title]
+            if len(_promoted) >= 2:
+                # Promote sub-chapters to top-level lessons.
+                content_items = [
+                    {
+                        "title": sub["title"],
+                        "type": "lesson",
+                        "content": sub["content"],
+                        "parent": None,
+                        "path": [sub["title"]],
+                    }
+                    for sub in _promoted
+                ]
+                toc = build_flat_toc_from_content_items(content_items)
+                # Preserve any parent intro from the virtual item as ভূমিকা.
+                _parent = next((it for it in _b_items if it.get("title") == _virtual_title), None)
+                if _parent and _parent.get("content") and not html_is_blank(_parent["content"]):
+                    front_sections = [*front_sections, {"title": "ভূমিকা", "html": _parent["content"]}]
+                compact_main_content = ""
 
     if front_sections:
         builder.add_front_section_pages(front_sections)
