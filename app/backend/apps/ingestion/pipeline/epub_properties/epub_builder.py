@@ -42,6 +42,11 @@ def safe_epub_filename(filename):
     return f"{cleaned_stem}{ext or '.epub'}"
 
 
+class EpubContentMissingError(ValueError):
+    """Raised when EPUB build is attempted with no content chapters and no
+    main-content page — i.e. the resulting book would have nothing to read."""
+
+
 class EpubBuilder:
     def __init__(self, book_title, author, series="", book_type="", output_folder=""):
         self.book_title = book_title
@@ -57,10 +62,23 @@ class EpubBuilder:
         self.book.set_language("bn")
         self.book.add_author(author)
         self.chapters = []
+        self.lesson_chapters = []
         self.front_matter_pages = []
         self.back_matter_pages = []
         self.content_pages_by_path = {}
         self.fallback_title_to_page = {}
+        # Printed toc.xhtml is registered eagerly (to lock spine position) but
+        # its body is rendered lazily in build_epub so it can list both the
+        # content chapters AND any back-section pages added after the call to
+        # add_*_toc_page. _toc_hint records how the printed TOC was requested
+        # so build_epub can fall back when no explicit toc_structure is given.
+        self._toc_chapter = None
+        self._toc_hint = None  # ("hierarchical", toc_structure, content_items) | ("flat", lessons)
+        # Back-section entries collected during add_back_section_pages — used
+        # so both the printed toc.xhtml and nav.xhtml list end-matter pages.
+        self._back_section_entries = []
+        # Whether a main-content page was registered (single-flow books).
+        self._has_main_content_page = False
 
     def render_template(self, template_name, **context):
         template = self.env.get_template(template_name)
@@ -102,7 +120,22 @@ class EpubBuilder:
             content=html_content,
         )
 
-        self.register_chapter(cover_page, include_in_nav=True, insert_front=True)
+        self.register_chapter(cover_page, insert_front=True)
+
+    def add_generated_cover_page(self):
+        """Generate a dark-mode HTML cover page when no real cover image is available."""
+        html_content = self.render_template(
+            "generated_cover.html",
+            book_title=self.book_title,
+            author=self.author,
+            series=self.series,
+        )
+        cover_page = epub.EpubHtml(
+            title="কভার",
+            file_name="cover_page.xhtml",
+            content=html_content,
+        )
+        self.register_chapter(cover_page, insert_front=True)
 
     def add_title_page(self):
         html_content = self.render_template(
@@ -115,7 +148,7 @@ class EpubBuilder:
             file_name="title.xhtml",
             content=html_content,
         )
-        self.register_chapter(chapter, include_in_nav=True)
+        self.register_chapter(chapter)
 
     def add_info_page(self, translator="", additional_info="", scraped_book_info=""):
         html_content = self.render_template(
@@ -134,7 +167,7 @@ class EpubBuilder:
             file_name="info.xhtml",
             content=html_content,
         )
-        self.register_chapter(chapter, include_in_nav=True)
+        self.register_chapter(chapter)
 
     def add_dedication_page(self, dedication_title="উৎসর্গ", dedication_html=""):
         html_content = self.render_template(
@@ -147,7 +180,7 @@ class EpubBuilder:
             file_name="dedication.xhtml",
             content=html_content,
         )
-        self.register_chapter(chapter, include_in_nav=True)
+        self.register_chapter(chapter)
 
     def add_main_content_page(self, main_content, title=None):
         if html_is_blank(main_content):
@@ -161,7 +194,8 @@ class EpubBuilder:
             file_name="main_content.xhtml",
             content=html_content,
         )
-        self.register_chapter(chapter, include_in_nav=True)
+        self.register_chapter(chapter)
+        self._has_main_content_page = True
 
     def add_front_section_pages(self, sections):
         for idx, section in enumerate(sections, start=1):
@@ -179,11 +213,12 @@ class EpubBuilder:
                 file_name=f"front_section_{idx}.xhtml",
                 content=html_content,
             )
-            self.register_chapter(page, include_in_nav=True)
+            self.register_chapter(page)
 
     def add_back_section_pages(self, sections):
-        for idx, section in enumerate(sections, start=1):
-            title = section.get("title") or f"সমাপ্তি {idx}"
+        registered_index = len(self._back_section_entries)
+        for raw_idx, section in enumerate(sections, start=1):
+            title = section.get("title") or f"সমাপ্তি {raw_idx}"
             content = section.get("html") or ""
             if html_is_blank(content):
                 continue
@@ -192,72 +227,46 @@ class EpubBuilder:
                 lesson_title=title,
                 lesson_content=content,
             )
+            registered_index += 1
+            file_name = f"back_section_{registered_index}.xhtml"
             page = epub.EpubHtml(
                 title=title,
-                file_name=f"back_section_{idx}.xhtml",
+                file_name=file_name,
                 content=html_content,
             )
-            self.register_chapter(page, include_in_nav=True, append_back=True)
+            self.register_chapter(page)
+            self._back_section_entries.append(
+                {"title": title, "file_name": file_name, "children": []}
+            )
 
     def add_toc_page(self, lessons):
-        html_content = self.render_template("toc.html", lessons=lessons)
+        # Defer body rendering to build_epub so the printed page can include
+        # back-section entries registered after this call. The chapter is
+        # placed in the spine immediately to lock the structural position
+        # (cover → title → info → dedication → front sections → toc.xhtml).
         chapter = epub.EpubHtml(
             title="সূচিপত্র",
             file_name="toc.xhtml",
-            content=html_content,
+            content="",
         )
-        # The printed সূচিপত্র page sits between front matter and the body in
-        # both the spine and the EPUB NAV so that the on-page reading order
-        # and the navigation order agree (HTML preview and EPUB must show the
-        # same TOC coverage in the same place).
-        self.register_chapter(chapter, include_in_nav=True)
+        self._toc_chapter = chapter
+        self._toc_hint = ("flat", list(lessons))
+        self.register_chapter(chapter)
 
     def add_hierarchical_toc_page(self, toc_structure, content_items):
-        item_counter = 1
-        path_to_file = {}
-        fallback_title_to_file = {}
-
-        for item in content_items:
-            file_name = f"lesson_{item_counter}.xhtml"
-            item_counter += 1
-            item_path = content_path_tuple(item.get("path"))
-            if item_path:
-                path_to_file[item_path] = file_name
-            fallback_title_to_file.setdefault(item.get("title"), file_name)
-
-        def build_hierarchical_entries(entries, parent_path=()):
-            built_entries = []
-
-            for entry in entries:
-                path = resolve_entry_path(entry, parent_path)
-                children = build_hierarchical_entries(entry.get("children", []), path)
-                file_name = path_to_file.get(path) or fallback_title_to_file.get(
-                    entry.get("title")
-                )
-                built_entries.append(
-                    {
-                        "title": entry.get("title", ""),
-                        "file_name": file_name,
-                        "has_children": bool(children),
-                        "children": children,
-                    }
-                )
-
-            return built_entries
-
-        hierarchical_lessons = build_hierarchical_entries(toc_structure)
-        html_content = self.render_template(
-            "toc_hierarchical.html",
-            lessons=hierarchical_lessons,
-        )
+        # Body rendered lazily in build_epub so the printed page lists the
+        # final set of content chapters AND any back-section pages registered
+        # after this call. The actual entries are built by _build_content_entries
+        # which uses content_pages_by_path / fallback_title_to_page populated
+        # during add_lesson_pages.
         chapter = epub.EpubHtml(
             title="সূচিপত্র",
             file_name="toc.xhtml",
-            content=html_content,
+            content="",
         )
-        # See add_toc_page: the printed Contents page is included in both
-        # the spine and the EPUB NAV so that nav order matches reading order.
-        self.register_chapter(chapter, include_in_nav=True)
+        self._toc_chapter = chapter
+        self._toc_hint = ("hierarchical", list(toc_structure), list(content_items))
+        self.register_chapter(chapter)
 
     def add_lesson_pages(self, lessons):
         for idx, lesson in enumerate(lessons, start=1):
@@ -281,37 +290,123 @@ class EpubBuilder:
                 content=html_content,
             )
             self.register_chapter(chapter)
+            self.lesson_chapters.append(chapter)
             if path:
                 self.content_pages_by_path[path] = chapter
             self.fallback_title_to_page.setdefault(title, chapter)
 
-    def build_navigation_entries(self, toc_structure, parent_path=()):
-        entries = []
+    def _build_content_entries(self, toc_structure):
+        """Walk toc_structure → nested entries [{title, file_name|None, children}]
+        using the chapter file names registered during add_lesson_pages.
 
-        for entry in toc_structure:
-            path = resolve_entry_path(entry, parent_path)
-            chapter = self.content_pages_by_path.get(path) or self.fallback_title_to_page.get(
-                entry.get("title", "")
-            )
-            children = self.build_navigation_entries(entry.get("children", []), path)
+        Entries without a resolvable chapter (TOC nodes that have no matching
+        content_item) are emitted as container entries (file_name=None) so
+        their children remain navigable while the parent renders as a label.
+        """
+        def walk(entries, parent_path=()):
+            built = []
+            for entry in entries:
+                path = resolve_entry_path(entry, parent_path)
+                title = entry.get("title", "")
+                chapter = self.content_pages_by_path.get(path) or self.fallback_title_to_page.get(title)
+                children = walk(entry.get("children", []), path)
+                built.append(
+                    {
+                        "title": title,
+                        "file_name": chapter.file_name if chapter else None,
+                        "children": children,
+                    }
+                )
+            return built
 
+        return walk(toc_structure)
+
+    def _entries_to_nav_nodes(self, entries):
+        """Convert unified entries → the nested ebooklib structure consumed
+        by self.book.toc. Container entries (no file_name) become Sections."""
+        nav = []
+        file_to_chapter = {ch.file_name: ch for ch in self.chapters}
+        for entry in entries:
+            children = self._entries_to_nav_nodes(entry["children"]) if entry.get("children") else []
+            chapter = file_to_chapter.get(entry.get("file_name")) if entry.get("file_name") else None
             if chapter and children:
-                entries.append((chapter, tuple(children)))
+                nav.append((chapter, tuple(children)))
             elif chapter:
-                entries.append(chapter)
+                nav.append(chapter)
             elif children:
-                entries.append((epub.Section(entry.get("title", "")), tuple(children)))
+                nav.append((epub.Section(entry.get("title", "")), tuple(children)))
+            # else: drop empty entry (no chapter, no children)
+        return nav
 
-        return entries
+    # Kept as a thin backwards-compatible wrapper; callers that produced an
+    # ebooklib navigation tree directly can still use this. New callers should
+    # rely on the unified entries produced inside build_epub.
+    def build_navigation_entries(self, toc_structure, parent_path=()):
+        return self._entries_to_nav_nodes(
+            self._build_content_entries(toc_structure)
+            if not parent_path
+            else self._build_content_entries(toc_structure)
+        )
+
+    def _resolve_content_entries(self, toc_structure):
+        """Pick the best available content-entry source, in priority order:
+
+        1. Explicit toc_structure passed to build_epub.
+        2. Hierarchical hint captured at add_hierarchical_toc_page time.
+        3. Flat hint captured at add_toc_page time.
+        4. content_pages_by_path (path-indexed lessons).
+        5. lesson_chapters (insertion order).
+        """
+        if toc_structure:
+            return self._build_content_entries(toc_structure)
+        if self._toc_hint and self._toc_hint[0] == "hierarchical":
+            return self._build_content_entries(self._toc_hint[1])
+        if self._toc_hint and self._toc_hint[0] == "flat":
+            file_to_chapter = {ch.file_name: ch for ch in self.chapters}
+            return [
+                {
+                    "title": title or (file_to_chapter[file_name].title if file_to_chapter.get(file_name) else ""),
+                    "file_name": file_name,
+                    "children": [],
+                }
+                for (title, file_name) in self._toc_hint[1]
+            ]
+        if self.content_pages_by_path:
+            return [
+                {"title": ch.title, "file_name": ch.file_name, "children": []}
+                for ch in self.content_pages_by_path.values()
+            ]
+        return [
+            {"title": ch.title, "file_name": ch.file_name, "children": []}
+            for ch in self.lesson_chapters
+        ]
 
     def build_epub(self, filename="book.epub", toc_structure=None):
         filename = safe_epub_filename(filename)
-        content_navigation = (
-            self.build_navigation_entries(toc_structure or [])
-            if toc_structure
-            else list(self.content_pages_by_path.values())
-        )
-        self.book.toc = tuple(self.front_matter_pages + content_navigation + self.back_matter_pages)
+
+        content_entries = self._resolve_content_entries(toc_structure)
+
+        # A book without content chapters AND without a main-content fallback
+        # has nothing to read — refuse rather than emitting a hollow EPUB.
+        if not content_entries and not self._has_main_content_page:
+            raise EpubContentMissingError(
+                f"Cannot build EPUB {filename!r}: no content chapters and no main-content page were registered."
+            )
+
+        # Unified entry list — drives BOTH the printed toc.xhtml body and the
+        # EPUB nav (book.toc). Front matter (cover/title/info/dedication/front
+        # sections) is intentionally NOT in this list: those pages come before
+        # the printed TOC in the spine and are reached by sequential reading.
+        unified_entries = [*content_entries, *self._back_section_entries]
+
+        # Render printed toc.xhtml lazily so it lists the same entries as nav.
+        if self._toc_chapter is not None:
+            self._toc_chapter.content = self.render_template(
+                "toc_hierarchical.html",
+                lessons=unified_entries,
+            )
+
+        self.book.toc = tuple(self._entries_to_nav_nodes(unified_entries))
         self.book.spine = [*self.chapters, ("nav", "no")]
         self.book.add_item(epub.EpubNcx())
         self.book.add_item(epub.EpubNav())

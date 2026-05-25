@@ -960,3 +960,265 @@ def clean_extracted_dedication_html(dedication_html):
 
     cleaned_html = str(soup).strip()
     return cleaned_html if plain_text_from_html(cleaned_html) else ""
+
+
+# ---------------------------------------------------------------------------
+# Phase A.2: Sub-chapter synthesis from in-chapter headings (h2/h3/h4)
+# ---------------------------------------------------------------------------
+
+SUBCHAPTER_HEADING_PREFERENCE = ("h2", "h3", "h4")
+SUBCHAPTER_MIN_HEADINGS = 2
+SUBCHAPTER_MIN_BODY_TEXT = 20
+SUBCHAPTER_PARENT_INTRO_MIN_TEXT = 80
+
+
+def _heading_is_top_level(heading_tag):
+    parent = heading_tag.parent
+    while parent is not None and parent.name is not None:
+        if parent.name in {"blockquote", "table", "thead", "tbody", "tr", "td", "th", "figure", "aside"}:
+            return False
+        parent = parent.parent
+    return True
+
+
+def _collect_subchapter_candidates(content_html):
+    if not content_html or not content_html.strip():
+        return None, []
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    for tag_name in SUBCHAPTER_HEADING_PREFERENCE:
+        headings = [
+            tag
+            for tag in soup.find_all(tag_name)
+            if _heading_is_top_level(tag) and clean_display_text(tag.get_text(" ", strip=True))
+        ]
+        if len(headings) >= SUBCHAPTER_MIN_HEADINGS:
+            return soup, headings
+    return None, []
+
+
+def _split_html_by_headings(soup, headings):
+    """Walk top-level children of the soup root and partition into:
+    {preamble_html, sections=[{title, html}]}.
+    Sections end at the next heading at the same level (or end of doc).
+    """
+    heading_ids = {id(tag) for tag in headings}
+    title_by_id = {
+        id(tag): clean_display_text(tag.get_text(" ", strip=True))
+        for tag in headings
+    }
+
+    preamble_parts = []
+    sections = []
+    current = None
+    # Iterate the soup's direct children plus any children of a wrapping container.
+    # Use a flat list: every direct descendant of soup root.
+    nodes = list(soup.children)
+
+    def _walk(node_list):
+        nonlocal current
+        for node in list(node_list):
+            if getattr(node, "name", None) is None:
+                # NavigableString — assign to current section / preamble
+                txt = str(node)
+                if not txt.strip():
+                    continue
+                if current is None:
+                    preamble_parts.append(txt)
+                else:
+                    current["html_parts"].append(txt)
+                continue
+            if id(node) in heading_ids:
+                title = title_by_id[id(node)]
+                current = {"title": title, "html_parts": []}
+                sections.append(current)
+                continue
+            # If a non-heading element contains one of our headings, descend.
+            nested = [
+                child
+                for child in node.find_all(SUBCHAPTER_HEADING_PREFERENCE)
+                if id(child) in heading_ids
+            ]
+            if nested:
+                _walk(list(node.children))
+                continue
+            html = str(node)
+            if current is None:
+                preamble_parts.append(html)
+            else:
+                current["html_parts"].append(html)
+
+    _walk(nodes)
+
+    return {
+        "preamble_html": "\n".join(preamble_parts).strip(),
+        "sections": [
+            {"title": s["title"], "html": "\n".join(s["html_parts"]).strip()}
+            for s in sections
+        ],
+    }
+
+
+def _subchapter_titles_are_safe(sections):
+    titles = [s["title"] for s in sections]
+    if any(not title for title in titles):
+        return False
+    # All identical titles → not useful as TOC.
+    if len(set(titles)) == 1:
+        return False
+    return True
+
+
+def _split_content_item_into_subchapters(item):
+    """Return (parent_item, sub_items) if the item can be split, else None."""
+    content_html = item.get("content", "") or ""
+    soup, headings = _collect_subchapter_candidates(content_html)
+    if not soup or len(headings) < SUBCHAPTER_MIN_HEADINGS:
+        return None
+
+    partition = _split_html_by_headings(soup, headings)
+    sections = partition["sections"]
+    if len(sections) < SUBCHAPTER_MIN_HEADINGS:
+        return None
+    if not _subchapter_titles_are_safe(sections):
+        return None
+
+    # Every section must have at least SUBCHAPTER_MIN_BODY_TEXT of body content.
+    for section in sections:
+        text = clean_display_text(plain_text_from_html(section["html"]))
+        if len(text) < SUBCHAPTER_MIN_BODY_TEXT:
+            return None
+
+    parent_title = item.get("title", "")
+    parent_path = list(item.get("path") or [parent_title])
+    preamble_html = partition["preamble_html"]
+    preamble_text = clean_display_text(plain_text_from_html(preamble_html))
+    keep_parent_intro = len(preamble_text) >= SUBCHAPTER_PARENT_INTRO_MIN_TEXT
+
+    parent_item = {
+        **item,
+        "content": preamble_html if keep_parent_intro else "",
+        "path": parent_path,
+    }
+
+    sub_items = []
+    for section in sections:
+        sub_path = parent_path + [section["title"]]
+        sub_items.append(
+            {
+                "title": section["title"],
+                "content": section["html"],
+                "type": "topic",
+                "parent": parent_title,
+                "path": sub_path,
+            }
+        )
+    return parent_item, sub_items, keep_parent_intro
+
+
+def _find_toc_entry_by_path(toc_entries, path):
+    target = list(path)
+    for entry in toc_entries or []:
+        entry_path = list(entry.get("path") or [entry.get("title", "")])
+        if entry_path == target:
+            return entry
+        nested = _find_toc_entry_by_path(entry.get("children") or [], path)
+        if nested is not None:
+            return nested
+    return None
+
+
+def expand_content_items_with_subchapters(toc, content_items):
+    """Synthesise nested sub-chapters from h2/h3/h4 inside top-level lessons.
+
+    For every leaf content item that has 2+ same-level headings inside its
+    HTML body, split it into:
+      - an optional preamble (kept on the parent if substantial),
+      - child topic items for each heading section.
+    The matching TOC entry receives ``children`` mirroring the new structure.
+    Items that already have explicit children (i.e. the curated source already
+    declared a hierarchy) are left untouched.
+
+    Returns (new_toc, new_content_items). Safe no-op when nothing to split.
+    """
+    if not content_items:
+        return toc, content_items
+
+    # Collect titles of items that have children declared elsewhere in toc — we
+    # never split those. Build a set of TOC paths that already have children.
+    paths_with_children = set()
+
+    def _walk_toc(entries):
+        for entry in entries or []:
+            entry_path = tuple(entry.get("path") or [entry.get("title", "")])
+            if entry.get("children"):
+                paths_with_children.add(entry_path)
+            _walk_toc(entry.get("children") or [])
+
+    _walk_toc(toc or [])
+
+    # Titles that already appear as parents in content_items (i.e. there are
+    # children already in content_items pointing to them) should not be split.
+    declared_parent_titles = {
+        item.get("parent")
+        for item in content_items
+        if item.get("parent")
+    }
+
+    new_items = []
+    # We mutate a deep-ish copy of toc to attach children.
+    new_toc = [
+        {**entry, "children": list(entry.get("children") or [])}
+        for entry in (toc or [])
+    ]
+
+    for item in content_items:
+        path = tuple(item.get("path") or [item.get("title", "")])
+        title = item.get("title", "")
+        # Skip items that are themselves children, or already have descendants.
+        if item.get("parent"):
+            new_items.append(item)
+            continue
+        if title in declared_parent_titles:
+            new_items.append(item)
+            continue
+        if path in paths_with_children:
+            new_items.append(item)
+            continue
+
+        split = _split_content_item_into_subchapters(item)
+        if not split:
+            new_items.append(item)
+            continue
+
+        parent_item, sub_items, keep_parent_intro = split
+        new_items.append(parent_item)
+        new_items.extend(sub_items)
+
+        # Mirror the new structure into the TOC.
+        toc_entry = _find_toc_entry_by_path(new_toc, list(path))
+        children_entries = [
+            {
+                "title": sub["title"],
+                "type": "topic",
+                "has_content": True,
+                "path": sub["path"],
+            }
+            for sub in sub_items
+        ]
+        if toc_entry is not None:
+            toc_entry["children"] = children_entries
+            toc_entry["has_content"] = bool(keep_parent_intro)
+        else:
+            # Item had no TOC entry — append one with children.
+            new_toc.append(
+                {
+                    "title": title,
+                    "type": "lesson",
+                    "has_content": bool(keep_parent_intro),
+                    "path": list(path),
+                    "children": children_entries,
+                }
+            )
+
+    return new_toc, new_items

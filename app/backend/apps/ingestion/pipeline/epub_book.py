@@ -1,13 +1,18 @@
 import os
+from pathlib import Path
 
 from apps.ingestion.pipeline.curated_export import (
     curated_document_to_legacy_payload,
     is_curated_document,
 )
 from .epub_properties.epub_builder import EpubBuilder, html_is_blank
+from apps.ingestion.services.submissions_support.assets import resolve_generated_cover_path
 from apps.ingestion.services.normalization import (
+    build_flat_toc_from_content_items,
     dedupe_structured_sections,
+    expand_content_items_with_subchapters,
     extract_boundary_sections_from_content_items,
+    infer_structured_content_from_main_content,
     normalize_dedication_heading_and_content,
     split_leading_front_sections,
     split_trailing_front_sections,
@@ -63,18 +68,26 @@ def create_epub(book_data):
         output_folder=book_data["output_folder"]
     )
     
-    # Add cover page if available
-    if book_data["cover"]:
-        cover_path = os.path.join(book_data["output_folder"], book_data["cover"])
-        if os.path.exists(cover_path):
-            builder.add_cover_page(cover_image_path=cover_path)
-    
+    # Add cover page if available — use resolve_generated_cover_path so that
+    # a URL in book_data["cover"] (from cover_source_url) or a plain filename
+    # both resolve correctly against the local output folder.
+    _cover_path = resolve_generated_cover_path(
+        Path(book_data["output_folder"]), book_data.get("cover", "")
+    )
+    if _cover_path and _cover_path.exists():
+        builder.add_cover_page(cover_image_path=str(_cover_path))
+    else:
+        # No real cover image found — generate a dark-mode HTML cover instead.
+        builder.add_generated_cover_page()
+
     # Add standard pages
     builder.add_title_page()
     
-    # Add info page with extracted book info if available
+    # Book info page is only added when there is actual info to display;
+    # an empty page would just add a blank entry to the book.
     book_info = book_data.get("book_info", "")
-    builder.add_info_page(translator="", additional_info="", scraped_book_info=book_info)
+    if book_info and not html_is_blank(book_info):
+        builder.add_info_page(scraped_book_info=book_info)
     
     dedication_title, dedication_html = normalize_dedication_heading_and_content(
         book_data.get("dedication", "")
@@ -122,34 +135,53 @@ def create_epub(book_data):
     # the printed Contents page and EPUB NAV stay in sync with the body.
     content_items = _drop_blank_content_items(content_items)
 
+    # --- Single-page book: infer chapter structure from main content ----
+    # When the scraped/curated data has no content_items (a single HTML blob),
+    # attempt to detect headings and split the content into proper chapters.
+    # If inference finds ≥2 sections the book gets a real multi-chapter TOC;
+    # any content that comes before the first detected heading is kept as a
+    # front section so no text is lost.
+    if not content_items and compact_main_content and not html_is_blank(compact_main_content):
+        _inferred_toc, _inferred_items, _residual = infer_structured_content_from_main_content(
+            compact_main_content, book_title=book_data.get("book_title", "")
+        )
+        if len(_inferred_items) >= 2:
+            toc = _inferred_toc or build_flat_toc_from_content_items(_inferred_items)
+            content_items = _inferred_items
+            # Any HTML that precedes the first detected heading becomes a front section.
+            if _residual and not html_is_blank(_residual):
+                front_sections = [*front_sections, {"title": "ভূমিকা", "html": _residual}]
+            compact_main_content = ""
+
     if front_sections:
         builder.add_front_section_pages(front_sections)
 
-    # Add hierarchical TOC page (if the method exists in your EpubBuilder)
-    # Otherwise, fall back to regular TOC
-    if (toc or content_items) and hasattr(builder, 'add_hierarchical_toc_page'):
+    # Phase A.2: synthesise sub-chapters from in-chapter headings so long
+    # lessons get a real nested TOC instead of a single wall of text.
+    if content_items:
+        toc, content_items = expand_content_items_with_subchapters(toc, content_items)
+
+    # Add TOC page — use hierarchical template only when the curated document
+    # actually supplies a toc_structure; otherwise the rendered page is blank.
+    # Fall back to a flat list built directly from content_items.
+    if toc and content_items:
         builder.add_hierarchical_toc_page(
             toc_structure=toc,
             content_items=content_items
         )
     elif content_items:
-        # Fallback: Build simple TOC lessons list
         toc_lessons = [
-            (title, f"lesson_{i+1}.xhtml")
-            for i, title in enumerate(
-                item["title"] for item in content_items
-            )
+            (item.get("title", ""), f"lesson_{i+1}.xhtml")
+            for i, item in enumerate(content_items)
         ]
         builder.add_toc_page(lessons=toc_lessons)
 
-    # Add main content after the generated TOC so EPUB reading order mirrors a physical book.
-    # For single-flow books with no detected chapter structure, use a neutral
-    # label instead of "প্রস্তাবনা" (preface), which would be misleading.
-    if compact_main_content:
-        if not content_items:
-            main_content_title = book_data.get("book_title") or "মূল লেখা"
-        else:
-            main_content_title = None  # defaults to "প্রারম্ভ" in add_main_content_page
+    # Add main content only for single-flow books (no chapter structure).
+    # When content_items exist the remaining compact_main_content is either
+    # intro text already captured as a front section or leftover scraping
+    # noise — adding it as a "প্রারম্ভ" page would be misleading.
+    if compact_main_content and not content_items:
+        main_content_title = book_data.get("book_title") or "মূল লেখা"
         builder.add_main_content_page(main_content=compact_main_content, title=main_content_title)
     
     # Add lesson pages

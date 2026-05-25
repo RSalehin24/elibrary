@@ -16,6 +16,7 @@ from apps.catalog.services import (
     find_existing_book_by_source_url,
     replace_book_relations,
 )
+from apps.ingestion.services.submissions_support.detection import find_existing_matching_book
 from apps.common.models import LifecycleState, ReviewState
 from apps.common.text import normalize_catalog_text
 from apps.ingestion.pipeline.scraper_support.network import normalize_source_url
@@ -244,6 +245,7 @@ def persist_curated_book_with_hooks(
     target_book=None,
     find_deleted_book_by_title_fn=find_deleted_book_by_title,
     find_existing_book_by_source_url_fn=find_existing_book_by_source_url,
+    find_existing_matching_book_fn=find_existing_matching_book,
     replace_book_relations_fn=replace_book_relations,
 ):
     projection = curated_result["projection"]
@@ -296,7 +298,11 @@ def persist_curated_book_with_hooks(
             or ""
         )
 
-    existing_book = target_book or find_deleted_book_by_title_fn(projection["book_title"])
+    existing_book = (
+        target_book
+        or find_deleted_book_by_title_fn(projection["book_title"])
+        or find_existing_matching_book_fn(projection["book_title"], normalized)
+    )
     if existing_book:
         book = existing_book
         apply_fields(book)
@@ -326,7 +332,10 @@ def persist_curated_book_with_hooks(
             with transaction.atomic():
                 book = Book.objects.create(**create_kwargs)
         except IntegrityError:
-            book = find_existing_book_by_source_url_fn(normalized_url)
+            book = (
+                find_existing_book_by_source_url_fn(normalized_url)
+                or find_existing_matching_book_fn(projection["book_title"], normalized)
+            )
             if book is None:
                 raise
             apply_fields(book)

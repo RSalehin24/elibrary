@@ -686,7 +686,13 @@ def test_single_page_book_structure_metadata_and_exports_are_dynamic(tmp_path):
         "EPUB/lesson_2.xhtml",
         "EPUB/back_section_1.xhtml",
     }.issubset(names)
-    assert nav_text.index('href="toc.xhtml"') < nav_text.index('href="lesson_1.xhtml"')
+    # The printed toc.xhtml is the user-facing TOC; nav.xhtml is the EPUB
+    # reader's internal navigation. Per the dynamic-structuring spec they
+    # must list the SAME entries (content chapters + back sections) and
+    # nav.xhtml must NOT contain a self-link to toc.xhtml.
+    assert 'href="toc.xhtml"' not in nav_text
+    assert nav_text.index('href="lesson_1.xhtml"') < nav_text.index('href="lesson_2.xhtml"')
+    assert nav_text.index('href="lesson_2.xhtml"') < nav_text.index('href="back_section_1.xhtml"')
     assert opf_text.index('href="front_section_1.xhtml"') < opf_text.index('href="toc.xhtml"')
     assert opf_text.index('href="lesson_2.xhtml"') < opf_text.index('href="back_section_1.xhtml"')
 
@@ -785,11 +791,41 @@ def test_epub_builder_includes_visible_toc_page_before_lesson_navigation(tmp_pat
 
     import zipfile
 
+    import re
+
     with zipfile.ZipFile(epub_path) as archive:
         nav_text = archive.read("EPUB/nav.xhtml").decode("utf-8")
+        toc_text = archive.read("EPUB/toc.xhtml").decode("utf-8")
+        opf_text = archive.read("EPUB/content.opf").decode("utf-8")
 
-    assert 'href="toc.xhtml"' in nav_text
-    assert nav_text.index('href="toc.xhtml"') < nav_text.index('href="lesson_1.xhtml"')
+    href_pattern = re.compile(r'href="([^"#]+)"')
+
+    def _doc_hrefs(text):
+        return [h for h in href_pattern.findall(text) if not h.startswith("http")]
+
+    nav_hrefs = _doc_hrefs(nav_text)
+    toc_hrefs = _doc_hrefs(toc_text)
+
+    # Printed toc.xhtml is for humans; nav.xhtml is for the reader software.
+    # Per the dynamic-structuring spec they list the same entries, and
+    # nav.xhtml must NOT include a self-link or front-matter pages.
+    assert nav_hrefs == toc_hrefs == ["lesson_1.xhtml"]
+    for forbidden in (
+        "toc.xhtml",
+        "cover_page.xhtml",
+        "title.xhtml",
+        "info.xhtml",
+        "dedication.xhtml",
+        "front_section_1.xhtml",
+    ):
+        assert f'href="{forbidden}"' not in nav_text
+    # Printed toc.xhtml stays in the spine between front sections and content.
+    assert opf_text.index('href="front_section_1.xhtml"') < opf_text.index('href="toc.xhtml"')
+    assert opf_text.index('href="toc.xhtml"') < opf_text.index('href="lesson_1.xhtml"')
+    assert (
+        'idref="nav" linear="no"' in opf_text
+        or 'linear="no" idref="nav"' in opf_text
+    )
 
 
 @pytest.mark.django_db
@@ -1095,9 +1131,10 @@ def test_epub_builder_separates_front_matter_from_hierarchical_content_navigatio
         ]
     )
 
-    assert [page.title for page in builder.front_matter_pages] == [
-        "শিরোনাম পৃষ্ঠা",
-        "বই বিষয়ক তথ্য",
-    ]
     assert navigation[0][0].title == "প্রথম পাঠ"
     assert navigation[0][1][0].title == "১. ভূমিকা"
+    # Under the new dynamic-structuring policy, nav.xhtml must never carry
+    # title/info/dedication/front-section pages — only content + back matter.
+    nav_targets = {entry.title for entry, _ in navigation}
+    assert "শিরোনাম পৃষ্ঠা" not in nav_targets
+    assert "বই বিষয়ক তথ্য" not in nav_targets

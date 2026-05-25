@@ -125,3 +125,56 @@ def find_exact_existing_book(scraped_data, *, normalize_scraped_book_fn):
             return book
 
     return None
+
+
+def find_existing_matching_book(book_title, normalized_scraped):
+    """Return a live (non-deleted) Book that represents the same work.
+
+    Matching rules:
+    - Must share the same normalised title and source site.
+    - Must share at least one author name.  If the incoming data has no
+      author information the match is skipped (safer to create a new record
+      than to accidentally merge unrelated books).
+    - If *both* the incoming data *and* the candidate have translator names,
+      they must share at least one translator; otherwise they are treated as
+      different editions and the candidate is skipped.
+
+    Returns the first matching Book, or None if no safe match is found.
+    """
+    normalized_title = normalize_catalog_text(book_title or "")
+    if not normalized_title:
+        return None
+
+    target_author_names = normalized_role_names(normalized_scraped, ContributorRole.AUTHOR)
+    if not target_author_names:
+        # Cannot determine authorship — refuse to merge to avoid false positives.
+        return None
+
+    target_translator_names = normalized_role_names(normalized_scraped, ContributorRole.TRANSLATOR)
+
+    candidates = (
+        Book.objects.filter(
+            source_site="ebanglalibrary.com",
+            normalized_title=normalized_title,
+            deleted_at__isnull=True,
+        )
+        .prefetch_related("book_contributors__contributor")
+        .order_by("-created_at")
+    )
+
+    for book in candidates:
+        existing_author_names = related_role_names(book, ContributorRole.AUTHOR)
+        existing_translator_names = related_role_names(book, ContributorRole.TRANSLATOR)
+
+        # Different author → different book entirely.
+        if existing_author_names and not (target_author_names & existing_author_names):
+            continue
+
+        # Both sides have translator info but no overlap → different edition.
+        if target_translator_names and existing_translator_names:
+            if not (target_translator_names & existing_translator_names):
+                continue
+
+        return book
+
+    return None
