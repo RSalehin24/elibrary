@@ -18,6 +18,30 @@ from .entities import Category, Contributor, Series
 from .utils import build_unique_slug, generated_asset_upload_to
 
 
+class BookGroup(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Logical grouping for books that are different editions / translations
+    of the same underlying work. Used by duplicate-detection to surface
+    sibling books that share a canonical title but differ by edition,
+    translator, or publisher."""
+
+    canonical_title = models.CharField(max_length=255)
+    normalized_canonical_title = models.CharField(
+        max_length=255, db_index=True, editable=False, blank=True, default=""
+    )
+    note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["canonical_title"]
+
+    def save(self, *args, **kwargs):
+        self.canonical_title = clean_display_text(self.canonical_title)
+        self.normalized_canonical_title = normalize_catalog_text(self.canonical_title)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.canonical_title
+
+
 class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
     title = models.CharField(max_length=255)
     normalized_title = models.CharField(max_length=255, db_index=True, editable=False, blank=True, default="")
@@ -28,6 +52,17 @@ class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
     manual_binding = models.CharField(max_length=32, choices=ManualBindingType.choices, blank=True)
     manual_publisher = models.CharField(max_length=255, blank=True)
     manual_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    edition = models.CharField(max_length=120, blank=True)
+    normalized_edition = models.CharField(
+        max_length=120, db_index=True, editable=False, blank=True, default=""
+    )
+    group = models.ForeignKey(
+        BookGroup,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="books",
+    )
     summary = models.TextField(blank=True)
     state = models.CharField(max_length=32, choices=LifecycleState.choices, default=LifecycleState.DRAFT)
     review_state = models.CharField(max_length=32, choices=ReviewState.choices, default=ReviewState.PENDING)
@@ -58,6 +93,8 @@ class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
     def save(self, *args, **kwargs):
         self.title = clean_display_text(self.title)
         self.normalized_title = normalize_catalog_text(self.title)
+        self.edition = clean_display_text(self.edition or "")
+        self.normalized_edition = normalize_catalog_text(self.edition)
         if self._should_refresh_slug():
             self.slug = build_unique_slug(Book, self.title, self)
         current_code = (self.catalog_code or "").strip().upper()

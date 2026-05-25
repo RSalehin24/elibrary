@@ -2,6 +2,7 @@ from .books import (
     Book,
     BookCategory,
     BookContributor,
+    BookGroup,
     BookSource,
     BookSeries,
     CuratedBookDocument,
