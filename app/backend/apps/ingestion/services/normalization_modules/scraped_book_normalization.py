@@ -277,3 +277,276 @@ def normalize_scraped_book(book_data):
             "book_type": book_data.get("book_type", ""),
         },
     }
+
+
+CANONICAL_BOOK_INFO_KEY_ORDER = [
+    "title",
+    "original_title",
+    ContributorRole.AUTHOR,
+    ContributorRole.TRANSLATOR,
+    ContributorRole.EDITOR,
+    ContributorRole.COMPILER,
+    ContributorRole.ILLUSTRATOR,
+    ContributorRole.COVER_ARTIST,
+    ContributorRole.PUBLISHER,
+    "type",
+    "series",
+    "category",
+    "first_published",
+    "publisher_address",
+    "edition",
+    "language",
+    "page_count",
+    "original_title",
+    "isbn",
+    "price",
+]
+
+BOOK_INFO_KEY_LABELS_BN = {
+    "title": "শিরোনাম",
+    "original_title": "মূল শিরোনাম",
+    ContributorRole.AUTHOR: "লেখক",
+    ContributorRole.TRANSLATOR: "অনুবাদক",
+    ContributorRole.EDITOR: "সম্পাদক",
+    ContributorRole.COMPILER: "সংকলক",
+    ContributorRole.ILLUSTRATOR: "অলংকরণ",
+    ContributorRole.COVER_ARTIST: "প্রচ্ছদ",
+    ContributorRole.PUBLISHER: "প্রকাশক",
+    ContributorRole.OTHER: "অন্যান্য",
+    "type": "ধরন",
+    "series": "সিরিজ",
+    "category": "শ্রেণি",
+    "first_published": "প্রথম প্রকাশ",
+    "publisher_address": "প্রকাশনার ঠিকানা",
+    "edition": "সংস্করণ",
+    "language": "ভাষা",
+    "page_count": "পাতার সংখ্যা",
+    "isbn": "ISBN",
+    "price": "মূল্য",
+}
+
+BOOK_INFO_KEY_LABELS_EN = {
+    "title": "Title",
+    "original_title": "Original Title",
+    ContributorRole.AUTHOR: "Author",
+    ContributorRole.TRANSLATOR: "Translator",
+    ContributorRole.EDITOR: "Editor",
+    ContributorRole.COMPILER: "Compiler",
+    ContributorRole.ILLUSTRATOR: "Illustrator",
+    ContributorRole.COVER_ARTIST: "Cover Artist",
+    ContributorRole.PUBLISHER: "Publisher",
+    ContributorRole.OTHER: "Other",
+    "type": "Type",
+    "series": "Series",
+    "category": "Category",
+    "first_published": "First Published",
+    "publisher_address": "Publisher Address",
+    "edition": "Edition",
+    "language": "Language",
+    "page_count": "Pages",
+    "isbn": "ISBN",
+    "price": "Price",
+}
+
+
+def _book_info_labels(language):
+    return BOOK_INFO_KEY_LABELS_EN if language == "en" else BOOK_INFO_KEY_LABELS_BN
+
+
+_GENERIC_LABEL_VALUE_PATTERN = re.compile(
+    r"^\s*(?P<label>[^:ঃ\n\r]{1,60}?)\s*[:ঃ]\s*(?P<value>.+?)\s*$"
+)
+
+
+def _resolve_label_key(label):
+    """Map a recognized front-matter label to a canonical bucket key.
+
+    Uses exact (normalized) match against METADATA_LABEL_ALIASES so that
+    e.g. "মূল্য" (price) is not mistakenly matched by the shorter
+    "মূল" (original_title) prefix.
+    """
+    if not label:
+        return ""
+    normalized = normalize_catalog_text(label)
+    if not normalized:
+        return ""
+    for alias_entry in METADATA_LABEL_ALIASES:
+        if normalize_catalog_text(alias_entry["alias"]) == normalized:
+            role = alias_entry.get("role") or ""
+            key = alias_entry.get("key") or ""
+            if role:
+                return canonical_role(role)
+            if key:
+                return key
+    return ""
+
+
+def _bn_label_for_key(key, fallback_label="", *, labels=None):
+    table = labels if labels is not None else BOOK_INFO_KEY_LABELS_BN
+    if key in table:
+        return table[key]
+    return clean_display_text(fallback_label) or str(key)
+
+
+def _emit_book_info_line(label, value):
+    label_html = escape(clean_display_text(label))
+    value_html = escape(clean_display_text(value))
+    if not value_html:
+        return ""
+    if not label_html:
+        return f"<p>{value_html}</p>"
+    return f"<p>{label_html}: {value_html}</p>"
+
+
+def _add_bucket_value(buckets, key, value):
+    cleaned = clean_display_text(value)
+    if not cleaned:
+        return
+    bucket = buckets.setdefault(key, [])
+    norm = normalize_catalog_text(cleaned)
+    if any(normalize_catalog_text(existing) == norm for existing in bucket):
+        return
+    bucket.append(cleaned)
+
+
+def format_book_info_html_ordered(book_info_html, *, book_title="", language="bn"):
+    """Re-emit book_info HTML as ordered ``<p>label: value</p>`` lines.
+
+    Parses each block/fragment of the source HTML, buckets the recognized
+    entries by canonical key, and renders them in a fixed order (title,
+    author, translator, editor, publisher, type, publication date, publisher
+    address, ...). Unrecognized fragments are preserved at the end so no
+    information is lost.
+
+    ``language`` selects between Bengali ("bn", default) and English ("en")
+    field labels.
+    """
+
+    if not book_info_html:
+        return book_info_html
+
+    labels = _book_info_labels(language)
+
+    soup = BeautifulSoup(book_info_html, "html.parser")
+    blocks = [
+        block
+        for block in soup.find_all(BLOCK_TAG_NAMES)
+        if block.parent is not None and block_text(block)
+    ]
+    if not blocks:
+        return book_info_html
+
+    buckets = {}
+    raw_lines = []
+    raw_seen = set()
+
+    def remember_raw(text):
+        cleaned = clean_display_text(text)
+        if not cleaned:
+            return
+        key = normalize_catalog_text(cleaned)
+        if not key or key in raw_seen:
+            return
+        raw_seen.add(key)
+        raw_lines.append(cleaned)
+
+    title_text = clean_display_text(book_title)
+    if title_text:
+        _add_bucket_value(buckets, "title", title_text)
+
+    for block in blocks:
+        if block_has_break(block):
+            text_lines = block_text_lines(block) or [block_text(block)]
+            strong_lines = block_strong_text_lines(block)
+        else:
+            text_lines = [block_text(block)]
+            strong_lines = [block_strong_text(block)]
+
+        for line_index, line in enumerate(text_lines):
+            if not clean_display_text(line):
+                continue
+            strong_for_line = ""
+            if line_index < len(strong_lines):
+                strong_for_line = strong_lines[line_index]
+            elif strong_lines:
+                strong_for_line = strong_lines[0]
+
+            fragments = split_metadata_fragments(line) or [clean_display_text(line)]
+            for fragment in fragments:
+                fragment = clean_display_text(fragment)
+                if not fragment:
+                    continue
+
+                label, value = parse_front_matter_line(
+                    fragment,
+                    strong_text=strong_for_line,
+                    has_break=False,
+                )
+                if label and value:
+                    roles = roles_in_text(label)
+                    if roles:
+                        for role in roles:
+                            _add_bucket_value(buckets, canonical_role(role), value)
+                    else:
+                        resolved_key = _resolve_label_key(label)
+                        if resolved_key:
+                            _add_bucket_value(buckets, resolved_key, value)
+                        else:
+                            key_slug = normalize_catalog_text(label).replace(" ", "_") or "other"
+                            _add_bucket_value(buckets, key_slug, value)
+                            labels.setdefault(key_slug, label)
+                    continue
+
+                role_segments, names = parse_role_labeled_segment(fragment)
+                if role_segments and names:
+                    canonical = canonical_role(role_segments[0])
+                    for name in names:
+                        _add_bucket_value(buckets, canonical, name)
+                    continue
+
+                generic = _GENERIC_LABEL_VALUE_PATTERN.match(fragment)
+                if generic:
+                    g_label = clean_display_text(generic.group("label"))
+                    g_value = clean_display_text(generic.group("value"))
+                    if g_label and g_value and len(g_label) <= 40:
+                        key_slug = (
+                            normalize_catalog_text(g_label).replace(" ", "_")
+                            or "other"
+                        )
+                        _add_bucket_value(buckets, key_slug, g_value)
+                        labels.setdefault(key_slug, g_label)
+                        continue
+
+                remember_raw(fragment)
+
+    if not buckets and not raw_lines:
+        return book_info_html
+
+    output_lines = []
+    emitted_keys = set()
+
+    for key in CANONICAL_BOOK_INFO_KEY_ORDER:
+        if key in emitted_keys or key not in buckets:
+            continue
+        emitted_keys.add(key)
+        label = _bn_label_for_key(key, labels=labels)
+        value = ", ".join(buckets[key])
+        line = _emit_book_info_line(label, value)
+        if line:
+            output_lines.append(line)
+
+    for key, values in buckets.items():
+        if key in emitted_keys:
+            continue
+        emitted_keys.add(key)
+        label = _bn_label_for_key(key, labels=labels)
+        value = ", ".join(values)
+        line = _emit_book_info_line(label, value)
+        if line:
+            output_lines.append(line)
+
+    # raw_lines contains fragments that could not be parsed as key-value pairs.
+    # Only structured key-value content belongs in book information, so raw
+    # narrative text is intentionally discarded here.
+
+    return "\n".join(output_lines)

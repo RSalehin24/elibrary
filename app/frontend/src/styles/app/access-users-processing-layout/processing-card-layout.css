@@ -45,9 +45,9 @@
 }
 .processing-list-card {
   --processing-list-card-height: 724px;
-  max-height:var(--processing-list-card-height);
-  overflow:hidden;
-  gap:8px
+  max-height: var(--processing-list-card-height);
+  overflow: hidden;
+  gap: 4px;
 }
 .processing-list-card.is-collapsed {
   height:auto;

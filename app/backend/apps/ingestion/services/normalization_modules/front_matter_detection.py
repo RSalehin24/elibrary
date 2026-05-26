@@ -6,8 +6,17 @@ def resolve_front_section_title(block):
         return text
 
     strong_heading = block_strong_heading_text(block)
-    if strong_heading and is_likely_section_title_text(strong_heading):
-        return strong_heading
+    if strong_heading:
+        # A <p> whose entire content is wrapped in <strong> (e.g.
+        # <p><strong>চতুর্থ খণ্ডের ভূমিকা</strong></p>) is treated as a
+        # structural heading for the purpose of front-section detection.
+        # Using tag_name="h2" gives it full heading logic, including the
+        # suffix-match path that handles qualified names like
+        # "খণ্ডের ভূমিকা" / "সংস্করণের ভূমিকা".
+        if is_front_section_heading(strong_heading, tag_name="h2"):
+            return strong_heading
+        if is_likely_section_title_text(strong_heading):
+            return strong_heading
 
     return ""
 
@@ -199,7 +208,7 @@ def should_continue_dedication_block(text, strong_text="", tag_name=""):
         return False
     if len(cleaned_text) > MAX_DEDICATION_BLOCK_LENGTH:
         return False
-    return count_sentence_markers(cleaned_text) <= 3
+    return count_sentence_markers(cleaned_text) <= 8
 
 
 def looks_like_letter_excerpt_marker(text):
@@ -223,7 +232,33 @@ def is_front_section_heading(text, tag_name=""):
     if not cleaned_text or len(cleaned_text) > 140:
         return False
     if not heading_matches_patterns(cleaned_text, FRONT_SECTION_HEADING_PATTERNS):
-        return False
+        # Also match when a known front-section keyword appears as a *suffix*
+        # e.g. "চতুর্থ খণ্ডের ভূমিকা" — ভূমিকা is at the end, preceded by a
+        # qualifier phrase.  Restrict this to structural heading elements
+        # (h2/h3/h4…) only — paragraph body text that happens to end in ভূমিকা
+        # (e.g. "মূল বইয়ের ভূমিকা" as running prose) must NOT be classified as
+        # a front-section heading.
+        if tag_name not in HEADING_TAG_NAMES:
+            return False
+        normalized = normalize_catalog_text(cleaned_text)
+        suffix_matched = any(
+            normalized.endswith(f" {normalize_catalog_text(p)}")
+            for p in FRONT_SECTION_HEADING_PATTERNS
+            if p and normalize_catalog_text(p)
+        )
+        if not suffix_matched:
+            return False
+        # Reject if the prefix (everything before the keyword) contains
+        # content-chapter markers that suggest this is a chapter heading.
+        prefix_text = clean_display_text(
+            re.sub(
+                r"\s+" + re.escape(cleaned_text.rsplit(None, 1)[-1]) + r"\s*$",
+                "",
+                cleaned_text,
+            )
+        )
+        if prefix_text and re.search(r"[।.!?]", prefix_text):
+            return False
     normalized = normalize_catalog_text(cleaned_text)
     is_supplementary_chapter = heading_matches_patterns(
         cleaned_text,

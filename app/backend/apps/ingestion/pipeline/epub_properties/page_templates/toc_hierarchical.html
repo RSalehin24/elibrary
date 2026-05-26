@@ -1,33 +1,51 @@
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" lang="bn">
-<head>
-    <meta charset="UTF-8"/>
-    <title>সূচিপত্র</title>
-</head>
-<body>
-    <div style="width: 100%; height: 100%; margin: 40px; font-family: 'Kalpurush', 'SolaimanLipi', Arial, sans-serif; line-height: 1.8;">
-        <style>a { text-decoration: none; }</style>
-        <h1 style="text-align: center; color: #2c3e50; margin-bottom: 1.5em;">সূচিপত্র</h1>
-        {% macro render_entries(entries, level=0) -%}
-        <ul style="list-style-type: none; padding-left: {{ 0 if level == 0 else 2 }}em; margin-top: {{ '0' if level == 0 else '0.5em' }};">
+<!doctype html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="{{ html_lang or 'bn' }}">
+  <head>
+    <meta charset="UTF-8" />
+    <title>{{ toc_heading or 'সূচিপত্র' }}</title>
+  </head>
+  <body>
+    <div
+      style="
+        width: 100%;
+        height: 100%;
+        margin: 40px;
+        font-family:
+          &quot;Kalpurush&quot;, &quot;SolaimanLipi&quot;, Arial, sans-serif;
+        line-height: 1.8;
+      "
+    >
+      <style>
+        a {
+          text-decoration: none;
+        }
+      </style>
+      <h1 style="text-align: center; color: #2c3e50; margin-bottom: 1.5em">
+        {{ toc_heading or 'সূচিপত্র' }}
+      </h1>
+      {% macro render_entries(entries, level=0) -%}
+      <ul
+        style="list-style-type: none; padding-left: {{ 0 if level == 0 else 2 }}em; margin-top: {{ '0' if level == 0 else '0.5em' }};"
+      >
         {% for entry in entries %}
-            <li style="margin: 0.8em 0;">
-                {% if entry.file_name %}
-                <a
-                    href="{{ entry.file_name }}"
-                    style="color: {{ '#2980b9' if level == 0 else '#3498db' }}; font-weight: {{ '600' if level == 0 else '500' }}; font-size: {{ '1.05em' if level == 0 else '1em' }};"
-                >{{ entry.title }}</a>
-                {% else %}
-                <span style="font-weight: bold; font-size: {{ '1.1em' if level == 0 else '1em' }}; color: #34495e; display: block;">{{ entry.title }}</span>
-                {% endif %}
-                {% if entry.children %}
-                    {{ render_entries(entry.children, level + 1) }}
-                {% endif %}
-            </li>
+        <li style="margin: 0.8em 0">
+          {% if entry.file_name %}
+          <a
+            href="{{ entry.file_name }}"
+            style="color: {{ '#2980b9' if level == 0 else '#3498db' }}; font-weight: {{ '600' if level == 0 else '500' }}; font-size: {{ '1.05em' if level == 0 else '1em' }};"
+            >{{ entry.title }}</a
+          >
+          {% else %}
+          <span
+            style="font-weight: bold; font-size: {{ '1.1em' if level == 0 else '1em' }}; color: #34495e; display: block;"
+            >{{ entry.title }}</span
+          >
+          {% endif %} {% if entry.children %} {{ render_entries(entry.children,
+          level + 1) }} {% endif %}
+        </li>
         {% endfor %}
-        </ul>
-        {%- endmacro %}
-        {{ render_entries(lessons) }}
+      </ul>
+      {%- endmacro %} {{ render_entries(lessons) }}
     </div>
-</body>
+  </body>
 </html>

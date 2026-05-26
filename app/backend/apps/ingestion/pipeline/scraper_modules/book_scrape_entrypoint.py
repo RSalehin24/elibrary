@@ -125,7 +125,15 @@ def scrape_book_data(book_url, *, content_limits=None):
     front_sections = []
     back_sections = []
 
-    extracted_front_sections, main_content = split_leading_front_sections(main_content or "")
+    # Trust the source's explicit body structure (TOC or content_items) when
+    # available: never strip from inside lessons and never re-mine landing
+    # main_content as back-matter (that residual is already front-matter).
+    has_explicit_body = bool(toc or content_items)
+
+    extracted_front_sections, main_content = split_leading_front_sections(
+        main_content or "",
+        has_explicit_body=has_explicit_body,
+    )
     if extracted_front_sections:
         front_sections.extend(extracted_front_sections)
 
@@ -144,13 +152,18 @@ def scrape_book_data(book_url, *, content_limits=None):
             inferred_back_sections,
             toc,
             content_items,
-        ) = extract_boundary_sections_from_content_items(content_items, toc)
+        ) = extract_boundary_sections_from_content_items(
+            content_items,
+            toc,
+            trust_source_toc=has_explicit_body,
+        )
         front_sections.extend(inferred_front_sections)
         back_sections.extend(inferred_back_sections)
 
-    extracted_back_sections, main_content = split_trailing_front_sections(main_content or "")
-    if extracted_back_sections:
-        back_sections.extend(extracted_back_sections)
+    if not has_explicit_body:
+        extracted_back_sections, main_content = split_trailing_front_sections(main_content or "")
+        if extracted_back_sections:
+            back_sections.extend(extracted_back_sections)
 
     front_sections = dedupe_structured_sections(
         front_sections,

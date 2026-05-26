@@ -116,6 +116,11 @@
 [data-theme="dark"] .nav-dropdown-item:hover {
   background: rgba(40, 58, 50, 0.9);
 }
+[data-theme="dark"] .nav-dropdown-link:hover,
+[data-theme="dark"] .nav-dropdown-link.is-active {
+  background: rgba(40, 58, 50, 0.9);
+  color: var(--accent);
+}
 
 /* ============================================================
    PROFILE MENU  (profile-menu-and-page-layout.css)
@@ -252,6 +257,38 @@
 [data-theme="dark"] .catalog-search-icon {
   color: var(--muted);
 }
+/* catalog-toolbar-select: reset background-color + fix the CSS chevron arrow to a light colour */
+[data-theme="dark"] .catalog-toolbar-select {
+  background-color: rgba(22, 34, 29, 0.92);
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(180, 220, 200, 0.7) 50%),
+    linear-gradient(135deg, rgba(180, 220, 200, 0.7) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(50% - 2px),
+    calc(100% - 12px) calc(50% - 2px);
+  background-size:
+    6px 6px,
+    6px 6px;
+  background-repeat: no-repeat;
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.06),
+    0 10px 18px rgba(0, 0, 0, 0.28);
+}
+[data-theme="dark"] .catalog-toolbar-select:disabled {
+  background-color: rgba(22, 34, 29, 0.6);
+  opacity: 0.65;
+}
+[data-theme="dark"] .catalog-toolbar-select:hover {
+  border-color: var(--line-strong);
+}
+[data-theme="dark"] .catalog-toolbar-select:focus-visible {
+  border-color: var(--line-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 220, 200, 0.08),
+    0 0 0 3px rgba(95, 199, 155, 0.18);
+}
 [data-theme="dark"] .catalog-search-sort .catalog-toolbar-select {
   box-shadow:
     inset 0 1px 0 rgba(180, 220, 200, 0.06),
@@ -276,6 +313,13 @@
 }
 [data-theme="dark"] .catalog-filter-actions:focus-within {
   border-color: var(--line-strong);
+}
+[data-theme="dark"] .catalog-filter-grid {
+  background: rgba(22, 34, 29, 0.88);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px rgba(180, 220, 200, 0.06),
+    0 14px 28px rgba(0, 0, 0, 0.28);
 }
 [data-theme="dark"] .catalog-filter-expand-toggle {
   background: linear-gradient(
@@ -418,6 +462,20 @@
 [data-theme="dark"] .field-textarea:focus {
   border-color: var(--line-strong);
   background: rgba(22, 34, 29, 0.96);
+}
+/* .access-page .detail-facts select/input has specificity [0,2,1] which beats the
+   global dark [data-theme="dark"] select/input at [0,1,1] — must override explicitly */
+[data-theme="dark"] .access-page .detail-facts input,
+[data-theme="dark"] .access-page .detail-facts select {
+  border-color: var(--line);
+  box-shadow: none;
+}
+[data-theme="dark"] .access-page .detail-facts input:disabled,
+[data-theme="dark"] .access-page .detail-facts select:disabled {
+  background: rgba(22, 34, 29, 0.6);
+  color: var(--muted);
+  border-color: var(--line);
+  box-shadow: none;
 }
 [data-theme="dark"] .field-option-group {
   border-color: var(--line);
@@ -1333,6 +1391,14 @@
   box-shadow:
     inset 0 1px rgba(180, 220, 200, 0.06),
     0 12px 20px rgba(0, 0, 0, 0.25);
+}
+[data-theme="dark"] .saved-filter-apply {
+  color: var(--ink);
+}
+[data-theme="dark"] .processing-active-filter-chip {
+  background: rgba(28, 42, 36, 0.88);
+  border-color: var(--line);
+  color: var(--ink-soft);
 }
 
 /* ============================================================

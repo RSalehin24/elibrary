@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import requests
@@ -24,11 +25,14 @@ from apps.ingestion.pipeline.scraper_support.network import (
     normalize_source_url,
 )
 from apps.ingestion.services.normalization import (
+    classify_residual_main_content,
     dedupe_html_fragment_blocks,
     dedupe_structured_sections,
     extract_boundary_sections_from_content_items,
     extract_main_content_segments,
+    format_book_info_html_ordered,
     infer_structured_content_from_main_content,
+    merge_front_matter_html_parts,
     plain_text_from_html,
     promote_leading_front_matter,
     prune_duplicate_main_content,
@@ -37,6 +41,7 @@ from apps.ingestion.services.normalization import (
 )
 from apps.ingestion.services.resolution_support_metadata import split_display_title
 from apps.ingestion.services.resolution_support_network import get_with_host_fallback
+from apps.ingestion.pipeline.epub_properties.labels import detect_book_language, labels_for
 
 
 CURRENT_MANIFEST_SCHEMA_VERSION = "2026-05-03.1"
@@ -686,29 +691,76 @@ def duplicate_path_title(title, occurrence):
 
 
 def disambiguate_duplicate_content_paths(toc, content_items):
-    seen_paths = {}
-    updates_by_source_and_path = {}
-    normalized_items = []
-    for item in content_items or []:
-        normalized_item = dict(item)
+    # First pass: group items by clean path so we can detect duplicates and
+    # decide between "rename" (genuine distinct items sharing a label) and
+    # "merge" (identical inline extractions that should be collapsed).
+    groups = {}
+    item_order = []
+    for index, item in enumerate(content_items or []):
         path = [clean_display_text(part) for part in item.get("path", []) if clean_display_text(part)]
-        source_url = item.get("source_url", "")
-        if not path or not source_url:
-            normalized_items.append(normalized_item)
+        if not path:
+            item_order.append((index, item, None))
             continue
-
         path_key = tuple(path)
-        occurrence = seen_paths.get(path_key, 0) + 1
-        seen_paths[path_key] = occurrence
-        if occurrence > 1:
-            updated_path = [*path[:-1], duplicate_path_title(path[-1], occurrence)]
-            normalized_item["title"] = updated_path[-1]
-            normalized_item["path"] = updated_path
-            updates_by_source_and_path[(source_url, path_key)] = updated_path
+        groups.setdefault(path_key, []).append(index)
+        item_order.append((index, item, path_key))
+
+    dropped_indices = set()
+    updates_by_source_and_path = {}
+    for path_key, indices in groups.items():
+        if len(indices) < 2:
+            continue
+        items = [(content_items[i], i) for i in indices]
+        source_urls = [(it.get("source_url") or "") for it, _ in items]
+        # If every duplicate carries a distinct, non-empty source_url, treat
+        # them as genuinely different chapters that happen to share a title
+        # and disambiguate by appending an occurrence suffix.
+        distinct_urls = all(source_urls) and len(set(source_urls)) == len(source_urls)
+        if distinct_urls:
+            for occurrence, (it, idx) in enumerate(items, start=1):
+                if occurrence == 1:
+                    continue
+                updated_path = [*path_key[:-1], duplicate_path_title(path_key[-1], occurrence)]
+                updates_by_source_and_path[(it.get("source_url") or "", path_key)] = updated_path
+            continue
+        # Otherwise the duplicates are inline-extraction artefacts (same URL
+        # or no URL).  Keep the richest body text and drop the rest so the
+        # curated document validates cleanly.
+        def _body_len(entry):
+            return len(plain_text_from_html(entry.get("content", "")) or "")
+        keep_idx = max(indices, key=lambda i: _body_len(content_items[i]))
+        for i in indices:
+            if i != keep_idx:
+                dropped_indices.add(i)
+
+    normalized_items = []
+    for index, item, path_key in item_order:
+        if index in dropped_indices:
+            continue
+        normalized_item = dict(item)
+        if path_key is not None:
+            source_url = item.get("source_url") or ""
+            updated_path = updates_by_source_and_path.get((source_url, path_key))
+            if updated_path:
+                normalized_item["title"] = updated_path[-1]
+                normalized_item["path"] = updated_path
         normalized_items.append(normalized_item)
+
+    # Build a set of surviving paths so we can prune TOC leaves that no
+    # longer have an extracted content_item backing them.
+    surviving_paths = set()
+    for it in normalized_items:
+        cleaned = tuple(
+            clean_display_text(part)
+            for part in it.get("path", [])
+            if clean_display_text(part)
+        )
+        if cleaned:
+            surviving_paths.add(cleaned)
 
     def update_toc_entries(entries):
         updated_entries = []
+        seen_paths_local = set()
         for entry in entries or []:
             updated_entry = dict(entry)
             original_path = tuple(
@@ -716,13 +768,27 @@ def disambiguate_duplicate_content_paths(toc, content_items):
                 for part in updated_entry.get("path", [])
                 if clean_display_text(part)
             )
-            source_url = updated_entry.get("source_url", "")
+            source_url = updated_entry.get("source_url") or ""
             updated_path = updates_by_source_and_path.get((source_url, original_path))
             if updated_path:
                 updated_entry["title"] = updated_path[-1]
                 updated_entry["path"] = updated_path
+                effective_path = tuple(updated_path)
+            else:
+                effective_path = original_path
             if updated_entry.get("children"):
                 updated_entry["children"] = update_toc_entries(updated_entry["children"])
+            # Drop a TOC leaf if its content was dropped as a duplicate AND
+            # we have already seen an entry with the same effective path.
+            if (
+                effective_path
+                and not updated_entry.get("children")
+                and effective_path in seen_paths_local
+                and effective_path in surviving_paths
+            ):
+                continue
+            if effective_path:
+                seen_paths_local.add(effective_path)
             updated_entries.append(updated_entry)
         return updated_entries
 
@@ -838,12 +904,167 @@ def classify_manifest_structure(toc_nodes, content_items, main_content, toc_meta
     }
 
 
+_TITLE_PAGE_KEYWORDS = (
+    "প্রকাশ",
+    "প্রকাশক",
+    "মুদ্রক",
+    "সংস্করণ",
+    "মূল্য",
+    "publisher",
+    "printer",
+    "press",
+    "edition",
+    "published",
+    "isbn",
+    "copyright",
+)
+
+
+def _is_title_page_front_section(section, book_title, author):
+    title = (section.get("title") or "").strip()
+    html = section.get("html") or ""
+    text = plain_text_from_html(html).strip()
+    if not text and not title:
+        return False
+    if len(text) > 1200:
+        return False
+    haystack = f"{title}\n{text}".lower()
+    bt = (book_title or "").strip().lower()
+    au = (author or "").strip().lower()
+    title_match = bool(bt) and bt in haystack
+    author_match = bool(au) and any(
+        part for part in au.split() if len(part) >= 3 and part in haystack
+    )
+    if not title_match and not author_match:
+        return False
+    return any(keyword.lower() in haystack for keyword in _TITLE_PAGE_KEYWORDS)
+
+
+# Normalized forms of common table-of-contents headings that a source page may
+# include as a standalone section.  When the EPUB already has a generated TOC
+# page, these inline-TOC front sections are redundant.
+_INLINE_TOC_HEADING_NORMS = {
+    normalize_catalog_text(h)
+    for h in (
+        "সূচিপত্র", "সূচী", "বিষয়সূচী", "বিষয় সূচী",
+        "contents", "table of contents", "তালিকা",
+    )
+}
+
+
+def _drop_inline_toc_front_sections(front_sections):
+    """Remove any front section whose title is a table-of-contents heading.
+
+    The EPUB builder already generates a dedicated toc.xhtml; keeping an
+    inline TOC section would result in two identical "সূচিপত্র" nav entries.
+    """
+    result = []
+    for s in front_sections:
+        title = clean_display_text(s.get("title") or "")
+        norm = normalize_catalog_text(title)
+        if norm in _INLINE_TOC_HEADING_NORMS:
+            continue
+        result.append(s)
+    return result
+
+
+def _is_pure_title_duplicate_section(section, book_title, author):
+    """Return True when a section's entire text is just the book title (optionally
+    followed by a separator, author, and/or series name in parentheses).
+
+    Example: "যুগলবন্দী \u2013 নীহাররঞ্জন গুপ্ত (কিরীটী গোয়েন্দা কাহিনী)" is
+    a single-line duplicate of the title page and should be silently dropped.
+    """
+    html = section.get("html") or ""
+    text = plain_text_from_html(html).strip()
+    if not text or len(text) > 350:
+        return False
+    bt = (book_title or "").strip()
+    if not bt:
+        return False
+
+    def nfc(s):
+        return unicodedata.normalize("NFC", s).strip()
+
+    text_n = nfc(text)
+    bt_n = nfc(bt)
+
+    # Case 1: text starts with the book title
+    if text_n.lower().startswith(bt_n.lower()):
+        return True
+
+    # Case 2: author-first format — "Author – Title" or "Author (Series) Title"
+    au = (author or "").strip()
+    if au:
+        au_n = nfc(au)
+        if text_n.lower().startswith(au_n.lower()) and bt_n.lower() in text_n.lower():
+            return True
+
+    return False
+
+
+def _promote_title_page_front_sections_to_book_info(
+    *, book_info, front_sections, book_title, author
+):
+    """Move publisher/printer info found in a title-page front section into
+    book_info. Title-page front sections (e.g. সতী's first front section)
+    typically duplicate the book title + author but also carry the only copy
+    of publisher/printer/edition lines — those belong in Book Information.
+    """
+
+    if not front_sections:
+        return book_info, front_sections
+
+    bt_norm = (book_title or "").strip().lower()
+    au_norm = (author or "").strip().lower()
+
+    kept_sections = []
+    extra_lines_html = []
+
+    for section in front_sections:
+        if not _is_title_page_front_section(section, book_title, author):
+            # Drop sections that are nothing but a title/author/series line.
+            if not _is_pure_title_duplicate_section(section, book_title, author):
+                kept_sections.append(section)
+            continue
+
+        html = section.get("html") or ""
+        # Split the HTML into <p>...</p> blocks; fall back to line splitting.
+        blocks = re.findall(r"<p[^>]*>.*?</p>", html, flags=re.IGNORECASE | re.DOTALL)
+        if not blocks:
+            blocks = [
+                f"<p>{line.strip()}</p>"
+                for line in plain_text_from_html(html).splitlines()
+                if line.strip()
+            ]
+        for block in blocks:
+            block_text = plain_text_from_html(block).strip()
+            if not block_text:
+                continue
+            bl = block_text.lower()
+            if bt_norm and bl == bt_norm:
+                continue
+            if au_norm and bl == au_norm:
+                continue
+            # Drop blocks that are just "title – author" duplicates.
+            if bt_norm and au_norm and bt_norm in bl and au_norm in bl and len(block_text) <= len(book_title) + len(author) + 6:
+                continue
+            extra_lines_html.append(block)
+
+    if extra_lines_html:
+        appended = "\n".join(extra_lines_html)
+        book_info = merge_front_matter_html_parts(book_info or "", appended)
+
+    return book_info, kept_sections
+
+
 def normalize_body_sections(
     *,
     book_title,
     landing_main_content,
     toc_nodes,
     content_items,
+    author="",
 ):
     book_info, dedication, residual_main = extract_main_content_segments(landing_main_content or "")
     book_info = dedupe_html_fragment_blocks(book_info)
@@ -851,7 +1072,11 @@ def normalize_body_sections(
 
     front_sections = []
     back_sections = []
-    leading_sections, residual_main = split_leading_front_sections(residual_main or "")
+    has_explicit_body = bool(toc_nodes or content_items)
+    leading_sections, residual_main = split_leading_front_sections(
+        residual_main or "",
+        has_explicit_body=has_explicit_body,
+    )
     front_sections.extend(leading_sections)
 
     toc = assign_paths_to_toc(toc_nodes)
@@ -867,21 +1092,19 @@ def normalize_body_sections(
             content_items = inferred_content_items
             has_structured_content = True
 
-    if has_structured_content and html_text(residual_main):
-        front_sections.append({"title": SECTION_FALLBACK_TITLE, "html": residual_main})
-        residual_main = ""
-
     if content_items:
         inferred_front, inferred_back, toc, content_items = extract_boundary_sections_from_content_items(
             content_items,
             toc,
+            trust_source_toc=has_explicit_body,
         )
         front_sections.extend(inferred_front)
         back_sections.extend(inferred_back)
         toc, content_items = disambiguate_duplicate_content_paths(toc, content_items)
 
-    trailing_sections, residual_main = split_trailing_front_sections(residual_main or "")
-    back_sections.extend(trailing_sections)
+    if not has_explicit_body:
+        trailing_sections, residual_main = split_trailing_front_sections(residual_main or "")
+        back_sections.extend(trailing_sections)
 
     front_sections = dedupe_structured_sections(
         front_sections,
@@ -901,6 +1124,79 @@ def normalize_body_sections(
         ],
         content_items=content_items,
     )
+
+    # Classify any remaining residual main content. New key:value metadata is
+    # merged into book_info; coherent prose is wrapped under an auto-generated
+    # heading and appended as a front section; anything else is discarded.
+    if has_structured_content and html_text(residual_main):
+        residual_book_info, residual_sections, residual_main = classify_residual_main_content(
+            residual_main,
+            existing_fragments=[
+                book_info,
+                dedication,
+                *[section.get("html", "") for section in front_sections],
+                *[section.get("html", "") for section in back_sections],
+                *[item.get("content", "") for item in (content_items or [])],
+            ],
+        )
+        if residual_book_info:
+            book_info = merge_front_matter_html_parts(book_info, residual_book_info)
+        if residual_sections:
+            front_sections.extend(residual_sections)
+            front_sections = dedupe_structured_sections(
+                front_sections,
+                reference_fragments=[book_info, dedication],
+            )
+
+    if book_info:
+        promoted_info, front_sections = _promote_title_page_front_sections_to_book_info(
+            book_info=book_info,
+            front_sections=front_sections,
+            book_title=book_title,
+            author=author,
+        )
+        book_info = promoted_info
+    else:
+        # Even with no book_info, drop sections whose content is nothing but the
+        # book title / author / series line (pure title-page duplicates).
+        front_sections = [
+            s for s in front_sections
+            if not _is_pure_title_duplicate_section(s, book_title, author)
+        ]
+
+    language = detect_book_language(
+        book_title=book_title or "",
+        author=author or "",
+        book_info_html=book_info or "",
+    )
+
+    if book_info:
+        book_info = format_book_info_html_ordered(
+            book_info, book_title=book_title, language=language
+        )
+
+    # For front sections with no explicit title: keep the page but assign a
+    # nav-only label (পূর্বকথা / Preliminary Note) so the reader can still
+    # navigate to it.  The page itself renders with no heading — the content
+    # is presented as-is per the spec.
+    preamble_nav_label = labels_for(language).get("preamble_nav", "পূর্বকথা")
+    pruned_sections = []
+    for _sec in front_sections:
+        if ((_sec.get("title") or "").strip()):
+            pruned_sections.append(_sec)
+        elif plain_text_from_html(_sec.get("html", "")):
+            # Unnamed prose — keep with nav-only label, no page heading.
+            _sec = dict(_sec)
+            _sec["nav_title"] = preamble_nav_label
+            _sec["title"] = ""  # ensure no heading rendered on page
+            pruned_sections.append(_sec)
+        # else: empty unnamed section — discard
+    front_sections = pruned_sections
+
+    # Drop inline TOC sections when we already produce a generated toc.xhtml.
+    # Keeping them would show two identical "সূচিপত্র" entries in the nav.
+    if toc or content_items:
+        front_sections = _drop_inline_toc_front_sections(front_sections)
 
     return {
         "book_info": book_info,
@@ -1007,6 +1303,7 @@ def build_manifest_source_pages(source_url, *, content_limits=None):
             landing_main_content=landing_main_content,
             toc_nodes=toc_nodes,
             content_items=content_items,
+            author=author,
         )
         source_structure = classify_manifest_structure(
             toc_nodes,

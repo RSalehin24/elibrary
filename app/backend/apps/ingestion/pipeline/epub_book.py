@@ -14,6 +14,8 @@ from apps.ingestion.services.normalization import (
     extract_boundary_sections_from_content_items,
     infer_structured_content_from_main_content,
     normalize_dedication_heading_and_content,
+    plain_text_from_html,
+    SHORT_RESIDUAL_MAIN_CONTENT_LENGTH,
     split_leading_front_sections,
     split_trailing_front_sections,
 )
@@ -83,11 +85,13 @@ def create_epub(book_data):
     # Add standard pages
     builder.add_title_page()
     
-    # Book info page is only added when there is actual info to display;
-    # an empty page would just add a blank entry to the book.
+    # Book info page is always added — shows scraped metadata when available,
+    # otherwise falls back to the structured fields from book_data.
     book_info = book_data.get("book_info", "")
-    if book_info and not html_is_blank(book_info):
-        builder.add_info_page(scraped_book_info=book_info)
+    builder.add_info_page(
+        scraped_book_info=book_info,
+        translator=display_value(book_data.get("translator", "")),
+    )
     
     dedication_title, dedication_html = normalize_dedication_heading_and_content(
         book_data.get("dedication", "")
@@ -110,13 +114,20 @@ def create_epub(book_data):
     )
     toc = book_data["toc"]
     content_items = list(book_data["content_items"])
+    # Trust source structure when explicit body exists: skip back-matter mining
+    # from inside lessons and from leftover landing main_content.
+    has_explicit_body = bool(toc or content_items)
     if content_items and not canonical_payload:
         (
             inferred_front_sections,
             inferred_back_sections,
             toc,
             content_items,
-        ) = extract_boundary_sections_from_content_items(content_items, toc)
+        ) = extract_boundary_sections_from_content_items(
+            content_items,
+            toc,
+            trust_source_toc=has_explicit_body,
+        )
         front_sections = dedupe_structured_sections(
             [*front_sections, *inferred_front_sections],
             reference_fragments=reference_fragments,
@@ -127,8 +138,11 @@ def create_epub(book_data):
         )
     compact_main_content = main_content
     if not front_sections and not canonical_payload:
-        front_sections, compact_main_content = split_leading_front_sections(main_content)
-    if not back_sections and not canonical_payload:
+        front_sections, compact_main_content = split_leading_front_sections(
+            main_content,
+            has_explicit_body=has_explicit_body,
+        )
+    if not back_sections and not canonical_payload and not has_explicit_body:
         back_sections, compact_main_content = split_trailing_front_sections(compact_main_content or "")
 
     # Drop empty/whitespace-only chapters before TOC + spine generation so
@@ -222,11 +236,6 @@ def create_epub(book_data):
     if front_sections:
         builder.add_front_section_pages(front_sections)
 
-    # Phase A.2: synthesise sub-chapters from in-chapter headings so long
-    # lessons get a real nested TOC instead of a single wall of text.
-    if content_items:
-        toc, content_items = expand_content_items_with_subchapters(toc, content_items)
-
     # Add TOC page — use hierarchical template only when the curated document
     # actually supplies a toc_structure; otherwise the rendered page is blank.
     # Fall back to a flat list built directly from content_items.
@@ -246,7 +255,9 @@ def create_epub(book_data):
     # When content_items exist the remaining compact_main_content is either
     # intro text already captured as a front section or leftover scraping
     # noise — adding it as a "প্রারম্ভ" page would be misleading.
-    if compact_main_content and not content_items:
+    # Suppress trivially short residuals (story-list lines, title-only text)
+    # so they don't appear as a meaningless preamble page.
+    if compact_main_content and not content_items and len(plain_text_from_html(compact_main_content)) >= SHORT_RESIDUAL_MAIN_CONTENT_LENGTH:
         main_content_title = book_data.get("book_title") or "মূল লেখা"
         builder.add_main_content_page(main_content=compact_main_content, title=main_content_title)
     

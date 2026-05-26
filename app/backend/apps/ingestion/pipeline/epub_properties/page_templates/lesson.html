@@ -1,16 +1,20 @@
-<!DOCTYPE html>
-<html lang="bn">
+<!doctype html>
+<html lang="{{ html_lang or 'bn' }}">
   <head>
-    <meta charset="UTF-8">
+    <meta charset="UTF-8" />
     <title>{{lesson_title}}</title>
   </head>
   <body>
-    <div style="margin: 40px; font-family: Arial, sans-serif;">
-      <style>a { text-decoration: none; }</style>
+    <div style="margin: 40px; font-family: Arial, sans-serif">
+      <style>
+        a {
+          text-decoration: none;
+        }
+      </style>
+      {% if lesson_title %}
       <h2>{{lesson_title}}</h2>
-      <div>
-        {{lesson_content}}
-      </div>
+      {% endif %}
+      <div>{{lesson_content}}</div>
     </div>
   </body>
 </html>

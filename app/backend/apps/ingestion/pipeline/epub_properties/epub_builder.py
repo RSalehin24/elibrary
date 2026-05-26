@@ -3,6 +3,298 @@ import re
 from ebooklib import epub
 from jinja2 import Environment, FileSystemLoader
 
+from .labels import detect_book_language, labels_for
+
+# Fonts bundled alongside this file — available in every container without
+# any system-level font installation.
+_FONTS_DIR = os.path.join(os.path.dirname(__file__), "fonts")
+_BUNDLED_FONT_BOLD    = os.path.join(_FONTS_DIR, "NotoSansBengali-Bold.ttf")
+_BUNDLED_FONT_REGULAR = os.path.join(_FONTS_DIR, "NotoSansBengali-Regular.ttf")
+
+# Font search paths for cover image generation (bundled path first, then common
+# system locations as fallback).
+_COVER_FONT_REGULAR = [
+    _BUNDLED_FONT_REGULAR,
+    "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/Library/Fonts/NotoSansBengali-Regular.ttf",
+    "/Library/Fonts/NotoSans-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/NotoSansBengali-Regular.ttf",
+]
+_COVER_FONT_BOLD = [
+    _BUNDLED_FONT_BOLD,
+    "/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/Library/Fonts/NotoSansBengali-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/NotoSansBengali-Bold.ttf",
+]
+
+
+def _load_cover_font(paths, size):
+    """Return the first loadable ImageFont from *paths* at *size* pt, or None."""
+    try:
+        from PIL import ImageFont
+    except ImportError:
+        return None
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                continue
+    return None
+
+
+def _cover_wrap_lines(text, font, max_px, draw):
+    """Split *text* on whitespace into lines that each fit within *max_px* pixels.
+
+    Measurements pass ``language="bn"`` so Pillow (with libraqm) shapes
+    Bengali conjuncts correctly when computing line widths.
+    """
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        try:
+            width = draw.textlength(candidate, font=font, language="bn")
+        except TypeError:  # older PIL without language kwarg
+            width = draw.textlength(candidate, font=font)
+        if width <= max_px:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
+# Cover-input sanitisation helpers --------------------------------------------
+
+_LEADING_NUMBER_PREFIX = re.compile(r"^[\s\u00a0]*[\u09e6-\u09ef0-9]+[.)\u0964]?[\s\u00a0]+")
+_TRAILING_SEPARATOR_TAIL = re.compile(r"[\s\u00a0]*[\u2013\u2014\-–—:][\s\u00a0]*(.+)$")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def _normalize_cover_text(value):
+    if not value:
+        return ""
+    text = _WHITESPACE.sub(" ", str(value)).strip()
+    return text
+
+
+def _strip_leading_index(title):
+    """Remove a leading numeric volume prefix like ``৫০. `` or ``50. ``."""
+    return _LEADING_NUMBER_PREFIX.sub("", title, count=1).strip()
+
+
+def _sanitize_cover_inputs(book_title, author, series):
+    """Clean and de-duplicate the strings that appear on the generated cover.
+
+    Common artefacts removed:
+    - A leading Bengali/Latin numeral prefix on the title (``৫০. ``).
+    - A trailing ``" – series-name"`` tail on the title when *series* is set.
+    - Series text that is identical to the title or the author.
+    - Repetition of the same value across the three fields.
+    """
+    title  = _normalize_cover_text(book_title)
+    author = _normalize_cover_text(author)
+    series = _normalize_cover_text(series)
+
+    title = _strip_leading_index(title)
+
+    # If the title ends with " – {series-ish}" or " – {author}", trim that tail.
+    # We accept any tail that is a prefix of the series/author or vice-versa,
+    # because the title's series-suffix often omits a volume number that the
+    # series field carries (e.g. title ends "সাইমুম সিরিজ" while series is
+    # "সাইমুম সিরিজ #৫০").
+    def _strip_tail(text, tail_candidate):
+        if not text or not tail_candidate:
+            return text
+        # Match only the last " – tail" / " — tail" / " - tail" segment;
+        # the colon is excluded because colons commonly appear inside titles.
+        m = re.search(
+            r"[\s\u00a0]+[\u2013\u2014\-][\s\u00a0]+([^\u2013\u2014\-]+)$",
+            text,
+        )
+        if not m:
+            return text
+        tail_text = m.group(1).strip()
+        tc = tail_candidate.strip()
+        if (
+            tail_text == tc
+            or tail_text in tc
+            or tc in tail_text
+        ):
+            return text[: m.start()].rstrip()
+        return text
+
+    title = _strip_tail(title, series)
+    title = _strip_tail(title, author)
+
+    # Drop series/author if they duplicate another field.
+    if series and (series == title or series == author):
+        series = ""
+    if author and author == title:
+        author = ""
+
+    return title, author, series
+
+
+def _generate_cover_png(book_title, author, series, output_folder):
+    """Generate a PNG cover image with deep-green palette and Bengali text.
+
+    Produces a 1200×1800 image (standard ebook cover ratio) styled to match
+    the ebanglalibrary.com site's dark-mode look: a deep forest-green
+    background, soft cream/gold typography and a thin gold divider:
+
+      [top accent bar]
+      [gap]
+      [title  – bold, large, wrapped if necessary]
+      [series – optional, smaller]
+      [horizontal divider]
+      [author]
+      [gap]
+      [bottom accent bar]
+
+    Bengali shaping is delegated to libraqm (HarfBuzz) via the ``language="bn"``
+    parameter on every ``ImageDraw`` call, which fixes conjunct ordering and
+    vowel-sign placement.
+
+    Returns the absolute path to the saved PNG, or None if generation fails
+    (e.g. Pillow not installed or no writable output folder).
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+
+    title, author, series = _sanitize_cover_inputs(book_title, author, series)
+
+    W, H = 1200, 1800
+    PAD = 100
+    MAX_W = W - 2 * PAD
+
+    # Deep-green palette mirroring ebanglalibrary.com's dark mode.
+    BG_TOP        = (15,  36,  25)   # #0f2419  – forest-green top
+    BG_MID        = (29,  60,  52)   # #1d3c34  – richer green centre
+    BG_BOT        = (15,  36,  25)   # #0f2419  – forest-green bottom
+    ACCENT        = (201, 169, 110)  # #c9a96e  – warm gold accent
+    TITLE_COLOR   = (245, 241, 232)  # #f5f1e8  – cream
+    AUTHOR_COLOR  = (232, 227, 214)  # #e8e3d6  – soft cream
+    SERIES_COLOR  = (196, 207, 191)  # #c4cfbf  – pale sage
+    DIVIDER_COLOR = (201, 169, 110)  # gold
+
+    # --- background: smooth vertical gradient (top → mid → bottom) ---
+    GRAD_H = 64
+    grad_pixels = []
+    for row in range(GRAD_H):
+        t = row / (GRAD_H - 1)              # 0.0 (top) → 1.0 (bottom)
+        if t < 0.5:
+            local = t * 2                  # 0..1 within top half
+            r = int(BG_TOP[0] + (BG_MID[0] - BG_TOP[0]) * local)
+            g = int(BG_TOP[1] + (BG_MID[1] - BG_TOP[1]) * local)
+            b = int(BG_TOP[2] + (BG_MID[2] - BG_TOP[2]) * local)
+        else:
+            local = (t - 0.5) * 2          # 0..1 within bottom half
+            r = int(BG_MID[0] + (BG_BOT[0] - BG_MID[0]) * local)
+            g = int(BG_MID[1] + (BG_BOT[1] - BG_MID[1]) * local)
+            b = int(BG_MID[2] + (BG_BOT[2] - BG_MID[2]) * local)
+        grad_pixels.extend([(r, g, b)] * 2)
+    grad_img = Image.new("RGB", (2, GRAD_H))
+    grad_img.putdata(grad_pixels)
+    img = grad_img.resize((W, H), Image.BILINEAR)
+    draw = ImageDraw.Draw(img)
+
+    def _draw_text(xy, text, font, fill):
+        """Draw Bengali-shaped text using libraqm when available."""
+        try:
+            draw.text(xy, text, font=font, fill=fill, language="bn")
+        except TypeError:  # older PIL without language kwarg
+            draw.text(xy, text, font=font, fill=fill)
+
+    title_font  = _load_cover_font(_COVER_FONT_BOLD,    84) or _load_cover_font(_COVER_FONT_REGULAR, 84)
+    author_font = _load_cover_font(_COVER_FONT_REGULAR, 52)
+    series_font = _load_cover_font(_COVER_FONT_REGULAR, 40)
+
+    TITLE_LINE_H = 128   # pixels per title line (84 pt + leading)
+
+    title_lines = _cover_wrap_lines(title, title_font, MAX_W, draw) if title_font and title else []
+
+    # --- measure the full content block height ---
+    BAR_W,   BAR_H,  BAR_GAP  = 120, 5, 72
+    DIV_W,   DIV_H            = 160, 2
+    DIV_GAP_ABOVE, DIV_GAP_BELOW = 32, 28
+
+    title_h  = len(title_lines) * TITLE_LINE_H
+    series_h = (16 + 56 + 16) if (series and series_font) else 0
+    div_h    = DIV_GAP_ABOVE + DIV_H + DIV_GAP_BELOW
+    author_h = 72 if (author and author_font) else 0
+
+    block_h = BAR_H + BAR_GAP + title_h + series_h + div_h + author_h + BAR_GAP + BAR_H
+
+    y = (H - block_h) // 2   # top of the vertically-centred block
+
+    # --- top accent bar ---
+    draw.rectangle(
+        [(W // 2 - BAR_W // 2, y), (W // 2 + BAR_W // 2, y + BAR_H)],
+        fill=ACCENT,
+    )
+    y += BAR_H + BAR_GAP
+
+    # --- title ---
+    for line in title_lines:
+        try:
+            w = draw.textlength(line, font=title_font, language="bn")
+        except TypeError:
+            w = draw.textlength(line, font=title_font)
+        _draw_text(((W - w) // 2, y), line, title_font, TITLE_COLOR)
+        y += TITLE_LINE_H
+
+    # --- series (optional) ---
+    if series and series_font:
+        y += 16
+        try:
+            w = draw.textlength(series, font=series_font, language="bn")
+        except TypeError:
+            w = draw.textlength(series, font=series_font)
+        _draw_text(((W - w) // 2, y), series, series_font, SERIES_COLOR)
+        y += 56 + 16
+
+    # --- horizontal divider ---
+    y += DIV_GAP_ABOVE
+    draw.rectangle(
+        [(W // 2 - DIV_W // 2, y), (W // 2 + DIV_W // 2, y + DIV_H)],
+        fill=DIVIDER_COLOR,
+    )
+    y += DIV_H + DIV_GAP_BELOW
+
+    # --- author ---
+    if author and author_font:
+        try:
+            w = draw.textlength(author, font=author_font, language="bn")
+        except TypeError:
+            w = draw.textlength(author, font=author_font)
+        _draw_text(((W - w) // 2, y), author, author_font, AUTHOR_COLOR)
+        y += author_h
+
+    # --- bottom accent bar ---
+    y += BAR_GAP
+    draw.rectangle(
+        [(W // 2 - BAR_W // 2, y), (W // 2 + BAR_W // 2, y + BAR_H)],
+        fill=ACCENT,
+    )
+
+    cover_path = os.path.join(output_folder, "_generated_cover.png")
+    try:
+        img.save(cover_path, "PNG")
+    except Exception:
+        return None
+    return cover_path
+
 
 def content_path_tuple(path_value):
     if isinstance(path_value, (list, tuple)):
@@ -48,18 +340,20 @@ class EpubContentMissingError(ValueError):
 
 
 class EpubBuilder:
-    def __init__(self, book_title, author, series="", book_type="", output_folder=""):
+    def __init__(self, book_title, author, series="", book_type="", output_folder="", language=None):
         self.book_title = book_title
         self.author = author
         self.series = series
         self.book_type = book_type
         self.output_folder = output_folder
+        self.language = language or detect_book_language(book_title, author)
+        self.labels = labels_for(self.language)
         self.env = Environment(
             loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), "page_templates"))
         )
         self.book = epub.EpubBook()
         self.book.set_title(book_title)
-        self.book.set_language("bn")
+        self.book.set_language(self.labels["epub_lang"])
         self.book.add_author(author)
         self.chapters = []
         self.lesson_chapters = []
@@ -116,10 +410,11 @@ class EpubBuilder:
         html_content = self.render_template(
             "cover_page.html",
             cover_image=image_name,
+            html_lang=self.labels["html_lang"],
         )
 
         cover_page = epub.EpubHtml(
-            title="কভার",
+            title=self.labels["cover"],
             file_name="cover_page.xhtml",
             content=html_content,
         )
@@ -127,15 +422,36 @@ class EpubBuilder:
         self.register_chapter(cover_page, insert_front=True)
 
     def add_generated_cover_page(self):
-        """Generate a dark-mode HTML cover page when no real cover image is available."""
+        """Generate a dark-mode PNG cover image when no real cover is available.
+
+        Uses Pillow to produce a 600×900 PNG with the book title and author
+        rendered in Bengali-capable fonts, then calls add_cover_page() so the
+        image is properly registered in the EPUB manifest as the cover image.
+
+        Falls back to the HTML template if Pillow is unavailable or image
+        generation fails for any reason.
+        """
+        cover_path = _generate_cover_png(
+            book_title=self.book_title,
+            author=self.author,
+            series=self.series,
+            output_folder=self.output_folder,
+        )
+        if cover_path:
+            self.add_cover_page(cover_image_path=cover_path)
+            return
+
+        # Fallback: HTML cover page (CSS dark-mode styling)
         html_content = self.render_template(
             "generated_cover.html",
             book_title=self.book_title,
             author=self.author,
             series=self.series,
+            html_lang=self.labels["html_lang"],
+            cover_label=self.labels["cover"],
         )
         cover_page = epub.EpubHtml(
-            title="কভার",
+            title=self.labels["cover"],
             file_name="cover_page.xhtml",
             content=html_content,
         )
@@ -146,9 +462,10 @@ class EpubBuilder:
             "title_page.html",
             book_title=self.book_title,
             author=self.author,
+            html_lang=self.labels["html_lang"],
         )
         chapter = epub.EpubHtml(
-            title="শিরোনাম পৃষ্ঠা",
+            title=self.labels["title_page"],
             file_name="title.xhtml",
             content=html_content,
         )
@@ -165,22 +482,25 @@ class EpubBuilder:
             additional_info=additional_info,
             scraped_book_info=scraped_book_info,
             scrapped_data=not scraped_book_info,
+            html_lang=self.labels["html_lang"],
         )
         chapter = epub.EpubHtml(
-            title="বই বিষয়ক তথ্য",
+            title=self.labels["info_page"],
             file_name="info.xhtml",
             content=html_content,
         )
         self.register_chapter(chapter)
 
-    def add_dedication_page(self, dedication_title="উৎসর্গ", dedication_html=""):
+    def add_dedication_page(self, dedication_title=None, dedication_html=""):
+        title = dedication_title or self.labels["dedication"]
         html_content = self.render_template(
             "dedication.html",
-            dedication_title=dedication_title,
+            dedication_title=title,
             dedication_html=dedication_html,
+            html_lang=self.labels["html_lang"],
         )
         chapter = epub.EpubHtml(
-            title="উৎসর্গ",
+            title=self.labels["dedication"],
             file_name="dedication.xhtml",
             content=html_content,
         )
@@ -192,9 +512,10 @@ class EpubBuilder:
         html_content = self.render_template(
             "main_content.html",
             main_content=main_content,
+            html_lang=self.labels["html_lang"],
         )
         chapter = epub.EpubHtml(
-            title=title or "প্রারম্ভ",
+            title=title or self.labels["main_content"],
             file_name="main_content.xhtml",
             content=html_content,
         )
@@ -203,30 +524,37 @@ class EpubBuilder:
 
     def add_front_section_pages(self, sections):
         for idx, section in enumerate(sections, start=1):
-            title = section.get("title") or f"প্রারম্ভ {idx}"
+            # nav_title: used in the navigation sidebar when the section has
+            # no explicit page heading (unnamed prose → "পূর্বকথা" / "Preliminary Note").
+            # page_title: rendered as the visible <h2> on the page — empty
+            # means "no heading" per spec.
+            explicit_title = (section.get("title") or "").strip()
+            nav_title = explicit_title or section.get("nav_title") or f"{self.labels['front_section_prefix']} {idx}"
+            page_title = explicit_title  # empty → lesson.html suppresses heading
             content = section.get("html") or ""
             if html_is_blank(content):
                 continue
             html_content = self.render_template(
                 "lesson.html",
-                lesson_title=title,
+                lesson_title=page_title,
                 lesson_content=content,
+                html_lang=self.labels["html_lang"],
             )
             file_name = f"front_section_{idx}.xhtml"
             page = epub.EpubHtml(
-                title=title,
+                title=nav_title,
                 file_name=file_name,
                 content=html_content,
             )
             self.register_chapter(page)
             self._front_section_entries.append(
-                {"title": title, "file_name": file_name, "children": []}
+                {"title": nav_title, "file_name": file_name, "children": []}
             )
 
     def add_back_section_pages(self, sections):
         registered_index = len(self._back_section_entries)
         for raw_idx, section in enumerate(sections, start=1):
-            title = section.get("title") or f"সমাপ্তি {raw_idx}"
+            title = section.get("title") or f"{self.labels['back_section_prefix']} {raw_idx}"
             content = section.get("html") or ""
             if html_is_blank(content):
                 continue
@@ -234,6 +562,7 @@ class EpubBuilder:
                 "lesson.html",
                 lesson_title=title,
                 lesson_content=content,
+                html_lang=self.labels["html_lang"],
             )
             registered_index += 1
             file_name = f"back_section_{registered_index}.xhtml"
@@ -253,7 +582,7 @@ class EpubBuilder:
         # placed in the spine immediately to lock the structural position
         # (cover → title → info → dedication → front sections → toc.xhtml).
         chapter = epub.EpubHtml(
-            title="সূচিপত্র",
+            title=self.labels["toc"],
             file_name="toc.xhtml",
             content="",
         )
@@ -268,7 +597,7 @@ class EpubBuilder:
         # which uses content_pages_by_path / fallback_title_to_page populated
         # during add_lesson_pages.
         chapter = epub.EpubHtml(
-            title="সূচিপত্র",
+            title=self.labels["toc"],
             file_name="toc.xhtml",
             content="",
         )
@@ -290,6 +619,7 @@ class EpubBuilder:
                 "lesson.html",
                 lesson_title=title,
                 lesson_content=content,
+                html_lang=self.labels["html_lang"],
             )
             file_name = f"lesson_{idx}.xhtml"
             chapter = epub.EpubHtml(
@@ -318,10 +648,18 @@ class EpubBuilder:
                 title = entry.get("title", "")
                 chapter = self.content_pages_by_path.get(path) or self.fallback_title_to_page.get(title)
                 children = walk(entry.get("children", []), path)
+                # When a TOC entry has no direct content page but has
+                # children, point it at the first child's page so the nav
+                # entry is still clickable rather than a dead Section label.
+                file_name = (
+                    chapter.file_name
+                    if chapter
+                    else (children[0]["file_name"] if children else None)
+                )
                 built.append(
                     {
                         "title": title,
-                        "file_name": chapter.file_name if chapter else None,
+                        "file_name": file_name,
                         "children": children,
                     }
                 )
@@ -453,6 +791,8 @@ class EpubBuilder:
             self._toc_chapter.content = self.render_template(
                 "toc_hierarchical.html",
                 lessons=toc_xhtml_entries,
+                html_lang=self.labels["html_lang"],
+                toc_heading=self.labels["toc"],
             )
 
         # Comprehensive nav.xhtml — every page in the book, in spine order:

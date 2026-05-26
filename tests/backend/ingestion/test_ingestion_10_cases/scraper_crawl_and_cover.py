@@ -142,7 +142,17 @@ def test_scrape_book_data_recurses_through_nested_toc_links(monkeypatch, tmp_pat
 
     scraped = legacy_scraper.scrape_book_data(root_url)
 
-    assert "মূল বইয়ের ভূমিকা" in scraped["main_content"]
+    # When the source provides explicit body structure (TOC + content_items),
+    # the landing page's leading prose is treated as pure front-matter and
+    # promoted into ``front_sections`` rather than left inside main_content.
+    front_section_blobs = "".join(
+        section.get("html", "") for section in scraped.get("front_sections") or []
+    )
+    import unicodedata
+    combined = unicodedata.normalize(
+        "NFC", front_section_blobs + (scraped["main_content"] or "")
+    )
+    assert unicodedata.normalize("NFC", "মূল বইয়ের ভূমিকা") in combined
     assert "সূচীপত্র" not in scraped["main_content"]
     assert [entry["title"] for entry in scraped["toc"]] == ["সংগ্রহ খণ্ড"]
     assert [child["title"] for child in scraped["toc"][0]["children"]] == ["অধ্যায় ১"]
