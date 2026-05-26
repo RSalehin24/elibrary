@@ -922,6 +922,9 @@ _TITLE_PAGE_KEYWORDS = (
 
 def _is_title_page_front_section(section, book_title, author):
     title = (section.get("title") or "").strip()
+    # Named sections (preface, translator's note, etc.) are never a title page.
+    if title:
+        return False
     html = section.get("html") or ""
     text = plain_text_from_html(html).strip()
     if not text and not title:
