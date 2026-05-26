@@ -23,40 +23,12 @@ def split_leading_front_sections(main_content_html, *, has_explicit_body=False):
     current_section = None
     extraction_started = False
 
-    def _peel_heading_from_html_parts(html_parts):
-        """If the first non-empty block of ``html_parts`` is short and
-        heading-shaped (≤ 80 chars, ≤ 8 words, no sentence-terminator),
-        pop it and return (title, remaining_parts). Otherwise return
-        ("", html_parts).
-        """
-        if not html_parts:
-            return "", html_parts
-        first_html = html_parts[0]
-        first_text = clean_display_text(BeautifulSoup(first_html, "html.parser").get_text(" ", strip=True))
-        if not first_text:
-            return "", html_parts[1:]
-        if len(first_text) > 80:
-            return "", html_parts
-        if len(first_text.split()) > 8:
-            return "", html_parts
-        if re.search(r"[।.!?]", first_text):
-            return "", html_parts
-        return first_text, html_parts[1:]
-
     def _flush_unnamed_section():
         nonlocal current_section
         if not current_section:
             return
         html_parts = current_section["html_parts"]
         title = current_section["title"]
-        if not title:
-            peeled_title, peeled_parts = _peel_heading_from_html_parts(html_parts)
-            # Only consume the first block as the section title when there is
-            # something left for the body. Otherwise keep the block as the
-            # body so single-paragraph front-matter chunks are preserved.
-            if peeled_title and plain_text_from_html("\n".join(peeled_parts)):
-                title = peeled_title
-                html_parts = peeled_parts
         if plain_text_from_html("\n".join(html_parts)):
             sections.append({"title": title, "html": "\n".join(html_parts)})
         current_section = None
