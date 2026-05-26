@@ -15,7 +15,7 @@
   min-width:0
 }
 .processing-automation-field-label {
-  color:#0b3d2ea3;
+  color: var(--muted);
   font-size:.7rem;
   font-weight:800;
   letter-spacing:.08em;

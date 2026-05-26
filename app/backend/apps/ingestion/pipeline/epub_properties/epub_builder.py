@@ -79,6 +79,10 @@ class EpubBuilder:
         self._back_section_entries = []
         # Whether a main-content page was registered (single-flow books).
         self._has_main_content_page = False
+        # Front-section pages that contain real readable content. Used as a
+        # last-resort fallback when the scraper mis-classifies every chapter
+        # as front matter and leaves no content / main-content body.
+        self._front_section_entries = []
 
     def render_template(self, template_name, **context):
         template = self.env.get_template(template_name)
@@ -208,12 +212,16 @@ class EpubBuilder:
                 lesson_title=title,
                 lesson_content=content,
             )
+            file_name = f"front_section_{idx}.xhtml"
             page = epub.EpubHtml(
                 title=title,
-                file_name=f"front_section_{idx}.xhtml",
+                file_name=file_name,
                 content=html_content,
             )
             self.register_chapter(page)
+            self._front_section_entries.append(
+                {"title": title, "file_name": file_name, "children": []}
+            )
 
     def add_back_section_pages(self, sections):
         registered_index = len(self._back_section_entries)
@@ -388,10 +396,41 @@ class EpubBuilder:
 
         # A book without content chapters AND without a main-content fallback
         # has nothing to read — refuse rather than emitting a hollow EPUB.
-        if not content_entries and not self._has_main_content_page:
+        # The dynamic scraper occasionally mis-classifies every real chapter
+        # as a front-section (e.g. when only one composite TOC entry exists
+        # at the canonical depth). In that case the front sections ARE the
+        # readable body — allow the build to proceed; the nav-building loop
+        # below will list each front_section page individually so readers
+        # can still reach every chapter.
+        has_any_readable_section = bool(
+            self._front_section_entries or self._back_section_entries
+        )
+        if (
+            not content_entries
+            and not self._has_main_content_page
+            and not has_any_readable_section
+        ):
             raise EpubContentMissingError(
                 f"Cannot build EPUB {filename!r}: no content chapters and no main-content page were registered."
             )
+
+        # Single-page books fall back to a `main_content.xhtml` body with no
+        # lessons / hierarchical TOC. Without an explicit entry the printed
+        # toc.xhtml and nav.xhtml would silently drop the only readable page,
+        # so synthesize one from the registered main-content chapter.
+        if not content_entries and self._has_main_content_page:
+            main_chapter = next(
+                (ch for ch in self.chapters if ch.file_name == "main_content.xhtml"),
+                None,
+            )
+            if main_chapter is not None:
+                content_entries = [
+                    {
+                        "title": main_chapter.title,
+                        "file_name": "main_content.xhtml",
+                        "children": [],
+                    }
+                ]
 
         # Printed toc.xhtml is the in-book "Table of Contents" page and
         # lists only the readable body of the book: content chapters plus
@@ -400,6 +439,15 @@ class EpubBuilder:
         # pages come before the printed TOC in the spine and are reached
         # by sequential reading.
         toc_xhtml_entries = [*content_entries, *self._back_section_entries]
+        # Fallback for mis-classified single-flow books: if neither content
+        # nor main-content was registered but front sections exist, surface
+        # those in the printed TOC so the page isn't blank. Nav.xhtml still
+        # lists each front_section individually via the chapter walk below.
+        if not content_entries and not self._has_main_content_page and self._front_section_entries:
+            toc_xhtml_entries = [
+                *self._front_section_entries,
+                *self._back_section_entries,
+            ]
 
         if self._toc_chapter is not None:
             self._toc_chapter.content = self.render_template(
@@ -434,6 +482,33 @@ class EpubBuilder:
             )
         if not content_emitted and content_entries:
             nav_entries.extend(content_entries)
+
+        # Backstop: when TOC resolution is ambiguous (duplicate titles or
+        # path collisions) `_build_content_entries` can return entries that
+        # share a file_name and silently orphan lesson chapters. Append any
+        # spine lesson that wasn't represented in the spliced tree so the
+        # nav document covers every readable chapter on disk.
+        def _collect_file_names(entries):
+            files = set()
+            for entry in entries:
+                fn = entry.get("file_name")
+                if fn:
+                    files.add(fn)
+                files.update(_collect_file_names(entry.get("children") or []))
+            return files
+
+        covered_files = _collect_file_names(nav_entries)
+        for chapter in self.lesson_chapters:
+            if chapter.file_name in covered_files:
+                continue
+            nav_entries.append(
+                {
+                    "title": chapter.title,
+                    "file_name": chapter.file_name,
+                    "children": [],
+                }
+            )
+            covered_files.add(chapter.file_name)
 
         self.book.toc = tuple(self._entries_to_nav_nodes(nav_entries))
         self.book.spine = [*self.chapters, ("nav", "no")]

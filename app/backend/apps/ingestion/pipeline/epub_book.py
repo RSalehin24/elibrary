@@ -189,6 +189,36 @@ def create_epub(book_data):
                     front_sections = [*front_sections, {"title": "ভূমিকা", "html": _parent["content"]}]
                 compact_main_content = ""
 
+    # Mis-classification rescue: the dynamic scraper occasionally routes
+    # every real chapter into front_sections (e.g. when the canonical TOC
+    # only exposes one composite "৬-১০" sub-page). Detect that case — a
+    # near-empty content_items list paired with many substantive
+    # front_sections — and promote the front sections to content_items so
+    # the book remains readable and the EPUB audit's "spine has no content
+    # pages" check is satisfied.
+    if (
+        len(content_items) <= 1
+        and not canonical_payload
+        and not compact_main_content
+        and sum(1 for s in front_sections if not html_is_blank(s.get("html") or "")) >= 3
+    ):
+        promoted = [
+            {
+                "title": s.get("title") or "",
+                "type": "lesson",
+                "content": s.get("html") or "",
+                "parent": None,
+                "path": [s.get("title") or ""],
+            }
+            for s in front_sections
+            if not html_is_blank(s.get("html") or "")
+        ]
+        # Merge with any existing single composite content_item so its
+        # contents are not lost.
+        content_items = [*promoted, *content_items]
+        toc = build_flat_toc_from_content_items(content_items)
+        front_sections = []
+
     if front_sections:
         builder.add_front_section_pages(front_sections)
 

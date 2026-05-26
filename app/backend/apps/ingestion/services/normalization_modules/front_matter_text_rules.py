@@ -284,9 +284,18 @@ def block_strong_heading_text(block):
     return join_heading_lines(strong_lines)
 
 
+_NUMERIC_SECTION_MARKER_RE = re.compile(r"^[০-৯0-9]{1,4}(?:\s*[.)।])?$")
+
+
 def is_likely_section_title_text(text):
     plain_text = heading_plain_text(text)
     if not plain_text or len(plain_text) > 180:
+        return False
+    if _NUMERIC_SECTION_MARKER_RE.match(plain_text) and len(plain_text) <= 8:
+        # Bare numeric markers like "০১.", "১২." are in-body scene enumerators
+        # in novels, not chapter / front-matter titles. Refusing to treat them
+        # as section titles prevents `split_leading_front_sections` and
+        # `split_trailing_front_sections` from shredding a real lesson body.
         return False
     if text_matches_patterns(plain_text, DEDICATION_PATTERNS + BODY_SECTION_PATTERNS):
         return False
