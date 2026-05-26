@@ -120,7 +120,8 @@ A preamble must **not** be created in these situations (all very common bugs):
 
 - If the front section has an explicit title in the source (e.g. "ভূমিকা", "লেখকের কথা") — use that title both on the page and in the nav.
 - If the content is **uncategorised prose with no explicit title** — **do not generate or display any heading on the page itself**. Just render the content as-is.
-  - In the **NAV only**, use the heading **`পূর্বকথা`** (for Bengali books) or **`Preliminary Note`** (for English books) so there is a navigable entry.
+  - If there is exactly **one** such unnamed section: in the **NAV only**, use **`অন্যান্য`** (Bengali) or **`Others`** (English).
+  - If there are **multiple** unnamed sections: use **`অন্যান্য 1`**, **`অন্যান্য 2`**, … (Bengali) or **`Others 1`**, **`Others 2`**, … (English) in the NAV.
 
 ### Residual / leftover front text
 
@@ -129,7 +130,7 @@ If text is left over after extracting book info, dedication, and sections:
 - Check if it contains any **new information** not already captured.
 - If no new information → discard.
 - If it contains new **key-value** info → add to Book Information.
-- If it contains new **prose** → include it as a Front Section page with no heading on the page; use `পূর্বকথা` / `Preliminary Note` in the nav.
+- If it contains new **prose** → include it as a Front Section page with no heading on the page; use `অন্যান্য` / `Others` in the nav (with a digit suffix if multiple such sections exist).
 - Never blindly discard residual text; never blindly add it as-is with a generated heading on the page.
 
 ---
@@ -267,7 +268,7 @@ The following books from ebanglalibrary.com are the canonical test set for this 
 | Book                                    | URL                                                              | Spec Sections                                                                                                            |
 | --------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | ভূমিকা — প্রফুল্ল রায়                  | https://www.ebanglalibrary.com/books/ভূমিকা-প্রফুল্ল-রায়/       | §8 — `/books/` cross-links must not appear in TOC                                                                        |
-| ২০০১ আ স্পেস ওডিসি — আর্থার ক্লার্ক     | https://www.ebanglalibrary.com/books/২০০১-আ-স্পেস-ওডিসি-আর্থার/  | §5 — unnamed front prose kept with `পূর্বকথা` nav label; §8 — TOC structure                                              |
+| ২০০১ আ স্পেস ওডিসি — আর্থার ক্লার্ক     | https://www.ebanglalibrary.com/books/২০০১-আ-স্পেস-ওডিসি-আর্থার/  | §5 — unnamed front prose kept with `অন্যান্য` nav label (no heading on page); §8 — TOC structure                         |
 | শার্লক হোমস সমগ্র ১                     | https://www.ebanglalibrary.com/books/শার্লক-হোমস-সমগ্র-১-অনুবা/  | §8 — TOC structure                                                                                                       |
 | সিডনি সেলডন রচনাসমগ্র ২                 | https://www.ebanglalibrary.com/books/সিডনি-সেলডন-রচনাসমগ্র-২/    | §8 — TOC structure                                                                                                       |
 | প্রফেসর ওয়াই ৬                         | https://www.ebanglalibrary.com/books/৪৯-প্রফেসর-ওয়াই-৬-রহস্যপু/ | §8 — TOC structure _(URL currently returns 404)_                                                                         |

@@ -529,7 +529,9 @@ class EpubBuilder:
             # page_title: rendered as the visible <h2> on the page — empty
             # means "no heading" per spec.
             explicit_title = (section.get("title") or "").strip()
-            nav_title = explicit_title or section.get("nav_title") or f"{self.labels['front_section_prefix']} {idx}"
+            prefix = self.labels['front_section_prefix']
+            fallback_title = prefix if len(sections) == 1 else f"{prefix} {idx}"
+            nav_title = explicit_title or section.get("nav_title") or fallback_title
             page_title = explicit_title  # empty → lesson.html suppresses heading
             content = section.get("html") or ""
             if html_is_blank(content):

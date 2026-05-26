@@ -46,7 +46,7 @@ from apps.ingestion.pipeline.epub_properties.labels import detect_book_language,
 
 CURRENT_MANIFEST_SCHEMA_VERSION = "2026-05-03.1"
 UNCAPPED_LIMIT_KEYS = {"max_nodes", "max_lesson_pages", "max_topic_pages", "max_content_chars"}
-SECTION_FALLBACK_TITLE = "প্রারম্ভ"
+SECTION_FALLBACK_TITLE = "অন্যান্য"
 BANGLA_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
 
 
@@ -1178,19 +1178,17 @@ def normalize_body_sections(
             book_info, book_title=book_title, language=language
         )
 
-    # For front sections with no explicit title: keep the page but assign a
-    # nav-only label (পূর্বকথা / Preliminary Note) so the reader can still
-    # navigate to it.  The page itself renders with no heading — the content
-    # is presented as-is per the spec.
-    preamble_nav_label = labels_for(language).get("preamble_nav", "পূর্বকথা")
+    # For front sections with no explicit title: keep the page but leave
+    # nav_title unset so EpubBuilder assigns the prefix label
+    # (অন্যান্য / Others, with a digit when there are multiple) per the spec.
+    # The page itself renders with no heading — the content is presented as-is.
     pruned_sections = []
     for _sec in front_sections:
         if ((_sec.get("title") or "").strip()):
             pruned_sections.append(_sec)
         elif plain_text_from_html(_sec.get("html", "")):
-            # Unnamed prose — keep with nav-only label, no page heading.
+            # Unnamed prose — keep with no nav_title; builder handles the label.
             _sec = dict(_sec)
-            _sec["nav_title"] = preamble_nav_label
             _sec["title"] = ""  # ensure no heading rendered on page
             pruned_sections.append(_sec)
         # else: empty unnamed section — discard

@@ -49,7 +49,7 @@ LABEL_TEXTS = {
         "dedication": "উৎসর্গ",
         "toc": "সূচিপত্র",
         "main_content": "প্রারম্ভ",
-        "front_section_prefix": "প্রারম্ভ",   # "প্রারম্ভ {idx}"
+        "front_section_prefix": "অন্যান্য",   # "অন্যান্য {idx}"
         "back_section_prefix": "সমাপ্তি",     # "সমাপ্তি {idx}"
         # Nav-only label for uncategorised prose with no explicit heading.
         # The page itself renders with no heading; this text appears in the
@@ -65,7 +65,7 @@ LABEL_TEXTS = {
         "dedication": "Dedication",
         "toc": "Contents",
         "main_content": "Preface",
-        "front_section_prefix": "Section",
+        "front_section_prefix": "Others",
         "back_section_prefix": "Appendix",
         # Nav-only label for uncategorised prose with no explicit heading.
         "preamble_nav": "Preliminary Note",
