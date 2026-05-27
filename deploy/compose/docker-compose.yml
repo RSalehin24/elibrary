@@ -39,6 +39,7 @@ x-app-environment: &app_environment
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-bangla_library}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -60,6 +61,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -97,6 +99,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/backend.Dockerfile
+    restart: unless-stopped
     environment:
       <<: *app_environment
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
@@ -215,6 +218,7 @@ services:
       dockerfile: deploy/docker/frontend.Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-4173}:80"
     depends_on:
