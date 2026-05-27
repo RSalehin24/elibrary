@@ -3,7 +3,7 @@ import re
 from ebooklib import epub
 from jinja2 import Environment, FileSystemLoader
 
-from .labels import detect_book_language, labels_for
+from .labels import detect_book_language, labels_for, to_local_digits
 
 # Fonts bundled alongside this file — available in every container without
 # any system-level font installation.
@@ -31,6 +31,24 @@ _COVER_FONT_BOLD = [
 ]
 
 
+def _get_first_nav_href(nodes):
+    """Return the href of the first leaf nav node in a list of ebooklib toc nodes.
+
+    Nodes may be EpubHtml/Link/Section instances or (parent, children) tuples.
+    Recurses into tuple children if needed.
+    """
+    for node in nodes:
+        if isinstance(node, tuple):
+            result = _get_first_nav_href(list(node[1]))
+            if result:
+                return result
+        elif hasattr(node, "file_name") and node.file_name:
+            return node.file_name
+        elif hasattr(node, "href") and node.href:
+            return node.href
+    return None
+
+
 def _load_cover_font(paths, size):
     """Return the first loadable ImageFont from *paths* at *size* pt, or None."""
     try:
@@ -46,19 +64,37 @@ def _load_cover_font(paths, size):
     return None
 
 
+_LATIN_SCRIPT_CHARS = re.compile(r"[A-Za-z]")
+
+
+def _bn_language_kwargs(text):
+    """Return ``{"language": "bn"}`` unless *text* contains Latin letters.
+
+    Passing language="bn" to Pillow/HarfBuzz forces Bengali shaping rules
+    which drops Latin glyphs in mixed-script strings (e.g. "নলিনী বাবু BSc").
+    For purely Bengali text the hint improves conjunct shaping; for mixed or
+    Latin-only text we omit it so every character renders correctly.
+    """
+    if _LATIN_SCRIPT_CHARS.search(text):
+        return {}
+    return {"language": "bn"}
+
+
 def _cover_wrap_lines(text, font, max_px, draw):
     """Split *text* on whitespace into lines that each fit within *max_px* pixels.
 
-    Measurements pass ``language="bn"`` so Pillow (with libraqm) shapes
-    Bengali conjuncts correctly when computing line widths.
+    Passes ``language="bn"`` only when the text is free of Latin characters so
+    Pillow/HarfBuzz shapes Bengali conjuncts correctly without dropping English
+    letters in mixed-script titles (e.g. "নলিনী বাবু BSc").
     """
     words = text.split()
     lines = []
     current = ""
     for word in words:
         candidate = (current + " " + word).strip()
+        lang_kw = _bn_language_kwargs(candidate)
         try:
-            width = draw.textlength(candidate, font=font, language="bn")
+            width = draw.textlength(candidate, font=font, **lang_kw)
         except TypeError:  # older PIL without language kwarg
             width = draw.textlength(candidate, font=font)
         if width <= max_px:
@@ -210,9 +246,10 @@ def _generate_cover_png(book_title, author, series, output_folder):
     draw = ImageDraw.Draw(img)
 
     def _draw_text(xy, text, font, fill):
-        """Draw Bengali-shaped text using libraqm when available."""
+        """Draw text using libraqm when available, with script-aware language hint."""
+        lang_kw = _bn_language_kwargs(text)
         try:
-            draw.text(xy, text, font=font, fill=fill, language="bn")
+            draw.text(xy, text, font=font, fill=fill, **lang_kw)
         except TypeError:  # older PIL without language kwarg
             draw.text(xy, text, font=font, fill=fill)
 
@@ -247,8 +284,9 @@ def _generate_cover_png(book_title, author, series, output_folder):
 
     # --- title ---
     for line in title_lines:
+        lang_kw = _bn_language_kwargs(line)
         try:
-            w = draw.textlength(line, font=title_font, language="bn")
+            w = draw.textlength(line, font=title_font, **lang_kw)
         except TypeError:
             w = draw.textlength(line, font=title_font)
         _draw_text(((W - w) // 2, y), line, title_font, TITLE_COLOR)
@@ -257,8 +295,9 @@ def _generate_cover_png(book_title, author, series, output_folder):
     # --- series (optional) ---
     if series and series_font:
         y += 16
+        lang_kw = _bn_language_kwargs(series)
         try:
-            w = draw.textlength(series, font=series_font, language="bn")
+            w = draw.textlength(series, font=series_font, **lang_kw)
         except TypeError:
             w = draw.textlength(series, font=series_font)
         _draw_text(((W - w) // 2, y), series, series_font, SERIES_COLOR)
@@ -274,8 +313,9 @@ def _generate_cover_png(book_title, author, series, output_folder):
 
     # --- author ---
     if author and author_font:
+        lang_kw = _bn_language_kwargs(author)
         try:
-            w = draw.textlength(author, font=author_font, language="bn")
+            w = draw.textlength(author, font=author_font, **lang_kw)
         except TypeError:
             w = draw.textlength(author, font=author_font)
         _draw_text(((W - w) // 2, y), author, author_font, AUTHOR_COLOR)
@@ -523,26 +563,59 @@ class EpubBuilder:
         self._has_main_content_page = True
 
     def add_front_section_pages(self, sections):
-        for idx, section in enumerate(sections, start=1):
+        # Count how many sections have no explicit title so we only append a
+        # number when there are genuinely multiple unnamed sections.
+        fallback_count = sum(
+            1 for s in sections if not (s.get("title") or "").strip()
+        )
+        unnamed_idx = 0
+        file_idx = 0
+
+        for section in sections:
             # nav_title: used in the navigation sidebar when the section has
             # no explicit page heading (unnamed prose → "পূর্বকথা" / "Preliminary Note").
             # page_title: rendered as the visible <h2> on the page — empty
             # means "no heading" per spec.
             explicit_title = (section.get("title") or "").strip()
             prefix = self.labels['front_section_prefix']
-            fallback_title = prefix if len(sections) == 1 else f"{prefix} {idx}"
+            if not explicit_title:
+                unnamed_idx += 1
+                fallback_title = (
+                    prefix if fallback_count == 1
+                    else f"{prefix} {to_local_digits(unnamed_idx, self.language)}"
+                )
+            else:
+                fallback_title = explicit_title
             nav_title = explicit_title or section.get("nav_title") or fallback_title
             page_title = explicit_title  # empty → lesson.html suppresses heading
             content = section.get("html") or ""
             if html_is_blank(content):
                 continue
+
+            # Always strip out metadata key-value lines (e.g.
+            # "প্রচ্ছদশিল্পী : কৃষ্ণেন্দু মন্ডল", "প্রথম প্রকাশ – জানুয়ারি ১৯৯৮"),
+            # regardless of whether the section has an explicit title. Those
+            # lines already appear on the বই বিষয়ক তথ্য page and pollute the
+            # opening of named front sections like ভূমিকা / প্রারম্ভ. If nothing
+            # but metadata remains, drop the whole section.
+            from apps.ingestion.services.normalization import extract_main_content_segments  # noqa: PLC0415
+            _, _, remaining = extract_main_content_segments(content)
+            if html_is_blank(remaining):
+                if not explicit_title:
+                    # Unnamed section that was pure metadata — skip entirely.
+                    continue
+                # Named section: keep the heading but with no body would be
+                # confusing; skip it too.
+                continue
+            content = remaining
+            file_idx += 1
             html_content = self.render_template(
                 "lesson.html",
                 lesson_title=page_title,
                 lesson_content=content,
                 html_lang=self.labels["html_lang"],
             )
-            file_name = f"front_section_{idx}.xhtml"
+            file_name = f"front_section_{file_idx}.xhtml"
             page = epub.EpubHtml(
                 title=nav_title,
                 file_name=file_name,
@@ -556,7 +629,7 @@ class EpubBuilder:
     def add_back_section_pages(self, sections):
         registered_index = len(self._back_section_entries)
         for raw_idx, section in enumerate(sections, start=1):
-            title = section.get("title") or f"{self.labels['back_section_prefix']} {raw_idx}"
+            title = section.get("title") or f"{self.labels['back_section_prefix']} {to_local_digits(raw_idx, self.language)}"
             content = section.get("html") or ""
             if html_is_blank(content):
                 continue
@@ -617,11 +690,29 @@ class EpubBuilder:
                 title, content = lesson
                 path = ()
 
+            # Build heading hierarchy from the content path.
+            # path is a tuple from the root ancestor down to the current title,
+            # e.g. ("Part 1", "Chapter 2", "Section 3").
+            # Rules:
+            #   len(path) == 0 → no path info (flat book) → use legacy lesson_title h2
+            #   len(path) == 1 → top-level chapter (no ancestors) → no heading
+            #   len(path) >= 2 → nested chapter → inject h1…hN for the full ancestry chain
+            if len(path) >= 2:
+                # Each element becomes h1, h2, h3 … in order from root to current.
+                chapter_hierarchy = list(enumerate(path, start=1))
+            elif len(path) == 1:
+                # Top-level chapter: show just its title via the legacy h2 path.
+                chapter_hierarchy = None
+            else:
+                # No path info (flat / legacy): fall back to old lesson_title heading.
+                chapter_hierarchy = None
+
             html_content = self.render_template(
                 "lesson.html",
                 lesson_title=title,
                 lesson_content=content,
                 html_lang=self.labels["html_lang"],
+                chapter_hierarchy=chapter_hierarchy,
             )
             file_name = f"lesson_{idx}.xhtml"
             chapter = epub.EpubHtml(
@@ -650,14 +741,15 @@ class EpubBuilder:
                 title = entry.get("title", "")
                 chapter = self.content_pages_by_path.get(path) or self.fallback_title_to_page.get(title)
                 children = walk(entry.get("children", []), path)
-                # When a TOC entry has no direct content page but has
-                # children, point it at the first child's page so the nav
-                # entry is still clickable rather than a dead Section label.
-                file_name = (
-                    chapter.file_name
-                    if chapter
-                    else (children[0]["file_name"] if children else None)
-                )
+                # Container entries (a TOC node with no content page of its
+                # own — typically a LearnDash section heading such as a
+                # novel title inside an omnibus) keep file_name=None so
+                # that _entries_to_nav_nodes wraps them in an epub.Section
+                # carrying the section's OWN title. Synthesising a
+                # file_name from the first child here would cause ebooklib
+                # to emit the first child's title as the parent label and
+                # duplicate that child inside the nested <ol>.
+                file_name = chapter.file_name if chapter else None
                 built.append(
                     {
                         "title": title,
@@ -669,20 +761,40 @@ class EpubBuilder:
 
         return walk(toc_structure)
 
-    def _entries_to_nav_nodes(self, entries):
+    def _entries_to_nav_nodes(self, entries, _counter=None):
         """Convert unified entries → the nested ebooklib structure consumed
-        by self.book.toc. Container entries (no file_name) become Sections."""
+        by self.book.toc. Container entries (no file_name) become Sections.
+
+        When a container section has children, we give it a hash-fragment href
+        (e.g. ``lesson_1.xhtml#toc-section-0``) so that ebooklib emits an
+        ``<a>`` element in nav.xhtml instead of a ``<span>``.  epub.js silently
+        drops ``<span>``-only nav items, which causes the entire child subtree
+        to be flattened into the top level and the collapsible TOC to break.
+        """
+        if _counter is None:
+            _counter = [0]
         nav = []
         file_to_chapter = {ch.file_name: ch for ch in self.chapters}
         for entry in entries:
-            children = self._entries_to_nav_nodes(entry["children"]) if entry.get("children") else []
+            children = self._entries_to_nav_nodes(entry["children"], _counter) if entry.get("children") else []
             chapter = file_to_chapter.get(entry.get("file_name")) if entry.get("file_name") else None
             if chapter and children:
                 nav.append((chapter, tuple(children)))
             elif chapter:
                 nav.append(chapter)
             elif children:
-                nav.append((epub.Section(entry.get("title", "")), tuple(children)))
+                first_href = _get_first_nav_href(children)
+                if first_href:
+                    # Use a unique fragment so epub.js can identify this section
+                    # node without colliding with child items that share the same
+                    # base href.
+                    base = first_href.split("#")[0]
+                    section_href = f"{base}#toc-section-{_counter[0]}"
+                    _counter[0] += 1
+                    section = epub.Section(entry.get("title", ""), section_href)
+                else:
+                    section = epub.Section(entry.get("title", ""))
+                nav.append((section, tuple(children)))
             # else: drop empty entry (no chapter, no children)
         return nav
 

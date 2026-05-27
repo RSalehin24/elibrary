@@ -1003,7 +1003,105 @@ def _is_pure_title_duplicate_section(section, book_title, author):
         if text_n.lower().startswith(au_n.lower()) and bt_n.lower() in text_n.lower():
             return True
 
+    # Case 3: bibliographic-only single line — e.g.
+    # "সাতকাহন (১ম পর্ব) – উপন্যাস – সমরেশ মজুমদার". The text is short, has no
+    # sentence-ending punctuation, and every separator-delimited fragment is
+    # recognised as one of: a piece of the book title, the author, a known
+    # book-type/genre keyword, an edition/volume marker, or pure
+    # digits/parenthesised content. In that case the section adds no new
+    # information beyond what book_info already carries.
+    if _is_bibliographic_metadata_line(text_n, book_title=bt_n, author=au):
+        return True
+
     return False
+
+
+# Tokens that, on their own, are not new information when book_info is already
+# present (book type / genre / format markers). Kept lowercase for matching.
+_BIBLIOGRAPHIC_TOKEN_WORDS = {
+    "উপন্যাস", "গল্প", "ছোটগল্প", "গল্পগ্রন্থ", "প্রবন্ধ", "কবিতা",
+    "নাটক", "কাহিনি", "কাহিনী", "রচনাবলী", "সমগ্র", "অমনিবাস",
+    "কিশোর", "ক্লাসিক", "সাহিত্য", "ইতিহাস", "দর্শন",
+    "novel", "short story", "story", "stories", "poem", "poems",
+    "essay", "essays", "drama", "novella", "omnibus", "edition", "vol", "volume",
+    "part", "series",
+}
+
+# Suffix words used to mark editions/volumes — fragments containing only these
+# (plus digits/Bengali digits/parens) are also acceptable as bibliographic.
+_EDITION_MARKER_WORDS = {
+    "খণ্ড", "পর্ব", "অধ্যায়", "সংস্করণ", "edition", "vol", "volume", "part", "ম",
+}
+
+
+def _is_bibliographic_metadata_line(text_n, *, book_title, author):
+    """Heuristic: True when the line is purely a "title – type – author"-style
+    bibliographic header that duplicates book_info."""
+
+    if not text_n or len(text_n) > 200:
+        return False
+    # Multi-sentence / multi-paragraph content is real prose, not a header.
+    if "\n" in text_n or text_n.count("।") > 1 or text_n.count(".") > 1:
+        return False
+
+    # Strip parenthesised pieces (edition markers like "(১ম পর্ব)" are noise).
+    stripped = re.sub(r"[\(\[（【].*?[\)\]）】]", " ", text_n)
+    stripped = re.sub(r"\s+", " ", stripped).strip(" -–—|/:.,")
+    if not stripped:
+        return False
+
+    # Split on common bibliographic separators.
+    fragments = [f.strip() for f in re.split(r"\s*[–—/|:]\s*|\s+[-]\s+", stripped) if f.strip()]
+    if not fragments:
+        return False
+
+    bt_low = (book_title or "").lower()
+    au_low = (author or "").lower()
+    # Tokenised title pieces to match a fragment like "সাতকাহন" against title
+    # "সাতকাহন ১".
+    bt_tokens = {tok for tok in re.split(r"\s+", bt_low) if len(tok) >= 3}
+    au_tokens = {tok for tok in re.split(r"\s+", au_low) if len(tok) >= 3}
+
+    def fragment_is_metadata(frag):
+        f = frag.lower().strip(" -–—|/:.,")
+        if not f:
+            return True
+        if bt_low and (f == bt_low or f in bt_low or bt_low in f):
+            return True
+        if au_low and (f == au_low or au_low in f or f in au_low):
+            return True
+        # Pure digits / Bengali digits.
+        if re.fullmatch(r"[0-9০-৯\s.\-]+", f):
+            return True
+        if f in _BIBLIOGRAPHIC_TOKEN_WORDS:
+            return True
+        # All words of fragment recognised as bibliographic / edition / digit.
+        words = [w for w in re.split(r"\s+", f) if w]
+        if words and all(
+            w in _BIBLIOGRAPHIC_TOKEN_WORDS
+            or w in _EDITION_MARKER_WORDS
+            or w in bt_tokens
+            or w in au_tokens
+            or re.fullmatch(r"[0-9০-৯.\-]+", w)
+            for w in words
+        ):
+            return True
+        return False
+
+    # Require at least one fragment to match the title (so we don't drop an
+    # unrelated short line like "ভূমিকা") AND at least one fragment to match
+    # the author (so we don't drop legitimate one-line standalone content).
+    has_title_match = False
+    has_author_match = False
+    for frag in fragments:
+        if not fragment_is_metadata(frag):
+            return False
+        f = frag.lower().strip(" -–—|/:.,")
+        if bt_low and (f == bt_low or f in bt_low or bt_low in f or any(t in f for t in bt_tokens)):
+            has_title_match = True
+        if au_low and (f == au_low or au_low in f or f in au_low or any(t in f for t in au_tokens)):
+            has_author_match = True
+    return has_title_match and has_author_match
 
 
 def _promote_title_page_front_sections_to_book_info(

@@ -55,6 +55,25 @@ export const readerApplicationThemeViewportMethods = {
   handleTocSelection(event, target) {
     event.preventDefault();
 
+    // If the clicked label belongs to a parent .toc-node whose children are
+    // already expanded, treat the click as a collapse request. The first
+    // click on a parent auto-expands via syncSelectedTocItem; without this,
+    // there is no way to collapse it back from the label itself.
+    const row = target.closest(".slide-contents-item");
+    const node = row?.parentElement;
+    if (node && node.classList && node.classList.contains("toc-node")) {
+      const children = node.querySelector(":scope > .toc-children");
+      if (children && !children.hidden) {
+        children.hidden = true;
+        const toggle = row.querySelector(".toc-toggle");
+        if (toggle) {
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.innerHTML = "&#9654;";
+        }
+        return;
+      }
+    }
+
     const rawHref = getItemHref(target);
     const normalizedHref = this.normalizeHrefForComparison(rawHref);
     if (!normalizedHref) return;
@@ -63,8 +82,7 @@ export const readerApplicationThemeViewportMethods = {
     this.display(rawHref, () => {
       this.refresh(rawHref);
     });
-  }
-,
+  },
   applyThemeByIndex(themeIndex) {
     const isApplied = this.readerThemeManager.applyThemeByIndex(
       themeIndex,
@@ -74,26 +92,22 @@ export const readerApplicationThemeViewportMethods = {
       this.syncThemeControlState();
     }
     return isApplied;
-  }
-,
+  },
   cycleTheme() {
     const isApplied = this.readerThemeManager.cycleTheme(this.rendition);
     if (isApplied) {
       this.syncThemeControlState();
     }
     return isApplied;
-  }
-,
+  },
   changeFontSizeByStep(stepCount) {
     const hasChanged = this.readerThemeManager.changeFontSizeByStep(stepCount);
     this.syncFontControlState();
     return hasChanged;
-  }
-,
+  },
   closeSettings() {
     this.settingsPanelController.close();
-  }
-,
+  },
   syncThemeControlState() {
     const currentThemeIndex = this.readerThemeManager.getCurrentThemeIndex();
 
@@ -105,8 +119,7 @@ export const readerApplicationThemeViewportMethods = {
       button.classList.toggle("is-active", isActive);
       button.setAttribute("aria-pressed", isActive ? "true" : "false");
     });
-  }
-,
+  },
   syncFontControlState() {
     const currentFontSize = this.readerThemeManager.getCurrentFontSize();
     const isAtMinimum = currentFontSize <= MIN_FONT_SIZE;
@@ -119,13 +132,43 @@ export const readerApplicationThemeViewportMethods = {
       button.disabled = isDisabled;
       button.setAttribute("aria-disabled", isDisabled ? "true" : "false");
     });
-  }
-,
+  },
   syncReaderControlStates() {
     this.syncThemeControlState();
     this.syncFontControlState();
-  }
-,
+  },
+  syncChapterLabel(href) {
+    if (!this.chapterLabelElement) return;
+    const target = href || this.currentHref || "";
+    const items = this.flattenedToc || [];
+    const baseHref = target.split("#")[0];
+    const matches = items.filter(
+      (entry) => entry.href && baseHref.endsWith(entry.href.split("#")[0]),
+    );
+    // Prefer a leaf entry (no subitems) when multiple TOC nodes share the
+    // same underlying file — e.g. an omnibus section header and its first
+    // chapter both point at lesson_1.xhtml. Without this, the parent label
+    // ("বিষকুম্ভ") would shadow the child ("০১. তাসের ঘর") and the
+    // breadcrumb would lose the leaf.
+    const match =
+      matches.find(
+        (entry) =>
+          !Array.isArray(entry.subitems) || entry.subitems.length === 0,
+      ) || matches[0];
+    let label = "";
+    if (match) {
+      const ancestors = Array.isArray(match.ancestorLabels)
+        ? match.ancestorLabels.filter((part) => part && part.trim())
+        : [];
+      const parts = [...ancestors, match.label || ""].filter(
+        (part) => part && part.trim(),
+      );
+      label = parts.join(" › ");
+    } else {
+      label = this.lookupChapterLabel(target);
+    }
+    this.chapterLabelElement.textContent = label;
+  },
   handleFullscreenStateChange() {
     if (this.getFullscreenElement() || !this.isImmersiveMode || !this.rendition)
       return;
@@ -137,8 +180,7 @@ export const readerApplicationThemeViewportMethods = {
     this.stabilizeViewportResize([0, 140, 320, 620], 220, () => {
       this.loadingIndicatorController.hide();
     });
-  }
-,
+  },
   getFullscreenElement() {
     return (
       document.fullscreenElement ||
@@ -146,8 +188,7 @@ export const readerApplicationThemeViewportMethods = {
       document.webkitCurrentFullScreenElement ||
       null
     );
-  }
-,
+  },
   stabilizeViewportResize(delays = [0], resizeDelay = 0, onComplete) {
     this.clearFullscreenResizeTimers();
 
@@ -166,8 +207,7 @@ export const readerApplicationThemeViewportMethods = {
 
       this.fullscreenResizeTimers.push(timerId);
     });
-  }
-,
+  },
   resizeReaderViewport(delay = 0, onResized) {
     if (!this.rendition) {
       if (typeof onResized === "function") {
@@ -234,6 +274,5 @@ export const readerApplicationThemeViewportMethods = {
     }
 
     resizeRendition();
-  }
-,
+  },
 };

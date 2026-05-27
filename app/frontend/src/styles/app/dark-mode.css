@@ -1484,6 +1484,19 @@
   border-color: var(--line-strong);
   color: var(--ink);
 }
+[data-theme="dark"] .book-my-books-button.is-in-my-books,
+[data-theme="dark"] .my-books-toggle.is-in-my-books {
+  color: #fff4f4;
+  background: linear-gradient(180deg, #d84a4a 0%, #a83232 100%);
+  border-color: rgba(122, 25, 25, 0.5);
+  box-shadow: 0 12px 24px rgba(138, 52, 52, 0.24);
+}
+[data-theme="dark"] .book-my-books-button.is-in-my-books:hover,
+[data-theme="dark"] .my-books-toggle.is-in-my-books:hover {
+  background: linear-gradient(180deg, #e05555 0%, #b83838 100%);
+  border-color: rgba(160, 40, 40, 0.65);
+  box-shadow: 0 14px 28px rgba(138, 52, 52, 0.38);
+}
 [data-theme="dark"] .book-delete-control {
   background: linear-gradient(180deg, #d84a4a 0%, #a83232 100%);
   border-color: rgba(200, 80, 80, 0.55);

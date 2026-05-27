@@ -192,6 +192,10 @@ export default function ReaderViewport({
               </div>
             </div>
           </div>
+          <div className="reader-chapter-bar" id="reader-chapter-bar">
+            <span className="reader-chapter-name" id="reader-chapter-name" />
+            <span className="reader-location" id="reader-location" />
+          </div>
           <div className="wrapper-main">
             <button
               type="button"

@@ -103,6 +103,13 @@ export const readerApplicationEventBindingMethods = {
     );
 
     this.cleanupHandlers.push(
+      delegateEvent(document, "click", ".toc-toggle", (event, target) => {
+        event.stopPropagation();
+        this.handleTocToggle(target);
+      }),
+    );
+
+    this.cleanupHandlers.push(
       delegateEvent(document, "click", TOC_LABEL_SELECTOR, (event, target) => {
         this.handleTocSelection(event, target);
       }),
@@ -125,28 +132,24 @@ export const readerApplicationEventBindingMethods = {
         this.handleThemeControl(target);
       }),
     );
-  }
-,
+  },
   openNewBook() {
     if (!this.openEpubButton) return;
     this.openEpubButton.click();
-  }
-,
+  },
   openShortcutsModal(event) {
     if (event?.preventDefault) {
       event.preventDefault();
     }
     this.shortcutDialogController.open();
-  }
-,
+  },
   closeShortcutsModal(event, backdropElement) {
     if (backdropElement && event?.target !== backdropElement) {
       return;
     }
 
     this.shortcutDialogController.close();
-  }
-,
+  },
   handleBookFileSelection(event) {
     const file = event.target?.files?.[0];
     if (!file) return;
@@ -169,8 +172,19 @@ export const readerApplicationEventBindingMethods = {
       this.closeBook();
     };
     reader.readAsArrayBuffer(file);
-  }
-,
+  },
+  handleTocToggle(toggleBtn) {
+    const row = toggleBtn.closest(".slide-contents-item");
+    if (!row) return;
+    const node = row.parentElement;
+    if (!node || !node.classList.contains("toc-node")) return;
+    const children = node.querySelector(":scope > .toc-children");
+    if (!children) return;
+    const isOpen = !children.hidden;
+    children.hidden = isOpen;
+    toggleBtn.setAttribute("aria-expanded", String(!isOpen));
+    toggleBtn.innerHTML = isOpen ? "&#9654;" : "&#9660;";
+  },
   teardownCurrentPublication({ clearViewer = false, clearToc = false } = {}) {
     this.clearPendingIframeInteractionSetup();
     if (this.persistReadingStateTimer) {
@@ -202,6 +216,11 @@ export const readerApplicationEventBindingMethods = {
     this.navigation = null;
     this.currentHref = null;
     this.section = 0;
+    this.flattenedToc = null;
+
+    if (this.chapterLabelElement) {
+      this.chapterLabelElement.textContent = "";
+    }
 
     if (clearViewer && this.readerWrapperContainer) {
       removeClass(this.readerWrapperContainer, "stop");
@@ -212,6 +231,5 @@ export const readerApplicationEventBindingMethods = {
     if (clearToc && this.epubContents) {
       this.epubContents.innerHTML = "";
     }
-  }
-,
+  },
 };

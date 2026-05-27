@@ -25,6 +25,7 @@ import {
   flattenToc,
   getItemHref,
   renderToc,
+  renderTocTree,
   syncSelectedTocItem,
 } from ".././utils/toc-helpers.js";
 import {
@@ -179,9 +180,11 @@ export const readerApplicationBookInitializationMethods = {
       .then((navigation) => {
         if (!this.isSessionActive(sessionId) || !navigation) return;
         const flattenedToc = flattenToc(navigation.toc || []);
-        renderToc(this.epubContents, flattenedToc);
+        this.flattenedToc = flattenedToc;
+        renderTocTree(this.epubContents, navigation.toc || []);
         if (this.currentHref) {
           syncSelectedTocItem(this.currentHref);
+          this.syncChapterLabel(this.currentHref);
         }
       })
       .catch((error) => {

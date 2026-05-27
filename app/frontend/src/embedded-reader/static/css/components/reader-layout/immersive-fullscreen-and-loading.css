@@ -25,7 +25,8 @@
 
 .epub-reader-container.immersive-reading .reader-wrapper .wrapper-nav,
 .epub-reader-container.immersive-reading .reader-wrapper .arrow.prev-btn,
-.epub-reader-container.immersive-reading .reader-wrapper .arrow.next-btn {
+.epub-reader-container.immersive-reading .reader-wrapper .arrow.next-btn,
+.epub-reader-container.immersive-reading .reader-wrapper .reader-chapter-bar {
   display: none;
 }
 
@@ -36,7 +37,9 @@
 }
 
 .epub-reader-container.immersive-reading .reader-wrapper .wrapper-main,
-.epub-reader-container.immersive-reading .reader-wrapper .reader-wrapper-container,
+.epub-reader-container.immersive-reading
+  .reader-wrapper
+  .reader-wrapper-container,
 .epub-reader-container.immersive-reading #viewer {
   width: 100%;
   height: 100%;
@@ -49,14 +52,19 @@
   gap: 0;
 }
 
-.epub-reader-container.immersive-reading .reader-wrapper .reader-wrapper-container {
+.epub-reader-container.immersive-reading
+  .reader-wrapper
+  .reader-wrapper-container {
   border: 0;
   border-radius: 0;
   background: transparent;
   padding: 0;
 }
 
-.epub-reader-container.immersive-reading .reader-wrapper .reader-wrapper-container > .epub-container,
+.epub-reader-container.immersive-reading
+  .reader-wrapper
+  .reader-wrapper-container
+  > .epub-container,
 .epub-reader-container.immersive-reading
   .reader-wrapper
   .reader-wrapper-container
@@ -174,7 +182,6 @@
     flex-basis: 66%;
     max-width: 66%;
   }
-
 }
 
 @media (max-width: 900px) {

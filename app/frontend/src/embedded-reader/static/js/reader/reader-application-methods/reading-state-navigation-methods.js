@@ -27,6 +27,7 @@ import {
   renderToc,
   syncSelectedTocItem,
 } from ".././utils/toc-helpers.js";
+
 import {
   bindDoubleTapToggle,
   createSwipeBinder,
@@ -44,6 +45,13 @@ const TOC_TOGGLE_EXCLUDED_TARGETS =
   "a, button, input, textarea, select, label, summary, [data-no-reader-toggle]";
 const IFRAME_INTERACTION_READY_DELAY_MS = 200;
 const IFRAME_INTERACTION_RELOCATED_DELAY_MS = 100;
+
+const BENGALI_DIGIT_MAP = "০১২৩৪৫৬৭৮৯";
+
+function toLocalNumerals(str, lang) {
+  if (!lang || !lang.toLowerCase().startsWith("bn")) return str;
+  return String(str).replace(/[0-9]/g, (d) => BENGALI_DIGIT_MAP[d]);
+}
 
 function readCookie(name) {
   const pattern = new RegExp(`(?:^|; )${name}=([^;]*)`);
@@ -79,8 +87,7 @@ export const readerApplicationReadingStateNavigationMethods = {
         console.error("Failed to persist reading state.", error);
       });
     }, 350);
-  }
-,
+  },
   exitFullscreenIfActive() {
     if (!this.getFullscreenElement()) return;
 
@@ -103,8 +110,7 @@ export const readerApplicationReadingStateNavigationMethods = {
     } catch {
       // Ignore fullscreen exit errors.
     }
-  }
-,
+  },
   closeBook() {
     this.beginReaderSession();
     this.clearPendingIframeInteractionSetup();
@@ -131,8 +137,7 @@ export const readerApplicationReadingStateNavigationMethods = {
     this.syncTocToggleAriaState();
     this.syncReaderControlStates();
     this.readerThemeManager.syncSystemThemeColor(undefined, APP_THEME_COLOR);
-  }
-,
+  },
   getSectionCount() {
     if (Array.isArray(this.book?.spine?.spineItems)) {
       return this.book.spine.spineItems.length;
@@ -140,15 +145,13 @@ export const readerApplicationReadingStateNavigationMethods = {
 
     const numericLength = this.book?.spine?.length;
     return Number.isFinite(numericLength) ? numericLength : 0;
-  }
-,
+  },
   changePrev() {
     if (!this.rendition || this.section <= 0) return;
 
     this.section -= 1;
     this.displayCurrentSection();
-  }
-,
+  },
   changeNext() {
     const sectionCount = this.getSectionCount();
     if (
@@ -160,8 +163,7 @@ export const readerApplicationReadingStateNavigationMethods = {
 
     this.section += 1;
     this.displayCurrentSection();
-  }
-,
+  },
   displayCurrentSection() {
     if (!this.book || typeof this.book.section !== "function") return;
 
@@ -171,8 +173,7 @@ export const readerApplicationReadingStateNavigationMethods = {
     this.display(nextSection.href, () => {
       this.refresh(nextSection.href);
     });
-  }
-,
+  },
   display(href, callback, sessionId = this.readerSessionId) {
     if (!this.isSessionActive(sessionId) || !this.book?.rendition) {
       return Promise.resolve(false);
@@ -224,8 +225,7 @@ export const readerApplicationReadingStateNavigationMethods = {
         this.loadingIndicatorController.hide();
         return false;
       });
-  }
-,
+  },
   normalizeHrefForComparison(href) {
     if (!href) return "";
     const hrefWithoutHash = String(href).split("#")[0];
@@ -235,8 +235,7 @@ export const readerApplicationReadingStateNavigationMethods = {
     } catch {
       return hrefWithoutHash;
     }
-  }
-,
+  },
   syncSectionWithHref(href) {
     const normalizedHref = this.normalizeHrefForComparison(href);
     const spineItems = this.book?.spine?.spineItems;
@@ -255,6 +254,71 @@ export const readerApplicationReadingStateNavigationMethods = {
     if (sectionIndex !== -1) {
       this.section = sectionIndex;
     }
-  }
-,
+
+    this.updateChapterBar(href);
+  },
+  updateChapterBar(href) {
+    const nameEl = document.getElementById("reader-chapter-name");
+    const locEl = document.getElementById("reader-location");
+    if (!nameEl && !locEl) return;
+
+    const toc = this.book?.navigation?.toc;
+    const flat = toc ? flattenToc(toc) : [];
+    const normalizedHref = this.normalizeHrefForComparison(href);
+
+    // Collect ALL matching indexes (an omnibus section header and its first
+    // chapter often share the same underlying file). Then prefer a leaf entry
+    // (no subitems) so the breadcrumb shows e.g. "বিষকুম্ভ › ০১. তাসের ঘর"
+    // instead of just the parent section "বিষকুম্ভ".
+    const matchedIndexes = [];
+    if (flat.length && normalizedHref) {
+      for (let i = 0; i < flat.length; i++) {
+        const itemHref = this.normalizeHrefForComparison(flat[i].href || "");
+        if (
+          itemHref &&
+          (itemHref === normalizedHref ||
+            normalizedHref.endsWith(`/${itemHref}`) ||
+            itemHref.endsWith(`/${normalizedHref}`) ||
+            normalizedHref.endsWith(itemHref))
+        ) {
+          matchedIndexes.push(i);
+        }
+      }
+    }
+    let matchIdx = -1;
+    if (matchedIndexes.length) {
+      const leafIdx = matchedIndexes.find((idx) => {
+        const subs = flat[idx]?.subitems;
+        return !Array.isArray(subs) || subs.length === 0;
+      });
+      matchIdx = leafIdx !== undefined ? leafIdx : matchedIndexes[0];
+    }
+
+    const lang = this.book?.packaging?.metadata?.language || "";
+
+    if (nameEl) {
+      if (matchIdx >= 0) {
+        // Prefer the explicit ancestorLabels chain that flattenToc records
+        // (more reliable than scanning earlier flat entries by level, which
+        // breaks when sibling sub-trees are interleaved).
+        const ancestors = Array.isArray(flat[matchIdx].ancestorLabels)
+          ? flat[matchIdx].ancestorLabels.filter((p) => p && p.trim())
+          : [];
+        const crumb = [...ancestors, flat[matchIdx].label || ""].filter(
+          (p) => p && p.trim(),
+        );
+        nameEl.textContent = crumb.join(" › ");
+      } else {
+        nameEl.textContent = "";
+      }
+    }
+    if (locEl) {
+      if (matchIdx >= 0 && flat.length > 0) {
+        const raw = `${matchIdx + 1} / ${flat.length}`;
+        locEl.textContent = toLocalNumerals(raw, lang);
+      } else {
+        locEl.textContent = "";
+      }
+    }
+  },
 };

@@ -61,13 +61,13 @@ export const readerApplicationStartupSessionMethods = {
     this.readerWrapperContainer = query(SELECTORS.readerWrapperContainer);
     this.epubContainer = query(SELECTORS.epubContainer);
     this.settingPanel = query(SELECTORS.settingWrapper);
+    this.chapterLabelElement = query(SELECTORS.chapterLabel);
     removeClass(this.readerWrapperContainer, "close");
 
     if (this.settingsPanelController) {
       this.settingsPanelController.setPanelElement(this.settingPanel);
     }
-  }
-,
+  },
   getStoredNumber(key) {
     try {
       const value = window.localStorage.getItem(key);
@@ -78,23 +78,19 @@ export const readerApplicationStartupSessionMethods = {
     } catch {
       return null;
     }
-  }
-,
+  },
   beginReaderSession() {
     this.readerSessionId += 1;
     return this.readerSessionId;
-  }
-,
+  },
   isSessionActive(sessionId) {
     return sessionId === this.readerSessionId;
-  }
-,
+  },
   clearPendingIframeInteractionSetup() {
     if (!this.pendingIframeInteractionTimer) return;
     clearTimeout(this.pendingIframeInteractionTimer);
     this.pendingIframeInteractionTimer = null;
-  }
-,
+  },
   scheduleIframeInteractionSetup(
     delayMs = IFRAME_INTERACTION_READY_DELAY_MS,
     sessionId = this.readerSessionId,
@@ -106,20 +102,17 @@ export const readerApplicationStartupSessionMethods = {
       if (!this.isSessionActive(sessionId) || !this.rendition) return;
       this.setupIframeInteractions(sessionId);
     }, delayMs);
-  }
-,
+  },
   handleRecoverableBookError(contextMessage, error, sessionId) {
     if (!this.isSessionActive(sessionId)) return;
     console.error(contextMessage, error);
-  }
-,
+  },
   handleFatalBookError(contextMessage, error, sessionId) {
     if (!this.isSessionActive(sessionId)) return;
     console.error(contextMessage, error);
     this.loadingIndicatorController.hide();
     this.closeBook();
-  }
-,
+  },
   getLaunchManifestUrl() {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -127,8 +120,7 @@ export const readerApplicationStartupSessionMethods = {
     } catch {
       return "";
     }
-  }
-,
+  },
   loadManifestLaunchIfPresent() {
     const manifestUrl = this.getLaunchManifestUrl();
     if (!manifestUrl) return;
@@ -170,8 +162,7 @@ export const readerApplicationStartupSessionMethods = {
         console.error("Failed to load launch manifest.", error);
         this.loadingIndicatorController.hide();
       });
-  }
-,
+  },
   init() {
     if (this.hasInitialized) return;
     if (typeof window.ePub !== "function") {
@@ -195,8 +186,7 @@ export const readerApplicationStartupSessionMethods = {
       this.onFullscreenStateChange,
     );
     this.loadManifestLaunchIfPresent();
-  }
-,
+  },
   destroy() {
     if (!this.hasInitialized) return;
     this.hasInitialized = false;
@@ -229,6 +219,5 @@ export const readerApplicationStartupSessionMethods = {
     this.shortcutDialogController.close();
     this.iframeBridgeController.destroy();
     this.readerThemeManager.teardown();
-  }
-,
+  },
 };

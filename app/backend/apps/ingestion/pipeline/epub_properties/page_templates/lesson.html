@@ -5,15 +5,67 @@
     <title>{{lesson_title}}</title>
   </head>
   <body>
-    <div style="margin: 40px; font-family: Arial, sans-serif">
+    <div
+      style="
+        margin: 40px;
+        font-family:
+          &quot;Kalpurush&quot;, &quot;SolaimanLipi&quot;,
+          &quot;Noto Sans Bengali&quot;, Arial, sans-serif;
+      "
+    >
       <style>
         a {
           text-decoration: none;
         }
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+          font-family: inherit;
+          text-align: center;
+          font-weight: bold;
+          line-height: 1.5;
+          margin: 0.2em 0 0.6em 0;
+          color: inherit;
+        }
+        h1 {
+          font-size: 1.2em;
+        }
+        h2 {
+          font-size: 1.1em;
+        }
+        h3 {
+          font-size: 1.05em;
+        }
+        h4,
+        h5,
+        h6 {
+          font-size: 1em;
+        }
       </style>
-      {% if lesson_title %}
+      {% if chapter_hierarchy is defined and chapter_hierarchy is not none %} {#
+      Nested chapter: render full heading hierarchy (h1 for root ancestor … hN
+      for current title). #} {# chapter_hierarchy = [(1, "Ancestor"), (2,
+      "Parent"), (3, "Current")] #} {# An empty list means top-level chapter →
+      no heading rendered. #} {% for level, heading_text in chapter_hierarchy %}
+      {% if level == 1 %}
+      <h1>{{ heading_text }}</h1>
+      {% elif level == 2 %}
+      <h2>{{ heading_text }}</h2>
+      {% elif level == 3 %}
+      <h3>{{ heading_text }}</h3>
+      {% elif level == 4 %}
+      <h4>{{ heading_text }}</h4>
+      {% elif level == 5 %}
+      <h5>{{ heading_text }}</h5>
+      {% else %}
+      <h6>{{ heading_text }}</h6>
+      {% endif %} {% endfor %} {% else %} {# Legacy / flat-book path: render
+      lesson_title as h2 if present. #} {% if lesson_title %}
       <h2>{{lesson_title}}</h2>
-      {% endif %}
+      {% endif %} {% endif %}
       <div>{{lesson_content}}</div>
     </div>
   </body>

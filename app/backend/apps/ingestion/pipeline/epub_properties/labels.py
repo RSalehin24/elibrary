@@ -103,3 +103,18 @@ BOOK_INFO_LABELS_EN = {
 
 def labels_for(language):
     return LABEL_TEXTS.get(language) or LABEL_TEXTS["bn"]
+
+
+_BENGALI_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+
+def to_local_digits(n, language):
+    """Return *n* as a string with locale-appropriate digit characters.
+
+    For Bengali (``language == "bn"``), ASCII digits are replaced with
+    Bengali numerals (e.g. 1 → ১, 2 → ২).  All other languages keep ASCII.
+    """
+    s = str(n)
+    if language == "bn":
+        return s.translate(_BENGALI_DIGITS)
+    return s
