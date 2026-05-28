@@ -63,6 +63,6 @@ logs/**/*.log
 !logs/**/.gitkeep
 
 # Migration
-migration/config/migrate.env
+migration/env/migrate.env
 migration/runtime/*
 !migration/runtime/.gitkeep

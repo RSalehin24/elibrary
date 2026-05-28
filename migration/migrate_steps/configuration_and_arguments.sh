@@ -16,10 +16,10 @@ source "${MIGRATION_DIR}/lib/compose.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  migration/migrate.sh [--config migration/config/migrate.env] [--phase preflight|snapshot|restore|verify|full] [--dry-run] [--resume] [--keep-staging] [--allow-target-reset] [--skip-edge]
+  migration/migrate.sh [--config migration/env/migrate.env] [--phase preflight|snapshot|restore|verify|full] [--dry-run] [--resume] [--keep-staging] [--allow-target-reset] [--skip-edge]
 
 Options:
-  --config      Path to the migration config file. Defaults to migration/config/migrate.env.
+  --config      Path to the migration config file. Defaults to migration/env/migrate.env.
   --phase       Which phase to run:
                   preflight - check SSH access, disk space, and source health (safe, no changes made)
                   snapshot  - freeze the source and capture a database + storage snapshot
@@ -34,12 +34,12 @@ Options:
 
 Before migrating:
   1. Source server (AWS)           - deploy/env/.host.env        set DEPLOY_USER_NAME and DEPLOY_IP
-  2. Target server (Digital Ocean) - migration/config/migrate.env set TARGET_HOST and TARGET_IP
+  2. Target server (Digital Ocean) - migration/env/migrate.env set TARGET_HOST and TARGET_IP
      If the username differs on the target, also set TARGET_USER in that file.
 
 Examples:
   migration/migrate.sh --phase preflight --dry-run
-  migration/migrate.sh --config migration/config/migrate.env --phase full
+  migration/migrate.sh --config migration/env/migrate.env --phase full
   migration/migrate.sh --phase restore --resume
 EOF
 }
@@ -48,8 +48,8 @@ q() {
   printf '%q' "$1"
 }
 
-CONFIG_FILE="${MIGRATION_DIR}/config/migrate.env"
-CONFIG_EXAMPLE_FILE="${MIGRATION_DIR}/config/migrate.env.example"
+CONFIG_FILE="${MIGRATION_DIR}/env/migrate.env"
+CONFIG_EXAMPLE_FILE="${MIGRATION_DIR}/env/migrate.env.example"
 PHASE="full"
 DRY_RUN=0
 RESUME=0
