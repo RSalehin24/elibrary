@@ -19,15 +19,15 @@ Monorepo for the Bangla ebook platform. The platform scrapes, processes, and ser
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Backend API | Django (Python) |
-| Task Queue | Celery + Redis |
-| Frontend | React + Vite (JavaScript) |
-| Database | PostgreSQL |
-| Containerisation | Docker Compose |
-| Edge / TLS | Nginx + Certbot |
-| Testing | pytest · Vitest · Playwright |
+| Layer            | Technology                   |
+| ---------------- | ---------------------------- |
+| Backend API      | Django (Python)              |
+| Task Queue       | Celery + Redis               |
+| Frontend         | React + Vite (JavaScript)    |
+| Database         | PostgreSQL                   |
+| Containerisation | Docker Compose               |
+| Edge / TLS       | Nginx + Certbot              |
+| Testing          | pytest · Vitest · Playwright |
 
 ---
 
@@ -171,17 +171,33 @@ deploy/scripts/deploy.sh
 
 See [docs/operations/deployment.md](docs/operations/deployment.md) for the full deployment guide.
 
+### Migration
+
+```bash
+# 1. Create and fill in the config
+cp migration/env/migrate.env.example migration/env/migrate.env
+# Edit migration/env/migrate.env: set TARGET_HOST and TARGET_IP
+
+# 2. Dry run — validate config only, no changes
+migration/migrate.sh --dry-run
+
+# 3. Full migration
+migration/migrate.sh
+```
+
+See [docs/operations/migration.md](docs/operations/migration.md) for the full migration guide.
+
 ---
 
 ## Key Commands
 
-| Command | Purpose |
-|---|---|
-| `local/scripts/dev.sh up` | Start local Docker stack |
-| `deploy/scripts/deploy.sh` | Deploy to production |
+| Command                                    | Purpose                    |
+| ------------------------------------------ | -------------------------- |
+| `local/scripts/dev.sh up`                  | Start local Docker stack   |
+| `deploy/scripts/deploy.sh`                 | Deploy to production       |
 | `logs/scripts/show-logs.sh backend remote` | Stream remote backend logs |
-| `logs/scripts/show-logs.sh worker remote` | Stream remote worker logs |
-| `logs/scripts/show-logs.sh beat remote` | Stream remote beat logs |
+| `logs/scripts/show-logs.sh worker remote`  | Stream remote worker logs  |
+| `logs/scripts/show-logs.sh beat remote`    | Stream remote beat logs    |
 
 All scripts support `-h` / `--help` for usage details.
 
@@ -191,6 +207,7 @@ All scripts support `-h` / `--help` for usage details.
 
 - [Local development guide](docs/operations/local-development.md)
 - [Deployment guide](docs/operations/deployment.md)
+- [Migration guide](docs/operations/migration.md)
 - [Authentication flows](docs/operations/authentication-flows.md)
 - [Log viewing guide](docs/operations/log-viewing.md)
 - [Source site metadata notes](docs/ingestion/source-site-metadata.md)
