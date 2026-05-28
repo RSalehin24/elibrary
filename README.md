@@ -87,24 +87,63 @@ Monorepo for the Bangla ebook platform. The platform scrapes, processes, and ser
 
 - Local development: [docs/operations/local-development.md](docs/operations/local-development.md)
 - Deployment automation: [docs/operations/deployment.md](docs/operations/deployment.md)
+- Server-to-server migration: [docs/operations/migration.md](docs/operations/migration.md)
 - Log viewing: [docs/operations/log-viewing.md](docs/operations/log-viewing.md)
 
 ## Key Commands
 
-- `local/scripts/generate-env.sh`
-- `deploy/scripts/generate-env.sh production`
-- `deploy/scripts/generate-env.sh host`
-- `local/scripts/dev.sh up`
-- `tests/scripts/seed-e2e-data.sh`
-- `tests/scripts/test-all.sh`
-- `tests/scripts/test-backend.sh`
-- `tests/scripts/test-frontend-unit.sh`
-- `tests/scripts/test-e2e.sh`
-- `tests/scripts/verify.sh --repeat 3`
-- `deploy/scripts/deploy.sh`
-- `logs/scripts/show-logs.sh backend remote`
-- `logs/scripts/show-logs.sh worker remote`
-- `logs/scripts/show-logs.sh beat remote`
+### Local Development
+
+```bash
+local/scripts/generate-env.sh          # generate local env file
+local/scripts/dev.sh up                # start local stack with hot reload
+local/scripts/dev.sh ps                # check container status
+local/scripts/dev.sh logs backend      # follow backend + worker + beat logs
+local/scripts/dev.sh restart backend   # restart a single service
+local/scripts/dev.sh down              # stop and remove containers
+```
+
+### Testing
+
+```bash
+tests/scripts/seed-e2e-data.sh         # seed deterministic E2E records
+tests/scripts/test-all.sh              # full suite: backend + frontend unit + E2E
+tests/scripts/test-backend.sh          # backend pytest only
+tests/scripts/test-frontend-unit.sh    # frontend unit tests only
+tests/scripts/test-e2e.sh              # Playwright E2E tests only
+tests/scripts/verify.sh --repeat 3     # full verify loop (3 iterations)
+```
+
+### Deployment
+
+```bash
+deploy/scripts/generate-env.sh production   # generate production env file
+deploy/scripts/generate-env.sh host         # generate deploy host env file
+deploy/scripts/deploy.sh                    # deploy to production (push env)
+deploy/scripts/deploy.sh --sync-mode push   # force overwrite remote env
+deploy/scripts/deploy.sh --sync-mode preserve  # keep existing remote env
+deploy/scripts/deploy.sh --env-name test    # deploy to test environment
+```
+
+### Migration
+
+```bash
+migration/migrate.sh --dry-run              # validate config, no changes
+migration/migrate.sh --phase preflight      # SSH + disk checks only
+migration/migrate.sh                        # full server-to-server migration
+migration/migrate.sh --resume               # resume after interruption
+migration/migrate.sh --phase verify --resume  # resume verify phase only
+migration/migrate.sh --skip-edge            # skip nginx/certbot setup
+```
+
+### Log Viewing
+
+```bash
+logs/scripts/show-logs.sh backend remote   # tail remote backend logs
+logs/scripts/show-logs.sh worker remote    # tail remote worker logs
+logs/scripts/show-logs.sh beat remote      # tail remote beat logs
+logs/scripts/show-logs.sh frontend local   # tail local frontend logs
+```
 
 ## Runtime Notes
 
@@ -127,3 +166,4 @@ Monorepo for the Bangla ebook platform. The platform scrapes, processes, and ser
 - Processing live test matrix: [docs/processing-live-test-matrix.md](docs/processing-live-test-matrix.md)
 - Source metadata notes: [docs/ingestion/source-site-metadata.md](docs/ingestion/source-site-metadata.md)
 - Authentication flows: [docs/operations/authentication-flows.md](docs/operations/authentication-flows.md)
+- Migration guide: [docs/operations/migration.md](docs/operations/migration.md)

@@ -91,6 +91,40 @@ deploy/scripts/deploy.sh --sync-mode prompt
 - Docker is installed automatically when missing, or upgraded when `DEPLOY_DOCKER_VERSION` is set and the remote version does not match.
 - Host Nginx config is written automatically and Nginx is installed or upgraded when `DEPLOY_NGINX_VERSION` is set and the remote version does not match.
 
+## Updating Runtime Configuration Without a Full Redeploy
+
+For configuration-only changes (e.g. increasing `CELERY_PROCESSING_CONCURRENCY`) you can push the updated env and restart only the affected service, avoiding a full stack teardown.
+
+### Option A — Live, zero-downtime concurrency change (current session only)
+
+Celery's prefork pool accepts a `pool_grow` control command while workers are running:
+
+```bash
+source deploy/env/.host.env
+TARGET="${DEPLOY_USER_NAME}@${DEPLOY_IP}"
+REMOTE_DIR="${DEPLOY_REMOTE_APP_DIR:-/home/${DEPLOY_USER_NAME}/library_app}"
+
+# Add 2 processes to the processing-worker pool
+ssh "$TARGET" "cd '$REMOTE_DIR' && \
+  docker compose -f deploy/compose/docker-compose.yml exec -T processing-worker \
+  celery -A config control pool_grow 2"
+```
+
+This takes effect immediately. The change is lost on the next container restart.
+
+### Option B — Persistent change via deploy.sh (recommended)
+
+1. Update the value in `deploy/env/.production.env` (e.g. `CELERY_PROCESSING_CONCURRENCY=6`).
+2. Run the deployment script with `--sync-mode push`:
+
+```bash
+deploy/scripts/deploy.sh --sync-mode push
+```
+
+This rebuilds and recreates all containers. In-flight tasks are interrupted but **redelivered** on restart because `task_acks_late=True` is set in the Celery config, so no tasks are lost.
+
+**Memory note:** each processing worker process can consume up to ~400 MB (`worker_max_memory_per_child`). The `processing-worker` container is capped by `PROCESSING_WORKER_MEM_LIMIT`. Raise that limit alongside `CELERY_PROCESSING_CONCURRENCY` if needed.
+
 ## Remote Runtime Model
 
 - Docker Compose runs `frontend`, `backend`, `worker`, `beat`, `postgres`, `redis`, and a one-shot `backend-init` bootstrap service.
