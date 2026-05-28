@@ -2,11 +2,34 @@
 
 Monorepo for the Bangla ebook platform. The platform scrapes, processes, and serves Bangla (and English) ebooks from [ebanglalibrary.com](https://www.ebanglalibrary.com), producing well-structured EPUB and HTML books for an authenticated library of users.
 
-## Stack
+---
 
-- Backend: Django + Celery in [app/backend](app/backend)
-- Frontend: React + Vite in [app/frontend](app/frontend)
-- Infrastructure: Docker Compose for local and deployed services, host Nginx + Certbot for the remote edge
+## Features
+
+- 📚 **Ebook Scraping** — Automated scraper that ingests ebooks and their metadata (title, author, category, cover image) from a popular Bengali ebook site.
+- 🗂️ **Book Catalog** — Browsable and searchable catalog of all scraped books, organized by category and author.
+- 📖 **Ebook Generation** — Generates downloadable ebook files from scraped content and stores them for user access.
+- 🔐 **Authentication** — User registration and login with session-based access control.
+- ⚙️ **Async Task Processing** — Long-running scrape and generation jobs are handled by Celery workers with Redis as the message broker, keeping the API responsive.
+- 🐳 **Dockerized Stack** — Full local development and production deployment via Docker Compose, including Postgres, Redis, Django backend, Celery worker & beat, and React frontend.
+- 🧪 **Automated Testing** — Backend pytest suite, frontend unit tests (Vitest), and 19 end-to-end browser stories powered by Playwright.
+- 🚀 **One-Command Deployment** — Remote deployment automation with Nginx + Certbot for TLS at the edge.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend API | Django (Python) |
+| Task Queue | Celery + Redis |
+| Frontend | React + Vite (JavaScript) |
+| Database | PostgreSQL |
+| Containerisation | Docker Compose |
+| Edge / TLS | Nginx + Certbot |
+| Testing | pytest · Vitest · Playwright |
+
+---
 
 ## Features
 
@@ -82,88 +105,93 @@ Monorepo for the Bangla ebook platform. The platform scrapes, processes, and ser
 - `app/backend/storage/`: the runtime storage location for static files, uploads, generated books, and scraped exports
 - `automation/`: shared shell and env helpers used by local, deploy, and log automation
 - `tests/README.md`: test suite overview, coverage map, and script guide
+- `app/` — application source code for backend and frontend
+- `tests/` — backend and browser test suites at the repo root
+- `local/` — local Compose, Dockerfiles, env templates, and developer scripts
+- `deploy/` — deployment Compose, Dockerfiles, env templates, and remote automation scripts
+- `logs/` — local and remote log streaming plus captured log files
+- `automation/` — shared shell and env helpers used by local, deploy, and log automation
+- `app/backend/storage/` — runtime storage for static files, uploads, generated books, and scraped exports
 
-## Primary Workflows
+---
 
-- Local development: [docs/operations/local-development.md](docs/operations/local-development.md)
-- Deployment automation: [docs/operations/deployment.md](docs/operations/deployment.md)
-- Server-to-server migration: [docs/operations/migration.md](docs/operations/migration.md)
-- Log viewing: [docs/operations/log-viewing.md](docs/operations/log-viewing.md)
+## Getting Started
 
-## Key Commands
+### Prerequisites
+
+- Docker & Docker Compose
+- Git
 
 ### Local Development
 
 ```bash
-local/scripts/generate-env.sh          # generate local env file
-local/scripts/dev.sh up                # start local stack with hot reload
-local/scripts/dev.sh ps                # check container status
-local/scripts/dev.sh logs backend      # follow backend + worker + beat logs
-local/scripts/dev.sh restart backend   # restart a single service
-local/scripts/dev.sh down              # stop and remove containers
+# 1. Generate local environment files
+local/scripts/generate-env.sh
+
+# 2. Start the full local stack (postgres, redis, backend, worker, beat, frontend)
+local/scripts/dev.sh up
 ```
 
-### Testing
+The frontend will be available at `http://localhost:5173` and the backend API at `http://localhost:8000`.
+
+### Running Tests
 
 ```bash
-tests/scripts/seed-e2e-data.sh         # seed deterministic E2E records
-tests/scripts/test-all.sh              # full suite: backend + frontend unit + E2E
-tests/scripts/test-backend.sh          # backend pytest only
-tests/scripts/test-frontend-unit.sh    # frontend unit tests only
-tests/scripts/test-e2e.sh              # Playwright E2E tests only
-tests/scripts/verify.sh --repeat 3     # full verify loop (3 iterations)
+# Run all tests (requires live Docker stack)
+tests/scripts/test-all.sh
+
+# Backend tests only
+tests/scripts/test-backend.sh
+
+# Frontend unit tests only
+tests/scripts/test-frontend-unit.sh
+
+# End-to-end browser tests only
+tests/scripts/test-e2e.sh
+
+# Seed deterministic E2E data
+tests/scripts/seed-e2e-data.sh
+
+# Verify the full suite N times
+tests/scripts/verify.sh --repeat 3
 ```
+
+See [tests/README.md](tests/README.md) for the full coverage map and browser story list.
 
 ### Deployment
 
 ```bash
-deploy/scripts/generate-env.sh production   # generate production env file
-deploy/scripts/generate-env.sh host         # generate deploy host env file
-deploy/scripts/deploy.sh                    # deploy to production (push env)
-deploy/scripts/deploy.sh --sync-mode push   # force overwrite remote env
-deploy/scripts/deploy.sh --sync-mode preserve  # keep existing remote env
-deploy/scripts/deploy.sh --env-name test    # deploy to test environment
+# Generate production environment files
+deploy/scripts/generate-env.sh production
+deploy/scripts/generate-env.sh host
+
+# Deploy to remote server
+deploy/scripts/deploy.sh
 ```
 
-### Migration
+See [docs/operations/deployment.md](docs/operations/deployment.md) for the full deployment guide.
 
-```bash
-migration/migrate.sh --dry-run              # validate config, no changes
-migration/migrate.sh --phase preflight      # SSH + disk checks only
-migration/migrate.sh                        # full server-to-server migration
-migration/migrate.sh --resume               # resume after interruption
-migration/migrate.sh --phase verify --resume  # resume verify phase only
-migration/migrate.sh --skip-edge            # skip nginx/certbot setup
-```
+---
 
-### Log Viewing
+## Key Commands
 
-```bash
-logs/scripts/show-logs.sh backend remote   # tail remote backend logs
-logs/scripts/show-logs.sh worker remote    # tail remote worker logs
-logs/scripts/show-logs.sh beat remote      # tail remote beat logs
-logs/scripts/show-logs.sh frontend local   # tail local frontend logs
-```
+| Command | Purpose |
+|---|---|
+| `local/scripts/dev.sh up` | Start local Docker stack |
+| `deploy/scripts/deploy.sh` | Deploy to production |
+| `logs/scripts/show-logs.sh backend remote` | Stream remote backend logs |
+| `logs/scripts/show-logs.sh worker remote` | Stream remote worker logs |
+| `logs/scripts/show-logs.sh beat remote` | Stream remote beat logs |
 
-## Runtime Notes
+All scripts support `-h` / `--help` for usage details.
 
-- Local development runs `postgres`, `redis`, `backend`, `worker`, `beat`, and `frontend` from [local/compose/docker-compose.yml](local/compose/docker-compose.yml).
-- Deployment runs the same core services plus the Dockerized frontend from [deploy/compose/docker-compose.yml](deploy/compose/docker-compose.yml).
-- Books are stored only under `app/backend/storage/`, with generated titles in `app/backend/storage/media/generated/` and scraped export folders in `app/backend/storage/media/scraped-books/`.
-- Automated tests live under [tests/backend](tests/backend) and [tests/frontend](tests/frontend).
-- Backend pytest config lives at [tests/pytest.ini](tests/pytest.ini).
-- `tests/scripts/verify.sh` and `tests/scripts/test-all.sh` use the live Docker stack, reseed deterministic E2E records, run backend tests in the backend container, run frontend unit tests, build the frontend, and execute Playwright against the live app.
-- [tests/README.md](tests/README.md) maps the current backend coverage, frontend unit coverage, and the 24 live browser stories that run against the local Dockerized application.
-- Repo-facing scripts under `local/scripts/`, `deploy/scripts/`, `tests/scripts/`, and `logs/` support `-h` or `--help` for usage details without starting work.
+---
 
-## Supporting Docs
+## Documentation
 
-- EPUB pipeline specification: [docs/epub-pipeline-specification.md](docs/epub-pipeline-specification.md)
-- Processing use cases: [docs/processing-use-cases.md](docs/processing-use-cases.md)
-- Processing user stories: [docs/processing-user-stories.md](docs/processing-user-stories.md)
-- Processing pages reference: [docs/processing-pages-reference.md](docs/processing-pages-reference.md)
-- Processing pages implementation audit: [docs/processing-pages-implementation-audit.md](docs/processing-pages-implementation-audit.md)
-- Processing live test matrix: [docs/processing-live-test-matrix.md](docs/processing-live-test-matrix.md)
-- Source metadata notes: [docs/ingestion/source-site-metadata.md](docs/ingestion/source-site-metadata.md)
-- Authentication flows: [docs/operations/authentication-flows.md](docs/operations/authentication-flows.md)
-- Migration guide: [docs/operations/migration.md](docs/operations/migration.md)
+- [Local development guide](docs/operations/local-development.md)
+- [Deployment guide](docs/operations/deployment.md)
+- [Authentication flows](docs/operations/authentication-flows.md)
+- [Log viewing guide](docs/operations/log-viewing.md)
+- [Source site metadata notes](docs/ingestion/source-site-metadata.md)
+- [Test suite overview](tests/README.md)
