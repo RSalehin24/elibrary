@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import CatalogToolbar from "../components/CatalogToolbar";
 import PropertyTable from "../components/PropertyTable";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { formatBookDate } from "../utils/bookPresentation";
 import {
   cleanQueryParams,
@@ -40,6 +41,8 @@ const filterFields = [
       { value: "book_count", label: "Fewest books" },
       { value: "name", label: "Name A-Z" },
       { value: "-name", label: "Name Z-A" },
+      { value: "catalog_code", label: "Code ascending" },
+      { value: "-catalog_code", label: "Code descending" },
       { value: "-created_at", label: "Newest first" },
       { value: "created_at", label: "Oldest first" },
     ],
@@ -53,6 +56,7 @@ const seriesSortOptions =
   filterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function SeriesPage() {
+  usePageTitle("Series");
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
     () => filtersFromSearchParams(defaultFilters, searchParams),
@@ -121,7 +125,7 @@ export default function SeriesPage() {
           setFiltersExpanded={setFiltersExpanded}
           onSubmit={applyFilters}
           onReset={resetFilters}
-          searchPlaceholder="Search series..."
+          searchPlaceholder="Search series or codes..."
           resultCount={resultCount}
           resultCountLoading={initialLoading || refreshing}
           sortValue={filters.sort}
@@ -147,6 +151,7 @@ export default function SeriesPage() {
       ) : (
         <PropertyTable
           headers={[
+            "Code",
             "Series",
             "Books",
             "Digital",
@@ -154,7 +159,15 @@ export default function SeriesPage() {
             "Created",
             "Open",
           ]}
-          columnKinds={["title", "stat", "stat", "stat", "date", "action"]}
+          columnKinds={[
+            "code",
+            "title",
+            "stat",
+            "stat",
+            "stat",
+            "date",
+            "action",
+          ]}
           items={seriesList}
           shellRef={tableShellRef}
           hasMore={hasMore}
@@ -165,6 +178,7 @@ export default function SeriesPage() {
           shellClassName="catalog-table-shell--incremental"
           renderRow={(series) => (
             <tr key={series.id}>
+              <td className="table-code-cell">{series.catalog_code}</td>
               <td>
                 <Link
                   to={buildBooksLink(series.name)}

@@ -12,12 +12,14 @@ from apps.ingestion.services.normalization_support.metadata import (
     FRONT_MATTER_PATTERNS,
     METADATA_LABEL_ALIASES,
     ROLE_PATTERNS,
+    canonical_role,
     clean_contributor_value,
     extract_contributor_evidence,
     has_non_name_phrase_marker,
     is_role_label_text,
     looks_like_contributor_name,
     match_pattern_key,
+    parse_role_labeled_segment,
     roles_in_text,
     split_contributor_value,
     split_metadata_fragments,
@@ -123,7 +125,7 @@ HEADING_TAG_NAMES = {"h1", "h2", "h3", "h4", "h5", "h6"}
 MAX_METADATA_TEXT_LENGTH = 320
 MAX_METADATA_VALUE_LENGTH = 180
 MAX_TITLE_PREFIX_LENGTH = 140
-MAX_DEDICATION_BLOCK_LENGTH = 220
+MAX_DEDICATION_BLOCK_LENGTH = 600
 DATE_LINE_PATTERN = re.compile(
     r"^(?:[০-৯]{1,2}|[0-9]{1,2})\s+(?:জানুয়ারি|ফেব্রুয়ারি|মার্চ|এপ্রিল|মে|জুন|জুলাই|আগস্ট|সেপ্টেম্বর|অক্টোবর|নভেম্বর|ডিসেম্বর|january|february|march|april|may|june|july|august|september|october|november|december)\s*,?\s*(?:[০-৯]{4}|[0-9]{4})$",
     re.IGNORECASE,
@@ -223,6 +225,20 @@ def is_separator_paragraph(text):
     return clean_display_text(text).strip(" :ঃ-–—") in SEPARATOR_PARAGRAPH_VALUES
 
 
+_DOT_TEXT_DOT_RE = re.compile(r"^\.\s+\S.*\s+\.$")
+
+
+def is_dot_bracketed_section_boundary(text):
+    """Detect a Bengali decorative section separator of the form '. text .' (dot–space–text–space–dot).
+
+    In Bengali typography this pattern (e.g. '. তিন .' or '. ০ .') acts as a
+    visual divider between two front-matter sections and should be treated as a
+    section boundary rather than ordinary body text.
+    """
+    cleaned = clean_display_text(text).strip(" :ঃ-–—")
+    return bool(_DOT_TEXT_DOT_RE.match(cleaned))
+
+
 def block_text(block):
     return clean_display_text(block.get_text(" ", strip=True))
 
@@ -284,9 +300,18 @@ def block_strong_heading_text(block):
     return join_heading_lines(strong_lines)
 
 
+_NUMERIC_SECTION_MARKER_RE = re.compile(r"^[০-৯0-9]{1,4}(?:\s*[.)।])?$")
+
+
 def is_likely_section_title_text(text):
     plain_text = heading_plain_text(text)
     if not plain_text or len(plain_text) > 180:
+        return False
+    if _NUMERIC_SECTION_MARKER_RE.match(plain_text) and len(plain_text) <= 8:
+        # Bare numeric markers like "০১.", "১২." are in-body scene enumerators
+        # in novels, not chapter / front-matter titles. Refusing to treat them
+        # as section titles prevents `split_leading_front_sections` and
+        # `split_trailing_front_sections` from shredding a real lesson body.
         return False
     if text_matches_patterns(plain_text, DEDICATION_PATTERNS + BODY_SECTION_PATTERNS):
         return False

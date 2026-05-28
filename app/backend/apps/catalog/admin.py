@@ -8,6 +8,10 @@ from apps.catalog.models import (
     BookSource,
     Category,
     Contributor,
+    CuratedBookDocument,
+    CuratedEntity,
+    CuratedEvidence,
+    CuratedSection,
     GeneratedAsset,
     MetadataReview,
     MetadataVersion,
@@ -41,6 +45,10 @@ admin.site.register(BookContributor)
 admin.site.register(BookSeries)
 admin.site.register(BookCategory)
 admin.site.register(BookSource)
+admin.site.register(CuratedBookDocument)
+admin.site.register(CuratedEntity)
+admin.site.register(CuratedSection)
+admin.site.register(CuratedEvidence)
 admin.site.register(GeneratedAsset)
 admin.site.register(MetadataReview)
 admin.site.register(MetadataVersion)

@@ -25,6 +25,7 @@ import {
   flattenToc,
   getItemHref,
   renderToc,
+  renderTocTree,
   syncSelectedTocItem,
 } from ".././utils/toc-helpers.js";
 import {
@@ -60,6 +61,7 @@ export const readerApplicationBookInitializationMethods = {
       options.launchManifest || this.launchManifest,
       resolveAppUrl,
     );
+    this.seedHighlightsFromManifest?.(this.launchManifest);
     const normalizedSource =
       typeof source === "string" ? resolveAppUrl(source) : source;
 
@@ -178,9 +180,11 @@ export const readerApplicationBookInitializationMethods = {
       .then((navigation) => {
         if (!this.isSessionActive(sessionId) || !navigation) return;
         const flattenedToc = flattenToc(navigation.toc || []);
-        renderToc(this.epubContents, flattenedToc);
+        this.flattenedToc = flattenedToc;
+        renderTocTree(this.epubContents, navigation.toc || []);
         if (this.currentHref) {
           syncSelectedTocItem(this.currentHref);
+          this.syncChapterLabel(this.currentHref);
         }
       })
       .catch((error) => {
@@ -190,8 +194,7 @@ export const readerApplicationBookInitializationMethods = {
           sessionId,
         );
       });
-  }
-,
+  },
   attachRenditionEventHandlers(sessionId) {
     if (!this.rendition) return;
 
@@ -221,8 +224,9 @@ export const readerApplicationBookInitializationMethods = {
         sessionId,
       );
     });
-  }
-,
+
+    this.attachHighlightEventHandlers?.(sessionId);
+  },
   buildReadingStatePayload(location) {
     const normalizedHref = this.normalizeHrefForComparison(
       location?.start?.href || location?.href || this.currentHref || "",
@@ -251,6 +255,5 @@ export const readerApplicationBookInitializationMethods = {
       last_location: normalizedHref,
       progress_percent: progressPercent,
     };
-  }
-,
+  },
 };

@@ -3,11 +3,14 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authApi } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageLoader from "../components/PageLoader";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import { humanizeError } from "../utils/humanizeError";
 import { PASSWORD_LINK_COPY } from "./passwordLinkCopy";
 
 export default function PasswordLinkPage({ mode = "reset" }) {
+  usePageTitle(mode === "reset" ? "Set new password" : "Create password");
   const navigate = useNavigate();
   const { authenticated, loading, logout, refreshSession } = useSession();
   const [params] = useSearchParams();
@@ -50,7 +53,7 @@ export default function PasswordLinkPage({ mode = "reset" }) {
       await logout();
       toast.info("Signed out. You can now continue with this password link.");
     } catch (error) {
-      toast.error(error.message);
+      toast.error(humanizeError(error));
     } finally {
       setLoggingOut(false);
     }
@@ -84,7 +87,7 @@ export default function PasswordLinkPage({ mode = "reset" }) {
           return;
         }
         if (!isExpiredLinkError(error)) {
-          toast.error(error.message);
+          toast.error(humanizeError(error));
         }
         setLinkState("invalid");
       })
@@ -136,7 +139,7 @@ export default function PasswordLinkPage({ mode = "reset" }) {
         setLinkState("invalid");
         return;
       }
-      toast.error(error.message || "Request failed.");
+      toast.error(humanizeError(error, "Request failed."));
     } finally {
       setSubmitting(false);
     }

@@ -6,6 +6,8 @@ from apps.catalog.services import (
 )
 from django.conf import settings
 from apps.ingestion.pipeline import epub_book, html_book, scraper
+from apps.ingestion.pipeline.curated_pipeline import curate_book_document
+from apps.ingestion.pipeline.curated_persistence import persist_curated_book as _persist_curated_book
 from apps.ingestion.pipeline.scraper_support.network import normalize_source_url
 from apps.ingestion.pipeline.scraper_support.text import normalize_text, texts_are_similar
 from apps.ingestion.services.normalization import (
@@ -93,6 +95,14 @@ def generate_exports(book_data):
     epub_book.create_epub(book_data)
 
 
+def curate_book(source_url, *, high_fidelity=False):
+    limits = high_fidelity_scrape_limits() if high_fidelity else None
+    return curate_book_document(
+        normalize_source_url(source_url),
+        content_limits=limits,
+    )
+
+
 def detect_metadata_duplicate(scraped_data):
     return _detect_metadata_duplicate(
         scraped_data,
@@ -132,6 +142,15 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
     )
 
 
+def persist_curated_book(submission, job, curated_result, target_book=None):
+    return _persist_curated_book(
+        curated_result,
+        source_url=submission.resolved_url,
+        job=job,
+        target_book=target_book,
+    )
+
+
 def sync_assets(book, job, scraped_data):
     return _sync_assets(
         book,
@@ -144,12 +163,14 @@ def sync_assets(book, job, scraped_data):
 
 __all__ = [
     "capture_source_page_metadata",
+    "curate_book",
     "detect_metadata_duplicate",
     "find_exact_existing_book",
     "generate_exports",
     "normalize_source_url",
     "normalize_text",
     "persist_scraped_book",
+    "persist_curated_book",
     "scrape_book",
     "scrape_book_high_fidelity",
     "sync_assets",

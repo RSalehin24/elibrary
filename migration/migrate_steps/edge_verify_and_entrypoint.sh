@@ -31,7 +31,7 @@ run_verify() {
   verify_bundle_ready_for_restore
 
   if [[ "${TARGET_PRESTART_SUMMARY_MATCH:-0}" != "1" ]]; then
-    die "Target prestart summary verification did not complete successfully."
+    die "Data verification failed — the restore may be incomplete. Review the migration log at ${LOG_FILE}, fix the issue on the target server, and retry with --phase restore --resume."
   fi
 
   if [[ "${DRY_RUN}" == "1" ]]; then

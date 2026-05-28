@@ -46,6 +46,7 @@ import { readerApplicationKeyboardGestureTocMethods } from "./reader-application
 import { readerApplicationThemeViewportMethods } from "./reader-application-methods/theme-viewport-methods.js";
 import { readerApplicationImmersiveFullscreenMethods } from "./reader-application-methods/immersive-fullscreen-methods.js";
 import { readerApplicationCleanupResizeMethods } from "./reader-application-methods/cleanup-resize-methods.js";
+import { readerApplicationHighlightMethods } from "./reader-application-methods/highlight-methods.js";
 
 const TOC_LABEL_SELECTOR = ".slide-contents-item-label";
 const TOC_TOGGLE_EXCLUDED_TARGETS =
@@ -155,4 +156,5 @@ Object.assign(
   readerApplicationThemeViewportMethods,
   readerApplicationImmersiveFullscreenMethods,
   readerApplicationCleanupResizeMethods,
+  readerApplicationHighlightMethods,
 );

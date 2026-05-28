@@ -55,7 +55,10 @@ def update_automation_settings(kind, payload):
             automation_settings.time = time_type(int(hours), int(minutes))
     automation_settings.saved = True
     automation_settings.status_message = "Saved."
-    automation_settings.save()
+    if automation_settings.pk:
+        automation_settings.save(update_fields=["enabled", "interval", "time", "saved", "status_message", "updated_at"])
+    else:
+        automation_settings.save()
     publish_processing_ui_domains(processing_domains_for_automation(kind))
     return automation_settings
 

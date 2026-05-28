@@ -1,14 +1,35 @@
 import PageLoader from "../../components/PageLoader";
 
+// Matches THEMES array indices in reader-settings.js
+const READER_BG_BY_INDEX = { 0: "#fff", 1: "#f4eacd", 2: "#1b1f2a" };
+const READER_THEME_KEY = "epub_reader_theme_index";
+
+function getInitialReaderBg(resolvedTheme) {
+  try {
+    const stored = window.localStorage.getItem(READER_THEME_KEY);
+    if (stored !== null) {
+      const idx = Number(stored);
+      if (READER_BG_BY_INDEX[idx] !== undefined) return READER_BG_BY_INDEX[idx];
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return resolvedTheme === "dark" ? "#1b1f2a" : "#fff";
+}
+
 export default function ReaderViewport({
   isReaderBooted,
   navHidden,
   navigate,
+  resolvedTheme,
   targetBookPath,
   toggleAppNav,
 }) {
   return (
-    <section className="reader-page-fullscreen epub-container">
+    <section
+      className="reader-page-fullscreen epub-container"
+      style={{ backgroundColor: getInitialReaderBg(resolvedTheme) }}
+    >
       <section
         className="epub-reader-container"
         id="reader-view"
@@ -109,9 +130,30 @@ export default function ReaderViewport({
               <div className="reader-nav-extra">
                 <button
                   type="button"
+                  id="reader-bookmark-btn"
+                  className="icon-wrap icon-control reader-nav-extra-btn"
+                  aria-label="Bookmark this page"
+                  title="Bookmark this page"
+                >
+                  <span className="iconfont" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      focusable="false"
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+                    </svg>
+                  </span>
+                </button>
+                <button
+                  type="button"
                   className="icon-wrap icon-control reader-nav-extra-btn"
                   onClick={toggleAppNav}
-                  aria-label={navHidden ? "Show main header" : "Hide main header"}
+                  aria-label={
+                    navHidden ? "Show main header" : "Hide main header"
+                  }
                   title={navHidden ? "Show main header" : "Hide main header"}
                 >
                   <span className="iconfont" aria-hidden="true">
@@ -149,6 +191,10 @@ export default function ReaderViewport({
                 </button>
               </div>
             </div>
+          </div>
+          <div className="reader-chapter-bar" id="reader-chapter-bar">
+            <span className="reader-chapter-name" id="reader-chapter-name" />
+            <span className="reader-location" id="reader-location" />
           </div>
           <div className="wrapper-main">
             <button

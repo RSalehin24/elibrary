@@ -3,7 +3,7 @@
 def resolve_incomplete_records(record_ids):
     resolved = []
     published_domains = set()
-    for record in BookRecord.objects.filter(pk__in=record_ids):
+    for record in BookRecord.objects.filter(pk__in=record_ids).select_related("source_catalog_entry"):
         if not (record.was_incomplete or category_is_incomplete(record.category)):
             continue
         before_snapshot = processing_record_snapshot(record)
@@ -11,14 +11,14 @@ def resolve_incomplete_records(record_ids):
         record.was_incomplete = True
         record.resolved_from_incomplete = True
         record.book_creation_state = BookCreationRequestState.CREATED
-        record.save()
+        record.save(update_fields=["category", "was_incomplete", "resolved_from_incomplete", "book_creation_state", "updated_at"])
         latest_request = latest_request_for_record(record)
         if latest_request:
             previous_state = latest_request.state
             latest_request.state = BookCreationRequestState.CREATED
             latest_request.error_message = ""
             latest_request.progress = None
-            latest_request.save()
+            latest_request.save(update_fields=["state", "error_message", "progress", "updated_at"])
             published_domains.update(
                 processing_domains_for_request_change(
                     previous_state,

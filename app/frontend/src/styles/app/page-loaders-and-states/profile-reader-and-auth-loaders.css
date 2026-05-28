@@ -164,3 +164,8 @@
     max-width:none
   }
 }
+
+.empty-state-actions {
+  margin-top: 12px;
+  justify-content: center;
+}

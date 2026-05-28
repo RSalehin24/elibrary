@@ -101,9 +101,8 @@
 }
 
 .table-code-cell {
-  width: 152px;
-  max-width: 152px;
-  white-space: normal;
+  width: 1%;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -195,11 +194,17 @@
 }
 
 .property-table {
-  min-width: 720px;
+  min-width: 900px;
 }
 
 .property-table-col-code {
   width: 132px;
+}
+
+/* Explicit width so the name/series column is never squished to near-zero
+   by the fixed-width stat/date/action columns (which together take 560-692px). */
+.property-table-col-title {
+  width: 200px;
 }
 
 .property-table-col-stat,
@@ -293,4 +298,12 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.68),
     0 10px 18px rgba(12, 47, 36, 0.05);
+}
+
+.table-sort-indicator {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 0.7em;
+  color: var(--accent);
+  vertical-align: baseline;
 }

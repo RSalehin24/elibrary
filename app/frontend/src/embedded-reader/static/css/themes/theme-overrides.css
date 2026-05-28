@@ -1,8 +1,18 @@
+/* Let the outer shell track the active reader theme so the background
+   matches whether the user picks white, sepia, or night in the reader
+   settings panel — or when the app syncs to dark mode. */
+.epub-container {
+  background: var(--page-background);
+}
+
 .epub-container .epub-reader-container .reader-wrapper .wrapper-main {
   background: var(--reader-background, var(--page-background));
 }
 
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container {
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container {
   background: transparent !important;
 }
 
@@ -36,8 +46,14 @@
   color: var(--icon-color);
 }
 
-.epub-container .epub-reader-container .reader-wrapper-container .epub-container,
-.epub-container .epub-reader-container .reader-wrapper-container [id^="epubjs-container-"] {
+.epub-container
+  .epub-reader-container
+  .reader-wrapper-container
+  .epub-container,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper-container
+  [id^="epubjs-container-"] {
   background: transparent !important;
   background-color: transparent !important;
 }
@@ -62,16 +78,34 @@
 
 .epub-container,
 .epub-container .epub-reader-container .epub-contents,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > [id^="epubjs-container-"] {
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > .epub-container,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > [id^="epubjs-container-"] {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 .epub-container::-webkit-scrollbar,
 .epub-container .epub-reader-container .epub-contents::-webkit-scrollbar,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container::-webkit-scrollbar,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > .epub-container::-webkit-scrollbar,
 .epub-container
   .epub-reader-container
   .reader-wrapper
@@ -82,8 +116,15 @@
 
 .epub-container::-webkit-scrollbar-track,
 .epub-container .epub-reader-container .epub-contents::-webkit-scrollbar-track,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar-track,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar-track,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container::-webkit-scrollbar-track,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > .epub-container::-webkit-scrollbar-track,
 .epub-container
   .epub-reader-container
   .reader-wrapper
@@ -94,8 +135,15 @@
 
 .epub-container::-webkit-scrollbar-thumb,
 .epub-container .epub-reader-container .epub-contents::-webkit-scrollbar-thumb,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar-thumb,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar-thumb,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container::-webkit-scrollbar-thumb,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > .epub-container::-webkit-scrollbar-thumb,
 .epub-container
   .epub-reader-container
   .reader-wrapper
@@ -107,9 +155,18 @@
 }
 
 .epub-container::-webkit-scrollbar-thumb:hover,
-.epub-container .epub-reader-container .epub-contents::-webkit-scrollbar-thumb:hover,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container::-webkit-scrollbar-thumb:hover,
-.epub-container .epub-reader-container .reader-wrapper .reader-wrapper-container > .epub-container::-webkit-scrollbar-thumb:hover,
+.epub-container
+  .epub-reader-container
+  .epub-contents::-webkit-scrollbar-thumb:hover,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container::-webkit-scrollbar-thumb:hover,
+.epub-container
+  .epub-reader-container
+  .reader-wrapper
+  .reader-wrapper-container
+  > .epub-container::-webkit-scrollbar-thumb:hover,
 .epub-container
   .epub-reader-container
   .reader-wrapper

@@ -69,13 +69,14 @@ def _update_record_from_source_metadata(record, metadata):
         for field_name in update_fields:
             setattr(record, field_name, desired_values[field_name])
         record.save(update_fields=[*update_fields, "updated_at"])
+        _latest_request = latest_request_for_record(record)
         publish_processing_ui_domains(
             processing_domains_for_record_change(
                 before_snapshot,
                 processing_record_snapshot(record),
                 current_request_state=(
-                    latest_request_for_record(record).state
-                    if latest_request_for_record(record)
+                    _latest_request.state
+                    if _latest_request
                     else None
                 ),
             )
@@ -182,16 +183,30 @@ def duplicate_candidate_is_current_book(processing_request, candidate_book):
     return bool(current_book and current_book.id == candidate_book.id)
 
 
-def _persist_processing_book(processing_request, normalized_url, scraped_data):
+def _persist_processing_book(processing_request, normalized_url, scraped_data, curated_result=None):
     submission_stub = SimpleNamespace(resolved_url=normalized_url)
     target_book = (
         processing_request.linked_book
         if processing_request.linked_book_id and processing_request.linked_book and processing_request.linked_book.deleted_at is None
         else None
     )
-    book = persist_scraped_book(submission_stub, None, scraped_data, target_book=target_book)
+    if curated_result is not None:
+        book, _curated_document = persist_curated_book(
+            submission_stub,
+            None,
+            curated_result,
+            target_book=target_book,
+        )
+        if curated_result.get("status") != CuratedDocumentStatus.VALIDATED:
+            return book
+    else:
+        book = persist_scraped_book(submission_stub, None, scraped_data, target_book=target_book)
     export_payload = export_payload_from_book(book, scraped_data)
-    generate_exports(export_payload)
+    generate_exports(
+        curated_document_with_projection(curated_result["document"], export_payload)
+        if curated_result is not None
+        else export_payload
+    )
     sync_assets(book, None, export_payload)
     return book
 

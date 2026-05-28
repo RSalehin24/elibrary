@@ -1,0 +1,1509 @@
+import json
+import os
+import re
+import time
+import unicodedata
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
+
+import requests
+from bs4 import BeautifulSoup, Tag
+
+from apps.common.text import clean_display_text, normalize_catalog_text
+from apps.ingestion.pipeline import scraper
+from apps.ingestion.pipeline.curated_extractors import (
+    build_projection,
+    classify_structure,
+    extract_book_entities,
+    extract_sections,
+)
+from apps.ingestion.pipeline.curated_validation import generated_toc_from_content_items
+from apps.ingestion.pipeline.scraper_support.network import (
+    HEADERS,
+    clean_buttons,
+    create_session_with_retries,
+    decode_html_response,
+    normalize_source_url,
+)
+from apps.ingestion.services.normalization import (
+    classify_residual_main_content,
+    dedupe_html_fragment_blocks,
+    dedupe_structured_sections,
+    extract_boundary_sections_from_content_items,
+    extract_main_content_segments,
+    format_book_info_html_ordered,
+    infer_structured_content_from_main_content,
+    merge_front_matter_html_parts,
+    plain_text_from_html,
+    promote_leading_front_matter,
+    prune_duplicate_main_content,
+    split_leading_front_sections,
+    split_trailing_front_sections,
+)
+from apps.ingestion.services.resolution_support_metadata import split_display_title
+from apps.ingestion.services.resolution_support_network import get_with_host_fallback
+from apps.ingestion.pipeline.epub_properties.labels import detect_book_language, labels_for
+
+
+CURRENT_MANIFEST_SCHEMA_VERSION = "2026-05-03.1"
+UNCAPPED_LIMIT_KEYS = {"max_nodes", "max_lesson_pages", "max_topic_pages", "max_content_chars"}
+SECTION_FALLBACK_TITLE = "অন্যান্য"
+BANGLA_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+
+def _as_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def normalize_manifest_limits(content_limits=None):
+    limits = {
+        "max_nodes": None,
+        "max_lesson_pages": None,
+        "max_topic_pages": None,
+        "max_content_chars": None,
+        "disable_recursive": False,
+    }
+    if not isinstance(content_limits, dict):
+        return limits
+
+    for key in UNCAPPED_LIMIT_KEYS:
+        raw_value = content_limits.get(key)
+        if raw_value is None or raw_value == "" or raw_value == 0 or raw_value == "0":
+            limits[key] = None
+            continue
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            limits[key] = None
+            continue
+        limits[key] = parsed if parsed > 0 else None
+
+    limits["disable_recursive"] = _as_bool(content_limits.get("disable_recursive", False))
+    return limits
+
+
+def bounded_total(total, limit):
+    if not isinstance(total, int) or total < 1:
+        total = 1
+    if isinstance(limit, int) and limit > 0:
+        return min(total, limit)
+    return total
+
+
+def truncate_html(html, max_content_chars):
+    if not html:
+        return ""
+    if isinstance(max_content_chars, int) and max_content_chars > 0 and len(html) > max_content_chars:
+        return html[:max_content_chars]
+    return html
+
+
+def build_query_url(base_url, query_updates):
+    parsed = urlparse(base_url)
+    current_query = parse_qs(parsed.query, keep_blank_values=True)
+    for key, value in query_updates.items():
+        current_query[key] = [str(value)]
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urlencode(current_query, doseq=True),
+            "",
+        )
+    )
+
+
+def normalized_heading(title):
+    cleaned = clean_display_text(title or "")
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"\d+\s*Topics?.*$", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned.translate(BANGLA_DIGITS)
+
+
+def html_text(html):
+    return clean_display_text(plain_text_from_html(html or ""))
+
+
+class SourceFetchContext:
+    def __init__(self, session, *, sleep_seconds=0.25):
+        self.session = session
+        self.sleep_seconds = sleep_seconds
+        self.pages = []
+        self.cache = {}
+
+    def fetch_soup(self, url, *, kind, title="", cache=True):
+        if cache and url in self.cache:
+            return self.cache[url]
+
+        page = {
+            "url": url,
+            "kind": kind,
+            "title": clean_display_text(title),
+            "status": "failed",
+            "status_code": None,
+        }
+        try:
+            response = get_with_host_fallback(
+                self.session,
+                url,
+                headers=HEADERS,
+                timeout=30,
+            )
+            page["status_code"] = getattr(response, "status_code", None)
+            if response.status_code != 200:
+                self.pages.append(page)
+                self.cache[url] = None
+                return None
+
+            soup = BeautifulSoup(decode_html_response(response), "html.parser")
+            page["status"] = "fetched"
+            if not page["title"]:
+                page["title"] = page_title_from_soup(soup)
+            self.pages.append(page)
+            if cache:
+                self.cache[url] = soup
+            if self.sleep_seconds:
+                time.sleep(self.sleep_seconds)
+            return soup
+        except requests.exceptions.RequestException as error:
+            page["error"] = str(error)
+            self.pages.append(page)
+            if cache:
+                self.cache[url] = None
+            return None
+
+
+def page_title_from_soup(soup):
+    title_tag = soup.find("title") if soup else None
+    if not title_tag:
+        return ""
+    title, _author = split_display_title(title_tag.get_text(" ", strip=True))
+    return clean_display_text(title)
+
+
+def extract_title_and_author(soup):
+    visible_title = soup.select_one("h1.entry-title")
+    title = clean_display_text(visible_title.get_text(" ", strip=True)) if visible_title else ""
+    title_author = ""
+    title_tag = soup.find("title") if soup else None
+    if title_tag:
+        split_title, split_author = split_display_title(title_tag.get_text(" ", strip=True))
+        title = title or split_title
+        title_author = split_author
+    return title or "Book Title", title_author
+
+
+def class_tokens(tag):
+    return set(tag.get("class") or []) if isinstance(tag, Tag) else set()
+
+
+def has_class_token(tag, token):
+    return token in class_tokens(tag)
+
+
+def extract_entry_terms(soup):
+    terms = {}
+    meta = soup.select_one(".entry-meta.entry-meta-after-content") or soup.select_one(".entry-meta")
+    if not meta:
+        return terms
+
+    for span in meta.find_all("span"):
+        term_key = ""
+        for token in class_tokens(span):
+            if token.startswith("entry-terms-"):
+                term_key = token.replace("entry-terms-", "", 1)
+                break
+        if not term_key:
+            continue
+
+        links = [clean_display_text(link.get_text(" ", strip=True)) for link in span.find_all("a")]
+        values = [value for value in links if value]
+        if not values:
+            text = clean_display_text(span.get_text(" ", strip=True))
+            if text:
+                values = [text]
+        if values:
+            terms[term_key] = values
+    return terms
+
+
+def term_display(terms, *keys):
+    values = []
+    seen = set()
+    for key in keys:
+        for value in terms.get(key, []) or []:
+            normalized = normalize_catalog_text(value)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            values.append(value)
+    return ", ".join(values)
+
+
+def first_srcset_url(value):
+    if not value:
+        return ""
+    first = str(value).split(",")[0].strip()
+    return first.split()[0] if first else ""
+
+
+def extract_cover_url(soup, base_url):
+    figure = (
+        soup.select_one("figure.entry-image-link.entry-image-single")
+        or soup.select_one("figure.entry-image-link")
+        or soup.select_one("figure")
+    )
+    if not figure:
+        return ""
+
+    image = figure.find("img")
+    candidates = []
+    if image:
+        candidates.extend(
+            [
+                image.get("data-src"),
+                image.get("data-lazy-src"),
+                image.get("src"),
+                first_srcset_url(image.get("srcset")),
+                first_srcset_url(image.get("data-srcset")),
+            ]
+        )
+
+    for source in figure.find_all("source"):
+        candidates.append(first_srcset_url(source.get("srcset")))
+
+    for candidate in candidates:
+        if candidate:
+            return urljoin(base_url, candidate)
+    return ""
+
+
+def cover_extension(cover_url, content_type=""):
+    path = urlparse(cover_url or "").path.lower()
+    if ".webp" in path or "webp" in content_type:
+        return ".webp"
+    if ".png" in path or "png" in content_type:
+        return ".png"
+    if ".jpeg" in path or ".jpg" in path or "jpeg" in content_type or "jpg" in content_type:
+        return ".jpg"
+    return ".jpg"
+
+
+def download_cover_asset(cover_url, output_folder, session):
+    if not cover_url or not output_folder:
+        return ""
+    try:
+        response = session.get(cover_url, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return ""
+
+    ext = cover_extension(cover_url, response.headers.get("content-type", ""))
+    filename = f"book_cover{ext}"
+    os.makedirs(output_folder, exist_ok=True)
+    with open(os.path.join(output_folder, filename), "wb") as handle:
+        handle.write(response.content)
+    return filename
+
+
+def extract_entry_content_html(soup, title=""):
+    if not soup:
+        return ""
+    container = (
+        soup.select_one(".ld-tab-content.ld-visible.entry-content")
+        or soup.select_one(".ld-tab-content.entry-content")
+        or soup.select_one("article .entry-content")
+        or soup.select_one(".entry-content")
+    )
+    if not container:
+        return ""
+    container = clean_buttons(container)
+    html = container.decode_contents()
+    return scraper.remove_redundant_headers(html, title)
+
+
+def pagination_data(tag):
+    if not tag or not tag.has_attr("data-pager-results"):
+        return {}
+    raw_value = tag.get("data-pager-results", "")
+    try:
+        return json.loads(raw_value.replace("&quot;", '"'))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def lesson_total_pages(soup):
+    pagers = soup.select(".ld-pagination[data-pager-results]") if soup else []
+    for pager in pagers:
+        data = pagination_data(pager)
+        context = clean_display_text(" ".join(pager.get("class", []))).lower()
+        if "course_content" in context or data.get("pager_context") in {"course_content_shortcode", "course_content"}:
+            try:
+                return max(1, int(data.get("total_pages", 1)))
+            except (TypeError, ValueError):
+                return 1
+    for pager in pagers:
+        data = pagination_data(pager)
+        if "total_pages" in data:
+            try:
+                return max(1, int(data.get("total_pages", 1)))
+            except (TypeError, ValueError):
+                return 1
+    return 1
+
+
+def topic_page_numbers(lesson_item, page_url, max_topic_pages=None):
+    expand_id = lesson_item.get("data-ld-expand-id") if lesson_item else ""
+    if not expand_id:
+        return [1]
+
+    page_numbers = {1}
+    for tag in lesson_item.find_all(href=True):
+        parsed = urlparse(urljoin(page_url, tag.get("href", "")))
+        for value in parse_qs(parsed.query).get("ld-topic-page", []):
+            prefix, _, page_number = str(value).partition("-")
+            if prefix != str(expand_id):
+                continue
+            try:
+                page_numbers.add(int(page_number))
+            except (TypeError, ValueError):
+                continue
+
+    for tag in lesson_item.find_all(attrs={"data-ld-topic-page": True}):
+        prefix, _, page_number = str(tag.get("data-ld-topic-page", "")).partition("-")
+        if prefix != str(expand_id):
+            continue
+        try:
+            page_numbers.add(int(page_number))
+        except (TypeError, ValueError):
+            continue
+
+    for pager in lesson_item.select(".ld-pagination[data-pager-results]"):
+        data = pagination_data(pager)
+        try:
+            total_pages = int(data.get("total_pages", 1))
+        except (TypeError, ValueError):
+            continue
+        page_numbers.update(range(1, bounded_total(total_pages, max_topic_pages) + 1))
+
+    return sorted(page_number for page_number in page_numbers if page_number >= 1)
+
+
+def find_lesson_item_by_expand_id(soup, expand_id):
+    if not soup or not expand_id:
+        return None
+    return soup.find("div", attrs={"data-ld-expand-id": expand_id})
+
+
+def topic_container_for_lesson(lesson_item):
+    expand_id = lesson_item.get("data-ld-expand-id") if lesson_item else ""
+    if expand_id:
+        container = lesson_item.find("div", id=f"{expand_id}-container")
+        if container:
+            return container
+    return lesson_item
+
+
+def extract_topic_entries_from_lesson(lesson_item, *, base_url, seen_urls):
+    container = topic_container_for_lesson(lesson_item)
+    if not container:
+        return []
+
+    topics = []
+    topic_items = container.find_all(
+        "div",
+        class_=lambda value: value and "ld-table-list-item" in value,
+        recursive=True,
+    )
+    for topic_item in topic_items:
+        anchor = topic_item.find(
+            "a",
+            class_=lambda value: value and "ld-table-list-item-preview" in value,
+        )
+        if anchor is None or not anchor.get("href"):
+            continue
+        topic_url = normalize_content_url(anchor.get("href"), base_url)
+        key = topic_url or anchor.get("href")
+        if key in seen_urls:
+            continue
+        seen_urls.add(key)
+
+        title_span = anchor.find("span", class_="ld-topic-title")
+        title = normalized_heading(
+            title_span.get_text(" ", strip=True)
+            if title_span is not None
+            else anchor.get_text(" ", strip=True)
+        )
+        if not title:
+            continue
+        topics.append(
+            {
+                "title": title,
+                "url": topic_url,
+                "type": "topic",
+                "has_content": True,
+                "children": [],
+            }
+        )
+    return topics
+
+
+def scrape_nested_topic_nodes(lesson_item, page_url, ctx, limits):
+    expand_id = lesson_item.get("data-ld-expand-id") if lesson_item else ""
+    if not expand_id:
+        return []
+
+    topics = []
+    seen_urls = set()
+    for page_number in topic_page_numbers(
+        lesson_item,
+        page_url,
+        limits.get("max_topic_pages") or limits.get("max_lesson_pages"),
+    ):
+        paged_lesson_item = lesson_item
+        topic_page_url = page_url
+        if page_number > 1:
+            topic_page_url = build_query_url(page_url, {"ld-topic-page": f"{expand_id}-{page_number}"})
+            topic_soup = ctx.fetch_soup(topic_page_url, kind="topic_toc_page")
+            paged_lesson_item = find_lesson_item_by_expand_id(topic_soup, expand_id)
+            if paged_lesson_item is None:
+                continue
+
+        topics.extend(
+            extract_topic_entries_from_lesson(
+                paged_lesson_item,
+                base_url=topic_page_url,
+                seen_urls=seen_urls,
+            )
+        )
+    return topics
+
+
+def normalize_content_url(url, base_url):
+    if not url:
+        return ""
+    candidate = urljoin(base_url, str(url).strip())
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if parsed.netloc.lower() not in {"ebanglalibrary.com", "www.ebanglalibrary.com"}:
+        return ""
+    normalized_path = parsed.path or "/"
+    if normalized_path.startswith("/books/"):
+        normalized_path = normalized_path.rstrip("/") + "/"
+    return urlunparse(("https", "www.ebanglalibrary.com", normalized_path, parsed.params, parsed.query, ""))
+
+
+def toc_items_container(soup):
+    if not soup:
+        return None
+    containers = soup.select(".ld-item-list.ld-lesson-list .ld-item-list-items")
+    if containers:
+        return containers[0]
+    return soup.select_one(".ld-lesson-list")
+
+
+def parse_lesson_node(lesson_item, page_url, ctx, limits):
+    anchor = lesson_item.find("a", class_=lambda value: value and "ld-item-name" in value)
+    if anchor is None:
+        return None
+    title_node = anchor.find("div", class_=lambda value: value and "ld-item-title" in value) or anchor
+    title = normalized_heading(title_node.get_text(" ", strip=True))
+    url = normalize_content_url(anchor.get("href", ""), page_url)
+    if not title and not url:
+        return None
+    topics = scrape_nested_topic_nodes(lesson_item, page_url, ctx, limits)
+    return {
+        "title": title or url,
+        "url": url,
+        "type": "lesson",
+        "has_content": True,
+        "children": topics,
+    }
+
+
+def section_heading_title(block):
+    heading = block.select_one(".ld-lesson-section-heading") if block else None
+    text = heading.get_text(" ", strip=True) if heading else block.get_text(" ", strip=True)
+    return normalized_heading(text)
+
+
+def parse_toc_nodes_from_page(soup, page_url, ctx, limits):
+    container = toc_items_container(soup)
+    if not container:
+        return []
+
+    nodes = []
+    current_section = None
+    children = [child for child in container.children if isinstance(child, Tag)]
+    if not children:
+        children = container.find_all("div", recursive=False)
+
+    for child in children:
+        if has_class_token(child, "ld-item-list-section-heading"):
+            title = section_heading_title(child)
+            if not title:
+                continue
+            current_section = {
+                "title": title,
+                "url": "",
+                "type": "section",
+                "has_content": False,
+                "children": [],
+            }
+            nodes.append(current_section)
+            continue
+
+        lesson_item = child if has_class_token(child, "ld-item-lesson-item") else None
+        if lesson_item is None:
+            lesson_item = child.find(
+                "div",
+                class_=lambda value: value and "ld-item-lesson-item" in value,
+                recursive=False,
+            )
+        if lesson_item is None:
+            continue
+
+        lesson_node = parse_lesson_node(lesson_item, page_url, ctx, limits)
+        if lesson_node is None:
+            continue
+        if current_section is not None:
+            current_section["children"].append(lesson_node)
+        else:
+            nodes.append(lesson_node)
+
+    return [node for node in nodes if node.get("type") != "section" or node.get("children")]
+
+
+def toc_node_key(node):
+    return (
+        normalize_catalog_text(node.get("url", "")),
+        normalize_catalog_text(node.get("title", "")),
+    )
+
+
+def append_unique_child(container, child, seen_lesson_keys):
+    key = toc_node_key(child)
+    if key in seen_lesson_keys:
+        return
+    seen_lesson_keys.add(key)
+    container.setdefault("children", []).append(child)
+
+
+def mark_toc_subtree_seen(node, seen_lesson_keys):
+    if node.get("type") != "section":
+        seen_lesson_keys.add(toc_node_key(node))
+    for child in node.get("children", []) or []:
+        mark_toc_subtree_seen(child, seen_lesson_keys)
+
+
+def append_toc_node(target, node, seen_lesson_keys, current_section):
+    if node.get("type") == "section":
+        title_key = normalize_catalog_text(node.get("title", ""))
+        if current_section is not None and normalize_catalog_text(current_section.get("title", "")) == title_key:
+            for child in node.get("children", []) or []:
+                append_unique_child(current_section, child, seen_lesson_keys)
+            return current_section
+        target.append(node)
+        mark_toc_subtree_seen(node, seen_lesson_keys)
+        return node
+
+    key = toc_node_key(node)
+    if key in seen_lesson_keys:
+        return current_section
+    seen_lesson_keys.add(key)
+    if current_section is not None:
+        current_section.setdefault("children", []).append(node)
+    else:
+        target.append(node)
+    return current_section
+
+
+def collect_learndash_toc(landing_soup, canonical_url, ctx, limits):
+    if limits.get("disable_recursive"):
+        return [], {"toc_page_count": 0, "has_paginated_toc": False, "has_section_headings": False}
+
+    total_pages = bounded_total(lesson_total_pages(landing_soup), limits.get("max_lesson_pages"))
+    collected = []
+    seen_lesson_keys = set()
+    current_section = None
+    page_count = 0
+
+    for page_number in range(1, total_pages + 1):
+        page_url = canonical_url if page_number == 1 else build_query_url(canonical_url, {"ld-courseinfo-lesson-page": page_number})
+        soup = landing_soup if page_number == 1 else ctx.fetch_soup(page_url, kind="toc_page")
+        if not soup:
+            continue
+        page_count += 1
+        for node in parse_toc_nodes_from_page(soup, page_url, ctx, limits):
+            if node.get("type") == "section":
+                current_section = append_toc_node(collected, node, seen_lesson_keys, current_section)
+                continue
+            current_section = append_toc_node(collected, node, seen_lesson_keys, current_section)
+
+    has_sections = any(node.get("type") == "section" for node in collected)
+    return collected, {
+        "toc_page_count": page_count,
+        "has_paginated_toc": total_pages > 1,
+        "has_section_headings": has_sections,
+        "source_total_pages": lesson_total_pages(landing_soup),
+        "fetched_total_pages": total_pages,
+    }
+
+
+def assign_paths_to_toc(nodes, parent_path=()):
+    normalized_nodes = []
+    for node in nodes or []:
+        title = clean_display_text(node.get("title", ""))
+        if not title:
+            continue
+        path = [*parent_path, title]
+        children = assign_paths_to_toc(node.get("children", []), tuple(path))
+        normalized = {
+            "title": title,
+            "type": node.get("type") or "lesson",
+            "has_content": bool(node.get("has_content", True)),
+            "path": path,
+        }
+        if node.get("url"):
+            normalized["source_url"] = node["url"]
+        if children:
+            normalized["children"] = children
+        normalized_nodes.append(normalized)
+    return normalized_nodes
+
+
+def iter_content_nodes(nodes, parent_path=()):
+    for node in nodes or []:
+        title = clean_display_text(node.get("title", ""))
+        path = [*parent_path, title] if title else list(parent_path)
+        yield node, path
+        yield from iter_content_nodes(node.get("children", []), tuple(path))
+
+
+def duplicate_path_title(title, occurrence):
+    suffix = str(occurrence).translate(BANGLA_DIGITS)
+    return f"{title} ({suffix})"
+
+
+def disambiguate_duplicate_content_paths(toc, content_items):
+    # First pass: group items by clean path so we can detect duplicates and
+    # decide between "rename" (genuine distinct items sharing a label) and
+    # "merge" (identical inline extractions that should be collapsed).
+    groups = {}
+    item_order = []
+    for index, item in enumerate(content_items or []):
+        path = [clean_display_text(part) for part in item.get("path", []) if clean_display_text(part)]
+        if not path:
+            item_order.append((index, item, None))
+            continue
+        path_key = tuple(path)
+        groups.setdefault(path_key, []).append(index)
+        item_order.append((index, item, path_key))
+
+    dropped_indices = set()
+    updates_by_source_and_path = {}
+    for path_key, indices in groups.items():
+        if len(indices) < 2:
+            continue
+        items = [(content_items[i], i) for i in indices]
+        source_urls = [(it.get("source_url") or "") for it, _ in items]
+        # If every duplicate carries a distinct, non-empty source_url, treat
+        # them as genuinely different chapters that happen to share a title
+        # and disambiguate by appending an occurrence suffix.
+        distinct_urls = all(source_urls) and len(set(source_urls)) == len(source_urls)
+        if distinct_urls:
+            for occurrence, (it, idx) in enumerate(items, start=1):
+                if occurrence == 1:
+                    continue
+                updated_path = [*path_key[:-1], duplicate_path_title(path_key[-1], occurrence)]
+                updates_by_source_and_path[(it.get("source_url") or "", path_key)] = updated_path
+            continue
+        # Otherwise the duplicates are inline-extraction artefacts (same URL
+        # or no URL).  Keep the richest body text and drop the rest so the
+        # curated document validates cleanly.
+        def _body_len(entry):
+            return len(plain_text_from_html(entry.get("content", "")) or "")
+        keep_idx = max(indices, key=lambda i: _body_len(content_items[i]))
+        for i in indices:
+            if i != keep_idx:
+                dropped_indices.add(i)
+
+    normalized_items = []
+    for index, item, path_key in item_order:
+        if index in dropped_indices:
+            continue
+        normalized_item = dict(item)
+        if path_key is not None:
+            source_url = item.get("source_url") or ""
+            updated_path = updates_by_source_and_path.get((source_url, path_key))
+            if updated_path:
+                normalized_item["title"] = updated_path[-1]
+                normalized_item["path"] = updated_path
+        normalized_items.append(normalized_item)
+
+    # Build a set of surviving paths so we can prune TOC leaves that no
+    # longer have an extracted content_item backing them.
+    surviving_paths = set()
+    for it in normalized_items:
+        cleaned = tuple(
+            clean_display_text(part)
+            for part in it.get("path", [])
+            if clean_display_text(part)
+        )
+        if cleaned:
+            surviving_paths.add(cleaned)
+
+    def update_toc_entries(entries):
+        updated_entries = []
+        seen_paths_local = set()
+        for entry in entries or []:
+            updated_entry = dict(entry)
+            original_path = tuple(
+                clean_display_text(part)
+                for part in updated_entry.get("path", [])
+                if clean_display_text(part)
+            )
+            source_url = updated_entry.get("source_url") or ""
+            updated_path = updates_by_source_and_path.get((source_url, original_path))
+            if updated_path:
+                updated_entry["title"] = updated_path[-1]
+                updated_entry["path"] = updated_path
+                effective_path = tuple(updated_path)
+            else:
+                effective_path = original_path
+            if updated_entry.get("children"):
+                updated_entry["children"] = update_toc_entries(updated_entry["children"])
+            # Drop a TOC leaf if its content was dropped as a duplicate AND
+            # we have already seen an entry with the same effective path.
+            if (
+                effective_path
+                and not updated_entry.get("children")
+                and effective_path in seen_paths_local
+                and effective_path in surviving_paths
+            ):
+                continue
+            if effective_path:
+                seen_paths_local.add(effective_path)
+            updated_entries.append(updated_entry)
+        return updated_entries
+
+    return update_toc_entries(toc), normalized_items
+
+
+def fetch_content_item(node, path, ctx, limits):
+    url = node.get("url", "")
+    if not url:
+        return None
+    soup = ctx.fetch_soup(
+        url,
+        kind=node.get("type", "content"),
+        title=node.get("title", ""),
+        cache=False,
+    )
+    try:
+        html = truncate_html(
+            extract_entry_content_html(soup, node.get("title", "")),
+            limits.get("max_content_chars"),
+        )
+    finally:
+        if soup is not None:
+            soup.decompose()
+    if not html_text(html):
+        return None
+    return {
+        "title": clean_display_text(node.get("title", "")),
+        "content": html,
+        "type": node.get("type") or "lesson",
+        "parent": path[-2] if len(path) > 1 else None,
+        "path": list(path),
+        "source_url": url,
+    }
+
+
+def collect_content_items(nodes, ctx, limits):
+    content_items = []
+    max_nodes = limits.get("max_nodes")
+    for node, path in iter_content_nodes(nodes):
+        if isinstance(max_nodes, int) and max_nodes > 0 and len(content_items) >= max_nodes:
+            break
+        item = fetch_content_item(node, path, ctx, limits)
+        if item is None:
+            node["has_content"] = False
+            continue
+        node["has_content"] = True
+        content_items.append(item)
+    return content_items
+
+
+def list_toc_structure_traits(nodes):
+    lesson_count = 0
+    topic_count = 0
+    section_count = 0
+    lessons_with_topics = 0
+    lessons_without_topics = 0
+
+    def walk(entries):
+        nonlocal lesson_count, topic_count, section_count, lessons_with_topics, lessons_without_topics
+        for entry in entries or []:
+            entry_type = entry.get("type")
+            children = entry.get("children", []) or []
+            if entry_type == "section":
+                section_count += 1
+            elif entry_type == "topic":
+                topic_count += 1
+            else:
+                lesson_count += 1
+                if children:
+                    lessons_with_topics += 1
+                else:
+                    lessons_without_topics += 1
+            walk(children)
+
+    walk(nodes)
+    return {
+        "lesson_count": lesson_count,
+        "topic_count": topic_count,
+        "section_count": section_count,
+        "lessons_with_topics": lessons_with_topics,
+        "lessons_without_topics": lessons_without_topics,
+    }
+
+
+def classify_manifest_structure(toc_nodes, content_items, main_content, toc_meta):
+    traits = list_toc_structure_traits(toc_nodes)
+    if not toc_nodes:
+        if content_items:
+            structure_type = "single_page_heading_split"
+        elif html_text(main_content):
+            structure_type = "single_page_flow_no_toc"
+        else:
+            structure_type = "no_public_body"
+    elif traits["topic_count"] and traits["lessons_without_topics"]:
+        structure_type = "mixed_lessons_and_topics"
+    elif traits["topic_count"]:
+        structure_type = "lesson_topic_nested"
+    else:
+        structure_type = "flat_lessons"
+
+    if traits["section_count"] and structure_type in {"flat_lessons", "lesson_topic_nested", "mixed_lessons_and_topics"}:
+        structure_type = f"sectioned_{structure_type}"
+
+    return {
+        "type": structure_type,
+        "traits": traits,
+        "toc_page_count": toc_meta.get("toc_page_count", 0),
+        "has_paginated_toc": toc_meta.get("has_paginated_toc", False),
+        "has_section_headings": toc_meta.get("has_section_headings", False),
+        "source_total_pages": toc_meta.get("source_total_pages", 1),
+        "fetched_total_pages": toc_meta.get("fetched_total_pages", 1),
+    }
+
+
+_TITLE_PAGE_KEYWORDS = (
+    "প্রকাশ",
+    "প্রকাশক",
+    "মুদ্রক",
+    "সংস্করণ",
+    "মূল্য",
+    "publisher",
+    "printer",
+    "press",
+    "edition",
+    "published",
+    "isbn",
+    "copyright",
+)
+
+
+def _is_title_page_front_section(section, book_title, author):
+    title = (section.get("title") or "").strip()
+    # Named sections (preface, translator's note, etc.) are never a title page.
+    if title:
+        return False
+    html = section.get("html") or ""
+    text = plain_text_from_html(html).strip()
+    if not text and not title:
+        return False
+    if len(text) > 1200:
+        return False
+    haystack = f"{title}\n{text}".lower()
+    bt = (book_title or "").strip().lower()
+    au = (author or "").strip().lower()
+    title_match = bool(bt) and bt in haystack
+    author_match = bool(au) and any(
+        part for part in au.split() if len(part) >= 3 and part in haystack
+    )
+    if not title_match and not author_match:
+        return False
+    return any(keyword.lower() in haystack for keyword in _TITLE_PAGE_KEYWORDS)
+
+
+# Normalized forms of common table-of-contents headings that a source page may
+# include as a standalone section.  When the EPUB already has a generated TOC
+# page, these inline-TOC front sections are redundant.
+_INLINE_TOC_HEADING_NORMS = {
+    normalize_catalog_text(h)
+    for h in (
+        "সূচিপত্র", "সূচী", "বিষয়সূচী", "বিষয় সূচী",
+        "contents", "table of contents", "তালিকা",
+    )
+}
+
+
+def _drop_inline_toc_front_sections(front_sections):
+    """Remove any front section whose title is a table-of-contents heading.
+
+    The EPUB builder already generates a dedicated toc.xhtml; keeping an
+    inline TOC section would result in two identical "সূচিপত্র" nav entries.
+    """
+    result = []
+    for s in front_sections:
+        title = clean_display_text(s.get("title") or "")
+        norm = normalize_catalog_text(title)
+        if norm in _INLINE_TOC_HEADING_NORMS:
+            continue
+        result.append(s)
+    return result
+
+
+def _is_pure_title_duplicate_section(section, book_title, author):
+    """Return True when a section's entire text is just the book title (optionally
+    followed by a separator, author, and/or series name in parentheses).
+
+    Example: "যুগলবন্দী \u2013 নীহাররঞ্জন গুপ্ত (কিরীটী গোয়েন্দা কাহিনী)" is
+    a single-line duplicate of the title page and should be silently dropped.
+    """
+    html = section.get("html") or ""
+    text = plain_text_from_html(html).strip()
+    if not text or len(text) > 350:
+        return False
+    bt = (book_title or "").strip()
+    if not bt:
+        return False
+
+    def nfc(s):
+        return unicodedata.normalize("NFC", s).strip()
+
+    text_n = nfc(text)
+    bt_n = nfc(bt)
+
+    # Case 1: text starts with the book title
+    if text_n.lower().startswith(bt_n.lower()):
+        return True
+
+    # Case 2: author-first format — "Author – Title" or "Author (Series) Title"
+    au = (author or "").strip()
+    if au:
+        au_n = nfc(au)
+        if text_n.lower().startswith(au_n.lower()) and bt_n.lower() in text_n.lower():
+            return True
+
+    # Case 3: bibliographic-only single line — e.g.
+    # "সাতকাহন (১ম পর্ব) – উপন্যাস – সমরেশ মজুমদার". The text is short, has no
+    # sentence-ending punctuation, and every separator-delimited fragment is
+    # recognised as one of: a piece of the book title, the author, a known
+    # book-type/genre keyword, an edition/volume marker, or pure
+    # digits/parenthesised content. In that case the section adds no new
+    # information beyond what book_info already carries.
+    if _is_bibliographic_metadata_line(text_n, book_title=bt_n, author=au):
+        return True
+
+    return False
+
+
+# Tokens that, on their own, are not new information when book_info is already
+# present (book type / genre / format markers). Kept lowercase for matching.
+_BIBLIOGRAPHIC_TOKEN_WORDS = {
+    "উপন্যাস", "গল্প", "ছোটগল্প", "গল্পগ্রন্থ", "প্রবন্ধ", "কবিতা",
+    "নাটক", "কাহিনি", "কাহিনী", "রচনাবলী", "সমগ্র", "অমনিবাস",
+    "কিশোর", "ক্লাসিক", "সাহিত্য", "ইতিহাস", "দর্শন",
+    "novel", "short story", "story", "stories", "poem", "poems",
+    "essay", "essays", "drama", "novella", "omnibus", "edition", "vol", "volume",
+    "part", "series",
+}
+
+# Suffix words used to mark editions/volumes — fragments containing only these
+# (plus digits/Bengali digits/parens) are also acceptable as bibliographic.
+_EDITION_MARKER_WORDS = {
+    "খণ্ড", "পর্ব", "অধ্যায়", "সংস্করণ", "edition", "vol", "volume", "part", "ম",
+}
+
+
+def _is_bibliographic_metadata_line(text_n, *, book_title, author):
+    """Heuristic: True when the line is purely a "title – type – author"-style
+    bibliographic header that duplicates book_info."""
+
+    if not text_n or len(text_n) > 200:
+        return False
+    # Multi-sentence / multi-paragraph content is real prose, not a header.
+    if "\n" in text_n or text_n.count("।") > 1 or text_n.count(".") > 1:
+        return False
+
+    # Strip parenthesised pieces (edition markers like "(১ম পর্ব)" are noise).
+    stripped = re.sub(r"[\(\[（【].*?[\)\]）】]", " ", text_n)
+    stripped = re.sub(r"\s+", " ", stripped).strip(" -–—|/:.,")
+    if not stripped:
+        return False
+
+    # Split on common bibliographic separators.
+    fragments = [f.strip() for f in re.split(r"\s*[–—/|:]\s*|\s+[-]\s+", stripped) if f.strip()]
+    if not fragments:
+        return False
+
+    bt_low = (book_title or "").lower()
+    au_low = (author or "").lower()
+    # Tokenised title pieces to match a fragment like "সাতকাহন" against title
+    # "সাতকাহন ১".
+    bt_tokens = {tok for tok in re.split(r"\s+", bt_low) if len(tok) >= 3}
+    au_tokens = {tok for tok in re.split(r"\s+", au_low) if len(tok) >= 3}
+
+    def fragment_is_metadata(frag):
+        f = frag.lower().strip(" -–—|/:.,")
+        if not f:
+            return True
+        if bt_low and (f == bt_low or f in bt_low or bt_low in f):
+            return True
+        if au_low and (f == au_low or au_low in f or f in au_low):
+            return True
+        # Pure digits / Bengali digits.
+        if re.fullmatch(r"[0-9০-৯\s.\-]+", f):
+            return True
+        if f in _BIBLIOGRAPHIC_TOKEN_WORDS:
+            return True
+        # All words of fragment recognised as bibliographic / edition / digit.
+        words = [w for w in re.split(r"\s+", f) if w]
+        if words and all(
+            w in _BIBLIOGRAPHIC_TOKEN_WORDS
+            or w in _EDITION_MARKER_WORDS
+            or w in bt_tokens
+            or w in au_tokens
+            or re.fullmatch(r"[0-9০-৯.\-]+", w)
+            for w in words
+        ):
+            return True
+        return False
+
+    # Require at least one fragment to match the title (so we don't drop an
+    # unrelated short line like "ভূমিকা") AND at least one fragment to match
+    # the author (so we don't drop legitimate one-line standalone content).
+    has_title_match = False
+    has_author_match = False
+    for frag in fragments:
+        if not fragment_is_metadata(frag):
+            return False
+        f = frag.lower().strip(" -–—|/:.,")
+        if bt_low and (f == bt_low or f in bt_low or bt_low in f or any(t in f for t in bt_tokens)):
+            has_title_match = True
+        if au_low and (f == au_low or au_low in f or f in au_low or any(t in f for t in au_tokens)):
+            has_author_match = True
+    return has_title_match and has_author_match
+
+
+def _promote_title_page_front_sections_to_book_info(
+    *, book_info, front_sections, book_title, author
+):
+    """Move publisher/printer info found in a title-page front section into
+    book_info. Title-page front sections (e.g. সতী's first front section)
+    typically duplicate the book title + author but also carry the only copy
+    of publisher/printer/edition lines — those belong in Book Information.
+    """
+
+    if not front_sections:
+        return book_info, front_sections
+
+    bt_norm = (book_title or "").strip().lower()
+    au_norm = (author or "").strip().lower()
+
+    kept_sections = []
+    extra_lines_html = []
+
+    for section in front_sections:
+        if not _is_title_page_front_section(section, book_title, author):
+            # Drop sections that are nothing but a title/author/series line.
+            if not _is_pure_title_duplicate_section(section, book_title, author):
+                kept_sections.append(section)
+            continue
+
+        html = section.get("html") or ""
+        # Split the HTML into <p>...</p> blocks; fall back to line splitting.
+        blocks = re.findall(r"<p[^>]*>.*?</p>", html, flags=re.IGNORECASE | re.DOTALL)
+        if not blocks:
+            blocks = [
+                f"<p>{line.strip()}</p>"
+                for line in plain_text_from_html(html).splitlines()
+                if line.strip()
+            ]
+        for block in blocks:
+            block_text = plain_text_from_html(block).strip()
+            if not block_text:
+                continue
+            bl = block_text.lower()
+            if bt_norm and bl == bt_norm:
+                continue
+            if au_norm and bl == au_norm:
+                continue
+            # Drop blocks that are just "title – author" duplicates.
+            if bt_norm and au_norm and bt_norm in bl and au_norm in bl and len(block_text) <= len(book_title) + len(author) + 6:
+                continue
+            extra_lines_html.append(block)
+
+    if extra_lines_html:
+        appended = "\n".join(extra_lines_html)
+        book_info = merge_front_matter_html_parts(book_info or "", appended)
+
+    return book_info, kept_sections
+
+
+def normalize_body_sections(
+    *,
+    book_title,
+    landing_main_content,
+    toc_nodes,
+    content_items,
+    author="",
+):
+    book_info, dedication, residual_main = extract_main_content_segments(landing_main_content or "")
+    book_info = dedupe_html_fragment_blocks(book_info)
+    dedication = dedupe_html_fragment_blocks(dedication)
+
+    front_sections = []
+    back_sections = []
+    has_explicit_body = bool(toc_nodes or content_items)
+    leading_sections, residual_main = split_leading_front_sections(
+        residual_main or "",
+        has_explicit_body=has_explicit_body,
+    )
+    front_sections.extend(leading_sections)
+
+    toc = assign_paths_to_toc(toc_nodes)
+    has_structured_content = bool(toc or content_items)
+
+    if not has_structured_content:
+        inferred_toc, inferred_content_items, residual_main = infer_structured_content_from_main_content(
+            residual_main or "",
+            book_title=book_title,
+        )
+        if inferred_toc and inferred_content_items:
+            toc = inferred_toc
+            content_items = inferred_content_items
+            has_structured_content = True
+
+    if content_items:
+        inferred_front, inferred_back, toc, content_items = extract_boundary_sections_from_content_items(
+            content_items,
+            toc,
+            trust_source_toc=has_explicit_body,
+        )
+        front_sections.extend(inferred_front)
+        back_sections.extend(inferred_back)
+        toc, content_items = disambiguate_duplicate_content_paths(toc, content_items)
+
+    if not has_explicit_body:
+        trailing_sections, residual_main = split_trailing_front_sections(residual_main or "")
+        back_sections.extend(trailing_sections)
+
+    front_sections = dedupe_structured_sections(
+        front_sections,
+        reference_fragments=[book_info, dedication],
+    )
+    back_sections = dedupe_structured_sections(
+        back_sections,
+        reference_fragments=[book_info, dedication],
+    )
+    residual_main = prune_duplicate_main_content(
+        residual_main,
+        reference_fragments=[
+            book_info,
+            dedication,
+            *[section.get("html", "") for section in front_sections],
+            *[section.get("html", "") for section in back_sections],
+        ],
+        content_items=content_items,
+    )
+
+    # Classify any remaining residual main content. New key:value metadata is
+    # merged into book_info; coherent prose is wrapped under an auto-generated
+    # heading and appended as a front section; anything else is discarded.
+    if has_structured_content and html_text(residual_main):
+        residual_book_info, residual_sections, residual_main = classify_residual_main_content(
+            residual_main,
+            existing_fragments=[
+                book_info,
+                dedication,
+                *[section.get("html", "") for section in front_sections],
+                *[section.get("html", "") for section in back_sections],
+                *[item.get("content", "") for item in (content_items or [])],
+            ],
+        )
+        if residual_book_info:
+            book_info = merge_front_matter_html_parts(book_info, residual_book_info)
+        if residual_sections:
+            front_sections.extend(residual_sections)
+            front_sections = dedupe_structured_sections(
+                front_sections,
+                reference_fragments=[book_info, dedication],
+            )
+
+    if book_info:
+        promoted_info, front_sections = _promote_title_page_front_sections_to_book_info(
+            book_info=book_info,
+            front_sections=front_sections,
+            book_title=book_title,
+            author=author,
+        )
+        book_info = promoted_info
+    else:
+        # Even with no book_info, drop sections whose content is nothing but the
+        # book title / author / series line (pure title-page duplicates).
+        front_sections = [
+            s for s in front_sections
+            if not _is_pure_title_duplicate_section(s, book_title, author)
+        ]
+
+    language = detect_book_language(
+        book_title=book_title or "",
+        author=author or "",
+        book_info_html=book_info or "",
+    )
+
+    if book_info:
+        book_info = format_book_info_html_ordered(
+            book_info, book_title=book_title, language=language
+        )
+
+    # For front sections with no explicit title: keep the page but leave
+    # nav_title unset so EpubBuilder assigns the prefix label
+    # (অন্যান্য / Others, with a digit when there are multiple) per the spec.
+    # The page itself renders with no heading — the content is presented as-is.
+    pruned_sections = []
+    for _sec in front_sections:
+        if ((_sec.get("title") or "").strip()):
+            pruned_sections.append(_sec)
+        elif plain_text_from_html(_sec.get("html", "")):
+            # Unnamed prose — keep with no nav_title; builder handles the label.
+            _sec = dict(_sec)
+            _sec["title"] = ""  # ensure no heading rendered on page
+            pruned_sections.append(_sec)
+        # else: empty unnamed section — discard
+    front_sections = pruned_sections
+
+    # Drop inline TOC sections when we already produce a generated toc.xhtml.
+    # Keeping them would show two identical "সূচিপত্র" entries in the nav.
+    if toc or content_items:
+        front_sections = _drop_inline_toc_front_sections(front_sections)
+
+    return {
+        "book_info": book_info,
+        "dedication": dedication,
+        "front_sections": front_sections,
+        "back_sections": back_sections,
+        "main_content": residual_main,
+        "toc": toc,
+        "content_items": content_items,
+    }
+
+
+def projection_from_manifest_parts(
+    *,
+    canonical_url,
+    title,
+    author,
+    series,
+    book_type,
+    cover,
+    cover_source_url,
+    output_folder,
+    sections_payload,
+):
+    return {
+        "book_title": title,
+        "author": author,
+        "series": series,
+        "book_type": book_type,
+        "cover": cover or cover_source_url or "",
+        "cover_source_url": cover_source_url or "",
+        "main_content": sections_payload["main_content"],
+        "book_info": sections_payload["book_info"],
+        "dedication": sections_payload["dedication"],
+        "front_sections": sections_payload["front_sections"],
+        "back_sections": sections_payload["back_sections"],
+        "toc": sections_payload["toc"],
+        "content_items": sections_payload["content_items"],
+        "output_folder": output_folder,
+        "source_url": canonical_url,
+    }
+
+
+def build_manifest_from_projection(canonical_url, projection, *, pages=None, source_structure=None, metadata=None):
+    projection = dict(projection or {})
+    if projection.get("content_items") and not projection.get("toc"):
+        projection["toc"] = generated_toc_from_content_items(projection["content_items"])
+
+    entities, evidences = extract_book_entities(projection, canonical_url)
+    sections = extract_sections(projection, canonical_url)
+    assets = [item for item in entities if item.get("entity_type") == "asset"]
+    structure = source_structure or {"type": classify_structure(projection)}
+    return {
+        "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+        "canonical_url": canonical_url,
+        "source_url": projection.get("source_url") or canonical_url,
+        "book": {
+            "title": projection.get("book_title", ""),
+            "author": projection.get("author", ""),
+            "series": projection.get("series", ""),
+            "book_type": projection.get("book_type", ""),
+        },
+        "metadata": metadata or {},
+        "source_structure": structure,
+        "projection": projection,
+        "entities": entities,
+        "evidence": evidences,
+        "sections": sections,
+        "assets": assets,
+        "pages": pages or [],
+    }
+
+
+def build_manifest_source_pages(source_url, *, content_limits=None):
+    canonical_url = normalize_source_url(source_url)
+    limits = normalize_manifest_limits(content_limits)
+    with create_session_with_retries() as session:
+        ctx = SourceFetchContext(session)
+        landing_soup = ctx.fetch_soup(canonical_url, kind="landing")
+        if not landing_soup:
+            return {
+                "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                "source_url": canonical_url,
+                "canonical_url": canonical_url,
+                "pages": ctx.pages,
+                "manifest": {},
+                "raw_scrape_payload": {},
+            }
+
+        title, title_author = extract_title_and_author(landing_soup)
+        terms = extract_entry_terms(landing_soup)
+        author = term_display(terms, "authors", "author") or title_author
+        series = term_display(terms, "series")
+        book_type = term_display(terms, "ld_course_category", "category")
+        output_folder = scraper.create_output_folder(title)
+        cover_source_url = extract_cover_url(landing_soup, canonical_url)
+        cover = download_cover_asset(cover_source_url, output_folder, session)
+        landing_main_content = extract_entry_content_html(landing_soup, title)
+
+        toc_nodes, toc_meta = collect_learndash_toc(landing_soup, canonical_url, ctx, limits)
+        content_items = collect_content_items(toc_nodes, ctx, limits) if toc_nodes else []
+        sections_payload = normalize_body_sections(
+            book_title=title,
+            landing_main_content=landing_main_content,
+            toc_nodes=toc_nodes,
+            content_items=content_items,
+            author=author,
+        )
+        source_structure = classify_manifest_structure(
+            toc_nodes,
+            sections_payload["content_items"],
+            sections_payload["main_content"],
+            toc_meta,
+        )
+        projection = projection_from_manifest_parts(
+            canonical_url=canonical_url,
+            title=title,
+            author=author,
+            series=series,
+            book_type=book_type,
+            cover=cover,
+            cover_source_url=cover_source_url,
+            output_folder=output_folder,
+            sections_payload=sections_payload,
+        )
+        manifest = build_manifest_from_projection(
+            canonical_url,
+            projection,
+            pages=ctx.pages,
+            source_structure=source_structure,
+            metadata={"entry_terms": terms, "title_author": title_author},
+        )
+        manifest["toc_source"] = toc_nodes
+        return {
+            "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+            "source_url": canonical_url,
+            "canonical_url": canonical_url,
+            "pages": ctx.pages,
+            "manifest": manifest,
+            "raw_scrape_payload": projection,
+        }
+
+
+def build_manifest_from_legacy_payload(source_url, scraped_data):
+    canonical_url = normalize_source_url(source_url)
+    normalized_payload = dict(scraped_data) if isinstance(scraped_data, dict) else {}
+    promoted_book_info, cleaned_main_content = promote_leading_front_matter(
+        normalized_payload.get("book_info", ""),
+        normalized_payload.get("main_content", ""),
+    )
+    normalized_payload["book_info"] = promoted_book_info
+    normalized_payload["main_content"] = cleaned_main_content
+    if normalized_payload.get("content_items") and not normalized_payload.get("toc"):
+        normalized_payload["toc"] = generated_toc_from_content_items(normalized_payload["content_items"])
+    projection = build_projection(normalized_payload, canonical_url)
+    pages = [
+        {
+            "url": canonical_url,
+            "kind": "landing",
+            "title": projection.get("book_title", ""),
+            "status": "fetched" if isinstance(scraped_data, dict) else "failed",
+            "status_code": None,
+        }
+    ]
+    for index, item in enumerate(projection.get("content_items", []) or []):
+        source_item_url = (item or {}).get("source_url")
+        if source_item_url:
+            pages.append(
+                {
+                    "url": source_item_url,
+                    "kind": (item or {}).get("type") or "content",
+                    "title": (item or {}).get("title", ""),
+                    "status": "fetched",
+                    "status_code": None,
+                    "index": index,
+                }
+            )
+    manifest = build_manifest_from_projection(
+        canonical_url,
+        projection,
+        pages=pages,
+        source_structure={"type": classify_structure(projection), "legacy_payload": True},
+    )
+    return {
+        "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+        "source_url": canonical_url,
+        "canonical_url": canonical_url,
+        "pages": pages,
+        "manifest": manifest,
+        "raw_scrape_payload": projection,
+    }
+
+
+def manifest_to_projection(manifest):
+    projection = dict((manifest or {}).get("projection") or {})
+    projection.setdefault("book_title", (manifest or {}).get("book", {}).get("title", ""))
+    projection.setdefault("author", (manifest or {}).get("book", {}).get("author", ""))
+    projection.setdefault("series", (manifest or {}).get("book", {}).get("series", ""))
+    projection.setdefault("book_type", (manifest or {}).get("book", {}).get("book_type", ""))
+    projection.setdefault("cover", "")
+    projection.setdefault("cover_source_url", "")
+    projection.setdefault("main_content", "")
+    projection.setdefault("book_info", "")
+    projection.setdefault("dedication", "")
+    projection.setdefault("front_sections", [])
+    projection.setdefault("back_sections", [])
+    projection.setdefault("toc", [])
+    projection.setdefault("content_items", [])
+    projection.setdefault("output_folder", "")
+    projection.setdefault("source_url", (manifest or {}).get("canonical_url", ""))
+    return projection

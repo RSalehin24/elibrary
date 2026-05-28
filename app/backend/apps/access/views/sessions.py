@@ -1,4 +1,5 @@
 from django.http import Http404
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -77,13 +78,13 @@ class ReadingSessionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         ensure_book_reader_access(request, book)
         session, _ = reading_session_for_book(request.user, book)
         return Response(ReadingSessionSerializer(session).data)
 
     def post(self, request, slug):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         ensure_book_reader_access(request, book)
         session, _ = reading_session_for_book(request.user, book)
         serializer = ReadingSessionSerializer(session, data=request.data, partial=True)
@@ -96,13 +97,13 @@ class BookmarkListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         ensure_book_reader_access(request, book)
         queryset = bookmark_queryset_for_book(request.user, book)
-        return Response(BookmarkSerializer(queryset, many=True).data)
+        return apply_no_store_headers(Response(BookmarkSerializer(queryset, many=True).data))
 
     def post(self, request, slug):
-        book = Book.objects.get(slug=slug)
+        book = get_object_or_404(Book, slug=slug)
         ensure_book_reader_access(request, book)
         serializer = BookmarkSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

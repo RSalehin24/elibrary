@@ -3,7 +3,7 @@ export function bindDoubleTapToggle({
   onToggle,
   isInteractiveTarget,
   setLastGlobalTouchTime,
-  getLastGlobalTouchTime
+  getLastGlobalTouchTime,
 }) {
   if (!element) return;
 
@@ -17,13 +17,21 @@ export function bindDoubleTapToggle({
   let lastTouchEndTime = 0;
   let isMultiTouchGesture = false;
 
-  const clearSelection = () => {
-    const selection =
-      ownerWindow?.getSelection?.() ||
-      ownerDocument?.getSelection?.() ||
-      window.getSelection?.() ||
-      null;
+  const getActiveSelection = () =>
+    ownerWindow?.getSelection?.() ||
+    ownerDocument?.getSelection?.() ||
+    window.getSelection?.() ||
+    null;
 
+  const hasActiveTextSelection = () => {
+    const selection = getActiveSelection();
+    if (!selection || selection.rangeCount === 0) return false;
+    if (selection.isCollapsed) return false;
+    return (selection.toString?.() || "").trim().length > 0;
+  };
+
+  const clearSelection = () => {
+    const selection = getActiveSelection();
     if (selection?.rangeCount) {
       selection.removeAllRanges();
     }
@@ -59,6 +67,11 @@ export function bindDoubleTapToggle({
     if (deltaX > 12 || deltaY > 12) return;
 
     if (isInteractiveTarget?.(event.target)) return;
+    // Don't toggle the UI / clear selection while the user is interacting with a text selection.
+    if (hasActiveTextSelection()) {
+      lastTapTime = 0;
+      return;
+    }
 
     const now = Date.now();
     lastTouchEndTime = now;
@@ -82,6 +95,11 @@ export function bindDoubleTapToggle({
     if (Date.now() - lastTouchEndTime < 400) return;
     if (Date.now() - (getLastGlobalTouchTime?.() || 0) < 400) return;
     if (isInteractiveTarget?.(event.target)) return;
+    // Preserve user text selections so the highlight toolbar (and copy) can act on them.
+    if (hasActiveTextSelection()) {
+      lastTapTime = 0;
+      return;
+    }
 
     if (event.cancelable) {
       event.preventDefault();
@@ -103,6 +121,8 @@ export function bindDoubleTapToggle({
     if (Date.now() - lastTouchEndTime < 400) return;
     if (Date.now() - (getLastGlobalTouchTime?.() || 0) < 400) return;
     if (isInteractiveTarget?.(event.target)) return;
+    // A double-click commonly selects a word — keep the selection intact.
+    if (hasActiveTextSelection()) return;
 
     if (event.cancelable) {
       event.preventDefault();

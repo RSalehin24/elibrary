@@ -7,7 +7,8 @@ export const SELECTORS = {
   readerWrapperContainer: ".reader-wrapper-container",
   settingWrapper: ".setting-wrapper",
   epubContainer: ".epub-container",
-  viewer: "#viewer"
+  viewer: "#viewer",
+  chapterLabel: "#reader-chapter-label",
 };
 
 export const THEMES = [
@@ -16,28 +17,28 @@ export const THEMES = [
     style: {
       body: {
         color: "#000",
-        background: "#fff"
-      }
-    }
+        background: "#fff",
+      },
+    },
   },
   {
     name: "sepia",
     style: {
       body: {
         color: "#704214",
-        background: "#f4eacd"
-      }
-    }
+        background: "#f4eacd",
+      },
+    },
   },
   {
     name: "night",
     style: {
       body: {
         color: "#bdcadb",
-        background: "#1b1f2a"
-      }
-    }
-  }
+        background: "#1b1f2a",
+      },
+    },
+  },
 ];
 
 export const DEFAULT_FONT_SIZE = 20;
@@ -53,5 +54,5 @@ export const VIEWPORT_FALLBACK_CONTENT =
 
 export const STORAGE_KEYS = {
   themeIndex: "epub_reader_theme_index",
-  fontSize: "epub_reader_font_size"
+  fontSize: "epub_reader_font_size",
 };

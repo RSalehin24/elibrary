@@ -14,6 +14,7 @@ ENTITY_SEQUENCE_MASK = (1 << ENTITY_SEQUENCE_BITS) - 1
 BOOK_SEQUENCE_MASK = (1 << BOOK_SEQUENCE_BITS) - 1
 BOOK_CHECK_MASK = (1 << BOOK_CHECK_BITS) - 1
 UNKNOWN_RELATION_SEQUENCE = 0
+SERIES_ENTITY_TAG = 0
 CATEGORY_ENTITY_TAG = 1
 WRITER_ENTITY_TAG = 2
 BOOK_PAYLOAD_TAG = 3
@@ -23,7 +24,14 @@ ENTITY_SCRAMBLE_INVERSE = pow(ENTITY_SCRAMBLE_MULTIPLIER, -1, CATALOG_CODE_MODUL
 BOOK_SCRAMBLE_INVERSE = pow(BOOK_SCRAMBLE_MULTIPLIER, -1, CATALOG_CODE_MODULUS)
 CATEGORY_SCRAMBLE_OFFSET = 94_518_223_171
 WRITER_SCRAMBLE_OFFSET = 312_709_884_719
+SERIES_SCRAMBLE_OFFSET = 187_446_330_823
 BOOK_SCRAMBLE_OFFSET = 608_198_411_427
+
+_ENTITY_SCRAMBLE_OFFSETS = {
+    SERIES_ENTITY_TAG: SERIES_SCRAMBLE_OFFSET,
+    CATEGORY_ENTITY_TAG: CATEGORY_SCRAMBLE_OFFSET,
+    WRITER_ENTITY_TAG: WRITER_SCRAMBLE_OFFSET,
+}
 
 
 def code_salt(sequence_number, entity_tag):
@@ -71,13 +79,17 @@ def unscramble_payload(scrambled_value, *, inverse_multiplier, offset):
 def build_entity_catalog_code(sequence_number, *, entity_tag):
     if sequence_number < 0 or sequence_number > ENTITY_SEQUENCE_MASK:
         raise ValueError("Entity catalog code capacity exceeded.")
+    if entity_tag not in _ENTITY_SCRAMBLE_OFFSETS:
+        raise ValueError("Unknown entity tag.")
     payload = ((entity_tag << (ENTITY_SEQUENCE_BITS + ENTITY_SALT_BITS)) | (sequence_number << ENTITY_SALT_BITS) | code_salt(sequence_number, entity_tag))
-    offset = CATEGORY_SCRAMBLE_OFFSET if entity_tag == CATEGORY_ENTITY_TAG else WRITER_SCRAMBLE_OFFSET
+    offset = _ENTITY_SCRAMBLE_OFFSETS[entity_tag]
     return catalog_code_from_int(scramble_payload(payload, multiplier=ENTITY_SCRAMBLE_MULTIPLIER, offset=offset))
 
 
 def decode_entity_catalog_code(value, *, entity_tag):
-    offset = CATEGORY_SCRAMBLE_OFFSET if entity_tag == CATEGORY_ENTITY_TAG else WRITER_SCRAMBLE_OFFSET
+    if entity_tag not in _ENTITY_SCRAMBLE_OFFSETS:
+        raise ValueError("Unknown entity tag.")
+    offset = _ENTITY_SCRAMBLE_OFFSETS[entity_tag]
     payload = unscramble_payload(int_from_catalog_code(value), inverse_multiplier=ENTITY_SCRAMBLE_INVERSE, offset=offset)
     actual_tag = payload >> (ENTITY_SEQUENCE_BITS + ENTITY_SALT_BITS)
     sequence_number = (payload >> ENTITY_SALT_BITS) & ENTITY_SEQUENCE_MASK
@@ -95,12 +107,20 @@ def build_writer_catalog_code(sequence_number):
     return build_entity_catalog_code(sequence_number, entity_tag=WRITER_ENTITY_TAG)
 
 
+def build_series_catalog_code(sequence_number):
+    return build_entity_catalog_code(sequence_number, entity_tag=SERIES_ENTITY_TAG)
+
+
 def decode_category_catalog_code(value):
     return decode_entity_catalog_code(value, entity_tag=CATEGORY_ENTITY_TAG)
 
 
 def decode_writer_catalog_code(value):
     return decode_entity_catalog_code(value, entity_tag=WRITER_ENTITY_TAG)
+
+
+def decode_series_catalog_code(value):
+    return decode_entity_catalog_code(value, entity_tag=SERIES_ENTITY_TAG)
 
 
 def is_entity_catalog_code(value, *, entity_tag):

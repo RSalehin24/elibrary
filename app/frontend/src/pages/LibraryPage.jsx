@@ -4,7 +4,10 @@ import { catalogFetch } from "../api/catalog";
 import BookTable from "../components/BookTable";
 import CatalogToolbar from "../components/CatalogToolbar";
 import ExportActions from "../components/ExportActions";
-import { waitForExportUi, waitForMinimumLoader } from "../features/catalog/exportUiTiming";
+import {
+  waitForExportUi,
+  waitForMinimumLoader,
+} from "../features/catalog/exportUiTiming";
 import { SavedFilterStrip } from "../features/library/SavedFilterStrip";
 import { loadLibraryBooksForExport } from "../features/library/libraryExport";
 import {
@@ -15,7 +18,9 @@ import {
 } from "../features/library/libraryFilters";
 import { useMyBooksAction } from "../features/library/useMyBooksAction";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useSession } from "../hooks/useSession";
+import { useSessionFlag } from "../hooks/useSessionFlag";
 import { useToast } from "../hooks/useToast";
 import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
 import { getExportBlockState } from "../utils/export";
@@ -24,15 +29,15 @@ import {
   readPendingExport,
   writePendingExport,
 } from "../utils/exportSession";
-import {
-  cleanQueryParams,
-  filtersFromSearchParams,
-} from "../utils/query";
+import { cleanQueryParams, filtersFromSearchParams } from "../utils/query";
 
 export default function LibraryPage() {
+  usePageTitle("Library");
   const { authenticated } = useSession();
   const toast = useToast();
-  const pendingExportRef = useRef(readPendingExport(LIBRARY_EXPORT_STORAGE_KEY));
+  const pendingExportRef = useRef(
+    readPendingExport(LIBRARY_EXPORT_STORAGE_KEY),
+  );
   const resumedPendingExportRef = useRef(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
@@ -40,7 +45,10 @@ export default function LibraryPage() {
     [searchParams],
   );
   const [filters, setFilters] = useState(appliedFilters);
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useSessionFlag(
+    "filters-expanded:library",
+    false,
+  );
   const [savedFilters, setSavedFilters] = useState([]);
   const [savedFilterAction, setSavedFilterAction] = useState("");
   const [downloadState, setDownloadState] = useState(
@@ -146,7 +154,10 @@ export default function LibraryPage() {
       return;
     }
     setSavedFilterAction(`apply:${savedFilter.id}`);
-    const nextFilters = { ...defaultLibraryFilters, ...(savedFilter.params || {}) };
+    const nextFilters = {
+      ...defaultLibraryFilters,
+      ...(savedFilter.params || {}),
+    };
     setFilters(nextFilters);
     setSearchParams(cleanQueryParams(nextFilters));
     toast.success(`Applied "${savedFilter.name}".`);
@@ -286,6 +297,7 @@ export default function LibraryPage() {
           showMyBooksAction
           onMyBooksToggle={myBooksAction.toggleMyBooks}
           myBooksBusyIds={myBooksAction.busyIds}
+          sortValue={appliedFilters.sort}
         />
       )}
     </div>

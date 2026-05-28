@@ -1,6 +1,6 @@
 # Processing Pages Reference
 
-Validated on: 2026-04-15
+Validated on: 2026-05-27
 
 This document describes the current processing pages, the cards that are rendered on each page, the actions available inside those cards, the regressions that were fixed, and the test coverage used to verify the real development frontend and backend.
 
@@ -10,14 +10,14 @@ This document describes the current processing pages, the cards that are rendere
 - Heavy book payload fields are now deferred in the catalog and ingestion querysets/serializers so list pages do not pull HTML blobs, raw scrape payloads, or large JSON fields unless they are actually needed.
 - Processing pages now avoid unnecessary development-only duplicate frontend requests and avoid broad background polling when no active work exists, which reduced backend pressure and the worker-loss cascade seen during the failing runs.
 - The local development worker now runs in Celery `solo` mode with single-task settings pinned in compose, which stopped the repeated prefork `SIGKILL` crashes while draining the existing submission backlog.
+- The six-page processing dropdown has been replaced with four consolidated routes: `/catalog`, `/create`, `/on-hold`, and `/incomplete`. Old routes redirect automatically.
 
 ## Validated Edge Cases
 
 - Large catalog browse against the current dev dataset with thousands of source rows, including sort changes, page changes, and rows-per-page changes.
-- Failed page layout isolation: the failed route intentionally renders only the overview plus `Failed Requests`, not the wider queue board.
-- Duplicate page behavior when the matched existing book has already been deleted: `Same Book` is hidden and `New Book` remains available.
-- Collapsible `Stopped`, `Queued`, and `Deleted` cards render only when they still have matching rows, so the `Deleted` card can disappear completely after the final deleted request is requeued.
-- Submission and processing cards only expose state-valid actions such as `Start`, `Stop`, `Resume`, `Retry`, `Add Again to Queue`, and `Recreate` when the underlying row actually supports them.
+- On Hold page layout: Paused, Failed, Duplicate, and Deleted cards each own one request bucket.
+- Duplicate page behavior when the matched existing book has already been deleted: `New` and `New Edition` remain available.
+- Submission and processing cards only expose state-valid actions such as `Pause`, `Resume`, `Retry`, `Create Again`, `Recreate`, and `Delete` when the underlying row actually supports them.
 - Catalog rows correctly handle ready/open rows, stopped rows that can be resumed, deleted/local-book-missing rows, and non-creatable rows that remain read-only.
 - Incomplete checks cover missing source categories, books removed from unfinished tracking, empty removed-history ranges, and single-row versus bulk reprocess flows.
 
@@ -74,22 +74,24 @@ Row actions by row state:
 - `Retry` for failed jobs
 - `Delete` for any row
 
-### Duplicate review card
+### Duplicate card
 
-Used on the duplicate page.
+Used on the On Hold page.
 
 Common behavior:
 
 - search and filter drawer
 - row selection and select-all
-- bulk `Same Book selected`
-- bulk `New Book selected`
+- bulk `New selected`
+- bulk `New Edition selected`
+- bulk `Duplicate selected`
 - bulk `Delete selected`
 
 Row actions:
 
-- `Same Book`
-- `New Book`
+- `New`: dismiss duplicate and create a new book
+- `New Edition`: treat as a new edition of the existing book
+- `Duplicate`: confirm the existing book match
 - `Delete`
 
 ### Failed requests card
@@ -135,9 +137,183 @@ Actions:
 
 ## Page Map
 
-### `/processing-my-requests`
+The processing section now routes to four pages. Old `/processing-*` URLs redirect automatically to their new equivalents.
 
-Heading: `My Requests`
+### `/catalog`
+
+Heading: `Catalog`
+
+Cards:
+
+- `Catalog Overview`
+- `Catalog Sync` (manual sync control)
+- `Automation` (catalog automation settings)
+- `Catalog Books`
+
+`Catalog Sync` actions:
+
+- `Sync catalog` / `Pause sync` / `Resume sync`
+
+`Automation` card actions:
+
+- enable/disable toggle
+- set `Time`, `Frequency`, `Mode`, `Pages`
+- `Save automation`
+
+`Catalog Books` actions:
+
+- search
+- filter drawer
+- sort chooser
+- rows-per-page chooser
+- pagination: `First`, `Prev`, `Next`, `Last`
+- bulk `Create selected`
+- bulk `Delete selected`
+- row `Open` when a local ready book exists
+- row `Create` for creatable rows
+- row `Delete`
+
+How it works:
+
+- `Catalog Overview` is summary-only
+- manual sync and catalog automation share the same catalog runtime and cannot run in parallel
+- `Catalog Books` is the main source-catalog queue
+- formerly split across `/processing-catalog-books` and `/processing-automation`
+
+### `/create`
+
+Heading: `Create`
+
+Cards:
+
+- `Create Overview`
+- `Requests`
+- `Queue`
+- `Processing`
+- `Created`
+
+`Requests` bulk actions:
+
+- `Delete selected`
+
+`Queue` bulk actions:
+
+- `Delete selected`
+
+`Processing` bulk actions:
+
+- `Pause selected`
+- `Delete selected`
+
+`Created` row action:
+
+- `Open` when a linked book exists
+
+`Created` bulk action:
+
+- `Delete selected` (also deletes the linked book)
+
+How it works:
+
+- `Create Overview` shows live counts for Requests, Queue, Processing, and Created
+- requests move through `requests → queue → processing → created`
+- formerly at `/processing-my-requests`
+
+### `/on-hold`
+
+Heading: `On Hold`
+
+Cards:
+
+- `On Hold Overview`
+- `Paused`
+- `Failed`
+- `Duplicate`
+- `Deleted`
+
+`Paused` bulk actions:
+
+- `Resume selected`
+- `Delete selected`
+
+`Failed` bulk actions:
+
+- `Retry selected`
+- `Delete selected`
+
+`Failed` row display:
+
+- inline error reason shown as a detail column
+
+`Duplicate` bulk actions:
+
+- `New selected`
+- `New Edition selected`
+- `Duplicate selected`
+- `Delete selected`
+
+`Deleted` bulk action:
+
+- `Create Again selected`
+
+How it works:
+
+- `On Hold Overview` shows live counts for Paused, Failed, Duplicate, and Deleted
+- formerly split across `/processing-failed-requests` and `/processing-duplicate-requests`
+
+### `/incomplete`
+
+Heading: `Incomplete`
+
+Cards:
+
+- `Incomplete Overview`
+- `Automation` (incomplete-check automation settings)
+- `Incomplete` (source catalog records still marked incomplete)
+- `Updated` (records resolved since last run)
+
+`Automation` card actions:
+
+- enable/disable toggle
+- set `Time`, `Frequency`
+- `Save automation` / sync run control
+
+`Incomplete` card:
+
+- read-only list of currently incomplete records
+
+`Updated` bulk actions:
+
+- `Recreate selected`
+- `Delete selected`
+
+How it works:
+
+- `Incomplete Overview` shows live counts for Incomplete and Updated
+- automation fetches the live `অসম্পূর্ণ বই` category and reconciles the local catalog
+- resolved records move to `Updated` after the run completes
+- formerly at `/processing-incomplete-check`
+
+## REMOVED PAGES (redirect targets)
+
+The following routes now redirect permanently:
+
+| Old route                        | Redirects to  |
+| -------------------------------- | ------------- |
+| `/processing-catalog-books`      | `/catalog`    |
+| `/processing-automation`         | `/catalog`    |
+| `/processing-my-requests`        | `/create`     |
+| `/processing-failed-requests`    | `/on-hold`    |
+| `/processing-duplicate-requests` | `/on-hold`    |
+| `/processing-incomplete-check`   | `/incomplete` |
+
+## Validation
+
+### OBSOLETE SECTION BELOW
+
+The routes, card names, and action labels in the following validation block reflect the old six-page model. They are kept for historical reference only.
+
+### Old page inventory (pre-refactor)
 
 Cards:
 

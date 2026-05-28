@@ -60,6 +60,7 @@ class SeriesListSerializer(serializers.ModelSerializer):
         model = Series
         fields = [
             "id",
+            "catalog_code",
             "name",
             "slug",
             "book_count",

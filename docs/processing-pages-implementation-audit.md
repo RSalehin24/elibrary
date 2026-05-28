@@ -1,8 +1,10 @@
 # Processing Pages Implementation Audit
 
-This document describes the real implementation of the processing dropdown pages as of 2026-04-16.
+This document describes the real implementation of the processing pages as of 2026-05-27.
 
 It is based on the frontend routes/components and backend views/services, not on the existing processing docs.
+
+**Note:** The six-page processing model described in earlier sessions has been replaced with a four-page model. Old `/processing-*` routes now redirect to the new routes.
 
 ## Verification Performed
 
@@ -12,30 +14,19 @@ It is based on the frontend routes/components and backend views/services, not on
 
 ## Real Page Model
 
-The processing dropdown currently routes to six pages:
+The processing section currently routes to four pages:
 
-- `Catalog` -> `/processing-catalog-books`
-- `Automation` -> `/processing-automation`
-- `My Requests` -> `/processing-my-requests`
-- `Failed Requests` -> `/processing-failed-requests`
-- `Deplicate Requests` -> `/processing-duplicate-requests`
-- `Incomplete Requests` -> `/processing-incomplete-check`
+- `Catalog` -> `/catalog` (was `/processing-catalog-books` and `/processing-automation`)
+- `Create` -> `/create` (was `/processing-my-requests`)
+- `On Hold` -> `/on-hold` (was `/processing-failed-requests` and `/processing-duplicate-requests`)
+- `Incomplete` -> `/incomplete` (was `/processing-incomplete-check`)
 
-The real category/origin mapping is implemented in [app/frontend/src/features/processing/helpers/params.js](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/features/processing/helpers/params.js) and the backend filters in [app/backend/apps/ingestion/views/filters.py](/Users/rsalehin24/Documents/ebook-scrapping/app/backend/apps/ingestion/views/filters.py):
+The routing is defined in [app/frontend/src/features/app/AppRoutes.jsx](../app/frontend/src/features/app/AppRoutes.jsx). Old routes redirect with `<Navigate>`.
 
-- `My Requests` loads `origin=user`
-- `Catalog` loads `origin=curation`
-- `Automation` loads `origin=automation`
-- `Incomplete Requests` also loads `origin=curation`
-- `Failed Requests` does not filter by origin
-- `Deplicate Requests` does not filter by origin
+The page components are exported from [app/frontend/src/features/processing/BookProcessingPages.jsx](../app/frontend/src/features/processing/BookProcessingPages.jsx):
 
-Important consequences:
-
-- `Incomplete Requests` is not its own stored request category. It shares the same request origin as `Catalog`.
-- There is no persisted "last page category" field on `BookSubmission`, `ProcessingJob`, or `DuplicateReview`.
-- Failed and duplicate pages cannot filter by the page the request came from.
-- Catalog-origin requests and incomplete-origin reprocess requests are indistinguishable once they become normal submissions/jobs, because both are stored as `origin=curation`.
+- `CatalogProcessingPage` from `processing-pages/CatalogProcessingPage.jsx`
+- `CreateProcessingPage`, `OnHoldProcessingPage`, `IncompleteProcessingPage` from `processing-pages/QueueProcessingPages.jsx`
 
 ## Shared Card Families
 
@@ -43,62 +34,47 @@ Important consequences:
 
 These are summary-only cards with no row actions.
 
-- `My Requests Overview`
-- `Catalog Overview`
-- `Automation Overview`
-- `Failed Requests Overview`
-- `Deplicate Requests Overview`
-- `Incomplete Overview`
+- `Catalog Overview` (on `/catalog`)
+- `Create Overview` (on `/create`)
+- `On Hold Overview` (on `/on-hold`)
+- `Incomplete Overview` (on `/incomplete`)
 
-They all show counts, but not necessarily the same buckets.
+They each show counts for their respective pipeline buckets.
 
 ### Submission List Card Family
 
-Implemented inline in the page components and reused in:
+Implemented in `QueueProcessingPages.jsx` as `CreateCard` and `OnHoldCard`. Cards:
 
-- `Requests`
-- `Automation Requests`
-- `Ready`
-- `Stopped`
-- `Queued`
-- `Deleted`
+- `/create`: `Requests`, `Queue`, `Processing`, `Created`
+- `/on-hold`: `Paused`, `Failed`, `Duplicate`, `Deleted`
 
-Columns:
-
-- request value
-- status
-- linked book
-- updated time
-- action
-
-The request cell is rendered through [RequestValue](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/features/processing/components/ProcessingScaffold.jsx), so it shows:
+The request cell shows:
 
 - a primary request label
 - a secondary URL/host line when the input is a URL
-- a collapsible `View error` block when an error exists
+- an inline error detail column on the `Failed` card
 
-Single-row actions are conditional:
+Single-row actions are conditional by card:
 
-- `Open`: opens the linked book when `linked_book_slug` exists
-- `Recreate`: retries when the linked book record was deleted
-- `Review`: opens candidate selection when the submission is ambiguous
-- `Start`: resumes a queued job that has no `task_id`
-- `Stop`: stops an active job
-- `Add Again to Queue`: retries a deleted submission
-- `Resume`: resumes a stopped request
-- `Retry`: retries a failed or `needs_review` request
-- `Delete`: deletes the request or soft-deletes it first
+- `Created`: `Open` when `linkedBookSlug` is set
+- `Paused`: `Resume`, `Delete`
+- `Failed`: bulk `Retry`, `Delete` only (no per-row buttons)
+- `Duplicate`: `New`, `New Edition`, `Duplicate`, `Delete`
+- `Deleted`: `Create Again`
 
-Bulk actions depend on card mode:
+Bulk actions by card:
 
-- default/request cards: `Resume selected`, `Stop selected`, `Delete selected`
-- deleted cards: `Add selected to queue`, `Delete selected`
-- ready cards: `Delete selected`
-- stopped cards: `Resume selected`, `Delete selected`
+- `Requests`, `Queue`: `Delete selected`
+- `Processing`: `Pause selected`, `Delete selected`
+- `Created`: `Delete selected` (also deletes the linked book)
+- `Paused`: `Resume selected`, `Delete selected`
+- `Failed`: `Retry selected`, `Delete selected`
+- `Duplicate`: `New selected`, `New Edition selected`, `Duplicate selected`, `Delete selected`
+- `Deleted`: `Create Again selected`
 
 ### Processing Job Card Family
 
-Rendered as `Processing` on most pages.
+Rendered as `Processing` on the `/create` page only.
 
 Columns:
 
@@ -108,7 +84,7 @@ Columns:
 - updated
 - action
 
-Step labels come from [jobTypeLabel](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/features/processing/helpers/request.js):
+Step labels come from [jobTypeLabel](app/frontend/src/features/processing/helpers/request.js):
 
 - `ingestion` -> `Create`
 - `resolution` -> `Match`
@@ -130,53 +106,50 @@ Bulk actions:
 - `Stop selected`
 - `Delete selected`
 
-### Duplicate Review Card Family
+### Duplicate Card Family
 
-Visible only on `Deplicate Requests`, even though helper implementations exist in several other pages.
+Visible only on `/on-hold` as the `Duplicate` card.
 
 Columns:
 
 - request
-- existing book
 - duplicate review status
 - action
 
 Single-row actions:
 
-- `Same Book`: confirm the existing book match
-- `New Book`: dismiss the duplicate and queue a new book flow
-- `Delete`: remove the duplicate request
+- `New`: dismiss duplicate and queue a new book
+- `New Edition`: treat as a new edition of the existing book
+- `Duplicate`: confirm the existing book match
+- `Delete`
 
 Bulk actions:
 
-- `Same Book selected`
-- `New Book selected`
+- `New selected`
+- `New Edition selected`
+- `Duplicate selected`
 - `Delete selected`
 
 ### Failed Jobs Card Family
 
-Visible only on `Failed Requests`, even though helper implementations exist in several other pages.
+Visible on `/on-hold` as the `Failed` card.
 
 Columns:
 
 - request
-- step
 - updated
-- inline error text
+- inline error detail
 
 Visible actions are bulk-only:
 
 - `Retry selected`
 - `Delete selected`
 
-There are no per-row action buttons on this page.
+There are no per-row action buttons on this card.
 
 ### Run History Card Family
 
-Visible on:
-
-- `Automation`
-- `Incomplete Requests`
+Visible on `/catalog` (catalog automation runs) and `/incomplete` (incomplete automation runs).
 
 Columns:
 
@@ -230,7 +203,7 @@ Single-row actions:
 - `Resume`: same button path as `Create`, but the label becomes `Resume` when the row status is `stopped`
 - `Delete`: delete the catalog row
 
-The actual "create is still running" tracking for this card is implemented through `catalogCreationTracker` plus [resolvePendingCatalogCreationEntries](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/features/processing/helpers/catalog.js).
+The actual "create is still running" tracking for this card is implemented through `catalogCreationTracker` plus [resolvePendingCatalogCreationEntries](app/frontend/src/features/processing/helpers/catalog.js).
 
 ### Incomplete Catalog Card Family
 
@@ -276,180 +249,95 @@ It is just a filtered informational list with search and range filters.
 
 ## Page-By-Page Inventory
 
-## My Requests
+## `/catalog` — Catalog
 
-Rendered by [app/frontend/src/pages/ProcessingMyRequestsPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingMyRequestsPage.jsx)
-
-Visible cards:
-
-- `My Requests Overview`
-- `Requests`
-- `Processing`
-- `Ready`
-- `Stopped`
-- `Queued`
-- `Deleted`
-
-What is unique here:
-
-- It is the only page scoped to `origin=user`.
-- It shows failed and duplicate counts in the overview, but it does not render failed or duplicate row cards.
-
-What overlaps with other pages:
-
-- `Requests`, `Ready`, `Stopped`, `Queued`, and `Deleted` use the same submission-card behavior family used on `Automation`, `Catalog`, `Incomplete Requests`, and parts of `Deplicate Requests`.
-- `Processing` uses the same processing-job card family used on `Catalog`, `Automation`, `Incomplete Requests`, and `Deplicate Requests`.
-
-Current gaps:
-
-- failed and duplicate rows leave this page and are only represented by counts
-- helper implementations for duplicate, failed, and requeue-review cards exist in this file but are not rendered
-
-## Catalog
-
-Rendered by [app/frontend/src/pages/ProcessingCatalogBooksPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingCatalogBooksPage.jsx)
+Rendered by [app/frontend/src/features/processing/processing-pages/CatalogProcessingPage.jsx](../app/frontend/src/features/processing/processing-pages/CatalogProcessingPage.jsx)
 
 Visible cards:
 
 - `Catalog Overview`
+- `Catalog Sync` (manual sync)
+- `Automation` (catalog automation settings)
 - `Catalog Books`
+
+What is unique here:
+
+- `Catalog Sync` and `Automation` share the same catalog runtime so they cannot run in parallel.
+- `Catalog Books` is the only catalog snapshot browser with sync, sort, paging, and create-from-catalog actions.
+- Create progress is tracked until the catalog entry reaches a terminal state via `catalogCreationTracker` in [app/frontend/src/features/processing/helpers/catalog.js](../app/frontend/src/features/processing/helpers/catalog.js).
+
+Current notes:
+
+- duplicate outcomes surface through the On Hold page, not as a first-class catalog snapshot status
+- consolidated from the old `/processing-catalog-books` and `/processing-automation` pages
+
+## `/create` — Create
+
+Rendered by [app/frontend/src/features/processing/processing-pages/QueueProcessingPages.jsx](../app/frontend/src/features/processing/processing-pages/QueueProcessingPages.jsx) as `CreateProcessingPage`.
+
+Visible cards:
+
+- `Create Overview`
+- `Requests`
+- `Queue`
 - `Processing`
-- `Ready`
-- `Stopped`
-- `Queued`
+- `Created`
+
+What is unique here:
+
+- The full create pipeline is visible in one place: requests → queue → processing → created.
+- `Created` rows expose an `Open` link directly to the book when available.
+- Delete on `Created` rows also deletes the linked book.
+
+Current notes:
+
+- replaces the old `/processing-my-requests` page
+
+## `/on-hold` — On Hold
+
+Rendered by [app/frontend/src/features/processing/processing-pages/QueueProcessingPages.jsx](../app/frontend/src/features/processing/processing-pages/QueueProcessingPages.jsx) as `OnHoldProcessingPage`.
+
+Visible cards:
+
+- `On Hold Overview`
+- `Paused`
+- `Failed`
+- `Duplicate`
 - `Deleted`
 
 What is unique here:
 
-- `Catalog Books` is the only catalog snapshot browser.
-- It includes sync, sort, paging, and create-from-catalog actions.
-- It is the only page that currently tracks create progress until the catalog entry reaches a terminal state.
+- All four hold states — paused, failed, duplicate, deleted — are consolidated onto one page.
+- `Failed` exposes an inline error reason column; all actions on this card are bulk-only.
+- `Duplicate` supports three resolution paths: `New`, `New Edition`, and `Duplicate` (confirm match).
+- `Deleted` only allows `Create Again` bulk action.
 
-What overlaps with other pages:
+Current notes:
 
-- `Processing`, `Ready`, `Stopped`, `Queued`, and `Deleted` are the same card families used elsewhere, but filtered to `origin=curation`.
+- replaces the old `/processing-failed-requests` and `/processing-duplicate-requests` pages
+- the old "Deplicate" typo has been corrected to "Duplicate"
 
-Current gaps:
+## `/incomplete` — Incomplete
 
-- failed/requeued catalog status-card helpers exist in this file but are not rendered anywhere
-- duplicate is not a first-class catalog snapshot status; duplicate outcomes surface through duplicate reviews, while catalog snapshot status collapses that state into `failed` or later terminal submission/job state
-
-## Automation
-
-Rendered by [app/frontend/src/pages/ProcessingAutomationPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingAutomationPage.jsx)
-
-Visible cards:
-
-- `Automation Overview`
-- `Automation`
-- `Automation Requests`
-- `Processing`
-- `Ready`
-- `Stopped`
-- `Queued`
-- `Deleted`
-- `Run History`
-
-What is unique here:
-
-- `Automation` settings card shows the toggle, next-run time, schedule fields, mode, page limit, and `Save automation`.
-- `Run History` is scoped to scheduled automation runs (`trigger=scheduled`).
-
-What overlaps with other pages:
-
-- `Automation Requests`, `Ready`, `Stopped`, `Queued`, `Deleted` use the shared submission-card behavior.
-- `Processing` uses the shared job-card behavior.
-- `Run History` is the same run-history card family used on `Incomplete Requests`.
-
-Current gaps:
-
-- failed and duplicate row cards are not rendered here; only the counts survive in the overview
-
-## Failed Requests
-
-Rendered through [app/frontend/src/pages/ProcessingFailedRequestsPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingFailedRequestsPage.jsx) -> [app/frontend/src/pages/ProcessingAllActivityPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingAllActivityPage.jsx)
-
-Visible cards:
-
-- `Failed Requests Overview`
-- `Failed Requests`
-
-What is unique here:
-
-- This page loads only failed-job review data by default.
-- It is a job review page, not a submission queue page.
-- It shows inline error text and bulk-only actions.
-
-What overlaps with other pages:
-
-- The `Failed Requests` helper exists in other page files, but only this shared all-activity page actually renders it.
-
-Current gaps:
-
-- there is no origin/page filter, so you cannot narrow failed rows by `My Requests`, `Catalog`, `Automation`, or `Incomplete Requests`
-- there are no single-row buttons; all retry/delete handling is bulk
-
-## Deplicate Requests
-
-Rendered through [app/frontend/src/pages/ProcessingDuplicateRequestsPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingDuplicateRequestsPage.jsx) -> [app/frontend/src/pages/ProcessingAllActivityPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingAllActivityPage.jsx)
-
-Visible cards:
-
-- `Deplicate Requests Overview`
-- `Deplicate Requests`
-- `Processing`
-- `Ready`
-- `Stopped`
-- `Queued`
-- `Deleted`
-
-What is unique here:
-
-- `Deplicate Requests` is the only visible duplicate-review card.
-- It can resolve duplicates either as `Same Book` or `New Book`.
-
-What overlaps with other pages:
-
-- `Processing`, `Ready`, `Stopped`, `Queued`, and `Deleted` reuse the same shared card families as the other queue pages.
-
-Current gaps:
-
-- the visible label is misspelled as `Deplicate Requests`
-- there is no filter for the page/category the duplicate came from
-
-## Incomplete Requests
-
-Rendered by [app/frontend/src/pages/ProcessingIncompleteAutomationPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingIncompleteAutomationPage.jsx)
+Rendered by [app/frontend/src/features/processing/processing-pages/QueueProcessingPages.jsx](../app/frontend/src/features/processing/processing-pages/QueueProcessingPages.jsx) as `IncompleteProcessingPage`.
 
 Visible cards:
 
 - `Incomplete Overview`
-- `Automation Setup`
-- `Incomplete Catalog`
-- `Removed from Unfinished`
-- `Processing`
-- `Ready`
-- `Stopped`
-- `Queued`
-- `Deleted`
-- `Run History`
+- `Automation` (incomplete-check automation settings)
+- `Incomplete` (read-only list of currently incomplete records)
+- `Updated` (records resolved since the last run)
 
 What is unique here:
 
-- `Incomplete Catalog` is a book-level reprocess list, not a submission list.
-- `Removed from Unfinished` is informational only.
-- `Automation Setup` is a smaller automation form than the full `Automation` page.
+- `Automation` controls when the incomplete-check run fires.
+- `Incomplete` is read-only: records are reconciled by the backend automation, not by per-row operator action.
+- `Updated` rows can be recreated or deleted after resolution.
 
-What overlaps with other pages:
+Current notes:
 
-- `Processing`, `Ready`, `Stopped`, `Queued`, `Deleted` use the same shared submission/job card families.
-- `Run History` uses the same run-history family as `Automation`.
-
-Current gaps:
-
-- the page loads and processes `origin=curation`, the same as `Catalog`
-- this means `Processing`, `Ready`, `Stopped`, `Queued`, and `Deleted` on this page are not isolated to incomplete-page reprocess requests
-- requests created from here can show up on `Catalog`, and catalog requests can show up here
+- replaces the old `/processing-incomplete-check` page
+- `Updated` replaces the old `Removed from Unfinished` card
 
 ## Clear Bugs
 
@@ -457,13 +345,13 @@ Current gaps:
 
 Frontend stop flow:
 
-- [stopCatalogRefresh in ProcessingCatalogBooksPage.jsx](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingCatalogBooksPage.jsx) immediately flips the visual state to idle and clears the task id before the backend work has really proven it stopped
+- [CatalogProcessingPage.jsx](../app/frontend/src/features/processing/processing-pages/CatalogProcessingPage.jsx) sets optimistic runtime state immediately when the user pauses sync, before the backend confirms the stop
 
 Backend stop flow:
 
-- [cancel_source_catalog_refresh in services/curation.py](/Users/rsalehin24/Documents/ebook-scrapping/app/backend/apps/ingestion/services/curation.py) revokes the Celery task and immediately finalizes the refresh state as stopped/idle
-- [process_source_catalog_refresh in services/curation_support/source_refresh.py](/Users/rsalehin24/Documents/ebook-scrapping/app/backend/apps/ingestion/services/curation_support/source_refresh.py) then calls `TitleResolver().refresh_catalog(...)`
-- [TitleResolver.refresh_catalog in services/resolution.py](/Users/rsalehin24/Documents/ebook-scrapping/app/backend/apps/ingestion/services/resolution.py) has no cooperative cancellation checks inside its page loop
+- [cancel_source_catalog_refresh in services/curation.py](../app/backend/apps/ingestion/services/curation.py) revokes the Celery task and immediately finalizes the refresh state as stopped/idle
+- [process_source_catalog_refresh in services/curation_support/source_refresh.py](../app/backend/apps/ingestion/services/curation_support/source_refresh.py) then calls `TitleResolver().refresh_catalog(...)`
+- [TitleResolver.refresh_catalog in services/resolution.py](../app/backend/apps/ingestion/services/resolution.py) has no cooperative cancellation checks inside its page loop
 
 Result:
 
@@ -481,13 +369,7 @@ Across the submission, job, duplicate, failed-job, and run-history tables:
 - row action buttons usually disable correctly while `busyActionId`, `busyRunId`, or global lock flags are active
 - select-all checkboxes and row checkboxes are usually still enabled
 
-This is visible in:
-
-- `renderSubmissionsCard` implementations
-- `renderJobsCard` implementations
-- `ProcessingJobReviewCard`
-- `renderDuplicateCard`
-- `renderRunsCard`
+This is visible in the card and action components inside `QueueProcessingPages.jsx` and `CatalogProcessingPage.jsx`.
 
 Effect:
 
@@ -498,70 +380,49 @@ Effect:
 
 `Catalog Books` correctly keeps `Create` locked through tracked pending work.
 
-`Incomplete Catalog` does not. In [queueIncompleteBooks](/Users/rsalehin24/Documents/ebook-scrapping/app/frontend/src/pages/ProcessingIncompleteAutomationPage.jsx):
+`Incomplete` records are read-only in the current implementation. The `Updated` (resolved) card does allow `Recreate` and `Delete` bulk actions, but tracking does not continue until the resulting request reaches a terminal state:
 
-- `creatingCatalog` is set only around the queueing API request
-- after the API returns and one reload finishes, the lock is released
+- the busy lock is set only around the recreate API call
+- after the API returns, the lock is released
 - there is no equivalent to the catalog page's `catalogCreationTracker`
 
 Effect:
 
-- `Reprocess selected` can stop showing loading even though the created request is still queued or processing
-- controls can re-enable before the resulting book request reaches `ready`, `stopped`, `deleted`, `failed`, or `duplicate`
+- `Recreate selected` can stop showing loading even though the resulting request is still queued or processing
+- controls can re-enable before the request reaches a terminal state (`created`, `paused`, `failed`, `duplicate`)
 
-This does not match the requested "create book is not finished until terminal state" rule.
+### 4. On Hold page does not distinguish originating pipeline stage
 
-### 4. Incomplete Requests is not a separate request category
-
-The page looks separate in the UI, but it is not separate in stored request identity:
-
-- `Catalog` uses `origin=curation`
-- `Incomplete Requests` also uses `origin=curation`
+Rows on `/on-hold` (Paused, Failed, Duplicate, Deleted) do not carry a label for whether they came from the Create pipeline or from another source. The `origin` field is preserved but is not exposed as a user-visible filter.
 
 Effect:
 
-- the same curation request stream is reused by both pages
-- last-category ownership between `Catalog` and `Incomplete Requests` is lost
-- the same request can surface on both pages' queue cards
-
-This violates the requested rule that requests stay in one category until they become failed/duplicate, and then continue from their last category after that.
-
-### 5. Failed and duplicate pages cannot filter by the originating category
-
-There is no stored "came from page X" value, and the visible filter fields do not include origin/category.
-
-Effect:
-
-- once rows move into `Failed Requests` or `Deplicate Requests`, the user cannot filter them back down to `My Requests`, `Catalog`, `Automation`, or `Incomplete Requests`
-- the code only preserves `origin`, and even that is not exposed as a filter on these pages
-
-### 6. UI naming typo
-
-The navigation label, page title, and duplicate card title use `Deplicate Requests` instead of `Duplicate Requests`.
+- operators cannot narrow On Hold rows by the page the request came from
+- the stored `origin` value is not surfaced as a filter on `/on-hold`
 
 ## Requires Structural Change Or Explicit Product Direction
 
 These are not small one-line fixes.
 
-- If `Incomplete Requests` must be a true request category, it needs its own persisted origin/category or a stored last-page field. The current data model cannot distinguish catalog-created curation work from incomplete-page reprocess work.
-- If failed and duplicate pages must filter by previous category, that previous category has to be stored or derivable in a way richer than the current `origin`.
-- If duplicate must be a catalog-page status as well as a separate page, catalog snapshot status handling has to stop collapsing duplicate outcomes into broader failure-like states.
+- If failed and on-hold rows must be filterable by the pipeline stage they came from, that originating stage has to be stored on the request row in a way richer than the current `origin`.
+- If create tracking must continue until terminal state for rows recreated from `/incomplete`, an equivalent to the catalog page's `catalogCreationTracker` must be added for the Incomplete `Updated` card.
+- If checkbox selection must be locked during pending bulk or row actions, a selection-lock flag needs to be wired into every card's checkbox and select-all rendering path.
 
 ## Existing Test Coverage Gaps
 
-The current automated coverage is useful, but it does not fully prove the behavior you asked for.
+The current automated coverage is useful, but it does not fully prove all behavior.
 
 Covered today:
 
 - shared helper logic
 - catalog tracked create loading/disable behavior
-- basic stop/resume/delete flows on visible queue cards
+- basic pause/resume/delete flows on visible queue cards
 - mocked catalog sync start/stop UI behavior
+- automation settings save and persist flows
 
 Not covered well enough:
 
 - true backend cancellation of source catalog refresh after stop
 - checkbox lock behavior during single and bulk actions on every card family
-- incomplete-page create/reprocess tracking until terminal state
-- filtering failed/duplicate rows by originating page/category
-
+- incomplete-page recreate tracking until terminal state
+- filtering on-hold rows by originating pipeline stage

@@ -77,7 +77,7 @@ def enqueue_request_processing(processing_request):
         if task_id:
             next_progress[PROCESSING_DISPATCH_TASK_ID_KEY] = task_id
         processing_request.progress = next_progress
-        processing_request.save(update_fields=["progress"])
+        processing_request.save(update_fields=["progress", "updated_at"])
     return True
 
 
@@ -210,7 +210,7 @@ def processing_linked_book(record, request=None):
 
 
 def processing_row_payload(record, request=None, *, selectable=True):
-    progress = request.progress if isinstance(request and request.progress, dict) else {}
+    progress = request.progress if (request is not None and isinstance(request.progress, dict)) else {}
     linked_book = processing_linked_book(record, request)
     return {
         "id": str(request.id if request else record.id),

@@ -16,11 +16,30 @@ source "${MIGRATION_DIR}/lib/compose.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  migration/migrate.sh [--config migration/config/migrate.env] [--phase preflight|snapshot|restore|verify|full] [--dry-run] [--resume] [--keep-staging] [--allow-target-reset] [--skip-edge]
+  migration/migrate.sh [--config migration/env/migrate.env] [--phase preflight|snapshot|restore|verify|full] [--dry-run] [--resume] [--keep-staging] [--allow-target-reset] [--skip-edge]
+
+Options:
+  --config      Path to the migration config file. Defaults to migration/env/migrate.env.
+  --phase       Which phase to run:
+                  preflight - check SSH access, disk space, and source health (safe, no changes made)
+                  snapshot  - freeze the source and capture a database + storage snapshot
+                  restore   - upload the snapshot and rebuild the application on the target
+                  verify    - confirm target services are healthy and optionally set up nginx/SSL
+                  full      - run all phases end-to-end (default)
+  --dry-run     Print what would happen without making any changes.
+  --resume      Skip phases already marked as complete. Use after a partial or interrupted run.
+  --keep-staging       Keep the local staging bundle on disk after a successful migration.
+  --allow-target-reset Allow wiping existing data on the target before restoring.
+  --skip-edge          Skip nginx and certbot setup on the target server.
+
+Before migrating:
+  1. Source server (AWS)           - deploy/env/.host.env        set DEPLOY_USER_NAME and DEPLOY_IP
+  2. Target server (Digital Ocean) - migration/env/migrate.env set TARGET_HOST and TARGET_IP
+     If the username differs on the target, also set TARGET_USER in that file.
 
 Examples:
   migration/migrate.sh --phase preflight --dry-run
-  migration/migrate.sh --config migration/config/migrate.env --phase full
+  migration/migrate.sh --config migration/env/migrate.env --phase full
   migration/migrate.sh --phase restore --resume
 EOF
 }
@@ -29,8 +48,8 @@ q() {
   printf '%q' "$1"
 }
 
-CONFIG_FILE="${MIGRATION_DIR}/config/migrate.env"
-CONFIG_EXAMPLE_FILE="${MIGRATION_DIR}/config/migrate.env.example"
+CONFIG_FILE="${MIGRATION_DIR}/env/migrate.env"
+CONFIG_EXAMPLE_FILE="${MIGRATION_DIR}/env/migrate.env.example"
 PHASE="full"
 DRY_RUN=0
 RESUME=0
@@ -231,7 +250,7 @@ initialize_config() {
   TARGET_RESET_ALLOWED=0
 
   if [[ "${RESUME}" == "1" && ! -d "${BUNDLE_DIR}" ]]; then
-    die "Bundle directory does not exist for resume: ${BUNDLE_DIR}"
+    die "No previous migration run found. Remove --resume to start a new migration."
   fi
 
   log_layout_defaults
@@ -249,7 +268,7 @@ validate_required_config() {
   )
   local key
   for key in "${required_keys[@]}"; do
-    [[ -n "${!key:-}" ]] || die "Missing required config value: ${key}"
+    [[ -n "${!key:-}" ]] || die "Set ${key} in ${CONFIG_FILE} and retry."
   done
 }
 

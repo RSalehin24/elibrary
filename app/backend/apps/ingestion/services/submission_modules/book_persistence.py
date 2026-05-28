@@ -54,13 +54,13 @@ def create_submission_records(submitter, parsed_entries, auto_process=True, orig
                 submission.resolution_status = ResolutionStatus.RESOLVED
                 submission.resolution_confidence = 1.0
                 submission.status = SubmissionStatus.QUEUED
-                submission.save()
+                submission.save(update_fields=["resolved_url", "raw_payload", "resolution_status", "resolution_confidence", "status", "updated_at"])
             except ValueError as exc:
                 submission.resolution_status = ResolutionStatus.INVALID
                 submission.status = SubmissionStatus.NEEDS_REVIEW
                 submission.review_state = ReviewState.NEEDS_REVIEW
                 submission.error_message = str(exc)
-                submission.save()
+                submission.save(update_fields=["resolution_status", "status", "review_state", "error_message", "updated_at"])
         else:
             reusable_submission = find_reusable_submission(
                 normalized_input=submission.normalized_input,
@@ -159,6 +159,18 @@ def persist_scraped_book(submission, job, scraped_data, target_book=None):
         normalize_source_url_fn=normalize_source_url,
         sync_metadata_relations_fn=sync_metadata_relations,
         target_book=target_book,
+    )
+
+
+def persist_curated_book(submission, job, curated_result, target_book=None):
+    return _persist_curated_book(
+        curated_result,
+        source_url=submission.resolved_url,
+        job=job,
+        target_book=target_book,
+        find_deleted_book_by_title_fn=find_deleted_book_by_title,
+        find_existing_book_by_source_url_fn=find_existing_book_by_source_url,
+        replace_book_relations_fn=replace_book_relations,
     )
 
 

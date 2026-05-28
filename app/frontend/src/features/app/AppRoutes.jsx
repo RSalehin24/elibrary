@@ -7,6 +7,7 @@ import HomePage from "../../pages/HomePage";
 import LibraryPage from "../../pages/LibraryPage";
 import LoginPage from "../../pages/LoginPage";
 import ManualBooksPage from "../../pages/ManualBooksPage";
+import NotesPage from "../../pages/NotesPage";
 import PasswordLinkPage from "../../pages/PasswordLinkPage";
 import PasswordResetPage from "../../pages/PasswordResetPage";
 import ProfilePage from "../../pages/ProfilePage";
@@ -37,10 +38,11 @@ const protectedRoutes = [
   { path: "/publishers", element: <WriterPage /> },
   { path: "/compilers", element: <Navigate to="/editors" replace /> },
   { path: "/manual-books", element: <ManualBooksPage /> },
-  { path: "/created-books", element: <CreatedBooksPage /> },
+  { path: "/my-books", element: <CreatedBooksPage /> },
   { path: "/books/:slug", element: <BookDetailPage /> },
   { path: "/access", element: <AccessPage /> },
   { path: "/profile", element: <ProfilePage /> },
+  { path: "/notes", element: <NotesPage /> },
   { path: "/two-factor-setup", element: <TwoFactorSetupPage /> },
   { path: "/reader", element: <ReaderPage /> },
 ];
@@ -67,6 +69,10 @@ export default function AppRoutes() {
         }
       />
       <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/created-books"
+        element={<Navigate to="/my-books" replace />}
+      />
       <Route path="/reset-password" element={<PasswordResetPage />} />
       <Route
         path="/reset-password/confirm"
@@ -77,10 +83,7 @@ export default function AppRoutes() {
         element={<PasswordLinkPage mode="create" />}
       />
       {protectedRoutes.map(renderProtectedRoute)}
-      <Route
-        path="/processing"
-        element={<Navigate to="/catalog" replace />}
-      />
+      <Route path="/processing" element={<Navigate to="/catalog" replace />} />
       <Route
         path="/processing-catalog-books"
         element={<Navigate to="/catalog" replace />}
@@ -105,10 +108,7 @@ export default function AppRoutes() {
         path="/processing-incomplete-check"
         element={<Navigate to="/incomplete" replace />}
       />
-      <Route
-        path="/queue"
-        element={<Navigate to="/create" replace />}
-      />
+      <Route path="/queue" element={<Navigate to="/create" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

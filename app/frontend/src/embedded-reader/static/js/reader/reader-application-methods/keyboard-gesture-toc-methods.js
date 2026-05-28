@@ -68,8 +68,8 @@ export const readerApplicationKeyboardGestureTocMethods = {
     this.currentHref = resolvedHref;
     this.syncSectionWithHref(resolvedHref);
     syncSelectedTocItem(resolvedHref);
-  }
-,
+    this.syncChapterLabel(resolvedHref);
+  },
   setupKeyboardShortcuts() {
     this.keyboardHandler = (event) => {
       const keyEvent = event?.originalEvent || event;
@@ -134,16 +134,14 @@ export const readerApplicationKeyboardGestureTocMethods = {
     };
 
     document.addEventListener("keydown", this.keyboardHandler);
-  }
-,
+  },
   setupSwipeGestures() {
     if (this.readerWrapperContainer) {
       this.swipeBinder(this.readerWrapperContainer);
     }
 
     this.iframeBridgeController.attachSwipeGestures(this.swipeBinder);
-  }
-,
+  },
   setupReaderWrapperContainerModeToggle() {
     if (!this.readerWrapperContainer) return;
 
@@ -155,8 +153,7 @@ export const readerApplicationKeyboardGestureTocMethods = {
       },
       getLastGlobalTouchTime: () => this.lastIframeToggleTouch,
     });
-  }
-,
+  },
   resolveInternalBookHref(href) {
     if (!href) return "";
     if (!href.startsWith("#")) return href;
@@ -171,8 +168,7 @@ export const readerApplicationKeyboardGestureTocMethods = {
 
     if (!baseHref) return href;
     return `${baseHref}${href}`;
-  }
-,
+  },
   handleInternalBookLinkNavigation(href) {
     const resolvedHref = this.resolveInternalBookHref(href);
     if (!resolvedHref) return;
@@ -181,8 +177,7 @@ export const readerApplicationKeyboardGestureTocMethods = {
     this.display(resolvedHref, () => {
       this.refresh(resolvedHref);
     });
-  }
-,
+  },
   setupIframeInteractions(sessionId = this.readerSessionId) {
     if (!this.isSessionActive(sessionId) || !this.rendition) return;
 
@@ -203,16 +198,14 @@ export const readerApplicationKeyboardGestureTocMethods = {
     });
     this.iframeBridgeController.attachKeyboardShortcuts(this.keyboardHandler);
     this.settingsPanelController.refreshIframeBinding();
-  }
-,
+  },
   syncTocToggleAriaState() {
     const toggleButton = query(".iconmulu");
     if (!toggleButton || !this.epubContents) return;
 
     const isExpanded = !hasClass(this.epubContents, "close");
     toggleButton.setAttribute("aria-expanded", isExpanded ? "true" : "false");
-  }
-,
+  },
   toggleTocPanel() {
     const isClosed = hasClass(this.epubContents, "close");
 
@@ -232,13 +225,11 @@ export const readerApplicationKeyboardGestureTocMethods = {
     this.resizeReaderViewport(320, () => {
       this.loadingIndicatorController.hide();
     });
-  }
-,
+  },
   toggleSettingsPanel(event) {
     this.syncReaderControlStates();
     this.settingsPanelController.toggle(event);
-  }
-,
+  },
   handleFontSizeControl(target) {
     const tag = target?.dataset?.tag;
 
@@ -247,12 +238,10 @@ export const readerApplicationKeyboardGestureTocMethods = {
     } else if (tag === "small") {
       this.changeFontSizeByStep(-1);
     }
-  }
-,
+  },
   handleThemeControl(target) {
     const nextTheme = Number.parseInt(target?.dataset?.type || "", 10);
     if (!Number.isInteger(nextTheme)) return;
     this.applyThemeByIndex(nextTheme);
-  }
-,
+  },
 };

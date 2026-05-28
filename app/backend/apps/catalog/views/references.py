@@ -90,9 +90,10 @@ class SeriesListView(OptionalPaginationListMixin, generics.ListAPIView):
                     raw_lookup="name",
                     normalized_lookup="normalized_name",
                 )
+                | Q(catalog_code__icontains=query)
             )
         queryset = apply_created_at_filters(queryset, self.request).filter(book_count__gt=0)
-        sort_field = {"name": "name", "-name": "-name", "created_at": "created_at", "-created_at": "-created_at", "book_count": "book_count", "-book_count": "-book_count"}.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
+        sort_field = {"catalog_code": "catalog_code", "-catalog_code": "-catalog_code", "name": "name", "-name": "-name", "created_at": "created_at", "-created_at": "-created_at", "book_count": "book_count", "-book_count": "-book_count"}.get(self.request.query_params.get("sort", "-book_count"), "-book_count")
         return queryset.order_by(sort_field) if sort_field in {"created_at", "-created_at"} else queryset.order_by(sort_field, "name")
 
 

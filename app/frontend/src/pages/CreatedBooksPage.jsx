@@ -6,11 +6,9 @@ import CatalogToolbar from "../components/CatalogToolbar";
 import EmptyState from "../components/EmptyState";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
 import { useAsyncAction } from "../hooks/useAsyncAction";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useToast } from "../hooks/useToast";
-import {
-  cleanQueryParams,
-  filtersFromSearchParams,
-} from "../utils/query";
+import { cleanQueryParams, filtersFromSearchParams } from "../utils/query";
 
 const defaultFilters = {
   q: "",
@@ -75,6 +73,7 @@ const createdBookSortOptions =
   createdBookFilterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function CreatedBooksPage() {
+  usePageTitle("My Books");
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
@@ -119,11 +118,13 @@ export default function CreatedBooksPage() {
   }
 
   async function removeFromMyBooks(book) {
-    await removeAction.run(book.id, async () => {
-      await removeBookFromMyBooks(book.slug);
-      removeEntry(book.id);
-      toast.success("Removed from My Books.");
-    }).catch((nextError) => toast.error(nextError.message));
+    await removeAction
+      .run(book.id, async () => {
+        await removeBookFromMyBooks(book.slug);
+        removeEntry(book.id);
+        toast.success("Removed from My Books.");
+      })
+      .catch((nextError) => toast.error(nextError.message));
   }
 
   const resultCount = error && !books.length ? "" : `${totalCount}`;
@@ -131,7 +132,7 @@ export default function CreatedBooksPage() {
 
   return (
     <div className="catalog-page page-stack">
-      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout">
+      <header className="catalog-page-header catalog-page-header--with-toolbar catalog-page-header--property-layout catalog-page-header--sticky">
         <h1>My Books</h1>
 
         <CatalogToolbar

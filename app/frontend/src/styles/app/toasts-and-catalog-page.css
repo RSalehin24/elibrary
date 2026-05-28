@@ -137,6 +137,15 @@
   gap: 20px;
 }
 
+/* No row-gap between the sticky header and the content below it */
+.catalog-page:has(.catalog-page-header--sticky) {
+  row-gap: 20px;
+}
+
+.catalog-page-notes {
+  gap: 10px;
+}
+
 .catalog-page-header {
   display: grid;
   gap: 6px;
@@ -150,6 +159,31 @@
 
 .catalog-page-header--stacked {
   gap: 14px;
+}
+
+.catalog-page-header--sticky {
+  position: sticky;
+  top: 86px;
+  z-index: 10;
+  padding: 10px;
+  border-radius: 14px;
+  background: var(--surface-muted);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 4px 16px rgba(14, 52, 39, 0.06);
+}
+
+/* Suppress the grid row-gap on the toolbar form for all property-layout headers.
+   .catalog-toolbar-form uses gap:10px, but the collapsed .catalog-filter-drawer
+   (max-height:0, overflow:hidden) is still a grid row — the gap still renders
+   as phantom empty space below the search bar.
+   Note: row-gap:0 to neutralise the unused “controls controls” phantom row is in
+   catalog-property-controls.css, which imports after catalog-toolbar-secondary.css. */
+.catalog-page-header--property-layout .catalog-toolbar-form {
+  gap: 0;
+}
+.catalog-page-header--property-layout .catalog-filter-drawer.is-open {
+  margin-top: 10px;
 }
 
 .catalog-page-header--with-toolbar.catalog-page-header--stacked {
@@ -215,7 +249,7 @@
 }
 
 .catalog-page-header h1 {
-  margin: 0;
+  margin: 0 !important;
   font-size: clamp(1.4rem, 2.2vw, 2rem);
   line-height: 1.08;
   letter-spacing: -0.03em;
@@ -243,5 +277,20 @@
 }
 
 .catalog-page-header--with-toolbar .catalog-toolbar-wrap {
+  min-width: 0;
+}
+
+/* Sticky property-layout: flex-row removes the phantom 8px gap from the
+   empty "controls controls" grid row without touching any other page's layout */
+.catalog-page-header--sticky.catalog-page-header--property-layout {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+}
+.catalog-page-header--sticky.catalog-page-header--property-layout > h1 {
+  flex: 0 0 auto;
+}
+.catalog-page-header--sticky .catalog-toolbar-wrap {
+  flex: 1 1 auto;
   min-width: 0;
 }

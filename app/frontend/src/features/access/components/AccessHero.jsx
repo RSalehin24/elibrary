@@ -1,9 +1,6 @@
 export default function AccessHero({ activeTab, onSelectTab }) {
   return (
     <section className="detail-card admin-hero-card">
-      <div className="admin-hero-copy">
-        <h1>Users &amp; Access</h1>
-      </div>
       <div
         className="admin-tab-grid"
         role="tablist"

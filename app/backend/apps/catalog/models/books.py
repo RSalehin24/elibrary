@@ -4,9 +4,42 @@ from apps.common.models import LifecycleState, ReviewState, SoftDeleteModel, Tim
 from apps.common.text import clean_display_text, normalize_catalog_text
 
 from .catalog_codes import CATALOG_CODE_LENGTH, build_book_catalog_code, is_book_catalog_code
-from .choices import BookRecordType, ContributorRole, GeneratedAssetStatus, GeneratedAssetType, ManualBindingType
+from .choices import (
+    BookRecordType,
+    ContributorRole,
+    CuratedDocumentStatus,
+    CuratedEntityType,
+    CuratedSectionType,
+    GeneratedAssetStatus,
+    GeneratedAssetType,
+    ManualBindingType,
+)
 from .entities import Category, Contributor, Series
 from .utils import build_unique_slug, generated_asset_upload_to
+
+
+class BookGroup(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Logical grouping for books that are different editions / translations
+    of the same underlying work. Used by duplicate-detection to surface
+    sibling books that share a canonical title but differ by edition,
+    translator, or publisher."""
+
+    canonical_title = models.CharField(max_length=255)
+    normalized_canonical_title = models.CharField(
+        max_length=255, db_index=True, editable=False, blank=True, default=""
+    )
+    note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["canonical_title"]
+
+    def save(self, *args, **kwargs):
+        self.canonical_title = clean_display_text(self.canonical_title)
+        self.normalized_canonical_title = normalize_catalog_text(self.canonical_title)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.canonical_title
 
 
 class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
@@ -19,6 +52,17 @@ class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
     manual_binding = models.CharField(max_length=32, choices=ManualBindingType.choices, blank=True)
     manual_publisher = models.CharField(max_length=255, blank=True)
     manual_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    edition = models.CharField(max_length=120, blank=True)
+    normalized_edition = models.CharField(
+        max_length=120, db_index=True, editable=False, blank=True, default=""
+    )
+    group = models.ForeignKey(
+        BookGroup,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="books",
+    )
     summary = models.TextField(blank=True)
     state = models.CharField(max_length=32, choices=LifecycleState.choices, default=LifecycleState.DRAFT)
     review_state = models.CharField(max_length=32, choices=ReviewState.choices, default=ReviewState.PENDING)
@@ -49,6 +93,8 @@ class Book(UUIDPrimaryKeyModel, TimeStampedModel, SoftDeleteModel):
     def save(self, *args, **kwargs):
         self.title = clean_display_text(self.title)
         self.normalized_title = normalize_catalog_text(self.title)
+        self.edition = clean_display_text(self.edition or "")
+        self.normalized_edition = normalize_catalog_text(self.edition)
         if self._should_refresh_slug():
             self.slug = build_unique_slug(Book, self.title, self)
         current_code = (self.catalog_code or "").strip().upper()
@@ -175,3 +221,99 @@ class MetadataVersion(UUIDPrimaryKeyModel, TimeStampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class CuratedBookDocument(UUIDPrimaryKeyModel, TimeStampedModel):
+    book = models.ForeignKey(
+        Book,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="curated_documents",
+    )
+    source_job = models.ForeignKey(
+        "ingestion.ProcessingJob",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="curated_documents",
+    )
+    source_url = models.URLField(max_length=1000, db_index=True)
+    canonical_url = models.URLField(max_length=1000, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(
+        max_length=24,
+        choices=CuratedDocumentStatus.choices,
+        default=CuratedDocumentStatus.DRAFT,
+        db_index=True,
+    )
+    structure_type = models.CharField(max_length=64, blank=True)
+    title = models.CharField(max_length=255, blank=True)
+    validation_summary = models.JSONField(default=dict, blank=True)
+    source_snapshot = models.JSONField(default=dict, blank=True)
+    document = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        unique_together = ("source_url", "version")
+
+    def __str__(self):
+        return f"{self.title or self.source_url} v{self.version}"
+
+
+class CuratedEntity(UUIDPrimaryKeyModel, TimeStampedModel):
+    document = models.ForeignKey(CuratedBookDocument, on_delete=models.CASCADE, related_name="entities")
+    entity_type = models.CharField(max_length=32, choices=CuratedEntityType.choices)
+    role = models.CharField(max_length=64, blank=True)
+    value = models.CharField(max_length=500)
+    normalized_value = models.CharField(max_length=500, blank=True, db_index=True)
+    source_url = models.URLField(max_length=1000, blank=True)
+    source_location = models.CharField(max_length=255, blank=True)
+    evidence_text = models.TextField(blank=True)
+    confidence = models.FloatField(default=0)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["entity_type", "role", "value"]
+
+    def __str__(self):
+        return f"{self.entity_type}:{self.role}:{self.value}"
+
+
+class CuratedSection(UUIDPrimaryKeyModel, TimeStampedModel):
+    document = models.ForeignKey(CuratedBookDocument, on_delete=models.CASCADE, related_name="sections")
+    section_id = models.CharField(max_length=160)
+    section_type = models.CharField(max_length=32, choices=CuratedSectionType.choices)
+    title = models.CharField(max_length=500, blank=True)
+    path = models.JSONField(default=list, blank=True)
+    source_url = models.URLField(max_length=1000, blank=True)
+    source_location = models.CharField(max_length=255, blank=True)
+    html = models.TextField(blank=True)
+    confidence = models.FloatField(default=0)
+    sort_order = models.PositiveIntegerField(default=0)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["sort_order", "section_id"]
+        unique_together = ("document", "section_id")
+
+    def __str__(self):
+        return f"{self.section_type}:{self.title or self.section_id}"
+
+
+class CuratedEvidence(UUIDPrimaryKeyModel, TimeStampedModel):
+    document = models.ForeignKey(CuratedBookDocument, on_delete=models.CASCADE, related_name="evidence")
+    entity = models.ForeignKey(CuratedEntity, on_delete=models.CASCADE, blank=True, null=True, related_name="evidence")
+    section = models.ForeignKey(CuratedSection, on_delete=models.CASCADE, blank=True, null=True, related_name="evidence")
+    value = models.CharField(max_length=500, blank=True)
+    entity_type = models.CharField(max_length=32, blank=True)
+    role = models.CharField(max_length=64, blank=True)
+    source_url = models.URLField(max_length=1000, blank=True)
+    source_location = models.CharField(max_length=255, blank=True)
+    evidence_text = models.TextField(blank=True)
+    confidence = models.FloatField(default=0)
+    extractor = models.CharField(max_length=120, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]

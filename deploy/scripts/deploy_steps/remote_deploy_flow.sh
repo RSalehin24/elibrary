@@ -29,7 +29,7 @@ verify_deployment() {
     print_info "HTTPS probes failed. Collecting remote diagnostics from ${TARGET}."
     ssh "${TARGET}" "cd '${REMOTE_APP_ABS_DIR}' && if docker compose version >/dev/null 2>&1; then docker compose -f '${DEPLOY_COMPOSE_REL}' ps && docker compose -f '${DEPLOY_COMPOSE_REL}' logs --tail=80 backend frontend; elif command -v docker-compose >/dev/null 2>&1; then docker-compose -f '${DEPLOY_COMPOSE_REL}' ps && docker-compose -f '${DEPLOY_COMPOSE_REL}' logs --tail=80 backend frontend; fi" || true
     ssh "${TARGET}" "sudo tail -n 80 /var/log/nginx/error.log" || true
-    die "HTTPS verification failed for https://${DOMAIN}"
+    die "HTTPS is not reachable at https://${DOMAIN}. Check that nginx is running and all containers are healthy on the server, then rerun the deploy."
   fi
 
   print_info "Deployment verification passed for https://${DOMAIN}"
@@ -133,11 +133,11 @@ LOCAL_SUPER_ADMIN_PASSWORD="$(read_env_value_from_file "${LOCAL_ENV_FILE}" "SUPE
 print_info "[1/8] Running deployment preflight checks"
 resolved_ips="$(resolve_domain_ips "${DOMAIN}")"
 if [[ -z "${resolved_ips}" || "$(printf '%s\n' "${resolved_ips}" | grep -Fx "${DEPLOY_IP}" || true)" == "" ]]; then
-  die "DNS A record mismatch for ${DOMAIN}. Expected ${DEPLOY_IP}. Resolved: ${resolved_ips:-<none>}"
+  die "${DOMAIN} does not resolve to ${DEPLOY_IP}. Update the DNS A record for ${DOMAIN} to point to ${DEPLOY_IP} and retry."
 fi
 
-ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "echo connected" >/dev/null 2>&1 || die "SSH key access to ${TARGET} is not working."
-ssh -o BatchMode=yes "${TARGET}" "sudo -n true" >/dev/null 2>&1 || die "Passwordless sudo is required for fully automated deployment on ${TARGET}."
+ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "echo connected" >/dev/null 2>&1 || die "Cannot connect to ${TARGET} via SSH. Run: ssh-copy-id ${TARGET}"
+ssh -o BatchMode=yes "${TARGET}" "sudo -n true" >/dev/null 2>&1 || die "The deploy user on ${TARGET} needs passwordless sudo. On the server run: echo 'username ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/username"
 
 sync_remote_repository
 sync_workspace_files

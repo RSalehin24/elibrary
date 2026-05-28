@@ -2,7 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   ChevronIcon,
   MenuIcon,
-  MobileProfileSummary
+  MobileProfileSummary,
 } from "./MobileNavigationIcons";
 import { bookPropertiesItems } from "./navigation";
 
@@ -13,7 +13,7 @@ function MobileNavGroup({
   onClose,
   onToggle,
   open,
-  prefix
+  prefix,
 }) {
   return (
     <div className="mobile-nav-section">
@@ -64,7 +64,7 @@ export function MobileNavigationPanel({
   onPropertiesToggle,
   profileImageUrl,
   toast,
-  visibleProcessingItems
+  visibleProcessingItems,
 }) {
   return (
     <>
@@ -110,13 +110,22 @@ export function MobileNavigationPanel({
             </NavLink>
           ))}
           <NavLink
-            to="/created-books"
+            to="/my-books"
             className={({ isActive }) =>
               isActive ? "mobile-nav-link is-active" : "mobile-nav-link"
             }
             onClick={onClose}
           >
             My Books
+          </NavLink>
+          <NavLink
+            to="/notes"
+            className={({ isActive }) =>
+              isActive ? "mobile-nav-link is-active" : "mobile-nav-link"
+            }
+            onClick={onClose}
+          >
+            My Notes
           </NavLink>
         </div>
 

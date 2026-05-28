@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import CatalogToolbar from "../components/CatalogToolbar";
 import PropertyTable from "../components/PropertyTable";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { formatBookDate } from "../utils/bookPresentation";
 import {
   cleanQueryParams,
@@ -55,6 +56,7 @@ const categorySortOptions =
   filterFields.find((field) => field.key === "sort")?.options || [];
 
 export default function CategoryPage() {
+  usePageTitle("Categories");
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
     () => filtersFromSearchParams(defaultFilters, searchParams),

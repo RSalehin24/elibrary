@@ -6,13 +6,13 @@ import {
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
   STORAGE_KEYS,
-  THEMES
+  THEMES,
 } from "../reader-settings.js";
 import { clamp } from "../utils/dom-helpers.js";
 import {
   applyThemeContainerClass,
   applyThemeToCurrentPage,
-  syncSystemThemeColor
+  syncSystemThemeColor,
 } from "./theme-page-application.js";
 
 export class ReaderThemeManager {
@@ -24,7 +24,7 @@ export class ReaderThemeManager {
     fontStep = FONT_SIZE_STEP,
     maxFontSize = MAX_FONT_SIZE,
     minFontSize = MIN_FONT_SIZE,
-    themeList = THEMES
+    themeList = THEMES,
   } = {}) {
     this.containerElement = containerElement;
     this.themeList = themeList;
@@ -61,8 +61,17 @@ export class ReaderThemeManager {
     }
 
     if (Number.isFinite(fontSize)) {
-      this.currentFontSize = clamp(fontSize, this.minFontSize, this.maxFontSize);
+      this.currentFontSize = clamp(
+        fontSize,
+        this.minFontSize,
+        this.maxFontSize,
+      );
     }
+
+    // Apply the theme container class immediately so the correct background
+    // is visible from the moment the reader initialises, without waiting
+    // for the EPUB book to finish loading.
+    applyThemeContainerClass(this.containerElement, this.currentThemeIndex);
   }
 
   registerThemes() {
@@ -85,7 +94,7 @@ export class ReaderThemeManager {
     const nextSize = clamp(
       this.currentFontSize + this.fontStep * stepCount,
       this.minFontSize,
-      this.maxFontSize
+      this.maxFontSize,
     );
 
     if (nextSize === this.currentFontSize) return false;
@@ -177,7 +186,9 @@ export class ReaderThemeManager {
 
   teardown() {
     this.clearPendingThemeApplyTimers();
-    Array.from(this.observedDocuments).forEach((doc) => this.disconnectThemeObserver(doc));
+    Array.from(this.observedDocuments).forEach((doc) =>
+      this.disconnectThemeObserver(doc),
+    );
   }
 
   applyThemeContainerClass(themeIndex) {
@@ -188,7 +199,7 @@ export class ReaderThemeManager {
     syncSystemThemeColor({
       fallbackColor,
       fallbackThemeColor: this.fallbackThemeColor,
-      selectedTheme: this.getTheme(themeIndex)
+      selectedTheme: this.getTheme(themeIndex),
     });
   }
 
@@ -201,7 +212,7 @@ export class ReaderThemeManager {
       scheduleThemeReapply: (callback, delayMs) =>
         this.scheduleThemeReapply(callback, delayMs),
       theme: this.getTheme(themeIndex),
-      themeIndex
+      themeIndex,
     });
   }
 }

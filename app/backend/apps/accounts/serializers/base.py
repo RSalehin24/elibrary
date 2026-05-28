@@ -68,7 +68,13 @@ class ManagedUserSerializer(UserSerializer):
     can_resend_setup_email = serializers.BooleanField(read_only=True)
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ["grant_count", "global_scopes", "can_resend_setup_email"]
+        # Exclude "capabilities" (capability_scopes) — it triggers an N+1 DB query
+        # per user and is not displayed in the admin users table.
+        fields = [f for f in UserSerializer.Meta.fields if f != "capabilities"] + [
+            "grant_count",
+            "global_scopes",
+            "can_resend_setup_email",
+        ]
 
     def get_grant_count(self, obj):
         if hasattr(obj, "grant_count_value"):

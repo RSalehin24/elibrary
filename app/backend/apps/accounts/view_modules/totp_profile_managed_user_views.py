@@ -220,5 +220,3 @@ class ManagedUserResendSetupEmailView(APIView):
         except Exception:
             return Response({"detail": "Setup email could not be delivered."}, status=status.HTTP_400_BAD_REQUEST)
         return Response(ManagedUserSerializer(user, context={"request": request}).data)
-
-# Create your views here.

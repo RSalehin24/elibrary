@@ -28,7 +28,7 @@ export function applyThemeStyleContent({
   linkPalette,
   scrollbarPalette,
   themeBackground,
-  themeTextColor
+  themeTextColor,
 }) {
   const elements = ensureThemeStyleElements(doc);
   if (!elements) return;
@@ -154,6 +154,16 @@ export function applyThemeStyleContent({
       color: ${linkPalette.active} !important;
       -webkit-text-fill-color: ${linkPalette.active} !important;
       text-decoration-color: ${linkPalette.active} !important;
+    }
+    /* Theme-adaptive text selection. The selection background uses the theme's
+       link color tinted with the text color for legibility regardless of theme. */
+    ::selection {
+      background: ${linkPalette.default}55 !important;
+      color: ${themeTextColor} !important;
+    }
+    ::-moz-selection {
+      background: ${linkPalette.default}55 !important;
+      color: ${themeTextColor} !important;
     }
     ${forcedThemeTextStyles}
   `;

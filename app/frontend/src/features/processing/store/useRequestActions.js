@@ -14,8 +14,8 @@ export function useRequestActions(runCardAction) {
             body: {
               ids: requestIds,
               action,
-              ...extra
-            }
+              ...extra,
+            },
           }),
         {
           onSuccess: (payload, nextToast) =>
@@ -23,19 +23,19 @@ export function useRequestActions(runCardAction) {
               nextToast,
               action,
               payload?.changedCount || 0,
-              extra
-            )
-        }
+              extra,
+            ),
+        },
       ),
-    [runCardAction]
+    [runCardAction],
   );
 
   const deleteRequests = useCallback(
     (cardId, requestIds, options = {}) =>
       applyRequestAction(cardId, requestIds, "delete", {
-        deleteBook: Boolean(options.deleteBook)
+        deleteBook: Boolean(options.deleteBook),
       }),
-    [applyRequestAction]
+    [applyRequestAction],
   );
 
   return {
@@ -46,6 +46,8 @@ export function useRequestActions(runCardAction) {
     deleteRequests,
     markDuplicateRequestsAsNew: (cardId, requestIds) =>
       applyRequestAction(cardId, requestIds, "new"),
+    markDuplicateRequestsAsNewEdition: (cardId, requestIds) =>
+      applyRequestAction(cardId, requestIds, "new_edition"),
     pauseRequests: (cardId, requestIds) =>
       applyRequestAction(cardId, requestIds, "pause"),
     recreateCompletedRequests: (cardId, requestIds) =>
@@ -53,6 +55,6 @@ export function useRequestActions(runCardAction) {
     resumePausedRequests: (cardId, requestIds) =>
       applyRequestAction(cardId, requestIds, "resume"),
     retryFailedRequests: (cardId, requestIds) =>
-      applyRequestAction(cardId, requestIds, "retry")
+      applyRequestAction(cardId, requestIds, "retry"),
   };
 }

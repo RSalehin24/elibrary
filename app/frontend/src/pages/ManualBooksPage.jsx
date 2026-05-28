@@ -15,6 +15,7 @@ import {
 } from "../features/manual-books/manualBookFilters";
 import { loadManualBookOptions } from "../features/manual-books/manualBookOptions";
 import { useInfiniteCatalogBooks } from "../hooks/useInfiniteCatalogBooks";
+import { usePageTitle } from "../hooks/usePageTitle";
 import { useToast } from "../hooks/useToast";
 import { exportBooksToCsv, exportBooksToPdf } from "../utils/bookExport";
 import { getExportBlockState } from "../utils/export";
@@ -25,6 +26,7 @@ import {
 } from "../utils/exportSession";
 
 export default function ManualBooksPage() {
+  usePageTitle("Manual Books");
   const toast = useToast();
   const titleInputRef = useRef(null);
   const pendingExportRef = useRef(readPendingExport(MANUAL_BOOKS_EXPORT_STORAGE_KEY));

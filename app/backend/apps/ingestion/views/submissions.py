@@ -155,7 +155,7 @@ class SubmissionConfirmCandidateView(APIView):
         target_submission.resolution_confidence = candidate.confidence
         target_submission.status = SubmissionStatus.QUEUED
         target_submission.error_message = ""
-        target_submission.save()
+        target_submission.save(update_fields=["resolved_url", "resolution_status", "resolution_confidence", "status", "error_message", "updated_at"])
         sync_deduplicated_submissions(target_submission)
 
         existing_book = find_existing_book_by_source_url(candidate.candidate_url)

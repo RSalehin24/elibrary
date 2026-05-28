@@ -1,5 +1,6 @@
 from django.db.models import Exists, OuterRef, Subquery
 from django.http import Http404
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import generics, status
@@ -53,7 +54,7 @@ class MetadataVersionListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        book = Book.objects.get(slug=kwargs["slug"])
+        book = get_object_or_404(Book, slug=kwargs["slug"])
         if not user_has_scope(request.user, [PermissionScope.METADATA_EDIT], book=book):
             raise PermissionDenied("You do not have permission to inspect metadata history for this book.")
         versions = MetadataVersion.objects.filter(book=book).order_by("-created_at")
@@ -82,7 +83,7 @@ class MetadataReviewListCreateView(generics.ListCreateAPIView):
     serializer_class = MetadataReviewSerializer
 
     def get_book(self):
-        book = Book.objects.get(slug=self.kwargs["slug"])
+        book = get_object_or_404(Book, slug=self.kwargs["slug"])
         if not user_has_scope(self.request.user, [PermissionScope.METADATA_EDIT], book=book):
             raise PermissionDenied("You do not have permission to review metadata for this book.")
         return book

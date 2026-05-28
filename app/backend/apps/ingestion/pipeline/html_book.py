@@ -1,6 +1,10 @@
 import os
 from html import escape
 
+from apps.ingestion.pipeline.curated_export import (
+    curated_document_to_legacy_payload,
+    is_curated_document,
+)
 from apps.ingestion.services.normalization import (
     dedupe_structured_sections,
     extract_boundary_sections_from_content_items,
@@ -17,6 +21,7 @@ from .html_book_support.toc import (
     generate_content_html,
     html_cover_source,
 )
+from .epub_properties.labels import detect_book_language, labels_for
 
 def save_html(
     book_title,
@@ -39,10 +44,17 @@ def save_html(
     front_sections = list(front_sections or [])
     back_sections = list(back_sections or [])
     compact_main_content = main_content or ""
+    labels = labels_for(
+        detect_book_language(
+            book_title=book_title or "",
+            author=author or "",
+            book_info_html=book_info or "",
+        )
+    )
 
     # Start HTML document
     html = f"""<!DOCTYPE html>
-<html lang='bn'>
+<html lang='{labels["html_lang"]}'>
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -57,7 +69,8 @@ def save_html(
         <div class="author">{escape(author)}</div>"""
 
     if series:
-        html += f"\n        <div class='series'>সিরিজ: {escape(series)}</div>"
+        series_label = "Series" if labels["html_lang"] == "en" else "সিরিজ"
+        html += f"\n        <div class='series'>{series_label}: {escape(series)}</div>"
     if book_type:
         html += f"\n        <div class='book-type'>{escape(book_type)}</div>"
 
@@ -76,7 +89,7 @@ def save_html(
     # Book Info Section (extracted from main content, before dedication)
     if book_info:
         html += "\n      <div class='book-info-section'>"
-        html += "\n        <h2 class='book-info-title'>বই তথ্য</h2>"
+        html += f"\n        <h2 class='book-info-title'>{escape(labels['info_page'])}</h2>"
         html += "\n        <div class='book-info-content'>"
         indented_info = "\n".join(f"          {line}" for line in book_info.splitlines())
         html += f"\n{indented_info}"
@@ -109,7 +122,7 @@ def save_html(
     toc_id_map = build_toc_id_map(toc, existing_ids)
     if toc:
         html += "\n      <div class='toc-section'>"
-        html += "\n        <h2 class='toc-title'>সূচিপত্র</h2>"
+        html += f"\n        <h2 class='toc-title'>{escape(labels['toc'])}</h2>"
         html += "\n        <ul class='toc-list'>"
         toc_html = build_hierarchical_toc_html(toc, toc_id_map)
         html += toc_html
@@ -170,6 +183,10 @@ def create_html_book(book_data):
         "output_folder": str
     }
     """
+    if is_curated_document(book_data):
+        book_data = curated_document_to_legacy_payload(book_data)
+    canonical_payload = bool(book_data.get("canonical_manifest") or book_data.get("canonical_sections"))
+
     reference_fragments = [book_data.get("book_info", ""), book_data.get("dedication", "")]
     explicit_front_sections = dedupe_structured_sections(
         book_data.get("front_sections") or [],
@@ -183,13 +200,19 @@ def create_html_book(book_data):
     content_items = list(book_data["content_items"])
     inferred_front_sections = []
     inferred_back_sections = []
-    if content_items:
+    # Trust source structure when explicit body exists.
+    has_explicit_body = bool(toc or content_items)
+    if content_items and not canonical_payload:
         (
             inferred_front_sections,
             inferred_back_sections,
             toc,
             content_items,
-        ) = extract_boundary_sections_from_content_items(content_items, toc)
+        ) = extract_boundary_sections_from_content_items(
+            content_items,
+            toc,
+            trust_source_toc=has_explicit_body,
+        )
     front_sections = dedupe_structured_sections(
         [*explicit_front_sections, *inferred_front_sections],
         reference_fragments=reference_fragments,
@@ -200,9 +223,12 @@ def create_html_book(book_data):
     )
     main_content = book_data["main_content"]
     compact_main_content = main_content
-    if not front_sections:
-        front_sections, compact_main_content = split_leading_front_sections(main_content or "")
-    if not back_sections:
+    if not front_sections and not canonical_payload:
+        front_sections, compact_main_content = split_leading_front_sections(
+            main_content or "",
+            has_explicit_body=has_explicit_body,
+        )
+    if not back_sections and not canonical_payload and not has_explicit_body:
         back_sections, compact_main_content = split_trailing_front_sections(compact_main_content or "")
 
     save_html(

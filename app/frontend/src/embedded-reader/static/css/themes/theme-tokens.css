@@ -32,11 +32,16 @@ body.epub-container,
   --iframe-background: #fff;
 
   --reader-page-surface:
-    radial-gradient(circle at 10% 8%, rgba(120, 209, 120, 0.12), transparent 34%),
+    radial-gradient(
+      circle at 10% 8%,
+      rgba(120, 209, 120, 0.12),
+      transparent 34%
+    ),
     radial-gradient(circle at 92% 95%, rgba(18, 83, 64, 0.22), transparent 38%),
     linear-gradient(160deg, #eff6f2 0%, #e3eee8 100%);
   --reader-shell-border: rgba(17, 70, 54, 0.14);
   --reader-shell-shadow: rgba(14, 52, 39, 0.1);
+  --reader-text-dim: rgba(30, 60, 50, 0.52);
   --reader-surface-border: rgba(17, 70, 54, 0.12);
   --reader-surface-bg: rgba(255, 255, 255, 0.45);
   --reader-icon-hover-bg: rgba(17, 64, 50, 0.1);
@@ -83,11 +88,20 @@ body.epub-container.theme-type-1,
   --iframe-background: #f4eacd;
 
   --reader-page-surface:
-    radial-gradient(circle at 10% 8%, rgba(150, 118, 54, 0.12), transparent 34%),
-    radial-gradient(circle at 90% 90%, rgba(181, 145, 74, 0.18), transparent 38%),
+    radial-gradient(
+      circle at 10% 8%,
+      rgba(150, 118, 54, 0.12),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at 90% 90%,
+      rgba(181, 145, 74, 0.18),
+      transparent 38%
+    ),
     linear-gradient(160deg, #f6eed8 0%, #ecdeba 100%);
   --reader-shell-border: rgba(112, 66, 20, 0.2);
   --reader-shell-shadow: rgba(86, 58, 14, 0.12);
+  --reader-text-dim: rgba(112, 66, 20, 0.58);
   --reader-surface-border: rgba(112, 66, 20, 0.16);
   --reader-surface-bg: rgba(255, 246, 226, 0.5);
   --reader-icon-hover-bg: rgba(112, 66, 20, 0.12);
@@ -134,11 +148,20 @@ body.epub-container.theme-type-2,
   --iframe-background: #1b1f2a;
 
   --reader-page-surface:
-    radial-gradient(circle at 10% 10%, rgba(107, 163, 247, 0.11), transparent 34%),
-    radial-gradient(circle at 88% 92%, rgba(45, 63, 115, 0.28), transparent 42%),
+    radial-gradient(
+      circle at 10% 10%,
+      rgba(107, 163, 247, 0.11),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at 88% 92%,
+      rgba(45, 63, 115, 0.28),
+      transparent 42%
+    ),
     linear-gradient(160deg, #191e29 0%, #121622 100%);
   --reader-shell-border: rgba(126, 149, 210, 0.2);
   --reader-shell-shadow: rgba(2, 5, 12, 0.42);
+  --reader-text-dim: rgba(201, 215, 245, 0.55);
   --reader-surface-border: rgba(126, 149, 210, 0.18);
   --reader-surface-bg: rgba(22, 29, 43, 0.58);
   --reader-icon-hover-bg: rgba(126, 149, 210, 0.14);

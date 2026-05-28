@@ -102,6 +102,7 @@ def persisted_sync_status(state):
     )
     return latest_status or state.status
 
+
 def normalize_automation_settings(automation_settings, *, persist=False):
     update_fields = []
 
