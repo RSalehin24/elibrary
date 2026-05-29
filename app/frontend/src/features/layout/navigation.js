@@ -27,6 +27,11 @@ export const processingItems = [
     label: "Incomplete",
     capabilityRequired: true,
   },
+  {
+    to: "/reprocessing",
+    label: "Reprocessing",
+    capabilityRequired: true,
+  },
 ];
 
 export function isBookPropertiesRoute(pathname) {
@@ -49,6 +54,7 @@ export function isProcessingRoute(pathname) {
     pathname === "/create" ||
     pathname === "/on-hold" ||
     pathname === "/incomplete" ||
+    pathname === "/reprocessing" ||
     pathname.startsWith("/processing")
   );
 }

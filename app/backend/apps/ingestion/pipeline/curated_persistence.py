@@ -159,21 +159,34 @@ def next_document_version(source_url):
 def persist_curated_document(curated_result, *, book=None, job=None):
     document_payload = curated_result["document"]
     source_url = document_payload.get("source_url") or document_payload.get("canonical_url", "")
-    version = next_document_version(source_url)
-    stored_document = {**slim_document_payload(document_payload), "model_version": version}
-    curated_document = CuratedBookDocument.objects.create(
-        book=book,
-        source_job=job,
-        source_url=source_url,
-        canonical_url=document_payload.get("canonical_url", ""),
-        version=version,
-        status=document_payload.get("status", CuratedDocumentStatus.DRAFT),
-        structure_type=document_payload.get("structure_type", ""),
-        title=document_payload.get("book", {}).get("clean_title", ""),
-        validation_summary=document_payload.get("validation", {}),
-        source_snapshot=slim_source_snapshot(curated_result.get("source_snapshot") or {}),
-        document=stored_document,
-    )
+    curated_document = None
+    for _attempt in range(5):
+        version = next_document_version(source_url)
+        stored_document = {**slim_document_payload(document_payload), "model_version": version}
+        try:
+            with transaction.atomic():
+                curated_document = CuratedBookDocument.objects.create(
+                    book=book,
+                    source_job=job,
+                    source_url=source_url,
+                    canonical_url=document_payload.get("canonical_url", ""),
+                    version=version,
+                    status=document_payload.get("status", CuratedDocumentStatus.DRAFT),
+                    structure_type=document_payload.get("structure_type", ""),
+                    title=document_payload.get("book", {}).get("clean_title", ""),
+                    validation_summary=document_payload.get("validation", {}),
+                    source_snapshot=slim_source_snapshot(curated_result.get("source_snapshot") or {}),
+                    document=stored_document,
+                )
+            break
+        except IntegrityError:
+            # A concurrent or retried persist already claimed this version;
+            # recompute the next version and try again.
+            continue
+    if curated_document is None:
+        raise IntegrityError(
+            f"Unable to allocate a curated document version for source_url={source_url!r}"
+        )
     entity_map = {}
     for item in document_payload.get("entities", []):
         entity = CuratedEntity.objects.create(

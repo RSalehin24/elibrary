@@ -1,0 +1,297 @@
+/* ============================================================
+   REPROCESSING PAGE
+   Styles for /reprocessing — uses only CSS custom properties
+   so light/dark mode is handled automatically.
+   ============================================================ */
+
+/* --- Status badges ----------------------------------------- */
+
+.reprocess-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.reprocess-badge--queued {
+  background: var(--surface-muted);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.reprocess-badge--processing {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.reprocess-badge--succeeded {
+  background: var(--surface-muted);
+  color: var(--success);
+  border: 1px solid var(--line-strong);
+}
+
+.reprocess-badge--failed {
+  background: var(--surface-muted);
+  color: var(--danger);
+  border: 1px solid var(--line-strong);
+}
+
+.reprocess-badge--cancelled {
+  background: var(--surface-muted);
+  color: var(--warning);
+  border: 1px solid var(--line-strong);
+}
+
+/* --- Card container ---------------------------------------- */
+
+/* Override the base processing-card grid to 2 rows:
+   header (auto) + table-shell (fills remaining 724 px). */
+.reprocess-jobs-card {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.reprocess-actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-height: 34px;
+}
+
+/* --- Bulk action bar --------------------------------------- */
+
+.reprocess-bulk-count {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+.reprocess-bulk-btn {
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 0.8rem;
+}
+
+.reprocess-bulk-btn--delete {
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  border-radius: 12px;
+  border: none;
+  background: #c0392b;
+  color: #fff;
+  cursor: pointer;
+  transition:
+    opacity var(--duration-fast),
+    transform var(--duration-fast);
+}
+
+.reprocess-bulk-btn--delete:hover:not(:disabled) {
+  opacity: 0.88;
+  transform: translateY(-1px);
+}
+
+.reprocess-bulk-btn--delete:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* --- Table ------------------------------------------------- */
+
+.reprocess-sentinel-cell {
+  height: 1px;
+  padding: 0;
+}
+
+.reprocess-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.reprocess-table thead th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+
+.reprocess-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.reprocess-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.reprocess-table tbody tr.is-selected td {
+  background: var(--accent-soft);
+}
+
+.reprocess-table tbody tr:hover td {
+  background: var(--surface-muted);
+}
+
+.reprocess-table tbody tr.is-selected:hover td {
+  background: var(--accent-soft);
+}
+
+/* --- Column widths ----------------------------------------- */
+
+.reprocess-col-check {
+  width: 40px;
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+}
+
+.reprocess-col-status {
+  width: 100px;
+}
+
+.reprocess-col-number {
+  width: 72px;
+  text-align: center;
+}
+
+.reprocess-col-time {
+  width: 100px;
+  white-space: nowrap;
+}
+
+.reprocess-col-error {
+  max-width: 220px;
+  min-width: 120px;
+}
+
+.reprocess-col-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* --- Row actions ------------------------------------------- */
+
+.reprocess-row-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.reprocess-action-btn {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.reprocess-action-btn--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.reprocess-action-btn--open {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* --- Error text -------------------------------------------- */
+
+.reprocess-error-text {
+  color: var(--danger);
+  font-size: 0.8rem;
+  word-break: break-word;
+}
+
+/* --- Deleted tag ------------------------------------------- */
+
+.reprocess-deleted-tag {
+  margin-left: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--surface-muted);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  vertical-align: middle;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* --- Empty state ------------------------------------------- */
+
+.reprocess-empty {
+  color: var(--muted);
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+/* --- Table shell margin ------------------------------------ */
+
+.reprocess-jobs-card .processing-table-shell {
+  margin-top: 4px;
+}
+
+/* --- Responsive: keep count on same line as title ---------- */
+
+/* On tablet (≤980px) the base CSS collapses the 3-col head-line
+   and moves search/inline-tools to separate rows. Override to
+   keep Title | Search | Count on one line, actions on second row. */
+@media (max-width: 980px) {
+  .reprocess-jobs-card .processing-card-head-line {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title search filter"
+      "actions actions actions";
+    align-items: center;
+    gap: 10px;
+  }
+  .reprocess-jobs-card .processing-card-head-meta {
+    grid-area: title;
+  }
+  .reprocess-jobs-card .processing-card-head-search {
+    grid-area: search;
+    width: 100%;
+  }
+  .reprocess-jobs-card .processing-card-head-inline-tools {
+    grid-area: filter;
+    justify-content: flex-end;
+  }
+  .reprocess-jobs-card .processing-card-head-actions {
+    grid-area: actions;
+    justify-self: end;
+  }
+}
+
+/* --- Responsive: hide columns on smaller screens ----------- */
+
+@media (max-width: 1020px) {
+  .reprocess-hide-md {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .reprocess-hide-sm {
+    display: none;
+  }
+}

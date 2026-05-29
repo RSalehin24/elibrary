@@ -169,16 +169,23 @@ def sync_book_catalog_code(book):
 def replace_book_relations(book, contributors=None, series_names=None, category_names=None):
     if contributors is not None:
         book.book_contributors.all().delete()
+        seen_contributors = set()
         for index, contributor_info in enumerate(normalize_book_contributors(contributors)):
             contributor = get_or_create_contributor(contributor_info["name"])
             if contributor is None:
                 continue
-            BookContributor.objects.create(
+            contributor_key = (contributor.pk, contributor_info["role"])
+            if contributor_key in seen_contributors:
+                continue
+            seen_contributors.add(contributor_key)
+            BookContributor.objects.update_or_create(
                 book=book,
                 contributor=contributor,
                 role=contributor_info["role"],
-                raw_value=contributor_info.get("raw_value", contributor_info["name"]),
-                sort_order=index,
+                defaults={
+                    "raw_value": contributor_info.get("raw_value", contributor_info["name"]),
+                    "sort_order": index,
+                },
             )
 
     if series_names is not None:
@@ -192,11 +199,16 @@ def replace_book_relations(book, contributors=None, series_names=None, category_
             series = get_or_create_series(series_name)
             if series is None:
                 continue
-            BookSeries.objects.create(
+            if series.pk in seen_series:
+                continue
+            seen_series.add(series.pk)
+            BookSeries.objects.update_or_create(
                 book=book,
                 series=series,
-                raw_value=series_name,
-                sort_order=index,
+                defaults={
+                    "raw_value": series_name,
+                    "sort_order": index,
+                },
             )
 
     if category_names is not None:
@@ -210,10 +222,15 @@ def replace_book_relations(book, contributors=None, series_names=None, category_
             category = get_or_create_category(category_name)
             if category is None:
                 continue
-            BookCategory.objects.create(
+            if category.pk in seen_categories:
+                continue
+            seen_categories.add(category.pk)
+            BookCategory.objects.update_or_create(
                 book=book,
                 category=category,
-                raw_value=category_name,
+                defaults={
+                    "raw_value": category_name,
+                },
             )
 
     sync_book_catalog_code(book)

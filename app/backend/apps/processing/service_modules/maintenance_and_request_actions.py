@@ -224,8 +224,9 @@ def apply_resume_action(processing_request, *, actor=None):
     previous_state = processing_request.state
     processing_request.state = BookCreationRequestState.INITIAL
     processing_request.is_resumed = True
+    processing_request.force_generate = False
     processing_request.error_message = ""
-    processing_request.save(update_fields=["state", "is_resumed", "error_message", "updated_at"])
+    processing_request.save(update_fields=["state", "is_resumed", "force_generate", "error_message", "updated_at"])
     sync_record_state(processing_request.book_record)
     publish_processing_ui_domains(
         processing_domains_for_request_change(
@@ -300,62 +301,52 @@ def _fix_duplicate_paths_in_document(document):
 
 
 def apply_force_generate_action(processing_request, *, actor=None):
-    """Generate assets for a failed request whose curated document is REVIEW_REQUIRED.
+    """Re-queue a failed request through the full pipeline with the force flag set.
 
-    Skips re-scraping. Uses the already-persisted linked book and its curated
-    document to call generate_exports/sync_assets, then marks the request CREATED.
-
-    Mitigations applied before asset generation:
-      • Source-chrome blocks are stripped from BODY sections.
-      • Duplicate content paths are disambiguated using the same logic as the
-        normal pipeline so chapters that share a title get unique paths.
+    Unlike a plain retry, force-generate marks the request so the pipeline will
+    bypass the ``REVIEW_REQUIRED`` gate and apply automatic mitigations
+    (source-chrome stripping + duplicate content-path disambiguation) before
+    generating assets. The request moves back onto the Requests queue and the
+    book is recreated from scratch (re-scrape → curate → mitigate → export).
     """
     processing_request = _reload_processing_request(processing_request.id)
-    if processing_request.state != BookCreationRequestState.FAILED:
-        return processing_request
-    if processing_request.error_message != _REVIEW_REQUIRED_ERROR_MSG:
-        return processing_request
-
-    book = processing_request.linked_book
-    if book is None or book.deleted_at is not None:
-        raise ValueError(
-            "No linked book available on this request. Cannot force-generate assets."
-        )
-
-    curated_db = (
-        book.curated_documents
-        .order_by("-version", "-created_at")
-        .first()
+    previous_state = processing_request.state
+    record_before = processing_record_snapshot(processing_request.book_record)
+    processing_request.state = BookCreationRequestState.INITIAL
+    processing_request.force_generate = True
+    processing_request.progress = None
+    processing_request.error_message = ""
+    processing_request.duplicate_confirmed = False
+    processing_request.save(
+        update_fields=[
+            "state",
+            "force_generate",
+            "progress",
+            "error_message",
+            "duplicate_confirmed",
+            "updated_at",
+        ]
     )
-    if curated_db is None:
-        raise ValueError(
-            "No curated document found for the linked book. Cannot force-generate assets."
+    record = processing_request.book_record
+    if record.is_duplicate or record.duplicate_of_record_id:
+        record.is_duplicate = False
+        record.duplicate_of_record = None
+        record.save(update_fields=["is_duplicate", "duplicate_of_record", "updated_at"])
+    sync_record_state(record)
+    publish_processing_ui_domains(
+        processing_domains_for_request_change(
+            previous_state,
+            BookCreationRequestState.INITIAL,
+            record=record,
         )
-
-    scrape_payload = book.raw_scrape_payload or {}
-    export_payload = export_payload_from_book(book, scrape_payload)
-
-    # Apply mitigations to the curated document before generating assets.
-    raw_document = curated_db.document or {}
-    mitigated_document, chrome_stripped = _strip_source_chrome_from_document(raw_document)
-    mitigated_document, dupes_fixed = _fix_duplicate_paths_in_document(mitigated_document)
-    if chrome_stripped:
-        logger.info(
-            "Force-generate for request %s: stripped %d source-chrome block(s).",
-            processing_request.id,
-            chrome_stripped,
+        | processing_domains_for_record_change(
+            record_before,
+            processing_record_snapshot(record),
+            current_request_state=BookCreationRequestState.INITIAL,
         )
-    if dupes_fixed:
-        logger.info(
-            "Force-generate for request %s: resolved %d duplicate content path(s).",
-            processing_request.id,
-            dupes_fixed,
-        )
-
-    document_for_export = curated_document_with_projection(mitigated_document, export_payload)
-    generate_exports(document_for_export)
-    sync_assets(book, None, export_payload)
-    return _finalize_processing_request(processing_request, book, scrape_payload)
+    )
+    queue_processing_request(processing_request)
+    return processing_request
 
 
 def apply_retry_action(processing_request, *, actor=None):
@@ -363,12 +354,14 @@ def apply_retry_action(processing_request, *, actor=None):
     previous_state = processing_request.state
     record_before = processing_record_snapshot(processing_request.book_record)
     processing_request.state = BookCreationRequestState.INITIAL
+    processing_request.force_generate = False
     processing_request.error_message = ""
     processing_request.progress = None
     processing_request.duplicate_confirmed = False
     processing_request.save(
         update_fields=[
             "state",
+            "force_generate",
             "error_message",
             "progress",
             "duplicate_confirmed",

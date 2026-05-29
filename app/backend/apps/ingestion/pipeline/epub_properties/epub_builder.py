@@ -371,7 +371,17 @@ def safe_epub_filename(filename):
     stem, ext = os.path.splitext(base_name)
     cleaned_stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", stem)
     cleaned_stem = re.sub(r"\s+", " ", cleaned_stem).strip(" ._") or "book"
-    return f"{cleaned_stem}{ext or '.epub'}"
+    ext = ext or ".epub"
+    # Many filesystems cap a single path component at 255 bytes. Bengali code
+    # points use 3 bytes each in UTF-8, so a long Bengali title can exceed that
+    # limit and break asset storage. Truncate the stem on a code-point boundary
+    # so the encoded "<stem><ext>" stays comfortably within 200 bytes (leaving
+    # headroom for the random suffix Django appends on name collisions).
+    max_stem_bytes = 200 - len(ext.encode("utf-8"))
+    while len(cleaned_stem.encode("utf-8")) > max_stem_bytes and cleaned_stem:
+        cleaned_stem = cleaned_stem[:-1]
+    cleaned_stem = cleaned_stem.strip(" ._") or "book"
+    return f"{cleaned_stem}{ext}"
 
 
 class EpubContentMissingError(ValueError):

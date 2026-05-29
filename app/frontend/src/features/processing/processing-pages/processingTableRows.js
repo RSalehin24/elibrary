@@ -1,13 +1,23 @@
-import { INCOMPLETE_CATEGORY_KEYWORDS, decodeUrlForDisplay, requestDetails } from "./processingPageModel";
+import {
+  INCOMPLETE_CATEGORY_KEYWORDS,
+  decodeUrlForDisplay,
+  requestDetails,
+} from "./processingPageModel";
 export function normalizeSortValue(value) {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase();
 }
 export function categoryIsIncomplete(value) {
   const normalizedValue = normalizeSortValue(value);
-  return INCOMPLETE_CATEGORY_KEYWORDS.some(keyword => normalizedValue.includes(normalizeSortValue(keyword)));
+  return INCOMPLETE_CATEGORY_KEYWORDS.some((keyword) =>
+    normalizedValue.includes(normalizeSortValue(keyword)),
+  );
 }
 export function sortedUniqueValues(values) {
-  return Array.from(new Set(values.filter(Boolean))).sort((left, right) => normalizeSortValue(left).localeCompare(normalizeSortValue(right)));
+  return Array.from(new Set(values.filter(Boolean))).sort((left, right) =>
+    normalizeSortValue(left).localeCompare(normalizeSortValue(right)),
+  );
 }
 export function compareRequestDates(left, right) {
   const rightUpdated = Date.parse(right?.updatedAt || "") || 0;
@@ -25,7 +35,7 @@ export function compareRequestDates(left, right) {
 export function latestRequestByRecordId(requests) {
   const nextMap = new Map();
   const sortedRequests = [...requests].sort(compareRequestDates);
-  sortedRequests.forEach(request => {
+  sortedRequests.forEach((request) => {
     if (!nextMap.has(request.bookRecordId)) {
       nextMap.set(request.bookRecordId, request);
     }
@@ -36,10 +46,16 @@ export function requestBlocksSelection(request) {
   return request && !["failed", "deleted"].includes(request.state);
 }
 export function recordSelectable(record, requests, latestRequests) {
-  const recordRequests = requests.filter(request => request.bookRecordId === record.id);
-  const confirmedDuplicate = recordRequests.find(request => request.state === "duplicate" && request.duplicateConfirmed);
+  const recordRequests = requests.filter(
+    (request) => request.bookRecordId === record.id,
+  );
+  const confirmedDuplicate = recordRequests.find(
+    (request) => request.state === "duplicate" && request.duplicateConfirmed,
+  );
   if (confirmedDuplicate) {
-    const original = requests.find(request => request.id === confirmedDuplicate.duplicateOfRequestId);
+    const original = requests.find(
+      (request) => request.id === confirmedDuplicate.duplicateOfRequestId,
+    );
     return !original || ["failed", "deleted"].includes(original.state);
   }
   if (recordRequests.some(requestBlocksSelection)) {
@@ -70,13 +86,16 @@ export function rowFromRecord(record, latestRequest, requests, latestRequests) {
     progressCheckpoint: latestRequest?.progress?.checkpoint || "",
     progressSavedAt: latestRequest?.progress?.savedAt || "",
     errorMessage: latestRequest?.errorMessage || "",
+    progress: latestRequest?.progress || null,
     isResumed: Boolean(latestRequest?.isResumed),
     isConfirmedNotDuplicate: Boolean(latestRequest?.isConfirmedNotDuplicate),
     linkedBookId: latestRequest?.linkedBookId || record.linkedBookId || null,
-    linkedBookSlug: latestRequest?.linkedBookSlug || record.linkedBookSlug || null,
+    linkedBookSlug:
+      latestRequest?.linkedBookSlug || record.linkedBookSlug || null,
     duplicateOfRequestId: latestRequest?.duplicateOfRequestId || null,
-    duplicateOfRecordId: latestRequest?.duplicateOfRecordId || record.duplicateOfRecordId || null,
-    duplicateConfirmed: Boolean(latestRequest?.duplicateConfirmed)
+    duplicateOfRecordId:
+      latestRequest?.duplicateOfRecordId || record.duplicateOfRecordId || null,
+    duplicateConfirmed: Boolean(latestRequest?.duplicateConfirmed),
   };
 }
 export function rowFromRequest(request, record, requests, latestRequests) {
@@ -94,31 +113,44 @@ export function rowFromRequest(request, record, requests, latestRequests) {
     progressCheckpoint: request.progress?.checkpoint || "",
     progressSavedAt: request.progress?.savedAt || "",
     errorMessage: request.errorMessage || "",
+    progress: request.progress || null,
     isResumed: Boolean(request.isResumed),
     isConfirmedNotDuplicate: Boolean(request.isConfirmedNotDuplicate),
     linkedBookId: request.linkedBookId || record.linkedBookId || null,
     linkedBookSlug: request.linkedBookSlug || record.linkedBookSlug || null,
     duplicateOfRequestId: request.duplicateOfRequestId || null,
-    duplicateOfRecordId: request.duplicateOfRecordId || record.duplicateOfRecordId || null,
-    duplicateConfirmed: Boolean(request.duplicateConfirmed)
+    duplicateOfRecordId:
+      request.duplicateOfRecordId || record.duplicateOfRecordId || null,
+    duplicateConfirmed: Boolean(request.duplicateConfirmed),
   };
 }
 export function tableRowsForCard(cardKey, records, requests) {
   const latestRequests = latestRequestByRecordId(requests);
-  const recordsById = new Map(records.map(record => [record.id, record]));
+  const recordsById = new Map(records.map((record) => [record.id, record]));
   if (cardKey === "catalog-records") {
-    return [...records].map(record => rowFromRecord(record, latestRequests.get(record.id), requests, latestRequests)).sort((left, right) => {
-      const leftPriority = left.status === "not_created" ? 0 : 1;
-      const rightPriority = right.status === "not_created" ? 0 : 1;
-      if (leftPriority !== rightPriority) {
-        return leftPriority - rightPriority;
-      }
-      const titleComparison = normalizeSortValue(left.title).localeCompare(normalizeSortValue(right.title));
-      if (titleComparison !== 0) {
-        return titleComparison;
-      }
-      return String(left.id || "").localeCompare(String(right.id || ""));
-    });
+    return [...records]
+      .map((record) =>
+        rowFromRecord(
+          record,
+          latestRequests.get(record.id),
+          requests,
+          latestRequests,
+        ),
+      )
+      .sort((left, right) => {
+        const leftPriority = left.status === "not_created" ? 0 : 1;
+        const rightPriority = right.status === "not_created" ? 0 : 1;
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
+        }
+        const titleComparison = normalizeSortValue(left.title).localeCompare(
+          normalizeSortValue(right.title),
+        );
+        if (titleComparison !== 0) {
+          return titleComparison;
+        }
+        return String(left.id || "").localeCompare(String(right.id || ""));
+      });
   }
   const requestStateMap = {
     "create-requests": ["initial"],
@@ -128,29 +160,77 @@ export function tableRowsForCard(cardKey, records, requests) {
     "on-hold-paused": ["paused"],
     "on-hold-failed": ["failed"],
     "on-hold-duplicate": ["duplicate"],
-    "on-hold-deleted": ["deleted"]
+    "on-hold-deleted": ["deleted"],
   };
   if (requestStateMap[cardKey]) {
-    return [...requests].filter(request => requestStateMap[cardKey].includes(request.state)).sort(compareRequestDates).map(request => rowFromRequest(request, recordsById.get(request.bookRecordId), requests, latestRequests)).filter(Boolean);
+    return [...requests]
+      .filter((request) => requestStateMap[cardKey].includes(request.state))
+      .sort(compareRequestDates)
+      .map((request) =>
+        rowFromRequest(
+          request,
+          recordsById.get(request.bookRecordId),
+          requests,
+          latestRequests,
+        ),
+      )
+      .filter(Boolean);
   }
   if (cardKey === "incomplete-records") {
-    return [...records].filter(record => (record.wasIncomplete || categoryIsIncomplete(record.category)) && !record.resolvedFromIncomplete).map(record => ({
-      ...rowFromRecord(record, latestRequests.get(record.id), requests, latestRequests),
-      selectable: false
-    }));
+    return [...records]
+      .filter(
+        (record) =>
+          (record.wasIncomplete || categoryIsIncomplete(record.category)) &&
+          !record.resolvedFromIncomplete,
+      )
+      .map((record) => ({
+        ...rowFromRecord(
+          record,
+          latestRequests.get(record.id),
+          requests,
+          latestRequests,
+        ),
+        selectable: false,
+      }));
   }
   if (cardKey === "incomplete-completed") {
-    return [...requests].filter(request => request.state === "created").sort(compareRequestDates).map(request => rowFromRequest(request, recordsById.get(request.bookRecordId), requests, latestRequests)).filter(row => {
-      const record = recordsById.get(row.recordId);
-      return Boolean(record?.wasIncomplete && record?.resolvedFromIncomplete);
-    });
+    return [...requests]
+      .filter((request) => request.state === "created")
+      .sort(compareRequestDates)
+      .map((request) =>
+        rowFromRequest(
+          request,
+          recordsById.get(request.bookRecordId),
+          requests,
+          latestRequests,
+        ),
+      )
+      .filter((row) => {
+        const record = recordsById.get(row.recordId);
+        return Boolean(record?.wasIncomplete && record?.resolvedFromIncomplete);
+      });
   }
   return [];
 }
 export function filterTableRows(rows, filters) {
   const normalizedQuery = normalizeSortValue(filters.q);
-  return rows.filter(row => {
-    const searchText = normalizeSortValue([row.title, row.url, row.displayUrl, row.displayPath, row.writer, row.translator, row.publisher, row.category, row.status, requestDetails(row)].filter(Boolean).join(" "));
+  return rows.filter((row) => {
+    const searchText = normalizeSortValue(
+      [
+        row.title,
+        row.url,
+        row.displayUrl,
+        row.displayPath,
+        row.writer,
+        row.translator,
+        row.publisher,
+        row.category,
+        row.status,
+        requestDetails(row),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
     if (normalizedQuery && !searchText.includes(normalizedQuery)) {
       return false;
     }
@@ -165,16 +245,22 @@ export function filterTableRows(rows, filters) {
 }
 export function processingCardPath(cardKey) {
   const search = new URLSearchParams({
-    card: cardKey
+    card: cardKey,
   });
   return `/processing/card/?${search.toString()}`;
 }
-export function processingTablePath(cardKey, filters, offset, limit, includeFacets = true) {
+export function processingTablePath(
+  cardKey,
+  filters,
+  offset,
+  limit,
+  includeFacets = true,
+) {
   const search = new URLSearchParams({
     card: cardKey,
     offset: String(offset),
     limit: String(limit),
-    includeFacets: includeFacets ? "1" : "0"
+    includeFacets: includeFacets ? "1" : "0",
   });
   if (filters.q) {
     search.set("q", filters.q);

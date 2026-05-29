@@ -122,6 +122,7 @@ class BookCreationRequest(TimeStampedModel):
     error_message = models.TextField(blank=True)
     is_resumed = models.BooleanField(default=False)
     is_confirmed_not_duplicate = models.BooleanField(default=False)
+    force_generate = models.BooleanField(default=False)
     duplicate_of_request = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,

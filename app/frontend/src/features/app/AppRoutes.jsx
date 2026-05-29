@@ -15,6 +15,7 @@ import ReaderPage from "../../pages/ReaderPage";
 import SeriesPage from "../../pages/SeriesPage";
 import TwoFactorSetupPage from "../../pages/TwoFactorSetupPage";
 import WriterPage from "../../pages/WriterPage";
+import ReprocessingPage from "../../pages/ReprocessingPage";
 import {
   CatalogProcessingPage,
   CreateProcessingPage,
@@ -29,6 +30,7 @@ const protectedRoutes = [
   { path: "/create", element: <CreateProcessingPage /> },
   { path: "/on-hold", element: <OnHoldProcessingPage /> },
   { path: "/incomplete", element: <IncompleteProcessingPage /> },
+  { path: "/reprocessing", element: <ReprocessingPage /> },
   { path: "/library", element: <LibraryPage /> },
   { path: "/categories", element: <CategoryPage /> },
   { path: "/series", element: <SeriesPage /> },

@@ -184,7 +184,7 @@ class GeneratedAsset(UUIDPrimaryKeyModel, TimeStampedModel):
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="generated_assets")
     asset_type = models.CharField(max_length=16, choices=GeneratedAssetType.choices)
     status = models.CharField(max_length=16, choices=GeneratedAssetStatus.choices, default=GeneratedAssetStatus.PENDING)
-    file = models.FileField(upload_to=generated_asset_upload_to, blank=True)
+    file = models.FileField(upload_to=generated_asset_upload_to, blank=True, max_length=500)
     storage_path = models.CharField(max_length=500, blank=True)
     legacy_path = models.CharField(max_length=500, blank=True)
     content_type = models.CharField(max_length=100, blank=True)

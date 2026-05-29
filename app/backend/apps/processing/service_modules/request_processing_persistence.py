@@ -183,13 +183,14 @@ def duplicate_candidate_is_current_book(processing_request, candidate_book):
     return bool(current_book and current_book.id == candidate_book.id)
 
 
-def _persist_processing_book(processing_request, normalized_url, scraped_data, curated_result=None):
+def _persist_processing_book(processing_request, normalized_url, scraped_data, curated_result=None, *, force=False):
     submission_stub = SimpleNamespace(resolved_url=normalized_url)
     target_book = (
         processing_request.linked_book
         if processing_request.linked_book_id and processing_request.linked_book and processing_request.linked_book.deleted_at is None
         else None
     )
+    document_for_export = None
     if curated_result is not None:
         book, _curated_document = persist_curated_book(
             submission_stub,
@@ -197,14 +198,38 @@ def _persist_processing_book(processing_request, normalized_url, scraped_data, c
             curated_result,
             target_book=target_book,
         )
-        if curated_result.get("status") != CuratedDocumentStatus.VALIDATED:
+        not_validated = curated_result.get("status") != CuratedDocumentStatus.VALIDATED
+        if not_validated and not force:
             return book
+        document_for_export = curated_result["document"]
+        if not_validated and force:
+            # Force generation bypasses the review gate; apply the same
+            # automatic mitigations the manual Force Generate action used to
+            # apply inline so a review-required document can still export.
+            document_for_export, chrome_stripped = _strip_source_chrome_from_document(
+                document_for_export
+            )
+            document_for_export, dupes_fixed = _fix_duplicate_paths_in_document(
+                document_for_export
+            )
+            if chrome_stripped:
+                logger.info(
+                    "Force-generate request %s: stripped %d source-chrome block(s).",
+                    processing_request.id,
+                    chrome_stripped,
+                )
+            if dupes_fixed:
+                logger.info(
+                    "Force-generate request %s: resolved %d duplicate content path(s).",
+                    processing_request.id,
+                    dupes_fixed,
+                )
     else:
         book = persist_scraped_book(submission_stub, None, scraped_data, target_book=target_book)
     export_payload = export_payload_from_book(book, scraped_data)
     generate_exports(
-        curated_document_with_projection(curated_result["document"], export_payload)
-        if curated_result is not None
+        curated_document_with_projection(document_for_export, export_payload)
+        if document_for_export is not None
         else export_payload
     )
     sync_assets(book, None, export_payload)
@@ -235,8 +260,9 @@ def _finalize_processing_request(processing_request, book, scraped_data):
     processing_request.linked_book = book
     processing_request.error_message = ""
     processing_request.progress = None
+    processing_request.force_generate = False
     processing_request.save(
-        update_fields=["state", "linked_book", "error_message", "progress", "updated_at"]
+        update_fields=["state", "linked_book", "error_message", "progress", "force_generate", "updated_at"]
     )
     record = processing_request.book_record
     record_update_fields = []

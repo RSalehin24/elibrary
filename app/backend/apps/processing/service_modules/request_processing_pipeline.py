@@ -217,10 +217,12 @@ def _process_request_once(processing_request):
         normalized_url,
         scraped_data,
         curated_result=curated_result,
+        force=bool(processing_request.force_generate),
     )
     if (
         not legacy_scrape_overridden
         and curated_result.get("status") != CuratedDocumentStatus.VALIDATED
+        and not processing_request.force_generate
     ):
         return _mark_request_review_required(processing_request, book, curated_result)
     return _finalize_processing_request(processing_request, book, scraped_data)

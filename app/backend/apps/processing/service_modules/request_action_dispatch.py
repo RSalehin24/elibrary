@@ -53,6 +53,7 @@ def apply_new_action(processing_request, *, actor=None):
     record_before = processing_record_snapshot(processing_request.book_record)
     processing_request.state = BookCreationRequestState.INITIAL
     processing_request.is_confirmed_not_duplicate = True
+    processing_request.force_generate = False
     processing_request.duplicate_confirmed = False
     processing_request.duplicate_of_request = None
     processing_request.duplicate_of_record = None
@@ -63,6 +64,7 @@ def apply_new_action(processing_request, *, actor=None):
         update_fields=[
             "state",
             "is_confirmed_not_duplicate",
+            "force_generate",
             "duplicate_confirmed",
             "duplicate_of_request",
             "duplicate_of_record",
@@ -149,12 +151,14 @@ def apply_recreate_action(processing_request, *, actor=None):
     previous_state = processing_request.state
     record_before = processing_record_snapshot(processing_request.book_record)
     processing_request.state = BookCreationRequestState.INITIAL
+    processing_request.force_generate = False
     processing_request.progress = None
     processing_request.error_message = ""
     processing_request.duplicate_confirmed = False
     processing_request.save(
         update_fields=[
             "state",
+            "force_generate",
             "progress",
             "error_message",
             "duplicate_confirmed",

@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.permissions import CanManageProcessing
-from apps.ingestion.models import JobStatus
+from apps.ingestion.models import JobStatus, JobType
 from apps.ingestion.serializers import ProcessingJobSerializer, ProcessingLogSerializer
 from apps.ingestion.services.submissions import recover_stale_processing_jobs
 
@@ -20,9 +20,13 @@ class ProcessingJobListView(generics.ListAPIView):
     def get_queryset(self):
         queryset = visible_jobs_queryset(self.request.user)
         queryset = apply_submission_origin_filter(queryset, self.request.query_params.get("origin", "").strip(), field_name="submission__origin")
-        status_filter = normalize_status_filter(self.request.query_params.get("status", "").strip())
-        if status_filter:
-            queryset = queryset.filter(status=status_filter)
+        status_raw = self.request.query_params.get("status", "").strip()
+        if status_raw:
+            status_values = [normalize_status_filter(s.strip()) for s in status_raw.split(",") if s.strip()]
+            if len(status_values) == 1:
+                queryset = queryset.filter(status=status_values[0])
+            elif status_values:
+                queryset = queryset.filter(status__in=status_values)
         submission_status = normalize_status_filter(self.request.query_params.get("submission_status", "").strip())
         if submission_status:
             queryset = queryset.filter(submission__status=submission_status)
@@ -69,9 +73,24 @@ class ProcessingJobRecoverView(APIView):
         return Response({"recovered_jobs": recovered}, status=status.HTTP_202_ACCEPTED)
 
 
+class ReprocessJobSummaryView(APIView):
+    permission_classes = [CanManageProcessing]
+
+    def get(self, request):
+        base = visible_jobs_queryset(request.user).filter(job_type=JobType.REPROCESS)
+        return Response({
+            "queued": base.filter(status=JobStatus.QUEUED).count(),
+            "active": base.filter(status=JobStatus.PROCESSING).count(),
+            "done": base.filter(status=JobStatus.SUCCEEDED).count(),
+            "failed": base.filter(status=JobStatus.FAILED).count(),
+            "stopped": base.filter(status=JobStatus.CANCELLED).count(),
+        })
+
+
 __all__ = [
     "ProcessingJobDetailView",
     "ProcessingJobListView",
     "ProcessingJobLogsView",
     "ProcessingJobRecoverView",
+    "ReprocessJobSummaryView",
 ]
