@@ -215,8 +215,8 @@ def curate_scraped_book_data(source_url, scraped_data):
     }
 
 
-def curate_book_document(source_url, *, content_limits=None):
-    source_pages = fetch_source_pages(source_url, content_limits=content_limits)
+def curate_book_document(source_url, *, content_limits=None, page_cache=None):
+    source_pages = fetch_source_pages(source_url, content_limits=content_limits, page_cache=page_cache)
     snapshot = build_source_snapshot(source_pages)
     document = build_curated_document(snapshot)
     return {

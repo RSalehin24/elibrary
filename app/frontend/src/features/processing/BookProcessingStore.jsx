@@ -5,7 +5,7 @@ import { useToast } from "../../hooks/useToast";
 import { hasCapability } from "../../utils/capabilities";
 import {
   SHARED_PROCESSING_CARD_KEYS,
-  processingPageForPathname
+  processingPageForPathname,
 } from "./store/processingStoreConfig";
 import { useAutomationActions } from "./store/useAutomationActions";
 import { useCatalogSyncActions } from "./store/useCatalogSyncActions";
@@ -26,19 +26,19 @@ export function BookProcessingProvider({ children }) {
   const onProcessingPage = Boolean(processingPage);
   const sharedProcessingCardKeys = useMemo(
     () => [...SHARED_PROCESSING_CARD_KEYS],
-    []
+    [],
   );
   const {
     applyProcessingVersions,
     getDomainVersion,
     loadProcessingState,
     processingStateStatus,
-    queueProcessingStateReload
+    queueProcessingStateReload,
   } = useProcessingStateRuntime({
     canLoadProcessingState,
     onProcessingPage,
     processingPage,
-    sharedProcessingCardKeys
+    sharedProcessingCardKeys,
   });
   const streamMode = useProcessingStream({
     applyProcessingVersions,
@@ -46,12 +46,12 @@ export function BookProcessingProvider({ children }) {
     loadProcessingState,
     onProcessingPage,
     processingPage,
-    queueProcessingStateReload
+    queueProcessingStateReload,
   });
   const { busyCards, runCardAction } = useProcessingCardRunner({
     applyProcessingVersions,
     queueProcessingStateReload,
-    toast
+    toast,
   });
   const catalogSyncActions = useCatalogSyncActions(runCardAction);
   const automationActions = useAutomationActions(runCardAction);
@@ -72,7 +72,7 @@ export function BookProcessingProvider({ children }) {
       processingStateInitialLoading: processingStateStatus.initialLoading,
       processingStateLoaded: processingStateStatus.loadedOnce,
       processingStateRefreshing: processingStateStatus.refreshing,
-      streamMode
+      streamMode,
     }),
     [
       automationActions,
@@ -86,8 +86,8 @@ export function BookProcessingProvider({ children }) {
       processingStateStatus.loadedOnce,
       processingStateStatus.refreshing,
       requestActions,
-      streamMode
-    ]
+      streamMode,
+    ],
   );
 
   return (
@@ -100,7 +100,9 @@ export function BookProcessingProvider({ children }) {
 export function useBookProcessing() {
   const context = useContext(ProcessingPagesContext);
   if (!context) {
-    throw new Error("useBookProcessing must be used within BookProcessingProvider");
+    throw new Error(
+      "useBookProcessing must be used within BookProcessingProvider",
+    );
   }
   return context;
 }

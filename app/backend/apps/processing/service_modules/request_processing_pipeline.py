@@ -1,5 +1,31 @@
 
 
+def _scrape_heartbeat(request_id, stop_event):
+    """Keep a PROCESSING request from looking stale during long scraping operations.
+
+    Runs in a daemon thread and touches updated_at on the BookCreationRequest
+    row every PROCESSING_SCRAPE_HEARTBEAT_INTERVAL seconds so the maintenance
+    task does not mistake an actively-running scrape for a hung/stale request.
+    """
+    from django.db import close_old_connections  # local import — thread-safe
+    while not stop_event.wait(PROCESSING_SCRAPE_HEARTBEAT_INTERVAL):
+        try:
+            close_old_connections()
+            BookCreationRequest.objects.filter(
+                pk=request_id,
+                state=BookCreationRequestState.PROCESSING,
+            ).update(updated_at=timezone.now())
+        except Exception:
+            logger.debug(
+                "Scrape heartbeat update failed for request %s.", request_id, exc_info=True
+            )
+        finally:
+            try:
+                close_old_connections()
+            except Exception:
+                pass
+
+
 def _processing_request_duplicate_check(processing_request, scraped_data):
     if processing_request.is_confirmed_not_duplicate:
         return None
@@ -114,7 +140,27 @@ def _process_request_once(processing_request):
             raw_scraped_data = scrape_book(normalized_url)
             curated_result = curate_scraped_book_data(normalized_url, raw_scraped_data)
         else:
-            curated_result = curate_book(normalized_url)
+            _stop_heartbeat = threading.Event()
+            _heartbeat_thread = threading.Thread(
+                target=_scrape_heartbeat,
+                args=(processing_request.id, _stop_heartbeat),
+                daemon=True,
+                name=f"scrape-heartbeat-{processing_request.id}",
+            )
+            _heartbeat_thread.start()
+            _page_cache = DiskPageCache(scrape_cache_path_for_request(processing_request.id))
+            if _page_cache.has_cached_pages():
+                logger.info(
+                    "Request %s resuming scrape from disk cache (%d pages already fetched).",
+                    processing_request.id,
+                    _page_cache.cached_count(),
+                )
+            try:
+                curated_result = curate_book(normalized_url, page_cache=_page_cache)
+                _page_cache.delete()
+            finally:
+                _stop_heartbeat.set()
+                _heartbeat_thread.join(timeout=5)
         scraped_data = curated_result.get("projection", {})
         if isinstance(scraped_data, dict) and not scraped_data.get("book_title"):
             scraped_data = {

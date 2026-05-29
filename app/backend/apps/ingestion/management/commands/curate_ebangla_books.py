@@ -206,6 +206,11 @@ class Command(BaseCommand):
         parser.add_argument("--require-catalog-match", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--generate-assets", action="store_true")
+        parser.add_argument(
+            "--force-generate-assets",
+            action="store_true",
+            help="Generate assets even for review_required books (not just validated). Implies --generate-assets.",
+        )
         parser.add_argument("--require-assets", action="store_true")
         parser.add_argument(
             "--perfect",
@@ -269,6 +274,8 @@ class Command(BaseCommand):
             if not options["dry_run"]:
                 options["generate_assets"] = True
                 options["require_assets"] = True
+        if options["force_generate_assets"]:
+            options["generate_assets"] = True
         if options["require_assets"]:
             options["generate_assets"] = True
 
@@ -429,7 +436,10 @@ class Command(BaseCommand):
                     else:
                         persisted_verified = True
 
-                    if options["generate_assets"] and status == "validated":
+                    generate_eligible = status == "validated" or (
+                        options.get("force_generate_assets") and status == "review_required"
+                    )
+                    if options["generate_assets"] and generate_eligible:
                         try:
                             generate_exports(document)
                             sync_assets(book, None, curated["projection"])

@@ -181,6 +181,7 @@ function OnHoldCard({
 export function OnHoldProcessingPage() {
   const {
     canLoadProcessingState,
+    forceGenerateRequests,
     resumePausedRequests,
     retryFailedRequests,
     markDuplicateRequestsAsNew,
@@ -251,6 +252,11 @@ export function OnHoldProcessingPage() {
           detailsLabel="Error Reason"
           className="processing-on-hold-failed-card"
           actions={[
+            {
+              id: "force-generate",
+              label: "Force Generate",
+              onAction: (ids) => forceGenerateRequests("on-hold-failed", ids),
+            },
             {
               id: "retry",
               label: "Retry",

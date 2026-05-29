@@ -260,6 +260,8 @@ def apply_request_action(request_ids, action, *, delete_book=False, actor=None):
             apply_resume_action(processing_request, actor=actor)
         elif action == "retry":
             apply_retry_action(processing_request, actor=actor)
+        elif action == "force_generate":
+            apply_force_generate_action(processing_request, actor=actor)
         elif action == "new":
             apply_new_action(processing_request, actor=actor)
         elif action == "new_edition":

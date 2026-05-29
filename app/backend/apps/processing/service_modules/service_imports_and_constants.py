@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -37,10 +38,20 @@ from redis.exceptions import RedisError
 
 from apps.catalog.services import find_existing_book_by_source_url
 from apps.catalog.models import BookGroup, CuratedDocumentStatus
+from apps.common.text import clean_display_text, normalize_catalog_text
 from apps.ingestion.models import SourceCatalogEntry, SubmissionOrigin
 from apps.ingestion.pipeline.scraper_support.network import create_session_with_retries
 from apps.ingestion.pipeline.curated_pipeline import curate_scraped_book_data
 from apps.ingestion.pipeline.curated_export import curated_document_with_projection
+from apps.ingestion.pipeline.curated_validation import (
+    SOURCE_CHROME_BLOCK_TAGS,
+    SOURCE_CHROME_CONTAINS_PATTERNS,
+    SOURCE_CHROME_MAX_BLOCK_LENGTH,
+    SOURCE_CHROME_PATTERNS,
+    is_source_chrome_block,
+    source_chrome_hits,
+)
+from apps.ingestion.pipeline.book_manifest import disambiguate_duplicate_content_paths
 from apps.ingestion.services.normalization import promote_leading_front_matter
 from apps.ingestion.services.resolution import CATALOG_URL, TitleResolver, get_with_host_fallback
 from apps.ingestion.services.resolution_support import (
@@ -130,6 +141,7 @@ SYNC_ACTIVE_STATUSES = {
 PROCESSING_STALE_AFTER = timedelta(minutes=20)
 PROCESSING_STALE_MESSAGE = "Processing exceeded 20 minutes without completing."
 PROCESSING_DISPATCH_STALE_AFTER = timedelta(minutes=2)
+PROCESSING_SCRAPE_HEARTBEAT_INTERVAL = 300  # seconds between heartbeat DB touches
 MAX_PROCESSING_REQUEST_ATTEMPTS = 3
 DEFAULT_AUTOMATION_INTERVAL = "weekly"
 DEFAULT_AUTOMATION_TIME = time_type(3, 0)

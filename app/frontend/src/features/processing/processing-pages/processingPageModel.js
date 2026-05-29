@@ -1,5 +1,6 @@
 import { REQUEST_STATE_LABELS } from "../types";
-export const SEARCH_PLACEHOLDER = "Search name, URL, category, writer, translator, or publisher";
+export const SEARCH_PLACEHOLDER =
+  "Search name, URL, category, writer, translator, or publisher";
 export const PROCESSING_TABLE_BATCH_SIZE = 60;
 export const PROCESSING_TABLE_PREFETCH_TRIGGER = 30;
 export const PROCESSING_CARD_VISIBILITY_ROOT_MARGIN = "300px 0px";
@@ -15,11 +16,16 @@ export const CATALOG_PHASE_STATUS_PAUSED = "paused";
 export const CATALOG_PHASE_STATUS_COMPLETED = "completed";
 export const OPTIMISTIC_SYNC_MIN_MS = 2_000;
 export const OPTIMISTIC_SYNC_MAX_MS = 4_000;
-export const INCOMPLETE_CATEGORY_KEYWORDS = ["incomplete", "unfinished", "অসম্পূর্ণ", "অসম্পূর্ণ বই"];
+export const INCOMPLETE_CATEGORY_KEYWORDS = [
+  "incomplete",
+  "unfinished",
+  "অসম্পূর্ণ",
+  "অসম্পূর্ণ বই",
+];
 export const DEFAULT_SYNC_CARD = {
   status: "idle",
   runMode: SYNC_RUN_MODE_MANUAL,
-  message: "Ready to sync."
+  message: "Ready to sync.",
 };
 export const DEFAULT_AUTOMATION_CARD = {
   enabled: false,
@@ -27,7 +33,7 @@ export const DEFAULT_AUTOMATION_CARD = {
   time: "03:00",
   saved: false,
   lastRunAt: null,
-  statusMessage: ""
+  statusMessage: "",
 };
 export function formatDate(value) {
   if (!value) {
@@ -41,7 +47,7 @@ export function formatDate(value) {
     month: "short",
     day: "numeric",
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
   });
 }
 export function splitSyncMessage(message) {
@@ -73,13 +79,20 @@ export function normalizeCatalogCountMessage(message, recordCount) {
   if (!trimmed || !Number.isFinite(recordCount)) {
     return trimmed;
   }
-  return trimmed.replace(/Catalog now has \d+ book records?\./g, catalogRecordCountMessage(recordCount));
+  return trimmed.replace(
+    /Catalog now has \d+ book records?\./g,
+    catalogRecordCountMessage(recordCount),
+  );
 }
 export function catalogRuntimePhase(sync) {
   return sync?.phase || sync?.progress?.phase || CATALOG_SYNC_PHASE;
 }
 export function catalogPhaseState(sync, phase) {
-  const explicit = sync?.progress?.phaseStates && typeof sync.progress.phaseStates[phase] === "object" ? sync.progress.phaseStates[phase] : null;
+  const explicit =
+    sync?.progress?.phaseStates &&
+    typeof sync.progress.phaseStates[phase] === "object"
+      ? sync.progress.phaseStates[phase]
+      : null;
   if (explicit) {
     return explicit;
   }
@@ -95,10 +108,17 @@ export function catalogPhaseStatus(sync, phase) {
   const explicit = sync?.progress?.phaseStatuses?.[phase];
   if (explicit) {
     if (phase === syncPhase) {
-      if (runtimeStatus === "pausing" && explicit === CATALOG_PHASE_STATUS_RUNNING) {
+      if (
+        runtimeStatus === "pausing" &&
+        explicit === CATALOG_PHASE_STATUS_RUNNING
+      ) {
         return CATALOG_PHASE_STATUS_PAUSING;
       }
-      if (runtimeStatus === "paused" && (explicit === CATALOG_PHASE_STATUS_RUNNING || explicit === CATALOG_PHASE_STATUS_PAUSING)) {
+      if (
+        runtimeStatus === "paused" &&
+        (explicit === CATALOG_PHASE_STATUS_RUNNING ||
+          explicit === CATALOG_PHASE_STATUS_PAUSING)
+      ) {
         return CATALOG_PHASE_STATUS_PAUSED;
       }
     }
@@ -118,7 +138,9 @@ export function catalogPhaseStatus(sync, phase) {
     if (runtimeStatus === "syncing") {
       return CATALOG_PHASE_STATUS_RUNNING;
     }
-    return savedData ? CATALOG_PHASE_STATUS_COMPLETED : CATALOG_PHASE_STATUS_NOT_STARTED;
+    return savedData
+      ? CATALOG_PHASE_STATUS_COMPLETED
+      : CATALOG_PHASE_STATUS_NOT_STARTED;
   }
   if (phase === CATALOG_REQUEST_CREATION_PHASE) {
     if (syncPhase === CATALOG_REQUEST_CREATION_PHASE) {
@@ -137,7 +159,10 @@ export function catalogPhaseStatus(sync, phase) {
   return CATALOG_PHASE_STATUS_NOT_STARTED;
 }
 export function catalogPhaseIsActive(status) {
-  return status === CATALOG_PHASE_STATUS_RUNNING || status === CATALOG_PHASE_STATUS_PAUSING;
+  return (
+    status === CATALOG_PHASE_STATUS_RUNNING ||
+    status === CATALOG_PHASE_STATUS_PAUSING
+  );
 }
 export function catalogPhaseOwner(sync, phase) {
   const explicitState = catalogPhaseState(sync, phase);
@@ -155,7 +180,10 @@ export function catalogPhaseOwner(sync, phase) {
   return savedDataRunMode || sync?.runMode || "";
 }
 export function catalogActivePhase(sync) {
-  const requestCreationStatus = catalogPhaseStatus(sync, CATALOG_REQUEST_CREATION_PHASE);
+  const requestCreationStatus = catalogPhaseStatus(
+    sync,
+    CATALOG_REQUEST_CREATION_PHASE,
+  );
   if (catalogPhaseIsActive(requestCreationStatus)) {
     return CATALOG_REQUEST_CREATION_PHASE;
   }
@@ -164,16 +192,28 @@ export function catalogActivePhase(sync) {
     return CATALOG_SYNC_PHASE;
   }
   const runtimeStatus = sync?.status || "idle";
-  return runtimeStatus === "syncing" || runtimeStatus === "pausing" ? catalogRuntimePhase(sync) : "";
+  return runtimeStatus === "syncing" || runtimeStatus === "pausing"
+    ? catalogRuntimePhase(sync)
+    : "";
 }
+const _REVIEW_REQUIRED_MSG =
+  "Curated document requires review before asset generation.";
+
 export function requestDetails(request) {
   if (!request) {
     return "";
   }
-  const checkpoint = request.progress?.checkpoint || request.progressCheckpoint || "";
+  const checkpoint =
+    request.progress?.checkpoint || request.progressCheckpoint || "";
   const savedAt = request.progress?.savedAt || request.progressSavedAt || "";
   if (checkpoint) {
     return savedAt ? `${checkpoint} (${formatDate(savedAt)})` : checkpoint;
+  }
+  if (request.errorMessage === _REVIEW_REQUIRED_MSG) {
+    const errors = request.progress?.curatedValidation?.errors;
+    if (Array.isArray(errors) && errors.length > 0) {
+      return errors.join(" • ");
+    }
   }
   if (request.errorMessage) {
     return request.errorMessage;

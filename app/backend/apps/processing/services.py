@@ -25,6 +25,7 @@ _MODULE_FILES = (
     "processing_card_payloads.py",
     "automation_commands.py",
     "request_processing_persistence.py",
+    "scrape_cache.py",
     "request_processing_pipeline.py",
     "maintenance_and_request_actions.py",
     "request_action_dispatch.py",

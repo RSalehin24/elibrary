@@ -238,6 +238,126 @@ def apply_resume_action(processing_request, *, actor=None):
     return processing_request
 
 
+_REVIEW_REQUIRED_ERROR_MSG = "Curated document requires review before asset generation."
+
+
+def _strip_source_chrome_from_document(document):
+    """Return a copy of *document* with source-chrome blocks removed from BODY sections.
+
+    Looks for blocks matching SOURCE_CHROME_PATTERNS inside each BODY section's
+    HTML and removes them.  Returns (cleaned_document, stripped_count).
+    """
+    from apps.catalog.models import CuratedSectionType
+
+    sections = document.get("sections") or []
+    cleaned_sections = []
+    total_stripped = 0
+    for section in sections:
+        if section.get("section_type") != CuratedSectionType.BODY:
+            cleaned_sections.append(section)
+            continue
+        html = section.get("html", "")
+        soup = BeautifulSoup(html, "html.parser")
+        stripped = 0
+        for block in soup.find_all(SOURCE_CHROME_BLOCK_TAGS):
+            block_text = clean_display_text(block.get_text(" ", strip=True))
+            normalized = normalize_catalog_text(block_text)
+            for pattern in SOURCE_CHROME_PATTERNS:
+                normalized_pattern = normalize_catalog_text(pattern)
+                if normalized_pattern and is_source_chrome_block(normalized, normalized_pattern, pattern):
+                    block.decompose()
+                    stripped += 1
+                    break
+        if stripped:
+            total_stripped += stripped
+            cleaned_sections.append({**section, "html": str(soup)})
+        else:
+            cleaned_sections.append(section)
+    if total_stripped:
+        return {**document, "sections": cleaned_sections}, total_stripped
+    return document, 0
+
+
+def _fix_duplicate_paths_in_document(document):
+    """Return a copy of *document* with duplicate content paths disambiguated.
+
+    Uses the existing ``disambiguate_duplicate_content_paths`` function which
+    handles two cases: genuinely distinct chapters sharing a title (renamed with
+    an occurrence suffix) and inline-extraction artefacts (duplicates merged by
+    keeping the richest body).  Returns (fixed_document, fixed_count).
+    """
+    toc = document.get("toc") or []
+    content_items = document.get("content_items") or []
+
+    from apps.ingestion.pipeline.curated_validation import duplicate_paths as _dp
+    dupes = _dp(content_items)
+    if not dupes:
+        return document, 0
+
+    fixed_toc, fixed_items = disambiguate_duplicate_content_paths(toc, content_items)
+    fixed_count = len(content_items) - len(fixed_items) + len(dupes)
+    return {**document, "toc": fixed_toc, "content_items": fixed_items}, max(fixed_count, len(dupes))
+
+
+def apply_force_generate_action(processing_request, *, actor=None):
+    """Generate assets for a failed request whose curated document is REVIEW_REQUIRED.
+
+    Skips re-scraping. Uses the already-persisted linked book and its curated
+    document to call generate_exports/sync_assets, then marks the request CREATED.
+
+    Mitigations applied before asset generation:
+      • Source-chrome blocks are stripped from BODY sections.
+      • Duplicate content paths are disambiguated using the same logic as the
+        normal pipeline so chapters that share a title get unique paths.
+    """
+    processing_request = _reload_processing_request(processing_request.id)
+    if processing_request.state != BookCreationRequestState.FAILED:
+        return processing_request
+    if processing_request.error_message != _REVIEW_REQUIRED_ERROR_MSG:
+        return processing_request
+
+    book = processing_request.linked_book
+    if book is None or book.deleted_at is not None:
+        raise ValueError(
+            "No linked book available on this request. Cannot force-generate assets."
+        )
+
+    curated_db = (
+        book.curated_documents
+        .order_by("-version", "-created_at")
+        .first()
+    )
+    if curated_db is None:
+        raise ValueError(
+            "No curated document found for the linked book. Cannot force-generate assets."
+        )
+
+    scrape_payload = book.raw_scrape_payload or {}
+    export_payload = export_payload_from_book(book, scrape_payload)
+
+    # Apply mitigations to the curated document before generating assets.
+    raw_document = curated_db.document or {}
+    mitigated_document, chrome_stripped = _strip_source_chrome_from_document(raw_document)
+    mitigated_document, dupes_fixed = _fix_duplicate_paths_in_document(mitigated_document)
+    if chrome_stripped:
+        logger.info(
+            "Force-generate for request %s: stripped %d source-chrome block(s).",
+            processing_request.id,
+            chrome_stripped,
+        )
+    if dupes_fixed:
+        logger.info(
+            "Force-generate for request %s: resolved %d duplicate content path(s).",
+            processing_request.id,
+            dupes_fixed,
+        )
+
+    document_for_export = curated_document_with_projection(mitigated_document, export_payload)
+    generate_exports(document_for_export)
+    sync_assets(book, None, export_payload)
+    return _finalize_processing_request(processing_request, book, scrape_payload)
+
+
 def apply_retry_action(processing_request, *, actor=None):
     processing_request = _reload_processing_request(processing_request.id)
     previous_state = processing_request.state

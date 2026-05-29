@@ -76,6 +76,21 @@ def high_fidelity_scrape_limits():
     return limits
 
 
+def processing_curate_limits():
+    """Memory-safe content limits for the curate_book() pipeline in the processing worker.
+
+    These defaults are lower than DEFAULT_SCRAPE_LIMITS to stay within the Docker VM
+    memory ceiling when scraping large books.  Override via env vars if needed.
+    """
+    return {
+        "max_nodes": getattr(settings, "PROCESSING_CURATE_MAX_NODES", 80),
+        "max_depth": getattr(settings, "PROCESSING_CURATE_MAX_DEPTH", 6),
+        "max_lesson_pages": getattr(settings, "PROCESSING_CURATE_MAX_LESSON_PAGES", 20),
+        "max_content_chars": getattr(settings, "PROCESSING_CURATE_MAX_CONTENT_CHARS", 60000),
+        "disable_recursive": False,
+    }
+
+
 def scrape_book(source_url):
     return scraper.scrape_book_data(
         normalize_source_url(source_url),
@@ -95,11 +110,17 @@ def generate_exports(book_data):
     epub_book.create_epub(book_data)
 
 
-def curate_book(source_url, *, high_fidelity=False):
-    limits = high_fidelity_scrape_limits() if high_fidelity else None
+def curate_book(source_url, *, high_fidelity=False, content_limits=None, page_cache=None):
+    if content_limits is not None:
+        limits = content_limits
+    elif high_fidelity:
+        limits = high_fidelity_scrape_limits()
+    else:
+        limits = processing_curate_limits()
     return curate_book_document(
         normalize_source_url(source_url),
         content_limits=limits,
+        page_cache=page_cache,
     )
 
 

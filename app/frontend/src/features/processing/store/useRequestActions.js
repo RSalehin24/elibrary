@@ -44,6 +44,8 @@ export function useRequestActions(runCardAction) {
     createAgainRequests: (cardId, requestIds) =>
       applyRequestAction(cardId, requestIds, "create_again"),
     deleteRequests,
+    forceGenerateRequests: (cardId, requestIds) =>
+      applyRequestAction(cardId, requestIds, "force_generate"),
     markDuplicateRequestsAsNew: (cardId, requestIds) =>
       applyRequestAction(cardId, requestIds, "new"),
     markDuplicateRequestsAsNewEdition: (cardId, requestIds) =>

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import time
@@ -43,6 +44,8 @@ from apps.ingestion.services.resolution_support_metadata import split_display_ti
 from apps.ingestion.services.resolution_support_network import get_with_host_fallback
 from apps.ingestion.pipeline.epub_properties.labels import detect_book_language, labels_for
 
+
+logger = logging.getLogger(__name__)
 
 CURRENT_MANIFEST_SCHEMA_VERSION = "2026-05-03.1"
 UNCAPPED_LIMIT_KEYS = {"max_nodes", "max_lesson_pages", "max_topic_pages", "max_content_chars"}
@@ -825,17 +828,34 @@ def fetch_content_item(node, path, ctx, limits):
     }
 
 
-def collect_content_items(nodes, ctx, limits):
+def collect_content_items(nodes, ctx, limits, *, page_cache=None):
     content_items = []
     max_nodes = limits.get("max_nodes")
+    cached = {}
+    if page_cache is not None:
+        cached = page_cache.get_cached_items()
+        if cached:
+            logger.info(
+                "Resuming content scrape: %d pages already cached from previous run.",
+                len(cached),
+            )
     for node, path in iter_content_nodes(nodes):
         if isinstance(max_nodes, int) and max_nodes > 0 and len(content_items) >= max_nodes:
             break
+        url = node.get("url", "")
+        if url and url in cached:
+            item = cached[url]
+            node["has_content"] = bool(item)
+            if item:
+                content_items.append(item)
+            continue
         item = fetch_content_item(node, path, ctx, limits)
         if item is None:
             node["has_content"] = False
             continue
         node["has_content"] = True
+        if page_cache is not None:
+            page_cache.save_item(item)
         content_items.append(item)
     return content_items
 
@@ -1369,7 +1389,7 @@ def build_manifest_from_projection(canonical_url, projection, *, pages=None, sou
     }
 
 
-def build_manifest_source_pages(source_url, *, content_limits=None):
+def build_manifest_source_pages(source_url, *, content_limits=None, page_cache=None):
     canonical_url = normalize_source_url(source_url)
     limits = normalize_manifest_limits(content_limits)
     with create_session_with_retries() as session:
@@ -1396,7 +1416,7 @@ def build_manifest_source_pages(source_url, *, content_limits=None):
         landing_main_content = extract_entry_content_html(landing_soup, title)
 
         toc_nodes, toc_meta = collect_learndash_toc(landing_soup, canonical_url, ctx, limits)
-        content_items = collect_content_items(toc_nodes, ctx, limits) if toc_nodes else []
+        content_items = collect_content_items(toc_nodes, ctx, limits, page_cache=page_cache) if toc_nodes else []
         sections_payload = normalize_body_sections(
             book_title=title,
             landing_main_content=landing_main_content,

@@ -8,11 +8,12 @@ from apps.ingestion.pipeline.scraper_support.network import normalize_source_url
 CURATED_DOCUMENT_SCHEMA_VERSION = CURRENT_MANIFEST_SCHEMA_VERSION
 
 
-def fetch_source_pages(source_url, *, content_limits=None):
+def fetch_source_pages(source_url, *, content_limits=None, page_cache=None):
     canonical_url = normalize_source_url(source_url)
     return build_manifest_source_pages(
         canonical_url,
         content_limits=content_limits,
+        page_cache=page_cache,
     )
 
 

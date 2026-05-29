@@ -85,13 +85,16 @@ class ProcessingRequestActionView(APIView):
     def post(self, request):
         serializer = RequestActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        with collect_processing_ui_version_updates() as versions:
-            changed = apply_request_action(
-                serializer.validated_data["ids"],
-                serializer.validated_data["action"],
-                delete_book=serializer.validated_data["deleteBook"],
-                actor=request.user,
-            )
+        try:
+            with collect_processing_ui_version_updates() as versions:
+                changed = apply_request_action(
+                    serializer.validated_data["ids"],
+                    serializer.validated_data["action"],
+                    delete_book=serializer.validated_data["deleteBook"],
+                    actor=request.user,
+                )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         return processing_response(
             processing_mutation_payload(
                 versions,

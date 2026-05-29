@@ -62,6 +62,11 @@ export function notifyRequestAction(toast, action, changedCount, options = {}) {
       description: `${countLabel(changedCount, "request")} returned to Requests.`,
       type: "success",
     },
+    force_generate: {
+      title: "Assets generated",
+      description: `${countLabel(changedCount, "book")} had assets force-generated and moved to Created.`,
+      type: "success",
+    },
   }[action];
 
   if (copy) {

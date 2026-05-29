@@ -111,9 +111,16 @@ class BookCreationRequestSerializer(serializers.ModelSerializer):
         ]
 
     def get_progress(self, obj):
-        if obj.state != BookCreationRequest.State.PAUSED:
-            return None
-        return obj.progress
+        if obj.state == BookCreationRequest.State.PAUSED:
+            return obj.progress
+        if obj.state == BookCreationRequest.State.FAILED and isinstance(obj.progress, dict):
+            validation = obj.progress.get("curatedValidation")
+            if validation:
+                return {
+                    "curatedValidation": validation,
+                    "curatedStatus": obj.progress.get("curatedStatus", ""),
+                }
+        return None
 
     def get_linkedBookSlug(self, obj):
         if obj.linked_book_id and obj.linked_book and obj.linked_book.deleted_at is None:
@@ -201,6 +208,7 @@ class RequestActionSerializer(BulkIdsSerializer):
             "pause",
             "resume",
             "retry",
+            "force_generate",
             "new",
             "new_edition",
             "confirm_duplicate",
