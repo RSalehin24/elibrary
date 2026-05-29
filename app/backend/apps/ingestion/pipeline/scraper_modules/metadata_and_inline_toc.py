@@ -90,11 +90,15 @@ def download_cover_image(soup, output_folder):
     return filename
 
 def scrape_main_content(soup):
-    div = soup.find("div", class_="ld-tab-content ld-visible entry-content")
-    if div:
-        div = clean_buttons(div)
-        content = div.decode_contents()
-        # Remove redundant headers
+    container = (
+        soup.select_one(".ld-tab-content.ld-visible.entry-content")
+        or soup.select_one(".ld-tab-content.entry-content")
+        or soup.select_one("article .entry-content")
+        or soup.select_one(".entry-content")
+    )
+    if container:
+        container = clean_buttons(container)
+        content = container.decode_contents()
         content = remove_redundant_headers(content, "")
         return content
     return ""

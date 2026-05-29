@@ -248,4 +248,7 @@ def sanitize_folder_name(name):
     name = name.strip()
     name = re.sub(r'[<>:"/\\|?*]', "_", name)
     name = re.sub(r"\s+", "_", name)
-    return name
+    MAX_BYTES = 255
+    while len(name.encode("utf-8")) > MAX_BYTES and name:
+        name = name[:-1]
+    return name.strip("_") or "book"
