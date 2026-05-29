@@ -15,6 +15,7 @@ class UserSerializer(serializers.ModelSerializer):
     totp_setup_required = serializers.BooleanField(source="requires_totp_setup", read_only=True)
     capabilities = serializers.ListField(source="capability_scopes", child=serializers.CharField(), read_only=True)
     profile_image_url = serializers.SerializerMethodField()
+    kindle_emails = serializers.ListField(child=serializers.EmailField(), read_only=True)
 
     class Meta:
         model = User
@@ -30,6 +31,7 @@ class UserSerializer(serializers.ModelSerializer):
             "totp_required",
             "totp_setup_required",
             "capabilities",
+            "kindle_emails",
         ]
 
     def get_profile_image_url(self, obj):
@@ -83,12 +85,10 @@ class ManagedUserSerializer(UserSerializer):
 
 
 class ProfileSerializer(UserSerializer):
-    kindle_emails = serializers.ListField(child=serializers.EmailField(), read_only=True)
     kindle_sender_email = serializers.SerializerMethodField()
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + [
-            "kindle_emails",
             "kindle_sender_email",
         ]
 
