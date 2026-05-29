@@ -27,7 +27,7 @@ from .scraper_support.text import (
     texts_are_similar,
 )
 
-INLINE_TOC_PATTERNS = ("সূচীপত্র", "সুচিপত্র", "table of contents", "contents")
+INLINE_TOC_PATTERNS = ("সূচীপত্র", "সুচিপত্র", "সূচী", "table of contents", "contents")
 
 DEFAULT_SCRAPE_LIMITS = {
     "max_nodes": 320,

@@ -192,6 +192,10 @@ def should_continue_dedication_block(text, strong_text="", tag_name=""):
         return True
     if is_body_section_marker(cleaned_text, tag_name=tag_name):
         return False
+    # Numeric poem/chapter ordinal marker (e.g. "১.", "২.", "1.") — signals the
+    # start of body content and must stop dedication extraction immediately.
+    if re.match(r'^[০-৯0-9]+\.?\s*$', cleaned_text):
+        return False
     if is_non_dedication_strong_heading(cleaned_text, strong_text=strong_text, tag_name=tag_name):
         return False
     if tag_name in HEADING_TAG_NAMES and not is_dedication_heading(

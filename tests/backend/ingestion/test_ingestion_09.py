@@ -171,3 +171,26 @@ def test_inline_toc_extraction_removes_embedded_toc_even_without_section_bodies(
     assert "সূচীপত্র" not in cleaned_main_content
     assert "দুই বোন – রবীন্দ্রনাথ ঠাকুর" not in cleaned_main_content
     assert "উপন্যাস সমগ্র – রবীন্দ্রনাথ ঠাকুর" in cleaned_main_content
+
+
+def test_inline_toc_extraction_handles_paragraph_style_lesson_links():
+    """দুর্গরহস্য-style books: TOC heading is 'সূচী ॥' with <p><a> links (not <ul>/<ol>)."""
+    toc, content_items, cleaned_main_content = legacy_scraper.extract_inline_toc_and_content(
+        """
+        <div class="entry-content">
+          <p>দুর্গরহস্য। বাক-সাহিত্য। তৃতীয় প্রকাশ, চৈত্র ১৩৭১।</p>
+          <p>সূচী ॥</p>
+          <p><a href="https://www.ebanglalibrary.com/lessons/chitrachor/">চিত্রচোর</a></p>
+          <p><a href="https://www.ebanglalibrary.com/lessons/durgahasya/">দুর্গরহস্য</a></p>
+        </div>
+        """
+    )
+
+    assert [entry["title"] for entry in toc] == ["চিত্রচোর", "দুর্গরহস্য"]
+    assert all(entry["url"] for entry in toc)
+    assert content_items == []
+    assert "সূচী" not in cleaned_main_content
+    assert "চিত্রচোর" not in cleaned_main_content
+    # The lesson link paragraphs are removed, but the book title paragraph stays
+    assert "/lessons/chitrachor/" not in cleaned_main_content
+    assert "/lessons/durgahasya/" not in cleaned_main_content

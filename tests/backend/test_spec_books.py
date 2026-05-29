@@ -84,6 +84,24 @@ SPEC_BOOKS = [
         "name": "সতী — দীনেশচন্দ্র সেন",
         "checks": ["has_book_info", "toc_not_empty"],
     },
+    {
+        "id": "lohit_kiran",
+        "url": "https://www.ebanglalibrary.com/books/লোহিতকিরণচ্ছটা/",
+        "name": "লোহিতকিরণচ্ছটা",
+        "checks": ["toc_not_empty", "has_book_info"],
+    },
+    {
+        "id": "hat_chuye",
+        "url": "https://www.ebanglalibrary.com/books/হাত-ছুঁয়ে-ছুঁয়ে-দিয়েছি-সব/",
+        "name": "হাত ছুঁয়ে-ছুঁয়ে দিয়েছি সব",
+        "checks": ["toc_not_empty", "has_book_info"],
+    },
+    {
+        "id": "durga_rahasya",
+        "url": "https://www.ebanglalibrary.com/books/দুর্গরহস্য-শরদিন্দু-বন্দ্যোপাধ্যায়/",
+        "name": "দুর্গরহস্য — শরদিন্দু বন্দ্যোপাধ্যায়",
+        "checks": ["toc_not_empty", "has_book_info"],
+    },
 ]
 
 # ---------------------------------------------------------------------------

@@ -694,8 +694,6 @@ def infer_numeric_structured_content_from_main_content(main_content_html):
     numbers = [marker["number"] for marker in markers]
     if numbers[0] not in {1, 2}:
         return [], [], main_content_html
-    if any(next_number <= number for number, next_number in zip(numbers, numbers[1:])):
-        return [], [], main_content_html
 
     sequential_steps = sum(
         1

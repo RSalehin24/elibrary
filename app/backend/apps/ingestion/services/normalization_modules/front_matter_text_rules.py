@@ -35,6 +35,7 @@ DEDICATION_PATTERNS = [
 INLINE_TOC_HEADING_PATTERNS = [
     "সূচীপত্র",
     "সুচিপত্র",
+    "সূচী",
     "table of contents",
     "contents",
 ]
@@ -60,6 +61,8 @@ BODY_SECTION_PATTERNS = [
     "সংকলকের কথা",
     "প্রকাশকের কথা",
     "সূচিপত্র",
+    "সূচীপত্র",
+    "সূচী",
     "অধ্যায়",
     "অধ্যায়",
     "পর্ব",

@@ -197,6 +197,36 @@ def extract_inline_toc_and_content(main_content_html):
         next_index += 1
 
     if not toc_entries:
+        # Fallback: paragraph-style TOC links (e.g. <p><a href="/lessons/...">title</a></p>)
+        para_toc_index = next_index
+        para_toc_entries = []
+        para_toc_blocks = []
+        while para_toc_index < len(blocks):
+            block = blocks[para_toc_index]
+            if block.name != "p":
+                break
+            links = block.find_all("a", href=True)
+            if not links:
+                break
+            entries_from_block = []
+            for a in links:
+                url = normalize_crawl_url(a.get("href", ""))
+                title = normalize_structured_heading_title(a.get_text(" ", strip=True))
+                if url and title:
+                    entries_from_block.append(
+                        {"title": title, "url": url, "type": "lesson", "has_content": True}
+                    )
+            if not entries_from_block:
+                break
+            para_toc_entries.extend(entries_from_block)
+            para_toc_blocks.append(block)
+            para_toc_index += 1
+        if para_toc_entries:
+            toc_entries = para_toc_entries
+            toc_blocks.extend(para_toc_blocks)
+            next_index = para_toc_index
+
+    if not toc_entries:
         return [], [], main_content_html
 
     content_items = []
